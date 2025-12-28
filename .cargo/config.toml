@@ -29,11 +29,11 @@ linker = "lld-link.exe"
 
 [target.x86_64-apple-darwin]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+# macOS uses the system linker (ld), not lld
 
 [target.aarch64-apple-darwin]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+# macOS uses the system linker (ld), not lld
 
 # Network configuration
 [net]
