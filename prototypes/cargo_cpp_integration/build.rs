@@ -56,8 +56,11 @@ fn configure_linking() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     
     match target_os.as_str() {
-        "linux" | "macos" => {
+        "linux" => {
             println!("cargo:rustc-link-lib=stdc++");
+        }
+        "macos" => {
+            println!("cargo:rustc-link-lib=c++");
         }
         "windows" => {
             // MSVC automatically links C++ runtime
