@@ -133,6 +133,12 @@ used when committed.
 *   [Rust Style Guide](../styleguide/rust/rust.md) - Rust coding style for Chromium
 *   [Adding Third-party Rust Crates](../third_party/rust/README-importing-new-crates.md) - How to import crates from crates.io
 
+### Rust Training and Migration
+*   [Cargo Basics for Chromium Developers](rust/training/cargo_basics.md) - Introduction to Cargo for GN/Ninja users
+*   [Workspace Management Best Practices](rust/training/workspace_best_practices.md) - Managing Cargo workspaces in the monorepo
+*   [Cargo Troubleshooting Guide](rust/training/troubleshooting.md) - Solutions to common Cargo problems
+*   [Pilot Program Guide](rust/training/pilot_program.md) - Framework for migrating pilot components to Cargo
+
 ### General Development
 *   [Contributing to Chromium](contributing.md) - Reference workflow process for
     contributing to the Chromium code base.
