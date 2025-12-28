@@ -143,6 +143,11 @@ used when committed.
 *   [Phase 2 Implementation Guide](rust/phase2/implementation_guide.md) - Comprehensive guide for migrating production components
 *   [Migration Templates and Examples](rust/phase2/migration_templates.md) - Ready-to-use templates for Cargo.toml, build.rs, and FFI
 
+### Phase 3: Comprehensive Migration
+*   [Phase 3 Implementation Guide](rust/phase3/implementation_guide.md) - Scaling migration to major subsystems and establishing Cargo as primary build system
+*   [Configuration Templates](rust/phase3/configuration_templates.md) - IDE configs, CI/CD workflows, and build optimization templates
+*   [Phase 3 Progress Report](rust/phase3/PHASE_3_PROGRESS.md) - Status, metrics, and tracking for Phase 3 execution
+
 ### General Development
 *   [Contributing to Chromium](contributing.md) - Reference workflow process for
     contributing to the Chromium code base.
