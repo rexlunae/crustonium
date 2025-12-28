@@ -35,7 +35,12 @@ fn build_cpp_code() {
     // Platform-specific flags
     if cfg!(target_os = "windows") {
         build.flag("/EHsc"); // Enable C++ exception handling
+    } else if cfg!(target_os = "macos") {
+        build.flag("-stdlib=libc++");
+        build.flag("-Wall");
+        build.flag("-Wextra");
     } else {
+        // Linux and others
         build.flag("-Wall");
         build.flag("-Wextra");
     }
@@ -45,11 +50,25 @@ fn build_cpp_code() {
 }
 
 fn build_cxx_bridge() {
-    cxx_build::bridge("src/ffi.rs")
+    let mut bridge = cxx_build::bridge("src/ffi.rs");
+    
+    bridge
         .file("cpp/bridge_impl.cc")
         .include("cpp")  // Add cpp directory to include path
-        .flag_if_supported("-std=c++17")
-        .compile("cpp_bridge");
+        .flag_if_supported("-std=c++17");
+    
+    // Platform-specific flags for cxx bridge
+    if cfg!(target_os = "macos") {
+        bridge.flag("-stdlib=libc++");
+    } else if cfg!(target_os = "windows") {
+        bridge.flag("/EHsc"); // Enable C++ exception handling
+    } else {
+        // Linux and others
+        bridge.flag("-Wall");
+        bridge.flag("-Wextra");
+    }
+    
+    bridge.compile("cpp_bridge");
 }
 
 fn configure_linking() {
