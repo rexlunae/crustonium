@@ -139,6 +139,10 @@ used when committed.
 *   [Cargo Troubleshooting Guide](rust/training/troubleshooting.md) - Solutions to common Cargo problems
 *   [Pilot Program Guide](rust/training/pilot_program.md) - Framework for migrating pilot components to Cargo
 
+### Phase 2: Incremental Migration
+*   [Phase 2 Implementation Guide](rust/phase2/implementation_guide.md) - Comprehensive guide for migrating production components
+*   [Migration Templates and Examples](rust/phase2/migration_templates.md) - Ready-to-use templates for Cargo.toml, build.rs, and FFI
+
 ### General Development
 *   [Contributing to Chromium](contributing.md) - Reference workflow process for
     contributing to the Chromium code base.
