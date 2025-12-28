@@ -122,6 +122,17 @@ used when committed.
 *   [Updating Clang Format Binaries](updating_clang_format_binaries.md) - How up
     update the clang-format binaries that come with a checkout of Chromium
 
+### Rust
+*   [Rust in Chromium](rust.md) - General information on using Rust in Chromium
+*   [Rust Adoption Plan](rust_adoption_plan.md) - Strategic plan for adopting Rust and replacing C++ code
+*   [Cargo Build System Adoption](cargo_adoption_plan.md) - Plan for transitioning to Cargo as primary build system
+*   [C++ to Rust Migration Guide](rust/migration_guide.md) - Practical guide for migrating C++ components to Rust
+*   [Rust Quick Reference](rust/quick_reference.md) - Quick reference for Chromium developers using Rust
+*   [Hybrid Build System Setup](hybrid_build_setup.md) - Setting up and using GN/Ninja + Cargo hybrid builds
+*   [Rust FFI Guide](rust/ffi.md) - Guide for C++/Rust interoperability
+*   [Rust Style Guide](../styleguide/rust/rust.md) - Rust coding style for Chromium
+*   [Adding Third-party Rust Crates](../third_party/rust/README-importing-new-crates.md) - How to import crates from crates.io
+
 ### General Development
 *   [Contributing to Chromium](contributing.md) - Reference workflow process for
     contributing to the Chromium code base.
