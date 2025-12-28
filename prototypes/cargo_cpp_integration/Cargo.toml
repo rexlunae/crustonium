@@ -1,0 +1,31 @@
+# Cargo + C++ Integration Prototype
+#
+# Phase 1.1: Research and Prototyping
+# This prototype evaluates the `cc` crate for building C++ code from Cargo
+
+[package]
+name = "cargo-cpp-integration-prototype"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# For C++/Rust FFI
+cxx = { workspace = true }
+
+[build-dependencies]
+# For building C++ code
+cc = { workspace = true }
+cxx-build = { workspace = true }
+
+[dev-dependencies]
+# For benchmarking
+criterion = { workspace = true }
+
+[lib]
+name = "cargo_cpp_integration"
+crate-type = ["staticlib", "rlib"]
+
+[[bench]]
+name = "cpp_integration_bench"
+harness = false
