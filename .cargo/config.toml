@@ -1,0 +1,49 @@
+# Cargo Configuration for Chromium/Crustonium
+# Phase 1.1: Research and Prototyping
+
+[build]
+# Enable incremental compilation for faster rebuilds
+incremental = true
+
+# Target directory (can be overridden)
+target-dir = "target"
+
+# Vendor dependencies (following Chromium's practice)
+# NOTE: Vendoring disabled for Phase 1.1 prototyping
+# Will be re-enabled once prototype dependencies are finalized
+# [source.crates-io]
+# replace-with = "vendored-sources"
+# 
+# [source.vendored-sources]
+# directory = "third_party/rust"
+
+# Platform-specific linker configuration
+# Using lld for faster linking (following Chromium's approach)
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link.exe"
+
+[target.x86_64-apple-darwin]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Network configuration
+[net]
+git-fetch-with-cli = true
+
+# Convenient aliases for development
+[alias]
+b = "build --workspace"
+t = "test --workspace"
+c = "check --workspace"
+br = "build --release --workspace"
+tr = "test --release --workspace"
+bench-all = "bench --workspace"

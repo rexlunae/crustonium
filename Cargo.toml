@@ -1,0 +1,81 @@
+# Cargo Workspace for Chromium/Crustonium
+# Phase 1.1: Research and Prototyping - Workspace Structure Prototype
+#
+# This is a prototype workspace configuration for evaluating Cargo
+# as the primary build system. During Phase 1, this will coexist
+# with the existing GN/Ninja build system.
+
+[workspace]
+resolver = "2"
+
+# Prototype members - starting with existing Rust components
+members = [
+    "prototypes/cargo_cpp_integration",
+    "prototypes/workspace_structure_test",
+    # Existing components will be gradually added:
+    # "components/qr_code_generator",
+    # "components/user_data_importer/utility/parsing_ffi",
+    # "media/filters",
+    # "testing/rust_gtest_interop",
+]
+
+# Components not yet ready for Cargo migration
+exclude = [
+    "third_party",
+    "out",
+    "target",
+    "build",
+]
+
+# Workspace-wide dependency versions
+# This ensures all crates use the same version of common dependencies
+[workspace.dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+log = "0.4"
+
+# FFI and C++ integration
+cxx = "1.0"
+cc = "1.0"
+
+# Build dependencies
+cxx-build = "1.0"
+
+# Testing
+criterion = "0.5"
+
+# Workspace metadata
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+repository = "https://github.com/rexlunae/crustonium"
+
+# Build profiles optimized for Chromium's needs
+[profile.dev]
+opt-level = 0
+debug = true
+# Faster linking in development
+split-debuginfo = "unpacked"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = false
+
+# Production profile with maximum optimization
+[profile.production]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Profile for performance testing
+[profile.bench]
+inherits = "release"
+debug = true

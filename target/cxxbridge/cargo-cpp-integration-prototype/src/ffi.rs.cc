@@ -1,0 +1,1 @@
+../../../debug/build/cargo-cpp-integration-prototype-9e58a851679b0050/out/cxxbridge/sources/cargo-cpp-integration-prototype/src/ffi.rs.cc
