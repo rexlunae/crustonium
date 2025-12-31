@@ -12,9 +12,10 @@ resolver = "2"
 members = [
     "prototypes/cargo_cpp_integration",
     "prototypes/workspace_structure_test",
-    # Existing components will be gradually added:
-    # "components/qr_code_generator",
-    # "components/user_data_importer/utility/parsing_ffi",
+    # Existing components being migrated to Cargo:
+    "components/qr_code_generator",
+    # Additional components will be gradually added:
+    # "components/user_data_importer/utility/parsing_ffi",  # Requires serde_json_lenient
     # "media/filters",
     # "testing/rust_gtest_interop",
 ]
@@ -46,6 +47,10 @@ cxx-build = "1.0"
 
 # Testing
 criterion = "0.5"
+
+# Component-specific dependencies
+qr_code = "2.0"
+zip = "0.6"
 
 # Workspace metadata
 [workspace.package]
