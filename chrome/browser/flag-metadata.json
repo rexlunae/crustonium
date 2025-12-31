@@ -1725,6 +1725,11 @@
     "expiry_milestone": 150
   },
   {
+    "name": "chrome-next-ia",
+    "owners": [ "gambard@chromium.org", "meridian@google.com" ],
+    "expiry_milestone": 150
+  },
+  {
     "name": "chrome-web-store-navigation-throttle",
     "owners": [ "marissashen@google.com", "chrome-web-store-consumer-eng-team@google.com"],
     "expiry_milestone": 150
@@ -2055,11 +2060,6 @@
     "name": "controlled-frame-web-request-security-info",
     "owners": ["vkrot@google.com", "bhaskarsharma@google.com"],
     "expiry_milestone": 160
-  },
-  {
-    "name": "cpa-spec-update",
-    "owners": [ "eleanorlee@google.com", "wenyufu@chromium.org" ],
-    "expiry_milestone": 145
   },
   {
     "name": "cpe-passkey-largeblob-support",
@@ -2436,11 +2436,6 @@
   {
     "name": "devtools-starting-style-debugging",
     "owners": [ "bramus@chromium.org" ],
-    "expiry_milestone": 145
-  },
-  {
-    "name": "diamond-prototype",
-    "owners": ["gambard@chromium.com", "ewannpv@chromium.org"],
     "expiry_milestone": 145
   },
   {
@@ -5485,6 +5480,14 @@
     "name": "gemini-full-chat-history",
     "owners": [ "adamta@google.com", "bling-alchemy-eng@google.com" ],
     "expiry_milestone": 148
+  },
+  {
+    "name": "gemini-image-remix-tool",
+    "owners": [
+      "nicolasmacbeth@google.com",
+      "bling-alchemy-eng@google.com"
+    ],
+    "expiry_milestone": 155
   },
   {
     "name": "gemini-immediate-overlay",
@@ -9720,11 +9723,6 @@
     "expiry_milestone": 170
   },
   {
-    "name": "summarization-api-for-gemini-nano",
-    "owners": ["//chrome/browser/ai/OWNERS", "builtin-ai-team@google.com"],
-    "expiry_milestone": 145
-  },
-  {
     "name": "supervised-user-block-interstitial-v3",
     "owners": [
       "ddac@google.com",
@@ -10114,11 +10112,6 @@
     "name": "translate-open-settings",
     "owners": [ "perrier@chromium.org", "taox4@illinois.edu", "chrome-language@google.com" ],
     "expiry_milestone": 133
-  },
-  {
-    "name": "translation-api",
-    "owners": ["//chrome/browser/ai/OWNERS", "builtin-ai-team@google.com"],
-    "expiry_milestone": 145
   },
   {
     "name": "translation-api-streaming-by-sentence",

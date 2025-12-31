@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">ביטול ההסתרה</translation>
 <translation id="1456545332132818232">ביקורות על המוצר <ph name="PRODUCT_NAME" />, ‏<ph name="STARS" /> מתוך <ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">חוסכים זמן, מקלידים פחות</translation>
+<translation id="1466035273550360103">אין כרטיסיות פתוחות</translation>
 <translation id="1469381646033328562">החשבון מנוהל על ידי ההורה שלך.
 <ph name="BEGIN_LINK" />מידע נוסף<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">השתנתה</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">לא ניתן היה לשמור את השינוי.</translation>
 <translation id="3254806613790954367">הכרטיסייה האחרונה שפתחת בכל המכשירים</translation>
 <translation id="325717987950204592">לוחצים על "פרטיות ואבטחה"</translation>
-<translation id="3266338926702638258">הצגה של היסטוריית המחירים של המוצר הזה</translation>
 <translation id="3272527697863656322">ביטול</translation>
 <translation id="3273510436356991673">התאמה אישית של מסך הבית</translation>
 <translation id="3277021493514034324">כתובת האתר הועתקה</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">הסתרת הכרטיסיות האחרונות</translation>
 <translation id="4578835633387306383">הפעלה…</translation>
 <translation id="4580716718466706433">מעבר אל "מנהל הסיסמאות"</translation>
+<translation id="4585751637295612750">אפשר לפתוח כרטיסייה חדשה כדי להוסיף אותה לשאלה</translation>
 <translation id="4587589328781138893">אתרים</translation>
 <translation id="4592672037257622855">{count,plural, =1{הדף נוסף לרשימת הקריאה}one{‫{count} דפים נוספו לרשימת הקריאה}two{‫{count} דפים נוספו לרשימת הקריאה}other{‫{count} דפים נוספו לרשימת הקריאה}}</translation>
 <translation id="459644946100970322">להפעיל את ההתראות על שינוי במחיר?</translation>

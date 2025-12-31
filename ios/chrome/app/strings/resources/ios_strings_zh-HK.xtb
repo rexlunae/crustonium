@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">不要隱藏</translation>
 <translation id="1456545332132818232"><ph name="PRODUCT_NAME" />嘅產品評論，<ph name="MAX_STARS" /> 星入面攞到 <ph name="STARS" /> 星，<ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">節省時間，減少輸入操作</translation>
+<translation id="1466035273550360103">沒有開啟的分頁</translation>
 <translation id="1469381646033328562">你的帳戶由家長管理。
 <ph name="BEGIN_LINK" />瞭解詳情<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">已變更</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">無法儲存您的變更。</translation>
 <translation id="3254806613790954367">在你的所有裝置上顯示最後開啟的分頁</translation>
 <translation id="325717987950204592">輕按 [私隱權和安全性]</translation>
-<translation id="3266338926702638258">顯示呢件產品嘅價格記錄</translation>
 <translation id="3272527697863656322">取消</translation>
 <translation id="3273510436356991673">自訂主畫面</translation>
 <translation id="3277021493514034324">已複製網站網址</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">隱藏「最近開啟的分頁」</translation>
 <translation id="4578835633387306383">開啟…</translation>
 <translation id="4580716718466706433">前往「密碼管理工具」</translation>
+<translation id="4585751637295612750">開啟新分頁以加入查詢</translation>
 <translation id="4587589328781138893">網站</translation>
 <translation id="4592672037257622855">{count,plural, =1{已將頁面新增至閱讀清單}other{已將 {count} 個頁面新增至閱讀清單}}</translation>
 <translation id="459644946100970322">要開啟價格變更提示嗎？</translation>

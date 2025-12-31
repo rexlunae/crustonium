@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">लपवू नका</translation>
 <translation id="1456545332132818232"><ph name="PRODUCT_NAME" /> वरील उत्पादनाची परीक्षणे, <ph name="MAX_STARS" /> पैकी <ph name="STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">वेळ वाचवा, कमी टाइप करा</translation>
+<translation id="1466035273550360103">उघडलेले कोणतेही टॅब नाहीत</translation>
 <translation id="1469381646033328562">तुमचे खाते तुमच्या पालकांद्वारे व्यवस्थापित केले जाते.
 <ph name="BEGIN_LINK" />अधिक जाणून घ्या<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">बदलला आहे</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">तुमचा बदल सेव्ह करता आला नाही.</translation>
 <translation id="3254806613790954367">तुमच्या सर्व डिव्हाइसवर तुम्ही शेवटचा उघडलेला टॅब</translation>
 <translation id="325717987950204592">"गोपनीयता आणि सुरक्षा" वर टॅप करा</translation>
-<translation id="3266338926702638258">या उत्पादनासाठी किमतीचा इतिहास दाखवा</translation>
 <translation id="3272527697863656322">रद्द करा</translation>
 <translation id="3273510436356991673">तुमची होम स्क्रीन कस्टमाइझ करा</translation>
 <translation id="3277021493514034324">साइट अ‍ॅड्रेस कॉपी केला</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">अलीकडील टॅब लपवा</translation>
 <translation id="4578835633387306383">सुरू करा…</translation>
 <translation id="4580716718466706433">"Password Manager" वर जा</translation>
+<translation id="4585751637295612750">तुमच्या प्रश्नामध्ये जोडण्यासाठी नवीन टॅब उघडा</translation>
 <translation id="4587589328781138893">Sites</translation>
 <translation id="4592672037257622855">{count,plural, =1{पेज तुमच्या वाचन सूचीमध्ये जोडले आहे}other{{count} पेज तुमच्या वाचन सूचीमध्ये जोडली आहेत}}</translation>
 <translation id="459644946100970322">किमतीविषयी सूचना सुरू करायच्या आहेत का?</translation>

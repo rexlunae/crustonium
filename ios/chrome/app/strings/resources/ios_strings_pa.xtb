@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">ਨਾ ਲੁਕਾਓ</translation>
 <translation id="1456545332132818232"><ph name="PRODUCT_NAME" /> ਨੂੰ ਮਿਲੀਆਂ ਉਤਪਾਦ ਸਮੀਖਿਆਵਾਂ, <ph name="DOMAIN" /> 'ਤੇ ਇਸ ਉਤਪਾਦ ਨੂੰ <ph name="MAX_STARS" /> ਵਿੱਚੋਂ <ph name="STARS" /> ਮਿਲੇ ਹਨ</translation>
 <translation id="1460751212339734034">ਸਮਾਂ ਬਚਾਓ, ਘੱਟ ਟਾਈਪ ਕਰੋ</translation>
+<translation id="1466035273550360103">ਕੋਈ ਖੁੱਲ੍ਹੀ ਟੈਬ ਨਹੀਂ</translation>
 <translation id="1469381646033328562">ਤੁਹਾਡੇ ਖਾਤੇ ਦਾ ਪ੍ਰਬੰਧਨ ਤੁਹਾਡੇ ਮਾਂ-ਪਿਓ ਵੱਲੋਂ ਕੀਤਾ ਜਾਂਦਾ ਹੈ।
 <ph name="BEGIN_LINK" />ਹੋਰ ਜਾਣੋ<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">ਬਦਲੀ ਗਈ</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">ਤੁਹਾਡੀ ਤਬਦੀਲੀ ਨੂੰ ਰੱਖਿਅਤ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ।</translation>
 <translation id="3254806613790954367">ਤੁਹਾਡੇ ਸਾਰੇ ਡੀਵਾਈਸਾਂ 'ਤੇ ਤੁਹਾਡੀ ਆਖਰੀ ਖੁੱਲ੍ਹੀ ਟੈਬ</translation>
 <translation id="325717987950204592">"ਪਰਦੇਦਾਰੀ ਅਤੇ ਸੁਰੱਖਿਆ" 'ਤੇ ਟੈਪ ਕਰੋ</translation>
-<translation id="3266338926702638258">ਇਸ ਉਤਪਾਦ ਲਈ ਕੀਮਤ ਦਾ ਇਤਿਹਾਸ ਦਿਖਾਓ</translation>
 <translation id="3272527697863656322">ਰੱਦ ਕਰੋ</translation>
 <translation id="3273510436356991673">ਆਪਣੀ ਹੋਮ ਸਕ੍ਰੀਨ ਨੂੰ ਵਿਉਂਤਬੱਧ ਕਰੋ</translation>
 <translation id="3277021493514034324">ਸਾਈਟ ਦਾ ਪਤਾ ਕਾਪੀ ਕੀਤਾ ਗਿਆ</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">"ਹਾਲੀਆ ਟੈਬਾਂ" ਨੂੰ ਲੁਕਾਓ</translation>
 <translation id="4578835633387306383">ਚਾਲੂ ਕਰੋ…</translation>
 <translation id="4580716718466706433">"Password Manager" 'ਤੇ ਜਾਓ</translation>
+<translation id="4585751637295612750">ਇਸਨੂੰ ਆਪਣੇ ਸਵਾਲ ਵਿੱਚ ਸ਼ਾਮਲ ਕਰਨ ਲਈ ਇੱਕ ਨਵੀਂ ਟੈਬ ਖੋਲ੍ਹੋ</translation>
 <translation id="4587589328781138893">ਸਾਈਟਾਂ</translation>
 <translation id="4592672037257622855">{count,plural, =1{ਪੰਨੇ ਨੂੰ ਤੁਹਾਡੀ ਪੜ੍ਹਨ-ਸੂਚੀ ਵਿੱਚ ਸ਼ਾਮਲ ਕੀਤਾ ਗਿਆ}one{{count} ਪੰਨੇ ਨੂੰ ਤੁਹਾਡੀ ਪੜ੍ਹਨ-ਸੂਚੀ ਵਿੱਚ ਸ਼ਾਮਲ ਕੀਤਾ ਗਿਆ}other{{count} ਪੰਨਿਆਂ ਨੂੰ ਤੁਹਾਡੀ ਪੜ੍ਹਨ-ਸੂਚੀ ਵਿੱਚ ਸ਼ਾਮਲ ਕੀਤਾ ਗਿਆ}}</translation>
 <translation id="459644946100970322">ਕੀ ਕੀਮਤ ਬਾਰੇ ਅਲਰਟਾਂ ਨੂੰ ਚਾਲੂ ਕਰਨਾ ਹੈ?</translation>

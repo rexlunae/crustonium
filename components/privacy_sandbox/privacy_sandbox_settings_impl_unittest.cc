@@ -31,7 +31,6 @@
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/privacy_sandbox/privacy_sandbox_settings.h"
 #include "components/privacy_sandbox/privacy_sandbox_test_util.h"
-#include "components/privacy_sandbox/tpcd_experiment_eligibility.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
@@ -123,10 +122,6 @@ class PrivacySandboxSettingsTest : public testing::Test {
     mock_delegate()->SetUpIsIncognitoProfileResponse(/*incognito=*/false);
     mock_delegate()->SetUpHasAppropriateTopicsConsentResponse(
         /*has_appropriate_consent=*/true);
-    mock_delegate()->SetUpIsCookieDeprecationExperimentEligibleResponse(
-        /*eligible=*/true);
-    mock_delegate()->SetUpGetCookieDeprecationExperimentCurrentEligibility(
-        /*eligibility_reason=*/TpcdExperimentEligibility::Reason::kEligible);
   }
 
   MockPrivacySandboxSettingsDelegate* mock_delegate() { return mock_delegate_; }
@@ -455,40 +450,15 @@ TEST_F(PrivacySandboxSettingsTest, ClearingTopicSettings) {
   EXPECT_TRUE(privacy_sandbox_settings()->IsTopicAllowed(topic_c));
 }
 
-TEST_F(PrivacySandboxSettingsTest,
-       GetCookieDeprecationExperimentCurrentEligibility) {
-  EXPECT_CALL(*mock_delegate(),
-              GetCookieDeprecationExperimentCurrentEligibility())
-      .Times(1)
-      .WillOnce(Return(TpcdExperimentEligibility(
-          TpcdExperimentEligibility::Reason::k3pCookiesBlocked)));
-  EXPECT_EQ(privacy_sandbox_settings()
-                ->GetCookieDeprecationExperimentCurrentEligibility()
-                .reason(),
-            TpcdExperimentEligibility::Reason::k3pCookiesBlocked);
-
-  EXPECT_CALL(*mock_delegate(),
-              GetCookieDeprecationExperimentCurrentEligibility())
-      .Times(1)
-      .WillOnce(Return(TpcdExperimentEligibility(
-          TpcdExperimentEligibility::Reason::kEligible)));
-  EXPECT_EQ(privacy_sandbox_settings()
-                ->GetCookieDeprecationExperimentCurrentEligibility()
-                .reason(),
-            TpcdExperimentEligibility::Reason::kEligible);
-}
-
 struct PrivateAggregationDebugModeTestCase {
-  using TupleT = std::tuple<bool, bool, bool, bool, bool>;
+  using TupleT = std::tuple<bool, bool, bool, bool>;
 
   explicit PrivateAggregationDebugModeTestCase(TupleT t)
-      : cookies_blocked_by_experiment(std::get<0>(t)),
-        cookies_blocked_by_user_setting(std::get<1>(t)),
-        cookie_controls_mode_ui_pref(std::get<2>(t)),
-        site_exception_user_setting_defined(std::get<3>(t)),
-        ignore_site_exception_feature_enabled(std::get<4>(t)) {}
+      : cookies_blocked_by_user_setting(std::get<0>(t)),
+        cookie_controls_mode_ui_pref(std::get<1>(t)),
+        site_exception_user_setting_defined(std::get<2>(t)),
+        ignore_site_exception_feature_enabled(std::get<3>(t)) {}
 
-  bool cookies_blocked_by_experiment = false;
   bool cookies_blocked_by_user_setting = false;
   bool cookie_controls_mode_ui_pref = false;
   bool site_exception_user_setting_defined = false;
@@ -507,19 +477,16 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Combine(testing::Bool(),
                          testing::Bool(),
                          testing::Bool(),
-                         testing::Bool(),
                          testing::Bool())),
     // Creates a human-readable name for each test. Per gtest docs, test names
     // must contain only alphanumeric characters.
     [](const testing::TestParamInfo<PrivateAggregationDebugModeTestCase>& info)
         -> std::string {
       return base::StringPrintf(
-          "And3pcdExperiment%s"
           "AndExplicitUserSetting%s"
           "AndCookieControlsModePref%s"
           "AndSiteExceptionUserSetting%s"
           "AndIgnoreSiteException%s",
-          info.param.cookies_blocked_by_experiment ? "On" : "Off",
           info.param.cookies_blocked_by_user_setting ? "Blocks3pc" : "IsNotSet",
           info.param.cookie_controls_mode_ui_pref ? "On" : "Off",
           info.param.site_exception_user_setting_defined ? "Defined"
@@ -2088,88 +2055,6 @@ TEST_P(PrivacySandboxAttestationsTest, SetOverrideFromFlags) {
 }
 
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PrivacySandboxAttestationsTest);
-
-struct PrivacySandbox3pcdTestCase {
-  std::string disable_ads_apis_param = "false";
-  bool m1_topics_enabled_pref_consent = true;
-  bool delegate_experiment_eligibility = true;
-  bool output_keys = true;
-  int expected_status;
-};
-
-const PrivacySandbox3pcdTestCase kTestCases[] = {
-    {
-        .disable_ads_apis_param = "true",
-        .m1_topics_enabled_pref_consent = false,
-        .output_keys = false,
-        .expected_status =
-            /*static_cast<int>(Status::kBlockedBy3pcdExperiment)*/ 11,
-    },
-    {
-        .disable_ads_apis_param = "true",
-        .output_keys = false,
-        .expected_status =
-            /*static_cast<int>(Status::kBlockedBy3pcdExperiment)*/ 11,
-    },
-    {
-        .m1_topics_enabled_pref_consent = false,
-        .output_keys = false,
-        .expected_status = /*static_cast<int>(Status::kApisDisabled)*/ 3,
-    },
-    {
-        .disable_ads_apis_param = "true",
-        .delegate_experiment_eligibility = false,
-        .expected_status =
-            /*static_cast<int>(Status::kAllowed)*/ 0,
-    },
-    {
-        .expected_status = /*static_cast<int>(Status::kAllowed)*/ 0,
-    }};
-
-class PrivacySandbox3pcdExperimentTest
-    : public PrivacySandboxSettingsM1Test,
-      public testing::WithParamInterface<PrivacySandbox3pcdTestCase> {
- public:
-  PrivacySandbox3pcdExperimentTest() = default;
-
-  void InitializeFeaturesBeforeStart() override {
-    cookie_deprecation_feature_list_.Reset();
-  }
-
- protected:
-  base::test::ScopedFeatureList cookie_deprecation_feature_list_;
-};
-
-TEST_P(PrivacySandbox3pcdExperimentTest, ExperimentDisablesAdsAPIs) {
-  const PrivacySandbox3pcdTestCase& test_case = GetParam();
-  cookie_deprecation_feature_list_.InitAndEnableFeatureWithParameters(
-      features::kCookieDeprecationFacilitatedTesting,
-      {{features::kCookieDeprecationTestingDisableAdsAPIsName,
-        test_case.disable_ads_apis_param}});
-  mock_delegate()->SetUpIsCookieDeprecationExperimentEligibleResponse(
-      /*eligible=*/test_case.delegate_experiment_eligibility);
-  RunTestCase(
-      TestState{{kM1TopicsEnabledUserPrefValue,
-                 test_case.m1_topics_enabled_pref_consent},
-                {kHasAppropriateTopicsConsent,
-                 test_case.m1_topics_enabled_pref_consent}},
-      TestInput{
-          {kTopFrameOrigin, url::Origin::Create(GURL("https://top-frame.com"))},
-          {kTopicsURL, GURL("https://embedded.com")},
-      },
-      TestOutput{
-          {MultipleOutputKeys{kIsTopicsAllowed, kIsTopicsAllowedForContext},
-           test_case.output_keys},
-          {MultipleOutputKeys{
-               kIsTopicsAllowedMetric,
-               kIsTopicsAllowedForContextMetric,
-           },
-           test_case.expected_status}});
-}
-
-INSTANTIATE_TEST_SUITE_P(PrivacySandbox3pcdExperimentTests,
-                         PrivacySandbox3pcdExperimentTest,
-                         testing::ValuesIn(kTestCases));
 
 namespace {
 

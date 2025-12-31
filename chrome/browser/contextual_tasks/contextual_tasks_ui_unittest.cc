@@ -443,8 +443,8 @@ TEST_F(ContextualTasksUiTest, TaskCreated_ZeroState) {
   base::Uuid task_id = base::Uuid::ParseCaseInsensitive(kUuid);
   ContextualTask task(task_id);
   EXPECT_CALL(*contextual_tasks_service_, CreateTask()).WillOnce(Return(task));
-  // OnTaskChanged should be called with an empty UUID for zero state.
-  EXPECT_CALL(*service_for_nav_, OnTaskChanged(_, _, base::Uuid(), _)).Times(1);
+  // OnTaskChanged should be called with the created UUID.
+  EXPECT_CALL(*service_for_nav_, OnTaskChanged(_, _, task_id, _)).Times(1);
 
   std::unique_ptr<content::MockNavigationHandle> nav_handle =
       CreateMockNavigationHandle(url);
@@ -580,8 +580,15 @@ TEST_F(ContextualTasksUiTest, DidStartNavigation_ZeroState) {
       {GURL("https://google.com"), false},
       {GURL("https://google.com?q=test"), false},
       {GURL("https://www.google.com/search?udm=50"), true},
+      {GURL("https://www.google.com/search?udm=50&mstk=test"), false},
       {GURL("https://www.google.com/search?udm=50&q="), true},
+      {GURL("https://www.google.com/search?udm=50&q=&mstk=test"), false},
+      {GURL("https://www.google.com/search?udm=50&q=&mstk="), true},
       {GURL("https://www.google.com/search?udm=50&q=test"), false},
+      {GURL("https://www.google.com/search?udm=50&q=test&mstk="), false},
+      {GURL("https://www.google.com/search?udm=50&q=&mstk=&vsrid=test"), false},
+      {GURL("https://www.google.com/search?udm=50&q=&mstk=&cinpts=test"),
+       false},
       {GURL("https://google.com/search"), false},
   };
 
@@ -595,7 +602,10 @@ TEST_F(ContextualTasksUiTest, DidStartNavigation_ZeroState) {
 
     EXPECT_EQ(
         ContextualTasksUI::IsZeroState(test_case.url, service_for_nav_.get()),
-        test_case.expected_is_zero_state);
+        test_case.expected_is_zero_state)
+        << "Expected " << test_case.url.spec() << " to "
+        << (test_case.expected_is_zero_state ? "be" : "not be")
+        << " a zero state";
     EXPECT_CALL(delegate, OnZeroStateChange(test_case.expected_is_zero_state))
         .Times(1);
 

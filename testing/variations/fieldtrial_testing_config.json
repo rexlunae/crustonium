@@ -7186,8 +7186,6 @@
                         "version": "2"
                     },
                     "enable_features": [
-                        "AttributionDebugReportingCookieDeprecationTesting",
-                        "CookieDeprecationFacilitatedTesting",
                         "SkipTpcdMitigationsForAds",
                         "TPCDAdHeuristicSubframeRequestTagging"
                     ]
@@ -8965,25 +8963,6 @@
             ]
         }
     ],
-    "DisableCookieDeprecationFacilitatedTestingLabels": [
-        {
-            "platforms": [
-                "android",
-                "chromeos",
-                "linux",
-                "mac",
-                "windows"
-            ],
-            "experiments": [
-                {
-                    "name": "LabelsOff",
-                    "disable_features": [
-                        "CookieDeprecationFacilitatedTestingLabels"
-                    ]
-                }
-            ]
-        }
-    ],
     "DisableGeoLanguageModel": [
         {
             "platforms": [
@@ -9583,6 +9562,21 @@
                     "enable_features": [
                         "AutofillEnableSeparatePixPreferenceItem",
                         "FacilitatedPaymentsEnableA2APayment"
+                    ]
+                }
+            ]
+        }
+    ],
+    "EnableADPFScrollNoRendererMain": [
+        {
+            "platforms": [
+                "android"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "enable_features": [
+                        "EnableADPFScrollNoRendererMain"
                     ]
                 }
             ]
@@ -17025,7 +17019,8 @@
                 {
                     "name": "Enabled",
                     "enable_features": [
-                        "EnableOAuthMultiloginStandardCookiesBinding"
+                        "EnableOAuthMultiloginStandardCookiesBinding",
+                        "UseUnexportableKeyServiceInBrowserProcess"
                     ]
                 }
             ]

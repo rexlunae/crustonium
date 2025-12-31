@@ -36,6 +36,18 @@ class MockActorUiStateManager : public ActorUiStateManagerInterface {
               RegisterActorTaskRemoved,
               (ActorTaskRemovedCallback callback),
               (override));
+  MOCK_METHOD(std::optional<std::string>,
+              GetActorTaskTitle,
+              (TaskId task_id),
+              (override));
+  MOCK_METHOD(std::optional<raw_ptr<tabs::TabInterface>>,
+              GetLastActedOnTab,
+              (TaskId task_id),
+              (override));
+  MOCK_METHOD(std::optional<actor::ActorTask::State>,
+              GetActorTaskState,
+              (TaskId task_id),
+              (override));
 };
 
 }  // namespace actor::ui

@@ -77,6 +77,7 @@
 <translation id="1119009590493440389"><ph name="MANAGE_SYNC_FOCUSED_FRIENDLY_MATCH_TEXT" />: tryck på Tabb och sedan på Retur om du vill hantera vilken Chrome-information du sparar i Google-kontot</translation>
 <translation id="1122714970786750095">El och elektronik</translation>
 <translation id="1123753900084781868">Live Caption är inte tillgängligt just nu</translation>
+<translation id="1124643885833329193">Exakt plats</translation>
 <translation id="112840717907525620">Cacheminnet för policyn är OK</translation>
 <translation id="1131264053432022307">Bilden som du kopierade</translation>
 <translation id="1132735979845538847"><ph name="ORIGIN" /> – Dra från toppen och tryck på bakåtknappen för att avsluta helskärmsläget</translation>
@@ -367,7 +368,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="1576277203042721907">Shopping Insights</translation>
 <translation id="1579189948231786790">Den här webbplatsen har blockerats av organisationen</translation>
 <translation id="1581080074034554886">CVC</translation>
-<translation id="1581172376168798878">Löper inte ut</translation>
 <translation id="1583429793053364125">Ett fel uppstod när webbsidan skulle visas.</translation>
 <translation id="1584492003828271317">Huruvida annonser som visas när du surfar anpassas eller inte beror på den här inställningen, föreslagna annonser på webbplatser, dina cookieinställningar och om webbplatsen du besöker anpassar annonser</translation>
 <translation id="1586541204584340881">Vilka tillägg du har installerat</translation>
@@ -481,7 +481,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="1746531169546376413">0 grader</translation>
 <translation id="1747777564644667857">Flyg</translation>
 <translation id="1748225549612934682">Förkorta texten om du vill få hjälp med att skriva</translation>
-<translation id="1751544761369730824">Radera webbplatsen <ph name="SITE_NAME" /></translation>
 <translation id="1752021286346845558">Postfack 8</translation>
 <translation id="1753706481035618306">Sidnummer</translation>
 <translation id="1755203724116202818">För att mäta en annons resultat delas begränsade typer av data mellan webbplatser, till exempel om du har gjort ett köp efter att ha besökt en webbplats.</translation>
@@ -619,7 +618,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="2002436619517051938">Du kan göra ändringar i inställningarna för Chrome.</translation>
 <translation id="2003709556000175978">Återställ lösenordet nu</translation>
 <translation id="2003775180883135320">Fyra hål högst upp</translation>
-<translation id="2004697686368036666">Vissa webbplatsers funktioner kanske inte fungerar</translation>
 <translation id="2009942480257059311">Knappen Skapa händelse: aktivera om du snabbt vill skapa en ny händelse i Google Kalender</translation>
 <translation id="201174227998721785">Hantera behörigheter och data som lagras på olika webbplatser i inställningarna för Chrome</translation>
 <translation id="2018769312928511665">Tyg (blankt)</translation>
@@ -893,6 +891,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="2400263725572336749">Lägg till pass</translation>
 <translation id="2400271059665846158">Hantera stamkundskort i Google Wallet</translation>
 <translation id="2400600116338235695">Får begära tillstånd att ansluta till en serieport</translation>
+<translation id="2403474027143565107">Exakt</translation>
 <translation id="240450251994300576">Sekundär sidhuvudslogotyp</translation>
 <translation id="2404884497378469141">Testa att kopiera filerna igen</translation>
 <translation id="2413155254802890957">Tidigare</translation>
@@ -997,6 +996,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="2571488850200220306">Av säkerhetsskäl kan den även se enhetens operativsystem, webbläsarversion och vilken programvara som är installerad</translation>
 <translation id="2573170131138724450">Tv-apparater</translation>
 <translation id="257674075312929031">Grupp</translation>
+<translation id="2577522251608256362">Stadsdel</translation>
 <translation id="2580031090587209073">Delningsalternativ</translation>
 <translation id="258027838577899739">Radera allt från historiken</translation>
 <translation id="258135245577667916"><ph name="USER_DISPLAY_NAME" /> lade till en flik</translation>
@@ -1231,7 +1231,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="2985306909656435243">Om alternativet är aktiverat sparar Chromium en kopia av kortet på enheten så att det går snabbare att fylla i formulär.</translation>
 <translation id="2985398929374701810">Ange en giltig adress</translation>
 <translation id="2987034854559945715">Det finns inga matchande funktioner</translation>
-<translation id="2988216301273604645">Chrome begränsar mängden information webbplatser kan använda för att spåra dig när du surfar. Du kan ändra inställningarna och välja din egen skyddsnivå.</translation>
 <translation id="2989742184762224133">Två häftklamrar högst upp</translation>
 <translation id="2991174974383378012">Dela med webbplatsen</translation>
 <translation id="299122504639061328">Hantera standardsökmotor och webbplatssökning</translation>
@@ -1283,6 +1282,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="3076865167425975822">Operativsystem</translation>
 <translation id="3080254622891793721">Bild</translation>
 <translation id="3082007635241601060">Tillåt att Google använder dina kundvagnar för att leta efter anpassade rabatter</translation>
+<translation id="3085373848068196154"><ph name="PROXY_INVALID_PROXY" /> är inte en giltig proxy.</translation>
 <translation id="3086269988715347183">Du har inte godkänt <ph name="BLOCKED_URL" /> tidigare</translation>
 <translation id="3086579638707268289">Din aktivitet på webben övervakas</translation>
 <translation id="3087734570205094154">Nederst</translation>
@@ -1514,7 +1514,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="3440783957068352691">kvadrat</translation>
 <translation id="3441653493275994384">Skärm</translation>
 <translation id="3443504041532578451">Optisk skiva (satäng)</translation>
-<translation id="3447644283769633681">Blockera alla cookies från tredje part</translation>
 <translation id="3447661539832366887">Enhetens ägare har stängt av dinosauriespelet.</translation>
 <translation id="3447884698081792621">Visa certifikat (utfärdat av <ph name="ISSUER" />)</translation>
 <translation id="3450323514459570273">Får begära tillstånd att styra och omprogrammera MIDI-enheter</translation>
@@ -1627,6 +1626,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="361438452008624280">Listposten <ph name="LANGUAGE_ID" />: Språket är okänt eller stöds inte.</translation>
 <translation id="3614934205542186002"><ph name="RUN_CHROME_SAFETY_CHECK_FOCUSED_FRIENDLY_MATCH_TEXT" />: tryck på Tabb och sedan på Retur om du vill köra en säkerhetskontroll i inställningarna för Chrome</translation>
 <translation id="3615309852743236517">Manikyr och pedikyr</translation>
+<translation id="3620034424637552643">Används ofta för vägbeskrivningar, leveranser och annat</translation>
 <translation id="3620239073311576716">Uniformer och arbetskläder</translation>
 <translation id="3621401353678567613">Aktivera aviseringar i inställningarna om du vill få aviseringar om prissänkningar för produkter du bevakar.</translation>
 <translation id="362276910939193118">Visa fullständig historik</translation>
@@ -1661,7 +1661,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="3659521826520353662">Vilka administratörsdefinierade webbplatser som besöks och när: <ph name="ALLOWLISTED_WEBSITES" /></translation>
 <translation id="3664479564786885722">Sök efter fler köpalternativ från andra butiker som säljer produkten.</translation>
 <translation id="3664782872746246217">Sökord:</translation>
-<translation id="3665100783276035932">De flesta webbplatser bör fungera som förväntat</translation>
 <translation id="3665806835792525231"><ph name="BEGIN_LINK1" />Läs mer<ph name="LINK_END1" /></translation>
 <translation id="3670030362669914947">Nummer</translation>
 <translation id="3670159164851218963">Historik för AI-läget</translation>
@@ -1894,6 +1893,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="4036753017940930924">Tomter och mark</translation>
 <translation id="403724377879219932">Får begära åtkomst till andra enheter i det lokala nätverket</translation>
 <translation id="4039506337798853114">Visa markören genom att trycka på |<ph name="ACCELERATOR" />|</translation>
+<translation id="4042597221652780603">Ungefärlig</translation>
 <translation id="4045070493270310437">Öppna flikar igen</translation>
 <translation id="4045226534284799755">Logga in på ditt Microsoft-konto innan du försöker igen</translation>
 <translation id="4045441967987592849">Öppna igen</translation>
@@ -2111,7 +2111,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="4332872603299969513">Barnböcker</translation>
 <translation id="4333295216031073611">Inköpslista</translation>
 <translation id="4333561522337981382">Hantera fönster på alla skärmar</translation>
-<translation id="4336219115486912529">{COUNT,plural, =1{Löper ut i morgon}other{Löper ut om # dagar}}</translation>
 <translation id="4336913590841287350">Principen stöds inte för användarpolicyer i iOS ännu.</translation>
 <translation id="4340575312453649552">Den här annonsen använde för många resurser för enheten, så den togs bort i Chrome.</translation>
 <translation id="4340810192899866471">Importera från JSON</translation>
@@ -2810,7 +2809,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="5512812358367123529">Kontorsmöbler</translation>
 <translation id="5513528801833998679">Använd enhetsinloggning</translation>
 <translation id="5515388687005870733">55 x 85 mm</translation>
-<translation id="5518352028556756716">De flesta webbplatser kan inte använda tredjepartscookies för att spåra dig när du surfar, och webbplatser kan inte använda tredjepartscookies i inkognitoläge.</translation>
 <translation id="5519516356611866228">Med dina ändringar</translation>
 <translation id="5519696598216267194">Papper (perforerat)</translation>
 <translation id="5520105693415771152">Saknar du aktuella uppgifter? Kontakta utgivaren för att uppdatera dem.</translation>
@@ -3212,6 +3210,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="6164605812717770913">En förälder eller vårdnadshavare har sagt att du inte får besöka den här webbplatsen. Du kan be hen att låsa upp den.</translation>
 <translation id="6165508094623778733">Läs mer</translation>
 <translation id="6167577165590485365">Senaste hämtningsförsök:</translation>
+<translation id="6171968084616623939"><ph name="PROXY_INVALID_SCHEME_HOST_PORT" /> är inte ett giltigt värde.</translation>
 <translation id="617256461084925519">Google Chrome försöker verifiera din identitet för att fylla i dina betalningsuppgifter.</translation>
 <translation id="6173208311907792313">Slutför köpet med Windows Hello</translation>
 <translation id="6176387967264100435">Det här priset är högt</translation>
@@ -3220,7 +3219,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="6180316780098470077">Intervall för nytt försök</translation>
 <translation id="6182972682129119950">A4 x 5</translation>
 <translation id="6184099524311454384">Sök bland flikar</translation>
-<translation id="6184868291074982484">Chrome begränsar automatiskt tredjepartscookies</translation>
 <translation id="6189351761800074311">Din text och ditt sidinnehåll skickas till Google, men används inte för att förbättra AI.
     <ph name="BEGIN_LINK" />Läs mer<ph name="END_LINK" /></translation>
 <translation id="6190518157737269631">Åsidosätt vissa tangenter på tangentbordet, till exempel Esc</translation>
@@ -3287,7 +3285,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="6295618774959045776">CVC:</translation>
 <translation id="6295855836753816081">Sparar ...</translation>
 <translation id="629730747756840877">Konto</translation>
-<translation id="6298456705131259420">Påverkar webbplatserna som anges här. Om du infogar ”[*.]” före ett domännamn skapas ett undantag för hela domänen. Om du till exempel lägger till “[*.]google.com” innebär det att tredjepartscookies också kan vara aktiva för mail.google.com, eftersom det är en del av google.com.</translation>
 <translation id="6300452962057769623">{0,plural, =0{Enheten startas om nu}=1{Om 1 sekund startas enheten om}other{Om # sekunder startas enheten om}}</translation>
 <translation id="6301104306974789820">Få aviseringar om prisbevakning</translation>
 <translation id="6302546952464230349">Via information om <ph name="PERMISSION_NAME" /> behörighet</translation>
@@ -3363,7 +3360,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="6398765197997659313">Avsluta helskärmsläge</translation>
 <translation id="6399633237874954301">Smartkortsläsare som tillåts av administratören</translation>
 <translation id="6401136357288658127">Den här principen är utfasad. Använd principen <ph name="NEW_POLICY" /> i stället.</translation>
-<translation id="640163077447496506">Löper ut i dag</translation>
 <translation id="6402537308870515461">Granskning krävs innan du flyttar</translation>
 <translation id="6403167778944553">Sovrum och badrum</translation>
 <translation id="6403434564317313607">Fliktitlar och webbadresser för sidor som du lägger till i tabellen skickas till Google, sparas i ditt konto <ph name="EMAIL" /> och kan ses av mänskliga granskare för att förbättra funktionen.</translation>
@@ -3538,6 +3534,7 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="6688851075017682769">Testadress efter land</translation>
 <translation id="6689249931105087298">Relativ med svartpunktskomprimering</translation>
 <translation id="6689271823431384964">Chrome ger möjlighet att spara dina kort i ditt Google-konto eftersom du är inloggad. Du kan ändra detta i inställningarna. Kortinnehavarens namn hämtas från ditt konto.</translation>
+<translation id="6690688090329768424"><ph name="PROXY_INVALID_DESTINATION" /> är inte ett giltigt destinationsmönster.</translation>
 <translation id="6691397311652656001">Frigör mer än <ph name="REQUIRED_FREE_DISK_SPACE" /> utrymme</translation>
 <translation id="6694681292321232194"><ph name="FIND_MY_PHONE_FOCUSED_FRIENDLY_MATCH_TEXT" />: tryck på Tabb och sedan på Retur om du vill hitta enheten i Google-kontot</translation>
 <translation id="6695428916538794739">Action- och äventyrsfilmer</translation>
@@ -3649,7 +3646,6 @@ Annars blockeras detta av integritetsinställningarna. Om du tillåter detta kan
 <translation id="6875894866901426843">Administratören raderar dina lokala filer, inklusive filer i papperskorgen, den <ph name="DATE_TIME" />.</translation>
 <translation id="6880941331070119097">Högprisalternativ</translation>
 <translation id="6881240511396774766">Skapa snabbt ett nytt Google-dokument</translation>
-<translation id="6882210908253838664">Om en webbplats inte fungerar kan du testa att ge den tillfällig behörighet att använda tredjepartscookies. <ph name="BEGIN_LINK" />Läs mer<ph name="END_LINK" /></translation>
 <translation id="6883221904761970440">Ett arbetsblad för autentisering av användaruppgifter för säker betalning har stängts</translation>
 <translation id="6883745783646124431">jobbadress</translation>
 <translation id="6886283082988906333">ZIP-arkiv</translation>
@@ -4077,7 +4073,6 @@ Mer information.
 <translation id="753556296624075801">Tillhandahålls av Google</translation>
 <translation id="753713322968419914">Vill du ta bort hemadressen från Autofyll i Chrome?</translation>
 <translation id="7537536606612762813">Obligatorisk</translation>
-<translation id="7541043894191476250">Sammanhangsbaserade uppgifter</translation>
 <translation id="7543525346216957623">Fråga en förälder</translation>
 <translation id="7546409722674205727">Startar <ph name="APP_NAME" /></translation>
 <translation id="7548892272833184391">Åtgärda anslutningsproblem</translation>
@@ -4142,7 +4137,6 @@ Mer information.
 <translation id="7631527008834753063">Tävlingsprogram på tv</translation>
 <translation id="7633909222644580952">Prestandainformation och kraschrapporter</translation>
 <translation id="7634963626477752453">Sparades i mappen <ph name="FOLDER_NAME" /></translation>
-<translation id="7636346903338549690">Webbplatser som tillåts att använda tredjepartscookies</translation>
 <translation id="7637571805876720304">Vill du ta bort kreditkortet från Chromium?</translation>
 <translation id="7637586430889951925">{COUNT,plural, =0{Inga}=1{1 lösenord i kontot (för <ph name="DOMAIN_LIST" />)}other{# lösenord i kontot (för <ph name="DOMAIN_LIST" />)}}</translation>
 <translation id="7638605456503525968">Serieportar</translation>
@@ -4286,6 +4280,7 @@ Mer information.
 <translation id="7870281855125116701">En rabatt hittades</translation>
 <translation id="7871445724586827387">Byt lösenord till Google-kontot</translation>
 <translation id="787226752901403048">Logga in i Chrome för att dela och gå med i flikgrupper och samarbeta</translation>
+<translation id="7874796722855317864"><ph name="PROXY_UNKNOWN_CONDITION" /> är inte en känd villkorstyp.</translation>
 <translation id="7877007680666472091">skyddade innehålls-id:n</translation>
 <translation id="7878562273885520351">Lösenordet kan vara utsatt för risk</translation>
 <translation id="7881044256965445977">Sök efter och anslut till enheter i det lokala nätverket</translation>
@@ -5011,6 +5006,7 @@ Mer information:
 <translation id="9090243919347147717">Bilagor</translation>
 <translation id="9090548458280093580">Sök i historiken med hjälp av AI</translation>
 <translation id="9090993752571911635">Internetleverantörer (ISP)</translation>
+<translation id="9092305980625216393">Används ofta för väder, lokala nyheter och annat</translation>
 <translation id="9093723786115107672">Sovplagg</translation>
 <translation id="9094424186948667194">Få åtkomst till andra appar och tjänster på den här enheten</translation>
 <translation id="9094544726794842788">En Gillar inte-markering öppnar ett formulär där du kan ange detaljerad feedback om varför du inte gillar dessa resultat</translation>

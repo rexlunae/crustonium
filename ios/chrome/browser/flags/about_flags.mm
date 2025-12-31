@@ -2515,9 +2515,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kIOSTrustedVaultNotificationName,
      flag_descriptions::kIOSTrustedVaultNotificationDescription,
      flags_ui::kOsIos, FEATURE_VALUE_TYPE(kIOSTrustedVaultNotification)},
-    {"diamond-prototype", flag_descriptions::kDiamondPrototypeName,
-     flag_descriptions::kDiamondPrototypeDescription, flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(kDiamondPrototype)},
     {"omnibox-drs-prototype", flag_descriptions::kOmniboxDRSPrototypeName,
      flag_descriptions::kOmniboxDRSPrototypeDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(kOmniboxDRSPrototype)},
@@ -2894,6 +2891,12 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
     {"composebox-ipad", flag_descriptions::kComposeboxIpadName,
      flag_descriptions::kComposeboxIpadDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(kComposeboxIpad)},
+    {"chrome-next-ia", flag_descriptions::kChromeNextIaName,
+     flag_descriptions::kChromeNextIaDescription, flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(kChromeNextIa)},
+    {"gemini-image-remix-tool", flag_descriptions::kGeminiImageRemixToolName,
+     flag_descriptions::kGeminiImageRemixToolDescription, flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(kGeminiImageRemixTool)},
 });
 
 bool SkipConditionalFeatureEntry(const flags_ui::FeatureEntry& entry) {

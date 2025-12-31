@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">Berkitilmasin</translation>
 <translation id="1456545332132818232">Mahsulot sharhlari: <ph name="PRODUCT_NAME" />, <ph name="STARS" />/<ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">Vaqtni tejang, kamroq yozing</translation>
+<translation id="1466035273550360103">Ochiq varaqlar topilmadi</translation>
 <translation id="1469381646033328562">Hisobingiz ota-onangiz boshqaruvida.
 <ph name="BEGIN_LINK" />Batafsil<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">Oʻzgardi</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">Oʻzgarish saqlanmadi.</translation>
 <translation id="3254806613790954367">Barcha qurilmalarda ochilgan oxirgi sahifa</translation>
 <translation id="325717987950204592">“Maxfiylik va xavfsizlik” bandini tanlang</translation>
-<translation id="3266338926702638258">Bu mahsulot uchun narxlar tarixini chiqarish</translation>
 <translation id="3272527697863656322">Bekor qilish</translation>
 <translation id="3273510436356991673">Bosh ekranni moslashtiring</translation>
 <translation id="3277021493514034324">Sayt manzilidan nusxa olindi</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">Oxirgi varaqlarni berkitish</translation>
 <translation id="4578835633387306383">Yoqish…</translation>
 <translation id="4580716718466706433">Parollar menejerini oching</translation>
+<translation id="4585751637295612750">Savolga kiritish uchun yangi varaq oching</translation>
 <translation id="4587589328781138893">Sites</translation>
 <translation id="4592672037257622855">{count,plural, =1{Saqlangan sahifalarga sahifa kiritildi}other{Saqlangan sahifalarga {count} ta sahifa kiritildi}}</translation>
 <translation id="459644946100970322">Narxga oid bildirishnomalar yoqilsinmi?</translation>
@@ -1568,6 +1569,7 @@ Handoff funksiyasini faqatgina Chrome sozlamalarida emas, balki qurilma sozlamal
 <translation id="6807287147325542056">Boshqa ilovalardagi parollar</translation>
 <translation id="681368974849482173">Saqlandi</translation>
 <translation id="6825078212112407882">{count,plural, =1{Bukmark Google hisobingizga ({email}) saqlandi}other{{count} ta bukmark Google hisobingizga ({email}) saqlandi}}</translation>
+<translation id="6826004672264649705">Hozirda bu mahsulot kuzatilmoqda. Narxlar tarixini koʻrish uchun oching</translation>
 <translation id="6830728435402077660">Xavfsiz emas</translation>
 <translation id="6831043979455480757">Tarjima</translation>
 <translation id="6842136130964845393">Parollarni istalgan vaqt ochish uchun shaxsingizni tasdiqlang</translation>

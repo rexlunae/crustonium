@@ -128,11 +128,13 @@ export class ContextualTasksAppElement extends CrLitElement {
         reflect: true,
       },
       isAiPage_: {type: Boolean, reflect: true},
+      isLensOverlayShowing_: {type: Boolean},
     };
   }
 
   private browserProxy_: BrowserProxy = BrowserProxyImpl.getInstance();
-  protected accessor isAiPage_: boolean = false;
+  protected accessor isAiPage_: boolean = true;
+  protected accessor isLensOverlayShowing_: boolean = false;
   // Indicates if in tab mode. Most start in a tab.
   protected accessor isShownInTab_: boolean = true;
   protected accessor darkMode_: boolean = loadTimeData.getBoolean('darkMode');
@@ -142,6 +144,11 @@ export class ContextualTasksAppElement extends CrLitElement {
   protected accessor showComposebox_: boolean = true;
   protected accessor isErrorPageVisible_: boolean = false;
   protected accessor isZeroState_: boolean = false;
+
+  protected friendlyZeroStateSubtitle: string =
+      loadTimeData.getString('friendlyZeroStateSubtitle');
+  protected friendlyZeroStateTitle: string =
+      loadTimeData.getString('friendlyZeroStateTitle');
   private listenerIds_: number[] = [];
   // The OAuth token to use for embedded page requests. Null if not yet set.
   // Can be empty if the user is not signed in or the token couldn't be fetched.
@@ -182,6 +189,9 @@ export class ContextualTasksAppElement extends CrLitElement {
         updateTitleInUrl(title);
         document.title = title || loadTimeData.getString('title');
       }),
+      callbackRouter.onAiPageStatusChanged.addListener((isAiPage: boolean) => {
+        this.isAiPage_ = isAiPage;
+      }),
       callbackRouter.postMessageToWebview.addListener(
           this.postMessageToWebview.bind(this)),
       callbackRouter.onHandshakeComplete.addListener(
@@ -203,6 +213,10 @@ export class ContextualTasksAppElement extends CrLitElement {
       callbackRouter.onZeroStateChange.addListener((isZeroState: boolean) => {
         this.isZeroState_ = isZeroState;
       }),
+      callbackRouter.onLensOverlayStateChanged.addListener(
+          (isOverlayShowing: boolean) => {
+            this.isLensOverlayShowing_ = isOverlayShowing;
+          }),
     ];
 
     this.updateSidePanelState();

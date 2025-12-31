@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">Jangan sembunyikan</translation>
 <translation id="1456545332132818232">Ulasan produk <ph name="PRODUCT_NAME" />, <ph name="STARS" /> dari <ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">Hemat waktu, mengetik lebih sedikit</translation>
+<translation id="1466035273550360103">Tidak ada tab yang terbuka</translation>
 <translation id="1469381646033328562">Akunmu dikelola oleh orang tuamu.
 <ph name="BEGIN_LINK" />Pelajari lebih lanjut<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">Berubah</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">Perubahan Anda tidak dapat disimpan.</translation>
 <translation id="3254806613790954367">Tab yang terakhir dibuka di semua perangkat Anda</translation>
 <translation id="325717987950204592">Ketuk "Privasi dan Keamanan"</translation>
-<translation id="3266338926702638258">Tampilkan histori harga untuk produk ini</translation>
 <translation id="3272527697863656322">Batal</translation>
 <translation id="3273510436356991673">Sesuaikan layar utama Anda</translation>
 <translation id="3277021493514034324">Alamat situs disalin</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">Sembunyikan Tab terbaru</translation>
 <translation id="4578835633387306383">Aktifkan…</translation>
 <translation id="4580716718466706433">Buka "Pengelola Sandi"</translation>
+<translation id="4585751637295612750">Buka tab baru untuk menambahkannya ke pertanyaan Anda</translation>
 <translation id="4587589328781138893">Situs</translation>
 <translation id="4592672037257622855">{count,plural, =1{Halaman ditambahkan ke daftar bacaan Anda}other{{count} halaman ditambahkan ke daftar bacaan Anda}}</translation>
 <translation id="459644946100970322">Aktifkan notifikasi harga?</translation>

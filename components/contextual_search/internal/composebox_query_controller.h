@@ -79,9 +79,9 @@ class ComposeboxQueryController
 
   // ContextualSearchContextController:
   void InitializeIfNeeded() override;
-  void CreateSearchUrl(std::unique_ptr<CreateSearchUrlRequestInfo>
-                           search_url_request_info,
-                       base::OnceCallback<void(GURL)> callback) override;
+  void CreateSearchUrl(
+      std::unique_ptr<CreateSearchUrlRequestInfo> search_url_request_info,
+      base::OnceCallback<void(GURL)> callback) override;
   lens::ClientToAimMessage CreateClientToAimRequest(
       std::unique_ptr<CreateClientToAimRequestInfo>
           create_client_to_aim_request_info) override;
@@ -99,6 +99,7 @@ class ComposeboxQueryController
   const contextual_search::FileInfo* GetFileInfo(
       const base::UnguessableToken& file_token) override;
   std::vector<const contextual_search::FileInfo*> GetFileInfoList() override;
+  base::WeakPtr<ContextualSearchContextController> AsWeakPtr() override;
 
   // Returns a request id to use for the viewport image upload request for the
   // given file info, setting the viewport request id on the file info if it is
@@ -427,6 +428,15 @@ class ComposeboxQueryController
       std::optional<lens::LensOverlaySelectionType> lens_overlay_selection_type,
       std::map<std::string, std::string>& url_params_map);
 
+  // Constructs the visual search interaction data based on the file info and
+  // interaction request data.
+  std::optional<lens::LensOverlayVisualSearchInteractionData>
+  ConstructVisualSearchInteractionData(
+      const FileInfo* file_info,
+      const std::optional<std::string>& query_text,
+      std::optional<lens::LensOverlaySelectionType>
+          lens_overlay_selection_type);
+
   // The last received cluster info.
   std::optional<lens::LensOverlayClusterInfo> cluster_info_ = std::nullopt;
 
@@ -492,10 +502,6 @@ class ComposeboxQueryController
   // attachments are available (true), or the only attachment if exactly one
   // attachment is available (false).
   bool prioritize_suggestions_for_the_first_attached_document_;
-
-  // Whether or not to support the context_id migration on the server, for
-  // the multi-context input flow.
-  bool enable_context_id_migration_;
 
   // Whether or not to attach the page title and url directly to the suggest
   // request params.

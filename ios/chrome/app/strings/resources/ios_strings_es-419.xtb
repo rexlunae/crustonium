@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">No ocultar</translation>
 <translation id="1456545332132818232">Opiniones sobre el producto en <ph name="PRODUCT_NAME" />, <ph name="STARS" /> de <ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">Ahorra tiempo y escribe menos</translation>
+<translation id="1466035273550360103">No hay pestañas abiertas</translation>
 <translation id="1469381646033328562">Tu madre o padre administra tu cuenta.
 <ph name="BEGIN_LINK" />Más información<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">Se cambió</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">No se pudo guardar el cambio.</translation>
 <translation id="3254806613790954367">La última pestaña que abriste en todos tus dispositivos</translation>
 <translation id="325717987950204592">Presiona "Privacidad y seguridad".</translation>
-<translation id="3266338926702638258">Mostrar el historial de precios de este producto</translation>
 <translation id="3272527697863656322">Cancelar</translation>
 <translation id="3273510436356991673">Personaliza tu pantalla principal</translation>
 <translation id="3277021493514034324">Se copió la dirección del sitio</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">Ocultar la opción Pestañas recientes</translation>
 <translation id="4578835633387306383">Activar…</translation>
 <translation id="4580716718466706433">Ve al "Administrador de contraseñas"</translation>
+<translation id="4585751637295612750">Abre una pestaña nueva para agregarla a tu pregunta</translation>
 <translation id="4587589328781138893">Sitios</translation>
 <translation id="4592672037257622855">{count,plural, =1{Se agregó la página a tu lista de lectura}other{Se agregaron {count} páginas a tu lista de lectura}}</translation>
 <translation id="459644946100970322">¿Quieres activar las alertas de precios?</translation>
@@ -1568,6 +1569,7 @@ Handoff también debe estar habilitado en la sección General de la configuraci�
 <translation id="6807287147325542056">Contraseñas en otras apps</translation>
 <translation id="681368974849482173">Elemento creado</translation>
 <translation id="6825078212112407882">{count,plural, =1{Se guardó el favorito en tu Cuenta de Google ({email})}other{Se guardaron {count} favoritos en tu Cuenta de Google ({email})}}</translation>
+<translation id="6826004672264649705">Estás realizando un seguimiento de este producto. Abre para ver el historial de precios</translation>
 <translation id="6830728435402077660">No seguro</translation>
 <translation id="6831043979455480757">Traducir</translation>
 <translation id="6842136130964845393">Para asegurarte de que siempre puedas acceder a tus contraseñas guardadas, verifica tu identidad.</translation>

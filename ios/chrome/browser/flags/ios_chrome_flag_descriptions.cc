@@ -286,6 +286,9 @@ const char kCacheIdentityListInChromeDescription[] =
     "Changes the implementation of the cache of the list of identities on "
     "device.";
 
+const char kChromeNextIaName[] = "ChromeNextIa";
+const char kChromeNextIaDescription[] = "Enables the chrome_next_ia feature.";
+
 const char kChromeStartupParametersAsyncName[] =
     "Enable the async chrome startup";
 const char kChromeStartupParametersAsyncDescription[] =
@@ -477,9 +480,6 @@ const char kDetectMainThreadFreezeName[] = "Detect freeze in the main thread.";
 const char kDetectMainThreadFreezeDescription[] =
     "A crash report will be uploaded if the main thread is frozen more than "
     "the time specified by this flag.";
-
-const char kDiamondPrototypeName[] = "Enable the diamon prototype";
-const char kDiamondPrototypeDescription[] = "Turn on prototype for diamond.";
 
 const char kDisableAutofillStrikeSystemName[] =
     "Disable the Autofill strike system";
@@ -684,6 +684,10 @@ const char kGeminiDynamicSettingsDescription[] =
 const char kGeminiFullChatHistoryName[] = "GeminiFullChatHistory";
 const char kGeminiFullChatHistoryDescription[] =
     "Enables the full chat history being shown in the floaty.";
+
+const char kGeminiImageRemixToolName[] = "Gemini Image Remix Tool";
+const char kGeminiImageRemixToolDescription[] =
+    "Enables the image remix tool in the Gemini floaty.";
 
 const char kGeminiImmediateOverlayName[] = "GeminiImmediateOverlay";
 const char kGeminiImmediateOverlayDescription[] =

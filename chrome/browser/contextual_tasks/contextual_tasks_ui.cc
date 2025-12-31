@@ -33,6 +33,7 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/lens/lens_search_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.h"
 #include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
@@ -446,6 +447,19 @@ void ContextualTasksUI::SetIsAiPage(bool is_ai_page) {
   if (page_) {
     page_->OnAiPageStatusChanged(is_ai_page);
   }
+
+  // When AI page is first loaded, close the Lens overlay if it's open.
+  if (is_ai_page && !was_ai_page_) {
+    auto* browser = GetBrowser();
+    if (browser) {
+      if (auto* controller = LensSearchController::FromTabWebContents(
+              browser->GetTabStripModel()->GetActiveWebContents())) {
+        controller->CloseLensAsync(
+            lens::LensOverlayDismissalSource::kContextualTasksQuerySubmitted);
+      }
+    }
+  }
+  was_ai_page_ = is_ai_page;
 }
 
 const GURL& ContextualTasksUI::GetInnerFrameUrl() const {
@@ -532,6 +546,26 @@ ContextualTasksUI::GetOrCreateContextualSessionHandle() {
   if (existing_session) {
     return existing_session;
   }
+
+  // Create a new session if there's no task ID yet.
+  if (!task_id_) {
+    auto* service = ContextualSearchServiceFactory::GetForProfile(
+        Profile::FromWebUI(web_ui()));
+    if (service) {
+      auto session_handle = service->CreateSession(
+          ntp_composebox::CreateQueryControllerConfigParams(),
+          contextual_search::ContextualSearchSource::kContextualTasks);
+      // TODO(crbug.com/469875164): Determine what to do with the return value
+      // of this call, or move this call to a different location.
+      session_handle->CheckSearchContentSharingSettings(
+          Profile::FromWebUI(web_ui())->GetPrefs());
+      helper->SetTaskSession(std::nullopt, std::move(session_handle));
+      return helper->session_handle();
+    }
+  }
+
+  // TODO(crbug.com/469837027): Figure out what the below is doing. It does not
+  // seem quite right.
 
   // If no valid session exists, maintains context continuity by trying to find
   // one from affiliated tabs or side panel WebContents.
@@ -634,6 +668,12 @@ void ContextualTasksUI::OnSidePanelStateChanged() {
 
 void ContextualTasksUI::DisableActiveTabContextSuggestion() {
   ui_service_->set_auto_tab_context_suggestion_enabled(false);
+}
+
+void ContextualTasksUI::OnLensOverlayStateChanged(bool is_showing) {
+  if (page_) {
+    page_->OnLensOverlayStateChanged(is_showing);
+  }
 }
 
 void ContextualTasksUI::OnActiveTabContextStatusChanged() {
@@ -776,7 +816,7 @@ void ContextualTasksUI::FrameNavObserver::DidFinishNavigation(
 
     ui_service_->OnTaskChanged(task_info_delegate_->GetBrowser(),
                                task_info_delegate_->GetWebUIWebContents(),
-                               base::Uuid(),
+                               new_task_id,
                                task_info_delegate_->IsShownInTab());
     return;
   }
@@ -801,7 +841,7 @@ void ContextualTasksUI::FrameNavObserver::DidFinishNavigation(
   bool is_pending_task =
       task_info_delegate_->GetTaskId().has_value() && !webui_thread_id;
 
-  // In cases where the webui doesn't know about an existing threaad ID or
+  // In cases where the webui doesn't know about an existing thread ID or
   // there's a mismatch, either create a new task or update to use an existing
   // one (if it exists).
   if (!is_pending_task &&
@@ -849,8 +889,21 @@ bool ContextualTasksUI::IsZeroState(
     const GURL& url,
     contextual_tasks::ContextualTasksUiService* ui_service) {
   std::string query_value;
+  std::string mstk_value;
+  std::string vsrid_value;
+  std::string cinpts_value;
   net::GetValueForKeyInQuery(url, "q", &query_value);
-  return ui_service->IsAiUrl(url) && query_value.empty();
+  net::GetValueForKeyInQuery(url, "mstk", &mstk_value);
+  net::GetValueForKeyInQuery(url, "vsrid", &vsrid_value);
+  net::GetValueForKeyInQuery(url, "cinpts", &cinpts_value);
+
+  // If the URL is an AI URL and there's no query or mstk, it's zero state. If
+  // there is either a query or mstk, assume it's not zero state. If there is a
+  // vsrid/cinpts, assume it's not zero state since there will soon be an mstk.
+  // TODO(crbug.com/472336339): Find a more robust way to determine if the page
+  // is zero state instead of query params.
+  return ui_service->IsAiUrl(url) && query_value.empty() &&
+         mstk_value.empty() && vsrid_value.empty() && cinpts_value.empty();
 }
 
 ContextualTasksUI::InnerFrameCreationObvserver::InnerFrameCreationObvserver(

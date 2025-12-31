@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">არ დაიმალოს</translation>
 <translation id="1456545332132818232">პროდუქტის მიმოხილვები <ph name="PRODUCT_NAME" />-ზე, <ph name="STARS" />/<ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">დაზოგეთ დრო, აკრიფეთ ნაკლები</translation>
+<translation id="1466035273550360103">გახსნილი ჩანართები არ არის</translation>
 <translation id="1469381646033328562">თქვენს ანგარიშს მართავს თქვენი მშობელი.
 <ph name="BEGIN_LINK" />შეიტყვეთ მეტი<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">შეიცვალა</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">ცვლილების შენახვა ვერ მოხერხდა.</translation>
 <translation id="3254806613790954367">თქვენ მიერ ყველა მოწყობილობაზე ბოლოს გახსნილი ჩანართი</translation>
 <translation id="325717987950204592">შეეხეთ: „კონფიდენციალურობა და უსაფრთხოება“</translation>
-<translation id="3266338926702638258">ამ პროდუქტის ფასების ისტორიის ჩვენება</translation>
 <translation id="3272527697863656322">გაუქმება</translation>
 <translation id="3273510436356991673">თქვენი მთავარი ეკრანის პარამეტრების დაყენება</translation>
 <translation id="3277021493514034324">გვერდის მისამართი დაკოპირდა</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">ბოლოდროინდელი ჩანართების დამალვა</translation>
 <translation id="4578835633387306383">ჩართვა…</translation>
 <translation id="4580716718466706433">გადადით „პაროლების მმართველში“</translation>
+<translation id="4585751637295612750">გახსენით ახალი ჩანართი, რომ დაამატოთ ის თქვენს შეკითხვას</translation>
 <translation id="4587589328781138893">საიტები</translation>
 <translation id="4592672037257622855">{count,plural, =1{გვერდი დაემატა თქვენს საკითხავ სიას}other{{count} გვერდი დაემატა თქვენს საკითხავ სიას}}</translation>
 <translation id="459644946100970322">გსურთ, ჩართოთ გაფრთხილება ფასის შესახებ?</translation>

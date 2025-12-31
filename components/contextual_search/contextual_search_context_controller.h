@@ -69,9 +69,6 @@ class ContextualSearchContextController {
     // attachments are available (true), or the only attachment if exactly one
     // attachment is available (false).
     bool prioritize_suggestions_for_the_first_attached_document = false;
-    // Whether or not to support the context_id migration on the server, for
-    // the multi-context input flow.
-    bool enable_context_id_migration = false;
     // Whether or not to attach the page title and url directly to the suggest
     // request params.
     bool attach_page_title_and_url_to_suggest_requests = false;
@@ -169,6 +166,9 @@ class ContextualSearchContextController {
 
     // Whether create images is selected.
     bool create_images_selected = false;
+
+    // Additional CGI params to append to the search request URL.
+    std::map<std::string, std::string> additional_cgi_params;
   };
 
   virtual ~ContextualSearchContextController() = default;
@@ -213,6 +213,9 @@ class ContextualSearchContextController {
 
   // Return the file infos for all files in the request.
   virtual std::vector<const FileInfo*> GetFileInfoList() = 0;
+
+  // Returns a weak pointer to the context controller.
+  virtual base::WeakPtr<ContextualSearchContextController> AsWeakPtr() = 0;
 };
 
 }  // namespace contextual_search

@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">Non nascondere</translation>
 <translation id="1456545332132818232">Recensioni prodotto su <ph name="PRODUCT_NAME" />, <ph name="STARS" /> su <ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">Risparmia tempo e digita meno</translation>
+<translation id="1466035273550360103">Nessuna scheda aperta</translation>
 <translation id="1469381646033328562">Il tuo account è gestito da un genitore.
 <ph name="BEGIN_LINK" />Scopri di più<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">Modificata</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">Impossibile salvare la modifica.</translation>
 <translation id="3254806613790954367">L'ultima scheda aperta su tutti i tuoi dispositivi</translation>
 <translation id="325717987950204592">Tocca "Privacy e sicurezza"</translation>
-<translation id="3266338926702638258">Mostra la cronologia dei prezzi per questo prodotto</translation>
 <translation id="3272527697863656322">Annulla</translation>
 <translation id="3273510436356991673">Personalizza la schermata Home</translation>
 <translation id="3277021493514034324">Indirizzo del sito copiato</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">Nascondi schede recenti</translation>
 <translation id="4578835633387306383">Attiva…</translation>
 <translation id="4580716718466706433">Vai a "Gestore delle password"</translation>
+<translation id="4585751637295612750">Apri una nuova scheda per aggiungerla alla tua domanda</translation>
 <translation id="4587589328781138893">Siti</translation>
 <translation id="4592672037257622855">{count,plural, =1{Pagina aggiunta al tuo elenco di lettura}other{{count} pagine aggiunte al tuo elenco di lettura}}</translation>
 <translation id="459644946100970322">Attivare gli avvisi sui prezzi?</translation>
@@ -1568,6 +1569,7 @@ La funzione Handoff deve anche essere attivata nella sezione Generali di Imposta
 <translation id="6807287147325542056">Password in altre app</translation>
 <translation id="681368974849482173">Elemento creato</translation>
 <translation id="6825078212112407882">{count,plural, =1{Preferito salvato nel tuo Account Google, {email}}other{{count} preferiti salvati nel tuo Account Google, {email}}}</translation>
+<translation id="6826004672264649705">Stai monitorando questo prodotto. Apri per visualizzare la cronologia dei prezzi</translation>
 <translation id="6830728435402077660">Non sicuro</translation>
 <translation id="6831043979455480757">Traduci</translation>
 <translation id="6842136130964845393">Per assicurarti di poter accedere alle tue password salvate in qualsiasi momento, verifica la tua identità</translation>

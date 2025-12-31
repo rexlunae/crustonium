@@ -232,8 +232,8 @@ bool IsTabGridDragAndDropEnabled() {
 BASE_FEATURE(kTabGridNewTransitions, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsNewTabGridTransitionsEnabled() {
-  if (IsDiamondPrototypeEnabled()) {
-    return false;
+  if (IsChromeNextIaEnabled()) {
+    return true;
   }
   return base::FeatureList::IsEnabled(kTabGridNewTransitions);
 }
@@ -1000,15 +1000,6 @@ bool IsIOSTrustedVaultNotificationEnabled() {
   return base::FeatureList::IsEnabled(kIOSTrustedVaultNotification);
 }
 
-BASE_FEATURE(kDiamondPrototype, base::FEATURE_DISABLED_BY_DEFAULT);
-
-bool IsDiamondPrototypeEnabled() {
-  if (ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_PHONE) {
-    return false;
-  }
-  return base::FeatureList::IsEnabled(kDiamondPrototype);
-}
-
 BASE_FEATURE(kIOSDefaultBrowserOffCyclePromo,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -1209,4 +1200,10 @@ BASE_FEATURE(kComposeboxIpad, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsComposeboxIpadEnabled() {
   return base::FeatureList::IsEnabled(kComposeboxIpad);
+}
+
+BASE_FEATURE(kChromeNextIa, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsChromeNextIaEnabled() {
+  return base::FeatureList::IsEnabled(kChromeNextIa);
 }

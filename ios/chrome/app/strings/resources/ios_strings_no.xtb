@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">Ikke skjul</translation>
 <translation id="1456545332132818232">Produktanmeldelser av <ph name="PRODUCT_NAME" />, <ph name="STARS" /> av <ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">Spar tid – skriv mindre</translation>
+<translation id="1466035273550360103">Ingen åpne faner</translation>
 <translation id="1469381646033328562">Kontoen din administreres av forelderen din.
 <ph name="BEGIN_LINK" />Finn ut mer<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">Endret</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">Kunne ikke lagre endringen.</translation>
 <translation id="3254806613790954367">Den siste åpne fanen på alle enhetene dine</translation>
 <translation id="325717987950204592">Trykk på «Personvern og sikkerhet»</translation>
-<translation id="3266338926702638258">Vis prishistorikken for dette produktet</translation>
 <translation id="3272527697863656322">Avbryt</translation>
 <translation id="3273510436356991673">Tilpass startskjermen</translation>
 <translation id="3277021493514034324">Nettstedsadressen er kopiert</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">Skjul nylige faner</translation>
 <translation id="4578835633387306383">Slå på…</translation>
 <translation id="4580716718466706433">Gå til «Passordlagring»</translation>
+<translation id="4585751637295612750">Åpne en ny fane for å legge den til i spørsmålet ditt</translation>
 <translation id="4587589328781138893">Nettsteder</translation>
 <translation id="4592672037257622855">{count,plural, =1{Siden er lagt til på leselisten din}other{{count} sider er lagt til på leselisten din}}</translation>
 <translation id="459644946100970322">Vil du slå på prisvarsler?</translation>

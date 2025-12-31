@@ -27,6 +27,8 @@ VerticalTabStripTopContainer::VerticalTabStripTopContainer(
     : state_controller_(state_controller),
       root_action_item_(root_action_item),
       action_view_controller_(std::make_unique<views::ActionViewController>()) {
+  SetProperty(views::kElementIdentifierKey,
+              kVerticalTabStripTopContainerElementId);
   SetLayoutManager(std::make_unique<views::DelegatingLayoutManager>(this));
 
   tab_search_button_ = AddChildButtonFor(kActionTabSearch);
@@ -42,9 +44,6 @@ VerticalTabStripTopContainer::VerticalTabStripTopContainer(
     projects_button_->SetProperty(views::kElementIdentifierKey,
                                   kVerticalTabStripProjectsButtonElementId);
   }
-
-  SetProperty(views::kElementIdentifierKey,
-              kVerticalTabStripTopContainerElementId);
 }
 
 VerticalTabStripTopContainer::~VerticalTabStripTopContainer() = default;
@@ -68,8 +67,6 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
     CHECK(projects_button_);
     container_buttons.push_back(projects_button_);
   }
-
-  CHECK(!container_buttons.empty());
 
   if (state_controller_->IsCollapsed()) {
     // If the vertical tab strip is collapsed, then lay out the buttons

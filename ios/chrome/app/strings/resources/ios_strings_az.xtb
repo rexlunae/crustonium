@@ -126,6 +126,7 @@
 <translation id="1455660774629812862">Gizlətməyin</translation>
 <translation id="1456545332132818232"><ph name="PRODUCT_NAME" /> üzrə məhsul rəyləri: <ph name="STARS" />/<ph name="MAX_STARS" />, <ph name="DOMAIN" /></translation>
 <translation id="1460751212339734034">Vaxta qənaət edin, az yazın</translation>
+<translation id="1466035273550360103">Açıq tab yoxdur</translation>
 <translation id="1469381646033328562">Hesabı valideyn idarə edir.
 <ph name="BEGIN_LINK" />Ətraflı məlumat<ph name="END_LINK" /></translation>
 <translation id="147982357559798527">Dəyişdirildi</translation>
@@ -595,7 +596,6 @@
 <translation id="3245744387817103524">Dəyişiklik yaddaşda saxlanmadı.</translation>
 <translation id="3254806613790954367">Bütün cihazlarınızda son açıq tab</translation>
 <translation id="325717987950204592">"Məxfilik və güvənlik" üzərinə toxunun</translation>
-<translation id="3266338926702638258">Bu məhsul üçün qiymət tarixçəsini göstərin</translation>
 <translation id="3272527697863656322">Ləğv edin</translation>
 <translation id="3273510436356991673">Əsas ekranı fərdiləşdirin</translation>
 <translation id="3277021493514034324">Sayt ünvanı kopyalandı</translation>
@@ -919,6 +919,7 @@
 <translation id="4568230126482344545">Son tabları gizlədin</translation>
 <translation id="4578835633387306383">Aktivləşdirin…</translation>
 <translation id="4580716718466706433">"Parol Menecerinə" keçin</translation>
+<translation id="4585751637295612750">Suala əlavə etmək üçün yeni tab açın</translation>
 <translation id="4587589328781138893">Saytlar</translation>
 <translation id="4592672037257622855">{count,plural, =1{Səhifə oxu siyahısına əlavə edildi}other{{count} səhifə oxu siyahısına əlavə edildi}}</translation>
 <translation id="459644946100970322">Qiymət xəbərdarlıqları aktiv edilsin?</translation>
