@@ -1,0 +1,23 @@
+# Cargo.toml for QR Code Generator Component
+# This enables building the Rust QR code FFI glue via Cargo
+
+[package]
+name = "qr-code-generator-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "qr_code_generator_ffi_glue"
+crate-type = ["staticlib", "rlib"]
+path = "qr_code_generator_ffi_glue.rs"
+
+[dependencies]
+# FFI support
+cxx = { workspace = true }
+
+# QR code generation
+qr_code = "2.0"
+
+[build-dependencies]
+cxx-build = { workspace = true }

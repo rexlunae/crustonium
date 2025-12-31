@@ -19,3 +19,16 @@ Android WebView, Ash). Even if these products have multiple executables, the
 code should be in subdirectories of the product.
 
 If you found a bug, please file it at https://crbug.com/new.
+
+## Rust Development
+
+This repository includes Rust components that can be built using Cargo alongside
+the traditional GN/Ninja build system. For Rust development:
+
+- **Quick Start**: See [docs/RUST_COMPILATION_QUICK_REF.md](docs/RUST_COMPILATION_QUICK_REF.md)
+- **Detailed Guide**: See [docs/RUST_COMPILATION.md](docs/RUST_COMPILATION.md)
+- **Build Rust components**: `cargo build --workspace`
+- **Run tests**: `cargo test --workspace`
+
+For the overall Rust adoption strategy, see [docs/rust_adoption_plan.md](docs/rust_adoption_plan.md)
+and [docs/cargo_adoption_plan.md](docs/cargo_adoption_plan.md).
