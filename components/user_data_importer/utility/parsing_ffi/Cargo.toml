@@ -1,0 +1,29 @@
+# Cargo.toml for User Data Importer Parsing FFI
+# This enables building the user data parsing FFI glue via Cargo
+
+[package]
+name = "user-data-importer-parsing-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "parsing_ffi"
+crate-type = ["staticlib", "rlib"]
+path = "lib.rs"
+
+[dependencies]
+# FFI support
+cxx = { workspace = true }
+
+# Core dependencies
+serde = { workspace = true }
+serde_json_lenient = "0.2"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# ZIP file handling
+zip = { workspace = true }
+
+[build-dependencies]
+cxx-build = { workspace = true }

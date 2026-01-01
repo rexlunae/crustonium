@@ -1,0 +1,23 @@
+# Cargo.toml for Media Filters Component
+# This enables building the Symphonia audio decoder FFI glue via Cargo
+
+[package]
+name = "media-filters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "symphonia_glue"
+crate-type = ["staticlib", "rlib"]
+path = "symphonia_glue.rs"
+
+[dependencies]
+# FFI support
+cxx = { workspace = true }
+
+# Audio decoding with Symphonia
+symphonia = "0.5"
+
+[build-dependencies]
+cxx-build = { workspace = true }

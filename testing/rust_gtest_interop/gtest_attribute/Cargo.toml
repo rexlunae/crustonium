@@ -1,0 +1,17 @@
+# Cargo.toml for gtest_attribute proc macro
+# This is a procedural macro for GTest attributes
+
+[package]
+name = "gtest_attribute"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+path = "../gtest_attribute.rs"
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
