@@ -540,7 +540,7 @@ vars = {
 
   # If you change this, also update the libc++ revision in
   # //buildtools/deps_revisions.gni.
-  'libcxx_revision':       'faedab19a5c6018779391b615624590d5fab696a',
+  'libcxx_revision':       '6ac116c7bac0da77d771ac337a5b8828a21e5888',
 
   # GN CIPD package version.
   'gn_version': 'git_revision:64d35867ca0a1088f13de8f4ccaf1a5687d7f1ce',
@@ -1724,7 +1724,7 @@ deps = {
     'packages': [
       {
           'package': 'chromium/third_party/androidx',
-          'version': 'txBgKc2exbbhRd8bU3mWFlITXY-cGdxekOdU1UXkA4EC',
+          'version': 'K8cimOtHYuSA-CISzSOb4BS_3xKH0o69BsmqKNLPWgsC',
       },
     ],
     'condition': 'checkout_android and non_git_source',
