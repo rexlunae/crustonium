@@ -15,6 +15,7 @@ members = [
     # Existing components being migrated to Cargo:
     "components/qr_code_generator",
     # Additional components added in Phase 1.2:
+    "components/facilitated_payments/core/validation",
     "components/user_data_importer/utility/parsing_ffi",
     "media/filters",
     "testing/rust_gtest_interop",

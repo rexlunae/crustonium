@@ -1,0 +1,24 @@
+# Facilitated Payments - Pix Validator
+#
+# Phase 1.2: Component Migration
+# Migrated from GN build to Cargo workspace
+
+[package]
+name = "facilitated-payments-pix-validator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "pix_validator"
+path = "pix_validator.rs"
+
+# The library can be used as both a Rust library and C static library
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+# No external dependencies - pure Rust implementation!
+
+[dev-dependencies]
+# For future Rust-native unit tests
