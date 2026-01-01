@@ -1,6 +1,10 @@
 #!/bin/bash
 # Quick build script for BLE Scan Parser (Tier 2 component)
 # This demonstrates the hybrid build pattern for components with C++ dependencies
+#
+# Note: This script is component-specific with hardcoded targets.
+# For a general-purpose hybrid build script, see:
+# tools/cargo_migration/hybrid_build.sh
 
 set -e
 
