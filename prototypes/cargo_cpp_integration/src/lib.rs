@@ -7,9 +7,7 @@
 //! 2. Using cxx for type-safe FFI between Rust and C++
 //! 3. Performance comparison between Rust and C++ implementations
 
-mod ffi;
-
-pub use ffi::*;
+pub mod ffi;
 
 /// Rust implementation of the same functionality for comparison
 pub struct RustComponent {

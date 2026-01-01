@@ -3,14 +3,14 @@
 // Phase 1.1: Performance benchmarking
 // Compares equivalent functionality implemented in both Rust and C++
 
-use cargo_cpp_integration::{RustComponent, create_legacy_component, process_via_cpp};
+use cargo_cpp_integration::{RustComponent, ffi::{create_legacy_component, process_via_cpp}};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 
 fn benchmark_rust_processing(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_processing");
     
     for size in [64, 256, 1024, 4096].iter() {
-        let input: Vec<u8> = (0..*size as u8).cycle().take(*size).collect();
+        let input: Vec<u8> = (0u8..=255).cycle().take(*size).collect();
         
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             let mut component = RustComponent::new();
@@ -27,7 +27,7 @@ fn benchmark_cpp_processing(c: &mut Criterion) {
     let mut group = c.benchmark_group("cpp_processing");
     
     for size in [64, 256, 1024, 4096].iter() {
-        let input: Vec<u8> = (0..*size as u8).cycle().take(*size).collect();
+        let input: Vec<u8> = (0u8..=255).cycle().take(*size).collect();
         
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             let component = create_legacy_component();
@@ -44,7 +44,7 @@ fn benchmark_cpp_processing(c: &mut Criterion) {
 fn benchmark_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_vs_cpp");
     let size = 1024;
-    let input: Vec<u8> = (0..size as u8).cycle().take(size).collect();
+    let input: Vec<u8> = (0u8..=255).cycle().take(size).collect();
     
     group.bench_function("rust", |b| {
         let mut component = RustComponent::new();
