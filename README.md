@@ -30,5 +30,21 @@ the traditional GN/Ninja build system. For Rust development:
 - **Build Rust components**: `cargo build --workspace`
 - **Run tests**: `cargo test --workspace`
 
-For the overall Rust adoption strategy, see [docs/rust_adoption_plan.md](docs/rust_adoption_plan.md)
-and [docs/cargo_adoption_plan.md](docs/cargo_adoption_plan.md).
+### Rust Migration Status
+
+**Phase 2 Tier 1 Complete** ✅ (2026-01-01)
+
+We have successfully migrated **6 production components** to the Cargo workspace:
+- Testing infrastructure (`rust_gtest_interop`)
+- Build tools (`gnrt`)
+- QR code generator
+- Payment validation
+- Data import utilities
+- Media filters
+
+**Current Status**: Ready for Phase 2 Tier 2 (complex C++ FFI integration)
+
+For migration progress and strategy:
+- **Migration Status**: [docs/rust/MIGRATION_STATUS.md](docs/rust/MIGRATION_STATUS.md)
+- **Overall Strategy**: [docs/rust_adoption_plan.md](docs/rust_adoption_plan.md)
+- **Cargo Adoption**: [docs/cargo_adoption_plan.md](docs/cargo_adoption_plan.md)
