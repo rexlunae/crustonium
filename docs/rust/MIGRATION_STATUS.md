@@ -115,51 +115,57 @@ cargo clippy --workspace
 
 ## Next Steps
 
-### Immediate: Phase 2 Tier 2 Planning (In Progress)
+### Immediate: Phase 2 Tier 2 Planning (✅ Complete - 2026-01-01)
 
-**Goal**: Migrate components with complex C++ FFI integration
+**Goal**: Plan migration for components with complex C++ FFI integration
 
-**Target Components**:
-- Bluetooth parser (`device/bluetooth/bluez/ble_scan_parser/`)
-- Additional media components
-- Network utilities
-- Platform abstraction layers
+**Planning Complete**:
+- ✅ Tier 2 challenges identified and documented
+- ✅ Migration strategies defined (Hybrid Build, Abstraction Layer, Deferred)
+- ✅ Component prioritization completed
+- ✅ Success criteria established
+- ✅ Timeline and milestones defined
 
-**Timeline**: Months 19-24 (per original plan)
+**See**: [docs/rust/phase2/TIER_2_PLANNING.md](phase2/TIER_2_PLANNING.md)
 
-**Preparation Needed**:
-1. Component assessment and prioritization
-2. Owner assignment
-3. FFI complexity analysis
-4. Resource allocation
-5. Detailed migration planning
+**Target Components** (Prioritized):
+1. **High Priority**: Bluetooth BLE parser (`device/bluetooth/bluez/ble_scan_parser/`)
+2. **Medium Priority**: Additional media components, network utilities
+3. **Lower Priority/Deferred**: Texture compressor (requires nightly Rust)
+
+**Key Insight**: Tier 2 components require **hybrid GN+Cargo build** due to dependencies on:
+- Chromium base library (//base)
+- GN-generated headers (buildflags, config)
+- Complex C++ dependency chains
 
 ### Short Term (Next 2-4 weeks)
 
-1. **Tier 2 Component Selection**
-   - Review component candidates
-   - Assess FFI complexity
-   - Prioritize based on value and risk
+1. **Team Review and Approval**
+   - Review Tier 2 planning document
+   - Approve migration strategy
+   - Allocate resources for first Tier 2 migration
    
-2. **Planning Documentation**
-   - Create Tier 2 migration roadmap
-   - Establish success criteria
-   - Define timeline and milestones
+2. **Hybrid Build Tooling**
+   - Create scripts to run GN then Cargo
+   - Update CI/CD for hybrid builds
+   - Document hybrid build workflow
    
-3. **Team Preparation**
-   - Present Tier 1 results to team
-   - Gather feedback and lessons learned
-   - Train team on complex FFI patterns
+3. **First Tier 2 Migration Prep**
+   - Set up bluetooth BLE parser for migration
+   - Create Cargo.toml with hybrid build support
+   - Test build process
+   - Document lessons learned
 
 ### Medium Term (Next 3-6 months)
 
 1. **Execute Tier 2 Migrations**
-   - Begin migrating Tier 2 components
-   - Apply lessons from Tier 1
+   - Complete bluetooth BLE parser migration
+   - Migrate 2-3 additional Tier 2 components
+   - Refine hybrid build approach
    - Track metrics and progress
    
 2. **Continuous Improvement**
-   - Optimize build times (sccache, etc.)
+   - Optimize hybrid build workflow
    - Enhance developer experience
    - Refine documentation based on feedback
    

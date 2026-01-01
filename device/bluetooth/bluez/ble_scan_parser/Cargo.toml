@@ -1,0 +1,23 @@
+# Copyright 2025 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+[package]
+name = "ble-scan-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# Static library for C++ linking
+crate-type = ["staticlib", "rlib"]
+path = "lib.rs"
+
+[dependencies]
+# cxx for C++ FFI bridge
+cxx = "1.0"
+
+[build-dependencies]
+# cxx-build for compiling the C++ bridge
+cxx-build = "1.0"
