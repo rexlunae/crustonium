@@ -68,7 +68,7 @@ The Rust migration plan for Chromium/Crustonium is **progressing successfully**.
 
 ## Current Workspace Configuration
 
-### Workspace Members (11 crates)
+### Workspace Members (12 crates)
 
 ```toml
 [workspace]
@@ -89,6 +89,7 @@ members = [
     
     # Phase 2 Tier 2 (Complex C++ FFI - Hybrid Build)
     "device/bluetooth/bluez/ble_scan_parser",  # First Tier 2 component
+    "mojo/public/rust/system",  # Second Tier 2 component
 ]
 ```
 
@@ -129,19 +130,28 @@ cargo clippy --workspace
 - ✅ Success criteria established
 - ✅ Timeline and milestones defined
 - ✅ **First component added to workspace** (BLE scan parser - 2026-01-01)
+- ✅ **Second component added to workspace** (Mojo Rust System API - 2026-01-01)
 - ✅ **Hybrid build documentation created**
 - ✅ **Helper scripts created**
 - [ ] Validate hybrid build in CI/CD
 - [ ] Complete integration testing
-- [ ] Migrate 2-3 additional Tier 2 components
+- [ ] Migrate 1-2 additional Tier 2 components
 
 **See**: [docs/rust/phase2/TIER_2_PLANNING.md](phase2/TIER_2_PLANNING.md)
 
-**Current Component**: Bluetooth BLE parser (`device/bluetooth/bluez/ble_scan_parser/`)
-- Added to workspace ✅
-- README documentation complete ✅
-- Build script created ✅
-- Next: CI/CD integration
+**Current Components**:
+
+1. **Bluetooth BLE parser** (`device/bluetooth/bluez/ble_scan_parser/`)
+   - Added to workspace ✅
+   - README documentation complete ✅
+   - Build script created ✅
+   - Next: CI/CD integration
+
+2. **Mojo Rust System API** (`mojo/public/rust/system/`)
+   - Added to workspace ✅
+   - README documentation complete ✅
+   - Build script created ✅
+   - Next: CI/CD integration
 
 ### Short Term (Next 2-4 weeks)
 
@@ -283,9 +293,9 @@ cargo clippy --workspace
 |-------|--------|-----------|------------|
 | Phase 1 (Foundation) | 100% | 100% | ✅ 100% |
 | Phase 2 Tier 1 (Pure Rust) | 6 components | 6 components | ✅ 100% |
-| Phase 2 Tier 2 (FFI) | 4-6 components | 1 in workspace | 🔄 ~20% |
+| Phase 2 Tier 2 (FFI) | 4-6 components | 2 in workspace | 🔄 ~40% |
 | Phase 2 Tier 3 (Mixed) | 3-5 components | 0 components | 📋 0% |
-| Overall Phase 2 | 13-17 components | 7 components | 🔄 ~45% |
+| Overall Phase 2 | 13-17 components | 8 components | 🔄 ~50% |
 
 ### Code Quality
 
@@ -300,9 +310,9 @@ cargo clippy --workspace
 
 | Metric | Current | Next Target |
 |--------|---------|-------------|
-| Components in Cargo workspace | 11 crates | +3-5 (More Tier 2) |
-| Rust code on Cargo | ~25-30% | ~45-55% |
-| Production components | 7 | 10-12 |
+| Components in Cargo workspace | 12 crates | +2-4 (More Tier 2) |
+| Rust code on Cargo | ~30-35% | ~45-55% |
+| Production components | 8 | 10-12 |
 
 ---
 
