@@ -189,3 +189,37 @@ fn get_type_from_merchant_account_info_data_object(
         _ => Err(Error::UnknownPixCodeType),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_input() {
+        let result = get_pix_qr_code_type(b"");
+        assert!(matches!(result, Err(PixQrCodeError::NotPaymentCode)));
+    }
+
+    #[test]
+    fn test_invalid_utf8() {
+        let invalid_utf8 = &[0xFF, 0xFE, 0xFD];
+        let result = get_pix_qr_code_type(invalid_utf8);
+        assert!(matches!(result, Err(PixQrCodeError::NotPaymentCode)));
+    }
+
+    #[test]
+    fn test_missing_payload_format_indicator() {
+        // A valid data object but not starting with payload format indicator
+        let input = b"2604test";
+        let result = get_pix_qr_code_type(input);
+        assert!(matches!(result, Err(PixQrCodeError::MissingPayloadFormatIndicator)));
+    }
+
+    #[test]
+    fn test_incomplete_data_object() {
+        // Starts correctly but has incomplete data object
+        let input = b"000201";
+        let result = get_pix_qr_code_type(input);
+        assert!(matches!(result, Err(PixQrCodeError::InvalidMerchantPresentedCode)));
+    }
+}
