@@ -95,12 +95,12 @@ jobs:
     - name: Build workspace
       run: |
         # Build workspace excluding Tier 2 components that require GN
-        # Tier 2 components (ble-scan-parser) require GN-generated headers
+        # Tier 2 components (ble-scan-parser, mojo-rust-system-api) require GN-generated headers/bindings
         # and are tested in the full Chromium CI environment
-        cargo build --workspace --exclude ble-scan-parser --verbose
+        cargo build --workspace --exclude ble-scan-parser --exclude mojo-rust-system-api --verbose
     
     - name: Build workspace (release)
-      run: cargo build --workspace --exclude ble-scan-parser --release --verbose
+      run: cargo build --workspace --exclude ble-scan-parser --exclude mojo-rust-system-api --release --verbose
       if: matrix.os == 'ubuntu-latest'  # Only on Linux to save time
 
   # Run tests
@@ -132,10 +132,10 @@ jobs:
     - name: Run tests
       run: |
         # Test workspace excluding Tier 2 components that require GN
-        cargo test --workspace --exclude ble-scan-parser --verbose
+        cargo test --workspace --exclude ble-scan-parser --exclude mojo-rust-system-api --verbose
     
     - name: Run doc tests
-      run: cargo test --workspace --exclude ble-scan-parser --doc --verbose
+      run: cargo test --workspace --exclude ble-scan-parser --exclude mojo-rust-system-api --doc --verbose
       if: matrix.os == 'ubuntu-latest'
 
   # Security audit
@@ -187,7 +187,7 @@ jobs:
       run: cargo install cargo-tarpaulin
     
     - name: Generate coverage
-      run: cargo tarpaulin --workspace --exclude ble-scan-parser --out Xml --verbose
+      run: cargo tarpaulin --workspace --exclude ble-scan-parser --exclude mojo-rust-system-api --out Xml --verbose
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4

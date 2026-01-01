@@ -27,6 +27,7 @@ members = [
     # Note: Tier 2 components require GN-generated headers and hybrid build approach
     # See docs/rust/phase2/TIER_2_PLANNING.md for migration strategy
     "device/bluetooth/bluez/ble_scan_parser",  # First Tier 2 component - requires GN build first
+    "mojo/public/rust/system",  # Second Tier 2 component - requires GN-generated bindings
 ]
 
 # Components not yet ready for Cargo migration
