@@ -40,7 +40,7 @@ macro_rules! internal_add_expectation_failure {
 /// Evaluates the given expression. If false, a failure is reported to Gtest.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_true(check_the_status_is_true());
 /// ```
 #[macro_export]
@@ -67,7 +67,7 @@ macro_rules! expect_true {
 /// Evaluates the given expression. If true, a failure is reported to Gtest.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_false(check_the_status_is_false());
 /// ```
 #[macro_export]
@@ -96,7 +96,7 @@ macro_rules! expect_false {
 /// must be PartialEq.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_eq(1 + 1, 2);
 /// ```
 #[macro_export]
@@ -126,7 +126,7 @@ macro_rules! expect_eq {
 /// must be PartialEq.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_ne(1 + 1, 3);
 /// ```
 #[macro_export]
@@ -157,7 +157,7 @@ macro_rules! expect_ne {
 /// comparison fails, the result is false.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_gt(1 + 1, 1);
 /// ```
 #[macro_export]
@@ -188,7 +188,7 @@ macro_rules! expect_gt {
 /// comparison fails, the result is false.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_lt(1 + 1, 1 + 2);
 /// ```
 #[macro_export]
@@ -219,7 +219,7 @@ macro_rules! expect_lt {
 /// PartialOrd comparison fails, the result is false.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_ge(1 + 1, 2);
 /// ```
 #[macro_export]
@@ -249,7 +249,7 @@ macro_rules! expect_ge {
 /// comparison fails, the result is false.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// expect_le(2, 1 + 1);
 /// ```
 #[macro_export]
