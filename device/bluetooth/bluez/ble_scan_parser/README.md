@@ -55,6 +55,32 @@ cargo build -p ble-scan-parser
 ninja -C out/Default device/bluetooth/bluez/ble_scan_parser:lib
 ```
 
+## CI/CD Integration
+
+### Current Status
+
+⚠️ **Note**: The BLE scan parser is currently **excluded from the pure Cargo CI workflow** because it requires GN-generated headers. It is tested in the full Chromium/GN CI environment.
+
+**Cargo CI** (`.github/workflows/cargo-ci.yml`):
+- Runs on: Push to main/develop, Pull Requests
+- Status: Excludes `ble-scan-parser` package
+- Command: `cargo build --workspace --exclude ble-scan-parser`
+
+**Chromium CI** (GN/Ninja based):
+- Runs on: Full Chromium infrastructure
+- Status: Includes all components
+- Tests: `ninja -C out/Default device_unittests`
+
+### Future Improvements
+
+For full hybrid build CI support, we would need to:
+1. Install GN and Ninja in CI environment
+2. Generate build files before Cargo build
+3. Build C++ dependencies
+4. Then run Cargo build
+
+This is planned for future iterations as more Tier 2 components are added.
+
 ## Testing
 
 ### Cargo Tests
