@@ -33,9 +33,11 @@ the traditional GN/Ninja build system. For Rust development:
 ### Rust Migration Status
 
 **Phase 2 Tier 1 Complete** ✅ (2026-01-01)  
-**Phase 2 Tier 2 Planning** 📋 (In Progress)
+**Phase 2 Tier 2 In Progress** 🔄 (Started 2026-01-01)
 
-We have successfully migrated **6 production components** to the Cargo workspace:
+We have successfully migrated **7 components** to the Cargo workspace:
+
+**Tier 1 (Pure Rust)** - 6 components:
 - Testing infrastructure (`rust_gtest_interop`)
 - Build tools (`gnrt`)
 - QR code generator
@@ -43,7 +45,10 @@ We have successfully migrated **6 production components** to the Cargo workspace
 - Data import utilities
 - Media filters
 
-**Current Status**: Phase 2 Tier 2 planning complete - Ready to begin complex C++ FFI migrations
+**Tier 2 (Complex C++ FFI)** - 1 component:
+- Bluetooth BLE scan parser (requires hybrid GN+Cargo build)
+
+**Current Status**: Phase 2 Tier 2 execution started - First complex C++ FFI component added to workspace
 
 For migration progress and strategy:
 - **Migration Status**: [docs/rust/MIGRATION_STATUS.md](docs/rust/MIGRATION_STATUS.md)

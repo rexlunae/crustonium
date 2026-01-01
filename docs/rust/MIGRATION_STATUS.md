@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-01-01  
 **Current Phase**: Phase 2 - Incremental Migration  
-**Tier**: Tier 1 Complete ✅, Tier 2 Planning
+**Tier**: Tier 1 Complete ✅, Tier 2 In Progress 🔄
 
 ---
 
@@ -13,7 +13,7 @@ The Rust migration plan for Chromium/Crustonium is **progressing successfully**.
 ### Current State
 - **Phase 1** (Foundation): ✅ **Complete**
 - **Phase 2 Tier 1** (Pure Rust): ✅ **Complete** (2026-01-01)
-- **Phase 2 Tier 2** (Rust + C++ FFI): 📋 **Planning**
+- **Phase 2 Tier 2** (Rust + C++ FFI): 🔄 **In Progress** (Started 2026-01-01)
 - **Phase 2 Tier 3** (Mixed): 📋 **Future**
 - **Phase 3** (Comprehensive): 📋 **Future**
 
@@ -68,7 +68,7 @@ The Rust migration plan for Chromium/Crustonium is **progressing successfully**.
 
 ## Current Workspace Configuration
 
-### Workspace Members (10 crates)
+### Workspace Members (11 crates)
 
 ```toml
 [workspace]
@@ -77,7 +77,7 @@ members = [
     "prototypes/cargo_cpp_integration",
     "prototypes/workspace_structure_test",
     
-    # Production Components (Phase 2 Tier 1)
+    # Production Components (Phase 2 Tier 1 - Pure Rust)
     "components/qr_code_generator",
     "components/facilitated_payments/core/validation",
     "components/user_data_importer/utility/parsing_ffi",
@@ -86,6 +86,9 @@ members = [
     "testing/rust_gtest_interop/gtest_attribute",
     "testing/rust_gtest_interop/chromium_macro_shim",
     "tools/crates/gnrt",
+    
+    # Phase 2 Tier 2 (Complex C++ FFI - Hybrid Build)
+    "device/bluetooth/bluez/ble_scan_parser",  # First Tier 2 component
 ]
 ```
 
@@ -115,46 +118,52 @@ cargo clippy --workspace
 
 ## Next Steps
 
-### Immediate: Phase 2 Tier 2 Planning (✅ Complete - 2026-01-01)
+### Immediate: Phase 2 Tier 2 Execution (🔄 In Progress - 2026-01-01)
 
-**Goal**: Plan migration for components with complex C++ FFI integration
+**Goal**: Migrate components with complex C++ FFI integration
 
-**Planning Complete**:
+**Progress**:
 - ✅ Tier 2 challenges identified and documented
 - ✅ Migration strategies defined (Hybrid Build, Abstraction Layer, Deferred)
 - ✅ Component prioritization completed
 - ✅ Success criteria established
 - ✅ Timeline and milestones defined
+- ✅ **First component added to workspace** (BLE scan parser - 2026-01-01)
+- ✅ **Hybrid build documentation created**
+- ✅ **Helper scripts created**
+- [ ] Validate hybrid build in CI/CD
+- [ ] Complete integration testing
+- [ ] Migrate 2-3 additional Tier 2 components
 
 **See**: [docs/rust/phase2/TIER_2_PLANNING.md](phase2/TIER_2_PLANNING.md)
 
-**Target Components** (Prioritized):
-1. **High Priority**: Bluetooth BLE parser (`device/bluetooth/bluez/ble_scan_parser/`)
-2. **Medium Priority**: Additional media components, network utilities
-3. **Lower Priority/Deferred**: Texture compressor (requires nightly Rust)
-
-**Key Insight**: Tier 2 components require **hybrid GN+Cargo build** due to dependencies on:
-- Chromium base library (//base)
-- GN-generated headers (buildflags, config)
-- Complex C++ dependency chains
+**Current Component**: Bluetooth BLE parser (`device/bluetooth/bluez/ble_scan_parser/`)
+- Added to workspace ✅
+- README documentation complete ✅
+- Build script created ✅
+- Next: CI/CD integration
 
 ### Short Term (Next 2-4 weeks)
 
-1. **Team Review and Approval**
-   - Review Tier 2 planning document
-   - Approve migration strategy
-   - Allocate resources for first Tier 2 migration
+1. **Complete BLE Scan Parser Migration** ✅ Started
+   - ✅ Component added to workspace
+   - ✅ Documentation created (README.md)
+   - ✅ Helper script created (build_hybrid.sh)
+   - [ ] Update CI/CD for hybrid builds
+   - [ ] Test build process on all platforms
+   - [ ] Document lessons learned
    
-2. **Hybrid Build Tooling**
-   - Create scripts to run GN then Cargo
-   - Update CI/CD for hybrid builds
-   - Document hybrid build workflow
+2. **Hybrid Build Tooling** 🔄 In Progress
+   - ✅ Scripts to run GN then Cargo exist (hybrid_build.sh)
+   - ✅ Component-specific build script created
+   - [ ] Update CI/CD for hybrid builds
+   - [ ] Test on multiple platforms
+   - [ ] Document hybrid build workflow
    
-3. **First Tier 2 Migration Prep**
-   - Set up bluetooth BLE parser for migration
-   - Create Cargo.toml with hybrid build support
-   - Test build process
-   - Document lessons learned
+3. **Second Tier 2 Migration Prep**
+   - [ ] Select next component based on BLE parser lessons
+   - [ ] Apply learned patterns
+   - [ ] Refine documentation and tooling
 
 ### Medium Term (Next 3-6 months)
 
@@ -274,9 +283,9 @@ cargo clippy --workspace
 |-------|--------|-----------|------------|
 | Phase 1 (Foundation) | 100% | 100% | ✅ 100% |
 | Phase 2 Tier 1 (Pure Rust) | 6 components | 6 components | ✅ 100% |
-| Phase 2 Tier 2 (FFI) | 4-6 components | 0 components | 📋 0% |
+| Phase 2 Tier 2 (FFI) | 4-6 components | 1 in workspace | 🔄 ~20% |
 | Phase 2 Tier 3 (Mixed) | 3-5 components | 0 components | 📋 0% |
-| Overall Phase 2 | 13-17 components | 6 components | 🔄 ~40% |
+| Overall Phase 2 | 13-17 components | 7 components | 🔄 ~45% |
 
 ### Code Quality
 
@@ -291,9 +300,9 @@ cargo clippy --workspace
 
 | Metric | Current | Next Target |
 |--------|---------|-------------|
-| Components in Cargo workspace | 10 crates | +4-6 (Tier 2) |
-| Rust code on Cargo | ~20-25% | ~40-50% |
-| Production components | 6 | 10-12 |
+| Components in Cargo workspace | 11 crates | +3-5 (More Tier 2) |
+| Rust code on Cargo | ~25-30% | ~45-55% |
+| Production components | 7 | 10-12 |
 
 ---
 
