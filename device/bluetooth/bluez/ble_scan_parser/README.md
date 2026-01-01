@@ -22,27 +22,27 @@ These dependencies require GN/Ninja to generate headers and build C++ libraries 
 
 ## Building
 
-### Option 1: Using the Hybrid Build Script (Recommended)
+### Option 1: Using the Component Build Script (Recommended)
 
 ```bash
-# From repository root
-./tools/cargo_migration/hybrid_build.sh
+# From component directory
+./device/bluetooth/bluez/ble_scan_parser/build_hybrid.sh
 
-# Or explicitly specify hybrid mode
+# Or from repository root with the general hybrid build script
 ./tools/cargo_migration/hybrid_build.sh --system hybrid
 ```
 
-This script will:
-1. Run GN to generate build files and headers
+The component script will:
+1. Check for/generate GN build files
 2. Build C++ dependencies with Ninja
-3. Build Rust components with Cargo
+3. Build Rust component with Cargo
 
 ### Option 2: Manual Two-Step Build
 
 ```bash
 # Step 1: Generate headers and build C++ dependencies with GN/Ninja
 gn gen out/Default
-ninja -C out/Default device/bluetooth
+ninja -C out/Default device/bluetooth/bluez/ble_scan_parser:wrapper_functions
 
 # Step 2: Build Rust component with Cargo
 cargo build -p ble-scan-parser
@@ -102,7 +102,7 @@ out/Default/device_unittests --gtest_filter="BleScanParser*"
 1. **First-time setup**: Run GN to generate headers
    ```bash
    gn gen out/Default
-   ninja -C out/Default device/bluetooth
+   ninja -C out/Default device/bluetooth/bluez/ble_scan_parser:wrapper_functions
    ```
 
 2. **Rust code changes**: You can use Cargo for faster iteration
