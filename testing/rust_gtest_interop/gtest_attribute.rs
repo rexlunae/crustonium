@@ -92,7 +92,7 @@ impl Parse for CppPrefixArgs {
 /// just named `fn test`.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// #[gtest(MathTest, Addition)]
 /// fn test() {
 ///   expect_eq!(1 + 1, 2);
@@ -100,14 +100,14 @@ impl Parse for CppPrefixArgs {
 /// ```
 ///
 /// The above adds the function to the Gtest binary as `MathTest.Addtition`:
-/// ```
+/// ```text
 /// [ RUN      ] MathTest.Addition
 /// [       OK ] MathTest.Addition (0 ms)
 /// ```
 ///
 /// A test with a Result return type, and which uses the `?` operator. It will
 /// fail if the test returns an `Err`, and print the resulting error string:
-/// ```
+/// ```ignore
 /// #[gtest(ResultTest, CheckThingWithResult)]
 /// fn test() -> std::result::Result<(), String> {
 ///   call_thing_with_result()?;
@@ -337,13 +337,14 @@ pub fn gtest(
 ///
 /// And in Rust we have a `ffi::GoatTestSuite` type generated to wrap the C++
 /// type. The the type can be marked as a valid TestSuite with the
-/// `#[extern_test_suite]` macro: ```rs
+/// `#[extern_test_suite]` macro: 
+/// ```ignore
 /// #[extern_test_suite("GoatTestSuite")]
 /// unsafe impl rust_gtest_interop::TestSuite for ffi::GoatTestSuite {}
 /// ```
 /// 
 /// # Internals
-/// The #[cpp_prefix("STRING_")] attribute can follow `#[extern_test_suite()]`
+/// The `#[cpp_prefix("STRING_")]` attribute can follow `#[extern_test_suite()]`
 /// to control the path to the C++ Gtest factory function. This is used for
 /// connecting to different C++ macros than the usual
 /// RUST_GTEST_TEST_SUITE_FACTORY().
