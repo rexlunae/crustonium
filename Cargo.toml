@@ -23,6 +23,10 @@ members = [
     "testing/rust_gtest_interop/chromium_macro_shim",
     # Phase 2 Tier 1 migrations:
     "tools/crates/gnrt",
+    # Phase 2 Tier 2 migrations (complex C++ FFI):
+    # Note: Tier 2 components require GN-generated headers and hybrid build approach
+    # See docs/rust/phase2/TIER_2_PLANNING.md for migration strategy
+    # "device/bluetooth/bluez/ble_scan_parser",  # Requires GN build first
 ]
 
 # Components not yet ready for Cargo migration
