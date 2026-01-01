@@ -1,0 +1,26 @@
+# Cargo.toml for Rust GTest Interop
+# This enables building the Rust/GTest integration library via Cargo
+
+[package]
+name = "rust-gtest-interop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rust_gtest_interop"
+crate-type = ["staticlib", "rlib"]
+path = "rust_gtest_interop.rs"
+
+[dependencies]
+# Re-exported for the gtest_attribute macros
+small_ctor = "0.1"
+
+# Proc macro for gtest attributes
+gtest_attribute = { path = "gtest_attribute" }
+
+# Provide chromium macro compatibility for Cargo builds
+chromium = { package = "chromium_macro_shim", path = "chromium_macro_shim" }
+
+[build-dependencies]
+# No C++ FFI bindings needed for this component
