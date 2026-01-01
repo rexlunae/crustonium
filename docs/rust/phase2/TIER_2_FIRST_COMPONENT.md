@@ -197,11 +197,13 @@ The `build.rs` script implements the hybrid build pattern:
 
 **Not yet measured** - Requires GN build infrastructure.
 
-**Expected**:
+**Estimated** (to be validated):
 - GN build (C++ deps): ~30-60s (one-time or when C++ changes)
 - Cargo build (Rust): ~5-10s (incremental)
-- Total (first time): ~35-70s
-- Total (Rust changes): ~5-10s
+- Total (first time): ~35-70s estimated
+- Total (Rust changes): ~5-10s estimated
+
+**Note**: These are preliminary estimates based on similar components. Actual measurements will be taken during build validation in the Chromium environment.
 
 ### Lines of Code
 
