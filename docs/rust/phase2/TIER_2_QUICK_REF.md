@@ -70,12 +70,15 @@ If your component **doesn't** have these dependencies, use Tier 1 approach inste
   use std::env;
   
   fn main() {
-      // Find workspace root
+      // Find workspace root by searching for .gn marker file
+      // This is more robust than hardcoded parent() calls
       let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-      let root_dir = PathBuf::from(&manifest_dir)
+      let manifest_path = PathBuf::from(&manifest_dir);
+      
+      let root_dir = manifest_path
           .ancestors()
-          .nth(4)  // Adjust based on depth
-          .expect("Failed to find workspace root");
+          .find(|p| p.join(".gn").exists())
+          .expect("Failed to find workspace root (no .gn file found)");
       
       // Check for GN output
       let out_dir = root_dir.join("out/Default");

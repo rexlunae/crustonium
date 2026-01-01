@@ -11,12 +11,13 @@ fn main() {
     // This is a known limitation for Tier 2 components with deep C++ dependencies.
     
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let root_dir = PathBuf::from(&manifest_dir)
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.parent())
-        .and_then(|p| p.parent())
-        .expect("Failed to find workspace root");
+    let manifest_path = PathBuf::from(&manifest_dir);
+    
+    // Find workspace root by looking for .gn marker file
+    let root_dir = manifest_path
+        .ancestors()
+        .find(|p| p.join(".gn").exists())
+        .expect("Failed to find workspace root (no .gn file found)");
     
     // Check for GN output directory
     let out_dir = root_dir.join("out/Default");
