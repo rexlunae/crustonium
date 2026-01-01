@@ -380,7 +380,7 @@ vars = {
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling CrossBench
   # and whatever else without interference from each other.
-  'crossbench_revision': 'cbd5d7a79a5b175042f25aaac32fcebb7e9c04f4',
+  'crossbench_revision': '84bb322dec4472aeb206c21b95e24d0f653b909e',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling CrossBench
   # and whatever else without interference from each other.
@@ -1206,7 +1206,7 @@ deps = {
       'packages': [
           {
               'package': 'chromium/chrome/android/orderfiles/arm64',
-              'version': 'sqPP2q9zp42YR6sOkJrYLlcsCiLzPXlMOU6blQimgFgC',
+              'version': '1K7zZKh9c0LUKRJKZYu9ukGbz8bmP0kcVbN3_NV-grUC',
           },
       ],
       'condition': 'checkout_android and non_git_source',
@@ -1228,7 +1228,7 @@ deps = {
       'packages': [
           {
               'package': 'chromium/android_webview/tools/orderfiles/arm64',
-              'version': 'ITKHLEXekJL78KqRCJRjMFOyu0-5zqO3J9jDOs_o8y8C',
+              'version': 'FxwiSBMKr2uB7IgNA0rAcw3EwsWsVTLfxuF2MD4z_4wC',
           },
       ],
       'condition': 'checkout_android and non_git_source',
