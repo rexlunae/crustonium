@@ -90,12 +90,17 @@ cxx-build = { workspace = true }
 ## Minimal build.rs Template
 
 ```rust
+use std::path::Path;
+
 fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let workspace_root = manifest_dir
-        .rsplit_once("/your/path")
-        .unwrap()
-        .0;
+    let manifest_path = Path::new(&manifest_dir);
+    
+    // Navigate up to workspace root (adjust depth as needed)
+    let workspace_root = manifest_path
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("Failed to find workspace root");
 
     cxx_build::bridge("src/lib.rs")
         .flag_if_supported("-std=c++17")

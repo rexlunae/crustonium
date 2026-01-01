@@ -106,16 +106,22 @@ cxx-build = { workspace = true }
 If your component uses C++/Rust FFI via cxx:
 
 ```rust
+use std::path::Path;
+
 fn main() {
-    // Get the workspace root directory
+    // Get the workspace root directory by going up from the manifest directory
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .expect("CARGO_MANIFEST_DIR not set");
     
-    // Adjust this path based on your component location
-    let workspace_root = manifest_dir
-        .rsplit_once("/components/your_component")
-        .expect("Expected to be in components/your_component")
-        .0;
+    // Use Path to handle both Unix and Windows path separators
+    let manifest_path = Path::new(&manifest_dir);
+    
+    // Navigate up based on your component's depth
+    // For components/your_component: go up 2 levels
+    let workspace_root = manifest_path
+        .parent()  // components/
+        .and_then(|p| p.parent())  // workspace root
+        .expect("Failed to find workspace root");
 
     // Build the cxx bridge
     cxx_build::bridge("your_file.rs")
