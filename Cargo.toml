@@ -15,8 +15,7 @@ members = [
     # Existing components being migrated to Cargo:
     "components/qr_code_generator",
     # Additional components added in Phase 1.2:
-    # Note: user_data_importer has compilation issues that need to be resolved
-    # "components/user_data_importer/utility/parsing_ffi",
+    "components/user_data_importer/utility/parsing_ffi",
     "media/filters",
     "testing/rust_gtest_interop",
     "testing/rust_gtest_interop/gtest_attribute",
@@ -53,7 +52,7 @@ criterion = "0.5"
 
 # Component-specific dependencies
 qr_code = "2.0"
-zip = "0.6"
+zip = "6.0"
 
 # Proc macro dependencies
 proc-macro2 = "1.0"
