@@ -21,6 +21,8 @@ members = [
     "testing/rust_gtest_interop",
     "testing/rust_gtest_interop/gtest_attribute",
     "testing/rust_gtest_interop/chromium_macro_shim",
+    # Phase 2 Tier 1 migrations:
+    "tools/crates/gnrt",
 ]
 
 # Components not yet ready for Cargo migration
