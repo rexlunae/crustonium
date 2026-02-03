@@ -9,7 +9,6 @@
 #include "base/notreached.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_high_entropy_op_type.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
@@ -24,7 +23,7 @@ class GLES2Interface;
 }  // namespace gpu
 
 namespace blink {
-class CanvasResourceProviderSharedImage;
+class CanvasResourceProviderSharedImageNon2D;
 
 class PLATFORM_EXPORT StaticBitmapImage : public Image {
  public:
@@ -74,11 +73,10 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   }
 
   virtual bool CopyToResourceProvider(
-      CanvasResourceProviderSharedImage* resource_provider,
+      CanvasResourceProviderSharedImageNon2D* resource_provider,
       const gfx::Rect& copy_rect) = 0;
 
   virtual void EnsureSyncTokenVerified() { NOTREACHED(); }
-  virtual gpu::MailboxHolder GetMailboxHolder() const { NOTREACHED(); }
   virtual scoped_refptr<gpu::ClientSharedImage> GetSharedImage() const {
     NOTREACHED();
   }

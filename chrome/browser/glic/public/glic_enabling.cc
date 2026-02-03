@@ -36,6 +36,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/variations/service/variations_service.h"
@@ -65,7 +66,7 @@ namespace glic {
 
 // Comma separated list of countries to enable GLIC, by default, if country
 // filtering is enabled.
-constexpr char kDefaultEnabledCountries[] = "us,au,ca,nz";
+constexpr char kDefaultEnabledCountries[] = "us,ca";
 
 // Feature flag kGlicLocaleFiltering controls whether locale filtering is
 // applied client side. Two finch params are used to control this, both are a
@@ -83,6 +84,14 @@ constexpr char kDefaultEnabledCountries[] = "us,au,ca,nz";
 constexpr char kDefaultEnabledLocales[] = "en-us";
 
 namespace {
+
+signin::Tribool CanUseGeminiInChrome(AccountCapabilities& capabilities) {
+#if BUILDFLAG(IS_ANDROID)
+  return signin::Tribool::kUnknown;
+#else  // TODO: Re-enable after crrev.com/c/7281467
+  return capabilities.can_use_gemini_in_chrome();
+#endif
+}
 
 bool HasGoogleInternalProfile() {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -201,6 +210,11 @@ std::string GlicGlobalEnabling::Delegate::GetLocale() {
       startup_data->chrome_feature_list_creator()->actual_locale());
 }
 
+GlicEnabling::ProfileEnablement::ProfileEnablement() = default;
+GlicEnabling::ProfileEnablement::ProfileEnablement(ProfileEnablement&&) =
+    default;
+GlicEnabling::ProfileEnablement::~ProfileEnablement() = default;
+
 GlicEnabling::ProfileEnablement GlicEnabling::EnablementForProfile(
     Profile* profile) {
   ProfileEnablement result;
@@ -236,9 +250,15 @@ GlicEnabling::ProfileEnablement GlicEnabling::EnablementForProfile(
                 signin::ConsentLevel::kSignin));
 
     // Not having a primary account is considered ineligible, as is kUnknown
-    // for the required account capability.
+    // for the required account capability (checked further below).
     if (primary_account.IsEmpty()) {
       result.primary_account_not_capable = true;
+    } else {
+      // Check if the profile is currently paused.
+      if (identity_manager->HasAccountWithRefreshTokenInPersistentErrorState(
+              primary_account.account_id)) {
+        result.primary_account_not_fully_signed_in = true;
+      }
     }
 
     // Check account capabilities.
@@ -250,10 +270,9 @@ GlicEnabling::ProfileEnablement GlicEnabling::EnablementForProfile(
         primary_account.capabilities.can_use_model_execution_features();
     if (base::FeatureList::IsEnabled(
             switches::kGlicEligibilitySeparateAccountCapability) &&
-        (primary_account.capabilities.can_use_gemini_in_chrome() !=
+        (CanUseGeminiInChrome(primary_account.capabilities) !=
          signin::Tribool::kUnknown)) {
-      capability_value =
-          primary_account.capabilities.can_use_gemini_in_chrome();
+      capability_value = CanUseGeminiInChrome(primary_account.capabilities);
     }
     result.primary_account_not_capable =
         (capability_value != signin::Tribool::kTrue);
@@ -264,11 +283,11 @@ GlicEnabling::ProfileEnablement GlicEnabling::EnablementForProfile(
     base::FieldTrial* field_trial = base::FeatureList::GetFieldTrial(
         switches::kGlicEligibilitySeparateAccountCapability);
     if (field_trial &&
-        (primary_account.capabilities.can_use_gemini_in_chrome() !=
+        (CanUseGeminiInChrome(primary_account.capabilities) !=
          signin::Tribool::kUnknown) &&
         (primary_account.capabilities.can_use_model_execution_features() !=
          signin::Tribool::kUnknown) &&
-        (primary_account.capabilities.can_use_gemini_in_chrome() !=
+        (CanUseGeminiInChrome(primary_account.capabilities) !=
          primary_account.capabilities.can_use_model_execution_features())) {
       g_browser_process->GetFeatures()
           ->glic_synthetic_trial_manager()
@@ -276,6 +295,10 @@ GlicEnabling::ProfileEnablement GlicEnabling::EnablementForProfile(
               kGlicEligibilitySeparateAccountCapabilitySyntheticTrialName,
               field_trial->GetGroupNameWithoutActivation());
     }
+
+    result.live_disallowed =
+        primary_account.capabilities.can_use_model_execution_features() !=
+        signin::Tribool::kTrue;
   }
 
   if (profile->GetPrefs()->GetInteger(::prefs::kGeminiSettings) !=
@@ -303,8 +326,7 @@ GlicEnabling::ProfileEnablement GlicEnabling::EnablementForProfile(
     }
   }
 
-  if (!HasConsentedForProfile(profile) &&
-      !base::FeatureList::IsEnabled(features::kGlicTrustFirstOnboarding)) {
+  if (!HasConsentedForProfile(profile)) {
     result.not_consented = true;
   }
 
@@ -337,15 +359,6 @@ bool GlicGlobalEnabling::IsEnabledByFlags() {
                                   chromeos::features::kFeatureManagementGlic));
 #endif  // BUILDFLAG(IS_CHROMEOS)
   return is_enabled;
-}
-
-// static
-bool GlicEnabling::IsInRolloutLocation() {
-  // TODO(crbug.com/454702721): Getting the location on ChromeOS is done
-  // differently.
-  auto* variations_service = g_browser_process->variations_service();
-  return variations_service->GetStoredPermanentCountry() == "us" &&
-         g_browser_process->GetApplicationLocale() == "en-US";
 }
 
 bool GlicEnabling::IsEnabledByFlags() {
@@ -423,7 +436,11 @@ mojom::ProfileReadyState GlicEnabling::GetProfileReadyState(Profile* profile) {
   if (enablement.DisallowedByAdmin()) {
     return mojom::ProfileReadyState::kDisabledByAdmin;
   }
-  if (!enablement.IsEnabledAndConsented()) {
+  if (!enablement.IsEnabled()) {
+    return mojom::ProfileReadyState::kIneligible;
+  }
+
+  if (enablement.not_consented && !IsTrustFirstOnboardingEnabled()) {
     return mojom::ProfileReadyState::kIneligible;
   }
 
@@ -432,17 +449,10 @@ mojom::ProfileReadyState GlicEnabling::GetProfileReadyState(Profile* profile) {
     return mojom::ProfileReadyState::kReady;
   }
 
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
-
-  // Check that profile is not currently paused.
-  CoreAccountInfo core_account_info =
-      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
-  if (core_account_info.IsEmpty()) {
+  if (enablement.primary_account_not_capable) {
     return mojom::ProfileReadyState::kUnknownError;
   }
-  if (identity_manager->HasAccountWithRefreshTokenInPersistentErrorState(
-          core_account_info.account_id)) {
+  if (enablement.primary_account_not_fully_signed_in) {
     return mojom::ProfileReadyState::kSignInRequired;
   }
   return mojom::ProfileReadyState::kReady;
@@ -465,6 +475,11 @@ void GlicEnabling::OnGlicSettingsPolicyChanged() {
 bool GlicEnabling::IsUnifiedFreEnabled(Profile* profile) {
   return IsMultiInstanceEnabled() &&
          base::FeatureList::IsEnabled(features::kGlicUnifiedFreScreen);
+}
+
+bool GlicEnabling::IsTrustFirstOnboardingEnabled() {
+  return IsMultiInstanceEnabled() &&
+         base::FeatureList::IsEnabled(features::kGlicTrustFirstOnboarding);
 }
 
 bool GlicEnabling::IsMultiInstanceEnabledByFlags() {

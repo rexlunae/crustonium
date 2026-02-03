@@ -60,6 +60,11 @@ AX_BASE_EXPORT bool IsAccessibilityPruneRedundantInlineConnectivityEnabled();
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityTextFormatting);
 AX_BASE_EXPORT bool IsAccessibilityTextFormattingEnabled();
 
+// Enables handling of occluding views belonging to overlaid "
+// "browser's UI.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityHandleOccludingViews);
+AX_BASE_EXPORT bool IsAccessibilityHandleOccludingViewsEnabled();
+
 // Enables text change types for text changed events.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityTextChangeTypes);
 AX_BASE_EXPORT bool IsAccessibilityTextChangeTypesEnabled();
@@ -252,9 +257,6 @@ AX_BASE_EXPORT BASE_DECLARE_FEATURE(
     kAccessibilityManifestV3AccessibilityCommon);
 AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForAccessibilityCommon();
 
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3BrailleIme);
-AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForBrailleIme();
-
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3ChromeVox);
 AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForChromeVox();
 
@@ -263,9 +265,6 @@ AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForEspeakNGTts();
 
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3GoogleTts);
 AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForGoogleTts();
-
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3SelectToSpeak);
-AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForSelectToSpeak();
 
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3SwitchAccess);
 AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForSwitchAccess();

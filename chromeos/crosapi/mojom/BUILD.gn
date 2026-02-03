@@ -8,8 +8,6 @@ import("//printing/buildflags/buildflags.gni")
 mojom("mojom") {
   sources = [
     "account_manager.mojom",
-    "chrome_app_kiosk_service.mojom",
-    "clipboard_history.mojom",
     "cros_display_config.mojom",
     "crosapi.mojom",
     "diagnostics_service.mojom",
@@ -19,19 +17,15 @@ mojom("mojom") {
     "keystore_service.mojom",
     "launcher_search.mojom",
     "local_printer.mojom",
-    "magic_boost.mojom",
-    "mahi.mojom",
     "nullable_primitives.mojom",
     "print_preview_cros.mojom",
     "probe_service.mojom",
-    "remoting.mojom",
     "telemetry_diagnostic_routine_service.mojom",
     "telemetry_event_service.mojom",
     "telemetry_extension_exception.mojom",
     "telemetry_keyboard_event.mojom",
     "telemetry_management_service.mojom",
     "video_conference.mojom",
-    "vpn_service.mojom",
   ]
   disable_variants = true
   enable_js_fuzzing = false

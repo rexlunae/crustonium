@@ -12388,40 +12388,6 @@ TEST_P(LayerTreeHostImplTest, ExternalTransformSetNeedsRedraw) {
   EXPECT_FALSE(last_on_draw_frame_->has_no_damage);
 }
 
-// TODO(crbug.com/458776836): Review memory limit related cc_unittests for
-// TreesInViz Service mode
-TEST_P(ClientModeLayerTreeHostImplTest, OnMemoryPressure) {
-  base::MemoryPressureListenerRegistry memory_pressure_listener_registry;
-
-  gfx::Size size(200, 200);
-  viz::SharedImageFormat format = viz::SinglePlaneFormat::kRGBA_8888;
-  gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
-  ResourcePool::InUsePoolResource resource =
-      host_impl_->resource_pool()->AcquireResource(size, format, color_space);
-  size_t current_memory_usage =
-      host_impl_->resource_pool()->GetTotalMemoryUsageForTesting();
-  EXPECT_EQ(current_memory_usage, 0u);
-
-  resource.set_backing(std::make_unique<ResourcePool::Backing>(
-      resource.size(), resource.format(), resource.color_space()));
-
-  host_impl_->resource_pool()->ReleaseResource(std::move(resource));
-
-  current_memory_usage =
-      host_impl_->resource_pool()->GetTotalMemoryUsageForTesting();
-
-  base::RunLoop run_loop;
-  base::MemoryPressureListener::SimulatePressureNotificationAsync(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL, run_loop.QuitClosure());
-  run_loop.Run();
-
-  size_t memory_usage_after_memory_pressure =
-      host_impl_->resource_pool()->GetTotalMemoryUsageForTesting();
-
-  // Memory usage after the memory pressure should be less than previous one.
-  EXPECT_LT(memory_usage_after_memory_pressure, current_memory_usage);
-}
-
 TEST_P(LayerTreeHostImplTest, OnDrawConstraintSetNeedsRedraw) {
   const gfx::Size viewport_size(100, 100);
   SetupDefaultRootLayer(viewport_size);
@@ -18417,7 +18383,6 @@ struct PreservationTestCase {
     kScrollUpdatesAndEndsOnly,
   };
   std::string test_name;
-  bool enable_feature;
   FrameSkippedReason reason;
   Preserve should_preserve;
   bool should_metrics_cause_frame_update;
@@ -18431,33 +18396,14 @@ INSTANTIATE_TEST_SUITE_P(
     LayerTreeHostImplEventMetricPreservationTest,
     LayerTreeHostImplEventMetricPreservationTest,
     testing::ValuesIn<PreservationTestCase>({
-        // If `features::kDropMetricsFromNonProducedFramesOnlyIfTheyHadNoDamage`
-        // is disabled, `LayerTreeHostImpl::DidNotProduceFrame()` should NEVER
-        // preserve all metrics (regardless of the reason why the frame wasn't
-        // produced). It should always preserve only GSUs/GSEs.
-        {.test_name = "FeatureDisabledWaitingOnMain",
-         .enable_feature = false,
-         .reason = FrameSkippedReason::kWaitingOnMain,
-         .should_preserve =
-             PreservationTestCase::Preserve::kScrollUpdatesAndEndsOnly,
-         .should_metrics_cause_frame_update = false},
-        {.test_name = "FeatureDisabledNoDamage",
-         .enable_feature = false,
-         .reason = FrameSkippedReason::kNoDamage,
-         .should_preserve =
-             PreservationTestCase::Preserve::kScrollUpdatesAndEndsOnly,
-         .should_metrics_cause_frame_update = false},
-        // If `features::kDropMetricsFromNonProducedFramesOnlyIfTheyHadNoDamage`
-        // is enabled, `LayerTreeHostImpl::DidNotProduceFrame()` should
-        // preserve all metrics UNLESS the frame wasn't produced because there
-        // was no damage, in which case it should preserve only GSUs/GSEs.
-        {.test_name = "FeatureEnabledWaitingOnMain",
-         .enable_feature = true,
+        // `LayerTreeHostImpl::DidNotProduceFrame()` should preserve all metrics
+        // UNLESS the frame wasn't produced because there was no damage, in
+        // which case it should preserve only GSUs/GSEs.
+        {.test_name = "WaitingOnMain",
          .reason = FrameSkippedReason::kWaitingOnMain,
          .should_preserve = PreservationTestCase::Preserve::kAllMetrics,
          .should_metrics_cause_frame_update = true},
-        {.test_name = "FeatureEnabledNoDamage",
-         .enable_feature = true,
+        {.test_name = "NoDamage",
          .reason = FrameSkippedReason::kNoDamage,
          .should_preserve =
              PreservationTestCase::Preserve::kScrollUpdatesAndEndsOnly,
@@ -18469,10 +18415,6 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_P(LayerTreeHostImplEventMetricPreservationTest, PreserveMetrics) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatureState(
-      features::kDropMetricsFromNonProducedFramesOnlyIfTheyHadNoDamage,
-      GetParam().enable_feature);
   SetupViewportLayersInnerScrolls(gfx::Size(50, 50), gfx::Size(100, 100));
 
   std::vector<EventMetrics*> expected_preserved_metrics_ptrs;

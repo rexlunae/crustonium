@@ -14,7 +14,7 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_animator.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_ui_features.h"
-#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
+#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
@@ -22,15 +22,15 @@
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view_controller+subclassing.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/banner_promo_view.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_view.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_view_controller_delegate.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_height_delegate.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_utils.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/tab_groups/ui/tab_group_indicator_view.h"
+#import "ios/chrome/browser/toolbar/tab_group/ui/tab_group_indicator_view.h"
+#import "ios/chrome/browser/toolbar/ui/toolbar_height_delegate.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 
 namespace {
@@ -126,8 +126,8 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   if (progress == 0 && !self.view.fakeOmniboxTarget) {
     [self.view addFakeOmniboxTarget];
     UITapGestureRecognizer* tapRecognizer = [[UITapGestureRecognizer alloc]
-        initWithTarget:self.omniboxCommandsHandler
-                action:@selector(focusOmnibox)];
+        initWithTarget:self.browserCoordinatorHandler
+                action:@selector(showComposebox)];
     [self.view.fakeOmniboxTarget addGestureRecognizer:tapRecognizer];
   } else if (progress > 0 && self.view.fakeOmniboxTarget) {
     [self.view removeFakeOmniboxTarget];
@@ -280,13 +280,13 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
 }
 
 - (void)showControlButtons {
-  for (ToolbarButton* button in self.view.allButtons) {
+  for (LegacyToolbarButton* button in self.view.allButtons) {
     button.alpha = 1;
   }
 }
 
 - (void)hideControlButtons {
-  for (ToolbarButton* button in self.view.allButtons) {
+  for (LegacyToolbarButton* button in self.view.allButtons) {
     button.alpha = 0;
   }
 }

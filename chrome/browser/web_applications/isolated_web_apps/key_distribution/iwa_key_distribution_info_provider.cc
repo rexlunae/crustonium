@@ -147,8 +147,7 @@ IwaKeyDistributionInfoProvider::OnRuntimeDataChanged(
 
 bool IwaKeyDistributionInfoProvider::IsBundleBlocklisted(
     std::string_view web_bundle_id) const {
-  return component_ &&
-         base::Contains(component_->data.blocklist, web_bundle_id);
+  return component_ && component_->data.blocklist.contains(web_bundle_id);
 }
 
 bool IwaKeyDistributionInfoProvider::IsManagedInstallPermitted(
@@ -159,8 +158,7 @@ bool IwaKeyDistributionInfoProvider::IsManagedInstallPermitted(
   }
 
   bool is_permitted =
-      component_ &&
-      base::Contains(component_->data.managed_allowlist, web_bundle_id);
+      component_ && component_->data.managed_allowlist.contains(web_bundle_id);
 
   base::UmaHistogramEnumeration(
       kIwaKeyDistributionManagedInstallCheckInfoSourceHistogramName,
@@ -179,8 +177,7 @@ bool IwaKeyDistributionInfoProvider::IsManagedUpdatePermitted(
   }
 
   bool is_permitted =
-      component_ &&
-      base::Contains(component_->data.managed_allowlist, web_bundle_id);
+      component_ && component_->data.managed_allowlist.contains(web_bundle_id);
 
   base::UmaHistogramEnumeration(
       kIwaKeyDistributionManagedUpdateCheckInfoSourceHistogramName,
@@ -408,7 +405,7 @@ IwaKeyDistributionInfoProvider::OnComponentUpdatedForTesting(
 }
 
 base::Value IwaKeyDistributionInfoProvider::AsDebugValue() const {
-  base::Value::Dict debug_data;
+  base::DictValue debug_data;
 
   if (!GetDevModeKeyRotationData().empty()) {
     auto* dev_mode_key_rotations =
@@ -455,7 +452,7 @@ base::Value IwaKeyDistributionInfoProvider::AsDebugValue() const {
 }
 
 void IwaKeyDistributionInfoProvider::WriteDebugMetadata(
-    base::Value::Dict& log) const {
+    base::DictValue& log) const {
   if (!component_) {
     // Will be displayed as <null>.
     log.Set("component", base::Value());

@@ -15,7 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
@@ -921,8 +920,8 @@ TEST_F(PaymentsDataManagerTest, AddCreditCard_CrazyCharacters) {
 
   ASSERT_EQ(cards.size(), payments_data_manager().GetCreditCards().size());
   for (size_t i = 0; i < cards.size(); ++i) {
-    EXPECT_TRUE(
-        base::Contains(cards, *payments_data_manager().GetCreditCards()[i]));
+    EXPECT_TRUE(std::ranges::contains(
+        cards, *payments_data_manager().GetCreditCards()[i]));
   }
 }
 
@@ -1441,6 +1440,19 @@ TEST_F(PaymentsDataManagerTest, DeleteAllLocalCreditCards) {
 
   // Expect the local credit cards to have been deleted.
   EXPECT_EQ(0U, payments_data_manager().GetLocalCreditCards().size());
+}
+
+TEST_F(PaymentsDataManagerTest, HasAllLocalCreditCards_LocalCreditCardsOnly) {
+  SetUpReferenceLocalCreditCards();
+
+  EXPECT_TRUE(payments_data_manager().HasAllLocalCreditCards());
+}
+
+TEST_F(PaymentsDataManagerTest, HasAllLocalCreditCards_WithServerCard) {
+  SetServerCards({test::GetMaskedServerCard()});
+  ResetPaymentsDataManager();
+
+  EXPECT_FALSE(payments_data_manager().HasAllLocalCreditCards());
 }
 
 TEST_F(PaymentsDataManagerTest, LogStoredCreditCardMetrics) {
@@ -4183,6 +4195,19 @@ TEST_F(PaymentsDataManagerTest, SetAutofillAmountExtractionAiTermsSeen) {
 
   EXPECT_TRUE(payments_data_manager()
                   .IsAutofillAmountExtractionAiTermsSeenPrefEnabled());
+}
+
+TEST_F(PaymentsDataManagerTest,
+       AutofillAmountExtractionAiTermsNotSeen_WhenTestFlagEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillAiBasedAmountExtractionIgnoreSeenTermsForTesting};
+  EXPECT_FALSE(payments_data_manager()
+                   .IsAutofillAmountExtractionAiTermsSeenPrefEnabled());
+
+  payments_data_manager().SetAutofillAmountExtractionAiTermsSeen();
+
+  EXPECT_FALSE(payments_data_manager()
+                   .IsAutofillAmountExtractionAiTermsSeenPrefEnabled());
 }
 
 // Tests that Buy-now-pay-later issuers are loaded when the

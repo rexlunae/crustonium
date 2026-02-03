@@ -65,22 +65,6 @@ std::vector<std::string> PopulateExpectedPolicy(const std::string& name,
   return expected_policy;
 }
 
-std::vector<std::string> PopulateExpectedRestartPolicy(
-    const std::string& name,
-    const std::string& value) {
-  std::vector<std::string> expected_policy;
-
-  // Populate expected policy column and row fields.
-  expected_policy.push_back(name);
-  expected_policy.push_back(value);
-  expected_policy.push_back("Platform");
-  expected_policy.push_back("Machine");
-  expected_policy.push_back("Mandatory");
-  expected_policy.push_back("Restart required");
-
-  return expected_policy;
-}
-
 void VerifyPolicies(
     const std::vector<std::vector<std::string>>& expected_policies) {
   // Retrieve the text contents of the policy table cells for all policies.
@@ -104,12 +88,12 @@ void VerifyPolicies(
       policies.GetString(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   GREYAssertTrue(value_ptr, @"Expected policies, but there weren't any.");
   GREYAssertTrue(value_ptr->is_list(), @"Value is not a list.");
-  const base::Value::List& actual_policies = value_ptr->GetList();
+  const base::ListValue& actual_policies = value_ptr->GetList();
 
   // Verify that the cells contain the expected strings for all policies.
   for (size_t i = 0; i < expected_policies.size(); ++i) {
     const std::vector<std::string> expected_policy = expected_policies[i];
-    const base::Value::List& actual_policy = actual_policies[i].GetList();
+    const base::ListValue& actual_policy = actual_policies[i].GetList();
     GREYAssertEqual(expected_policy.size(), actual_policy.size(),
                     @"Number of fields in the actual and expected policy row "
                     @"did not match.");
@@ -287,7 +271,7 @@ id<GREYMatcher> DownloadButton() {
   expected_policies.push_back(
       PopulateExpectedPolicy("AutofillCreditCardEnabled", "false"));
   expected_policies.push_back(
-      PopulateExpectedRestartPolicy("IncognitoModeAvailability", "1"));
+      PopulateExpectedPolicy("IncognitoModeAvailability", "1"));
   VerifyPolicies(expected_policies);
 }
 

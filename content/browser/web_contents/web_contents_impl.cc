@@ -21,7 +21,6 @@
 #include "base/base_switches.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
@@ -209,7 +208,6 @@
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "third_party/blink/public/mojom/image_downloader/image_downloader.mojom.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-shared.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
@@ -1053,7 +1051,7 @@ void WebContentsImpl::WebContentsTreeNode::DetachInnerWebContents(
 bool WebContentsImpl::WebContentsTreeNode::IsUnownedInnerWebContents(
     WebContents* inner_web_contents) const {
   CHECK_EQ(inner_web_contents->GetOuterWebContents(), current_web_contents_);
-  return base::Contains(unowned_inner_web_contents_, inner_web_contents);
+  return std::ranges::contains(unowned_inner_web_contents_, inner_web_contents);
 }
 
 void WebContentsImpl::WebContentsTreeNode::DetachUnownedInnerWebContents(
@@ -3136,8 +3134,6 @@ void WebContentsImpl::SetPrimaryPageImportance(
   base::android::ScopedServiceBindingBatch scoped_service_binding_batch;
 
   if (base::FeatureList::IsEnabled(features::kSubframeImportance)) {
-    CHECK(
-        base::FeatureList::IsEnabled(features::kSubframePriorityContribution));
     if (subframe_importance != primary_subframe_importance_) {
       primary_subframe_importance_ = subframe_importance;
       ApplyPrimaryPageSubframeImportance();
@@ -3797,9 +3793,6 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
   prefs.strict_mixed_content_checking =
       command_line.HasSwitch(switches::kEnableStrictMixedContentChecking);
 
-  prefs.strict_powerful_feature_restrictions = command_line.HasSwitch(
-      switches::kEnableStrictPowerfulFeatureRestrictions);
-
   const std::string blockable_mixed_content_group =
       base::FieldTrialList::FindFullName("BlockableMixedContent");
   prefs.strictly_block_blockable_mixed_content =
@@ -4087,16 +4080,6 @@ void WebContentsImpl::OnVibrate(RenderFrameHostImpl* rfh) {
   observers_.NotifyObservers(&WebContentsObserver::VibrationRequested);
 }
 
-std::optional<network::ParsedPermissionsPolicy>
-WebContentsImpl::GetPermissionsPolicyForIsolatedWebApp(
-    RenderFrameHostImpl* source) {
-  WebExposedIsolationInfo weii =
-      source->GetSiteInstance()->GetWebExposedIsolationInfo();
-  CHECK(weii.is_isolated_application());
-  return GetContentClient()->browser()->GetPermissionsPolicyForIsolatedWebApp(
-      this, weii.origin());
-}
-
 void WebContentsImpl::Stop() {
   TRACE_EVENT0("content", "WebContentsImpl::Stop");
   ForEachFrameTree([](FrameTree& frame_tree) { frame_tree.StopLoading(); });
@@ -4312,12 +4295,16 @@ void WebContentsImpl::OnRenderWidgetHostDestroyed(
   DCHECK_EQ(1u, num_erased);
 }
 
+PrerenderHostId WebContentsImpl::GetPrerenderHostId() {
+  return PrerenderHostId();
+}
+
 void WebContentsImpl::AddWebContentsDestructionObserver(
     WebContentsImpl* web_contents) {
   OPTIONAL_TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("content.verbose"),
                         "WebContentsImpl::AddWebContentsDestructionObserver");
 
-  if (!base::Contains(web_contents_destruction_observers_, web_contents)) {
+  if (!web_contents_destruction_observers_.contains(web_contents)) {
     web_contents_destruction_observers_[web_contents] =
         std::make_unique<WebContentsDestructionObserver>(this, web_contents);
   }
@@ -4337,8 +4324,8 @@ void WebContentsImpl::AddRenderWidgetHostDestructionObserver(
       TRACE_DISABLED_BY_DEFAULT("content.verbose"),
       "WebContentsImpl::AddRenderWidgetHostDestructionObserver");
 
-  DCHECK(!base::Contains(render_widget_host_destruction_observers_,
-                         render_widget_host));
+  DCHECK(
+      !render_widget_host_destruction_observers_.contains(render_widget_host));
 
   render_widget_host_destruction_observers_.insert(
       {render_widget_host,
@@ -4564,6 +4551,23 @@ bool WebContentsImpl::PreHandleGestureEvent(
     const blink::WebGestureEvent& event) {
   OPTIONAL_TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("content.verbose"),
                         "WebContentsImpl::PreHandleGestureEvent");
+  if (ignore_zoom_gestures_) {
+    if (event.GetType() == blink::WebInputEvent::Type::kGestureDoubleTap) {
+      return true;
+    }
+
+    // Disable pinch zooming in app windows.
+    if (blink::WebInputEvent::IsPinchGestureEventType(event.GetType())) {
+      // Only suppress pinch events that cause a scale change. We still
+      // allow synthetic wheel events for touchpad pinch to go to the page.
+      return !(event.SourceDevice() == blink::WebGestureDevice::kTouchpad &&
+               event.NeedsWheelEvent());
+    }
+  }
+
+  // TODO(crbug.com/475836809)
+  // Remove this delegate method. It exposes Blink types to the embedder. Since
+  // zoom blocking is now handled natively, we should audit remaining consumers.
   return delegate_ && delegate_->PreHandleGestureEvent(this, event);
 }
 
@@ -6022,7 +6026,7 @@ std::string WebContentsImpl::DumpAccessibilityTree(
   // This only runs during integration tests, or if a developer is
   // using an inspection tool, e.g. chrome://accessibility.
   ui::AXTreeManager::AlwaysFailFast();
-  DCHECK(base::Contains(AXInspectFactory::SupportedApis(), api_type));
+  DCHECK(std::ranges::contains(AXInspectFactory::SupportedApis(), api_type));
   std::unique_ptr<ui::AXTreeFormatter> formatter =
       AXInspectFactory::CreateFormatter(api_type);
 
@@ -6057,7 +6061,7 @@ void WebContentsImpl::RecordAccessibilityEvents(
         ax_mgr->GetBrowserAccessibilityRoot()
             ->GetTargetForNativeAccessibilityEvent();
 
-    DCHECK(base::Contains(AXInspectFactory::SupportedApis(), api_type));
+    DCHECK(std::ranges::contains(AXInspectFactory::SupportedApis(), api_type));
     event_recorder_ = content::AXInspectFactory::CreateRecorder(
         api_type, ax_mgr, pid, ui::AXTreeSelector(widget));
     event_recorder_->ListenToEvents(*callback);
@@ -6941,6 +6945,10 @@ void WebContentsImpl::SetPageScale(float scale_factor) {
                         "scale_factor", scale_factor);
   GetPrimaryMainFrame()->GetAssociatedLocalMainFrame()->SetScaleFactor(
       scale_factor);
+}
+
+void WebContentsImpl::SetIgnoreZoomGestures(bool ignore) {
+  ignore_zoom_gestures_ = ignore;
 }
 
 gfx::Size WebContentsImpl::GetPreferredSize() {
@@ -10231,6 +10239,20 @@ void WebContentsImpl::DidReceiveInputEvent(
                          WindowOpenDisposition::CURRENT_TAB);
   }
 
+  HandleUserInteractionForInputEvent(render_widget_host, event);
+}
+
+void WebContentsImpl::SimulateUserInteraction(
+    RenderWidgetHostImpl* render_widget_host,
+    const blink::WebInputEvent& event) {
+  CHECK(IsUserInteractionInputType(event.GetType()));
+
+  HandleUserInteractionForInputEvent(render_widget_host, event);
+}
+
+void WebContentsImpl::HandleUserInteractionForInputEvent(
+    RenderWidgetHostImpl* render_widget_host,
+    const blink::WebInputEvent& event) {
   if (!IsUserInteractionInputType(event.GetType())) {
     return;
   }
@@ -12169,10 +12191,8 @@ std::unique_ptr<PrerenderHandle> WebContentsImpl::StartPrerendering(
                                                      preloading_attempt);
 
   if (prerender_host_id) {
-    FrameTreeNodeId frame_tree_node_id =
-        PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id);
     return std::make_unique<PrerenderHandleImpl>(
-        GetPrerenderHostRegistry()->GetWeakPtr(), frame_tree_node_id,
+        GetPrerenderHostRegistry()->GetWeakPtr(), prerender_host_id,
         prerendering_url, std::move(no_vary_search_hint));
   }
   return nullptr;
@@ -12256,8 +12276,14 @@ bool WebContentsImpl::CancelPrerendering(FrameTreeNode* frame_tree_node,
     return frame_tree_node->GetParentOrOuterDocumentOrEmbedder()
         ->CancelPrerendering(PrerenderCancellationReason(final_status));
   }
+  PrerenderHost* prerender_host =
+      GetPrerenderHostRegistry()->FindNonReservedHostById(
+          frame_tree_node->frame_tree_node_id());
+  if (!prerender_host) {
+    return false;
+  }
   return GetPrerenderHostRegistry()->CancelHost(
-      frame_tree_node->frame_tree_node_id(), final_status);
+      prerender_host->prerender_host_id(), final_status);
 }
 
 ui::mojom::VirtualKeyboardMode WebContentsImpl::GetVirtualKeyboardMode() const {

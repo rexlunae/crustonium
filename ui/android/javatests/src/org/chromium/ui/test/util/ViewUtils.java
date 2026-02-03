@@ -4,9 +4,9 @@
 
 package org.chromium.ui.test.util;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.matcher.ViewMatchers.isRoot;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 
+import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
@@ -38,9 +38,9 @@ import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.junit.Assert;
 
-import org.chromium.base.test.transit.ViewCarryOn;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.transit.ViewFinder;
+import org.chromium.base.test.transit.ViewPresence;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 
@@ -132,42 +132,14 @@ public class ViewUtils {
     private ViewUtils() {}
 
     /**
-     * Waits until a view matching the given matches any of the given {@link ExpectedViewState}s.
-     * Fails if the matcher applies to multiple views. Times out after
-     * {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
-     *
-     * @param root The view group to search in.
-     * @param viewMatcher The matcher matching the view that should be waited for.
-     * @param viewState State that the matching view should be in. If multiple states are passed,
-     *                  the waiting will stop if at least one applies.
-     */
-    public static void waitForView(
-            ViewGroup root, Matcher<View> viewMatcher, @ExpectedViewState int viewState) {
-        CriteriaHelper.pollUiThread(new ExpectedViewCriteria(viewMatcher, viewState, root));
-    }
-
-    /**
-     * Waits until a view matches the given matcher and any of the given {@link ExpectedViewState}s.
-     * Fails if the matcher applies to multiple views. Times out after {@link
-     * CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
-     *
-     * @param viewMatcher The matcher matching the view that should be waited for.
-     * @param viewState State that the matching view should be in. If multiple states are passed,
-     *     the waiting will stop if at least one applies.
-     */
-    public static void waitForViewCheckingState(
-            Matcher<View> viewMatcher, @ExpectedViewState int viewState) {
-        onView(isRoot()).check(withEventualExpectedViewState(viewMatcher, viewState));
-    }
-
-    /**
      * Waits until a visible view matches the given matcher. Fails if the matcher applies to
      * multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
      *
      * @param viewMatcher The matcher matching the view that should be waited for.
      */
     public static void waitForVisibleView(Matcher<View> viewMatcher) {
-        waitForViewCheckingState(viewMatcher, VIEW_VISIBLE);
+        ViewFinder.waitForView(
+                viewMatcher, ViewElement.newOptions().allowDisabled().displayingAtLeast(1).build());
     }
 
     /**
@@ -210,7 +182,9 @@ public class ViewUtils {
      * @param viewMatcher The matcher matching the view that should be waited for.
      */
     public static void waitForView(ViewGroup root, Matcher<View> viewMatcher) {
-        waitForView(root, viewMatcher, VIEW_VISIBLE);
+        ViewFinder.waitForView(
+                allOf(viewMatcher, isDescendantOfA(is(root))),
+                ViewElement.newOptions().allowDisabled().displayingAtLeast(1).build());
     }
 
     /**
@@ -235,8 +209,8 @@ public class ViewUtils {
      */
     public static ViewInteraction onViewWaiting(
             Matcher<View> viewMatcher, ViewElement.Options options) {
-        ViewCarryOn<View> viewCarryOn = ViewFinder.waitForView(viewMatcher, options);
-        return viewCarryOn.onView();
+        ViewPresence<View> viewPresence = ViewFinder.waitForView(viewMatcher, options);
+        return viewPresence.onView();
     }
 
     /**
@@ -254,8 +228,9 @@ public class ViewUtils {
         if (checkRootDialog) {
             optionsBuilder = optionsBuilder.inDialog();
         }
-        ViewCarryOn<View> viewCarryOn = ViewFinder.waitForView(viewMatcher, optionsBuilder.build());
-        return viewCarryOn.onView();
+        ViewPresence<View> viewPresence =
+                ViewFinder.waitForView(viewMatcher, optionsBuilder.build());
+        return viewPresence.onView();
     }
 
     /**
@@ -267,9 +242,9 @@ public class ViewUtils {
      * @return An interaction on the matching view.
      */
     public static ViewInteraction onViewWaiting(Matcher<View> viewMatcher) {
-        ViewCarryOn<View> viewCarryOn =
+        ViewPresence<View> viewPresence =
                 ViewFinder.waitForView(viewMatcher, ViewElement.allowDisabledOption());
-        return viewCarryOn.onView();
+        return viewPresence.onView();
     }
 
     /**

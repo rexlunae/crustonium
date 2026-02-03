@@ -23,7 +23,6 @@
 #include "media/filters/hls_demuxer_status.h"
 #include "media/filters/hls_network_access_impl.h"
 #include "media/filters/hls_rendition.h"
-#include "media/filters/hls_stats_reporter.h"
 #include "media/filters/manifest_demuxer.h"
 #include "media/formats/hls/media_playlist.h"
 #include "media/formats/hls/parse_status.h"
@@ -68,8 +67,10 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
   int64_t GetMemoryUsage() const override;
   void Stop() override;
 
-  void SelectVideoVariant(const MediaTrack::Id&) override;
-  void SelectAudioRendition(const MediaTrack::Id&) override;
+  void SelectVideoTrack(const MediaTrack::Id&) override;
+  void SelectAudioTrack(const MediaTrack::Id&) override;
+  std::vector<DemuxerStream*> FilterDemuxerStreams(
+      std::vector<DemuxerStream*>&&) override;
 
   // HlsRenditionHost implementation.
   void ReadKey(const hls::MediaSegment::EncryptionData& data,
@@ -250,6 +251,7 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
       const hls::VariantStream* variant,
       std::optional<hls::RenditionGroup::RenditionTrack> video,
       std::optional<hls::RenditionGroup::RenditionTrack> audio);
+  void UpdateSelectableTrackLists();
 
   void LoadPlaylist(PlaylistParseInfo parse_info,
                     HlsDemuxerStatusCallback on_complete);
@@ -305,6 +307,14 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
   std::vector<std::string> selected_variant_codecs_
       GUARDED_BY_CONTEXT(media_sequence_checker_);
 
+  // Keep track of tracks :)
+  // If tracks change, we have to know which ones to delete and which ones to
+  // add via `add_track_` and `remove_track_`.
+  std::vector<MediaTrack> audio_tracks_
+      GUARDED_BY_CONTEXT(media_sequence_checker_);
+  std::vector<MediaTrack> video_tracks_
+      GUARDED_BY_CONTEXT(media_sequence_checker_);
+
   // Multiple renditions are allowed, and have to be synchronized.
   base::flat_map<std::string, std::unique_ptr<HlsRendition>> renditions_
       GUARDED_BY_CONTEXT(media_sequence_checker_);
@@ -334,9 +344,6 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
   // When renditions are added, this ensures that they are all of the same
   // liveness, and allows access to the liveness check later.
   std::optional<bool> is_seekable_ = std::nullopt;
-
-  hls::HlsStatsReporter stats_reporter_
-      GUARDED_BY_CONTEXT(media_sequence_checker_);
 
   // Ensure that safe member fields are only accessed on the media sequence.
   SEQUENCE_CHECKER(media_sequence_checker_);

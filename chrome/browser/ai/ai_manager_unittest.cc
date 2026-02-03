@@ -19,16 +19,14 @@
 #include "components/optimization_guide/core/model_execution/test/fake_model_broker.h"
 #include "components/optimization_guide/core/model_execution/test/mock_on_device_capability.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
-#include "components/optimization_guide/public/mojom/model_broker.mojom-data-view.h"
+#include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features_generated.h"
-#include "third_party/blink/public/mojom/ai/ai_common.mojom-forward.h"
 #include "third_party/blink/public/mojom/ai/ai_common.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom.h"
-#include "third_party/blink/public/mojom/ai/ai_manager.mojom-shared.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_rewriter.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_summarizer.mojom.h"
@@ -275,6 +273,34 @@ TEST_F(AIManagerTest, CheckAndFixLanguagesProofreader) {
   EXPECT_EQ(options->correction_explanation_language->code, "en-UK");
   options = make_options({"en", "fr"}, "hi");
   EXPECT_FALSE(ai_manager_->CheckAndFixLanguages(options, "API", supported));
+}
+
+// Test that GetLanguageModelParams returns null when sampling config is
+// not available (model not downloaded yet).
+TEST_F(AIManagerTest, GetLanguageModelParamsReturnsNullWhenNotAvailable) {
+  ON_CALL(*mock_optimization_guide_keyed_service_,
+          GetSamplingParamsConfig(_))
+      .WillByDefault(testing::Return(std::nullopt));
+
+  EXPECT_TRUE(ai_manager_->GetLanguageModelParams().is_null());
+}
+
+// Test that GetLanguageModelParams returns params when config is available
+TEST_F(AIManagerTest, GetLanguageModelParamsReturnsValidParamsWhenAvailable) {
+  optimization_guide::SamplingParamsConfig config{
+      .default_top_k = 3,
+      .default_temperature = 1.0f,
+  };
+  ON_CALL(*mock_optimization_guide_keyed_service_,
+          GetSamplingParamsConfig(_))
+      .WillByDefault(testing::Return(config));
+
+  auto params = ai_manager_->GetLanguageModelParams();
+
+  ASSERT_TRUE(params);
+  ASSERT_TRUE(params->default_sampling_params);
+  EXPECT_EQ(3u, params->default_sampling_params->top_k);
+  EXPECT_FLOAT_EQ(1.0f, params->default_sampling_params->temperature);
 }
 
 }  // namespace

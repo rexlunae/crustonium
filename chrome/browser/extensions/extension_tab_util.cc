@@ -36,9 +36,10 @@
 #include "components/data_sharing/public/features.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tab_groups/tab_group_id.h"  // nogncheck
-#include "components/tabs/public/split_tab_id.h"
-#include "components/tabs/public/split_tab_visual_data.h"
+#include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/url_formatter/url_fixer.h"
@@ -131,8 +132,8 @@ BrowserWindowInterface* CreateBrowser(Profile* profile, bool user_gesture) {
 
   BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
                                    *profile, user_gesture);
-  // TODO(https://crbug.com/430344931): When this is ported to android platfoms,
-  // this window isn't guaranteed to be fully initialized.
+  // TODO(https://crbug.com/430344931): When this is ported to android
+  // platforms, this window isn't guaranteed to be fully initialized.
   return CreateBrowserWindow(std::move(params));
 }
 
@@ -141,15 +142,13 @@ BrowserWindowInterface* CreateBrowser(Profile* profile, bool user_gesture) {
 // Use this function for reporting a tab id to an extension. It will
 // take care of setting the id to TAB_ID_NONE if necessary (for
 // example with devtools).
-int GetTabIdForExtensions(const WebContents* web_contents) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // TODO(https://crbug.com/430344931): Port this logic.
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+int GetTabIdForExtensions(WebContents& web_contents) {
+  BrowserWindowInterface* browser =
+      browser_window_util::GetBrowserForTabContents(web_contents);
   if (browser && !ExtensionTabUtil::BrowserSupportsTabs(browser)) {
     return -1;
   }
-#endif
-  return sessions::SessionTabHelper::IdForTab(web_contents).id();
+  return sessions::SessionTabHelper::IdForTab(&web_contents).id();
 }
 
 bool IsFileUrl(const GURL& url) {
@@ -269,7 +268,6 @@ int GetWindowIdOfGroup(const tab_groups::TabGroupId& id) {
   return -1;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Creates a tab MutedInfo object (see chrome/common/extensions/api/tabs.json)
 // with information about the mute state of a browser tab.
 api::tabs::MutedInfo CreateMutedInfo(content::WebContents* contents) {
@@ -293,7 +291,6 @@ api::tabs::MutedInfo CreateMutedInfo(content::WebContents* contents) {
   }
   return info;
 }
-#endif
 
 }  // namespace
 
@@ -367,7 +364,7 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
     GetTabListInterface(*contents, &tab_list, &tab_index);
   }
   api::tabs::Tab tab_object;
-  tab_object.id = GetTabIdForExtensions(contents);
+  tab_object.id = GetTabIdForExtensions(*contents);
   tab_object.index = tab_index;
   tab_object.window_id = GetWindowIdOfTab(contents);
   tab_object.status = GetLoadingStatus(contents);
@@ -433,9 +430,9 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
   tab_object.frozen = tab_lifecycle_unit_external &&
                       tab_lifecycle_unit_external->GetTabState() ==
                           ::mojom::LifecycleUnitState::FROZEN;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   tab_object.muted_info = CreateMutedInfo(contents);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   tab_object.incognito = contents->GetBrowserContext()->IsOffTheRecord();
   gfx::Size contents_size = contents->GetContainerBounds().size();
@@ -461,8 +458,9 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
   if (tab_strip) {
     tabs::TabInterface* opener = tab_strip->GetOpenerOfTabAt(tab_index);
     if (opener) {
-      CHECK(opener->GetContents());
-      tab_object.opener_tab_id = GetTabIdForExtensions(opener->GetContents());
+      content::WebContents* opener_contents = opener->GetContents();
+      CHECK(opener_contents);
+      tab_object.opener_tab_id = GetTabIdForExtensions(*opener_contents);
     }
   }
 #endif
@@ -472,16 +470,15 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
 }
 
 // static
-base::Value::List ExtensionTabUtil::CreateTabList(
-    BrowserWindowInterface* browser,
-    const Extension* extension,
-    mojom::ContextType context) {
+base::ListValue ExtensionTabUtil::CreateTabList(BrowserWindowInterface* browser,
+                                                const Extension* extension,
+                                                mojom::ContextType context) {
   return WindowControllerFromBrowser(browser)->CreateTabList(extension,
                                                              context);
 }
 
 // static
-base::Value::Dict ExtensionTabUtil::CreateWindowValueForExtension(
+base::DictValue ExtensionTabUtil::CreateWindowValueForExtension(
     BrowserWindowInterface& browser,
     const Extension* extension,
     WindowController::PopulateTabBehavior populate_tab_behavior,
@@ -785,20 +782,32 @@ int ExtensionTabUtil::GetSplitId(const split_tabs::SplitTabId& id) {
 }
 
 // static
+bool ExtensionTabUtil::SupportsTabGroups(BrowserWindowInterface* browser) {
+  CHECK(browser);
+#if BUILDFLAG(IS_ANDROID)
+  // Android only supports tab groups for normal browser windows.
+  return browser->GetType() == BrowserWindowInterface::TYPE_NORMAL;
+#else
+  // Other platforms have more complex logic (i.e. more browser types).
+  return browser->GetTabStripModel()->SupportsTabGroups();
+#endif
+}
+
+// static
 bool ExtensionTabUtil::GetGroupById(
     int group_id,
     content::BrowserContext* browser_context,
     bool include_incognito,
     WindowController** out_window,
-    tab_groups::TabGroupId* id,
-    const tab_groups::TabGroupVisualData** visual_data,
+    tab_groups::TabGroupId* out_id,
+    tab_groups::TabGroupVisualData* out_visual_data,
     std::string* error) {
   // Zero output parameters for the error cases.
   if (out_window) {
     *out_window = nullptr;
   }
-  if (visual_data) {
-    *visual_data = nullptr;
+  if (out_visual_data) {
+    *out_visual_data = {};
   }
 
   if (group_id == -1) {
@@ -820,14 +829,9 @@ bool ExtensionTabUtil::GetGroupById(
     if (!target_browser) {
       continue;
     }
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-    // TODO(crbug.com/405219902): Android does not have SupportsTabGroups() yet.
-    TabStripModel* target_tab_strip =
-        target_browser->GetBrowserForMigrationOnly()->tab_strip_model();
-    if (!target_tab_strip->SupportsTabGroups()) {
+    if (!SupportsTabGroups(target_browser)) {
       continue;
     }
-#endif
     TabListInterface* tab_list = TabListInterface::From(target_browser);
     if (!tab_list) {
       continue;
@@ -837,17 +841,16 @@ bool ExtensionTabUtil::GetGroupById(
         if (out_window) {
           *out_window = target_window;
         }
-        if (id) {
-          *id = target_group;
+        if (out_id) {
+          *out_id = target_group;
         }
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-        // TODO(crbug.com/405219902): Android does not support visual data yet.
-        if (visual_data) {
-          *visual_data = target_tab_strip->group_model()
-                             ->GetTabGroup(target_group)
-                             ->visual_data();
+        if (out_visual_data) {
+          std::optional<tab_groups::TabGroupVisualData> visual_data =
+              tab_list->GetTabGroupVisualData(target_group);
+          if (visual_data.has_value()) {
+            *out_visual_data = visual_data.value();
+          }
         }
-#endif
         return true;
       }
     }
@@ -907,25 +910,23 @@ bool ExtensionTabUtil::GetSharedStateOfGroup(const tab_groups::TabGroupId& id) {
   return saved_group->is_shared_tab_group();
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // static
 std::optional<api::tab_groups::TabGroup> ExtensionTabUtil::CreateTabGroupObject(
     const tab_groups::TabGroupId& id) {
-  Browser* browser = chrome::FindBrowserWithGroup(id, nullptr);
+  BrowserWindowInterface* browser = FindBrowserWithGroup(id);
   if (!browser) {
     return std::nullopt;
   }
-
-  CHECK(browser->tab_strip_model()->SupportsTabGroups());
-  TabGroupModel* group_model = browser->tab_strip_model()->group_model();
-  const tab_groups::TabGroupVisualData* visual_data =
-      group_model->GetTabGroup(id)->visual_data();
-
+  CHECK(SupportsTabGroups(browser));
+  TabListInterface* tab_list = TabListInterface::From(browser);
+  if (!tab_list) {
+    return std::nullopt;
+  }
+  std::optional<tab_groups::TabGroupVisualData> visual_data =
+      tab_list->GetTabGroupVisualData(id);
   DCHECK(visual_data);
-
   return CreateTabGroupObject(id, *visual_data);
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // static
 api::tab_groups::Color ExtensionTabUtil::ColorIdToColor(
@@ -1129,7 +1130,7 @@ base::expected<GURL, std::string> ExtensionTabUtil::PrepareURLForNavigation(
   // entered into the Omnibox), but some extensions rely on the legacy behavior
   // where all navigations were subject to the "fixing".  See also
   // https://crbug.com/1145381.
-  url = url_formatter::FixupURL(url.spec(), "" /* = desired_tld */);
+  url = url_formatter::FixupURL(url.spec());
 
   // Reject invalid URLs.
   if (!url.is_valid()) {
@@ -1316,12 +1317,23 @@ bool ExtensionTabUtil::OpenOptionsPage(const Extension* extension,
                                                                open_in_tab);
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // static
 bool ExtensionTabUtil::BrowserSupportsTabs(BrowserWindowInterface* browser) {
-  return browser && browser->GetType() != BrowserWindowInterface::TYPE_DEVTOOLS;
+  if (!browser) {
+    return false;
+  }
+
+  // On non-android platforms, devtools windows are backed by a Browser
+  // instance.
+#if !BUILDFLAG(IS_ANDROID)
+  // TODO(devlin): Should we be checking for other types, too? Like PiP?
+  if (browser->GetType() == BrowserWindowInterface::TYPE_DEVTOOLS) {
+    return false;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  return true;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // static
 api::tabs::TabStatus ExtensionTabUtil::GetLoadingStatus(WebContents* contents) {

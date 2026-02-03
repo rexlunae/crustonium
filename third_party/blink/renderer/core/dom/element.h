@@ -57,6 +57,7 @@
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/transform_view.h"
+#include "third_party/blink/renderer/platform/graphics/paint/tracked_element_data.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -64,6 +65,7 @@
 #include "third_party/blink/renderer/platform/restriction_target_id.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/theme_types.h"
+#include "third_party/blink/renderer/platform/tracked_element_id.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_table.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
@@ -107,14 +109,12 @@ class Element;
 class ElementAnimations;
 class ElementInternals;
 class ElementIntersectionObserverData;
-class ElementRareDataVector;
 class ExceptionState;
 class FocusOptions;
 class GetAnimationsOptions;
 class HTMLElement;
 class HTMLTemplateElement;
 class Image;
-class IndexedPseudoElement;
 class InputDeviceCapabilities;
 class InterestInvokerTargetData;
 class InvokerData;
@@ -176,8 +176,6 @@ using AttributeNamesView =
     bindings::TransformedView<AttributeCollection, AttributeToNameTransform>;
 
 using ColumnPseudoElementsVector = GCedHeapVector<Member<ColumnPseudoElement>>;
-using OverscrollAreaParentPseudoElementsVector =
-    HeapVector<Member<IndexedPseudoElement>>;
 
 enum SpellcheckAttributeState {
   kSpellcheckAttributeTrue,
@@ -1002,6 +1000,19 @@ class CORE_EXPORT Element : public ContainerNode {
   // Otherwise, returns a nullptr.
   const RegionCaptureCropId* GetRegionCaptureCropId() const;
 
+  // Associates the element with a TrackedElementRect, which is the object
+  // internally backing a TrackedElement.
+  // This method may be called at most once. The ID must be non-null.
+  void SetTrackedElementRect(std::unique_ptr<TrackedElementRect> rect);
+
+  // If SetTrackedElementRect(id) was previously called on `this`,
+  // returns the non-empty `id` which it previously provided.
+  // Otherwise, returns a nullptr.
+  const TrackedElementRect* GetTrackedElementRect() const;
+
+  // Clears the TrackedElementRect associated with the element.
+  void ClearTrackedElementRect();
+
   // Associates the element with a RestrictionTargetId, which is the object
   // internally backing a RestrictionTarget.
   // This method may be called at most once. The ID must be non-null.
@@ -1769,8 +1780,6 @@ class CORE_EXPORT Element : public ContainerNode {
       wtf_size_t index,
       const PhysicalRect& column_rect);
   const ColumnPseudoElementsVector* GetColumnPseudoElements() const;
-  const OverscrollAreaParentPseudoElementsVector*
-  GetOverscrollAreaParentPseudoElements() const;
 
   // Clear all ::column pseudo-elements, except for the leading `to_keep` ones.
   void ClearColumnPseudoElements(wtf_size_t to_keep = 0);
@@ -1830,10 +1839,6 @@ class CORE_EXPORT Element : public ContainerNode {
   // this rather than GetPseudoElement().
   Element* GetStyledPseudoElement(PseudoId pseudo_id,
                                   const AtomicString& pseudo_argument) const;
-
-  // Performs an update of the overscroll pseudo-elements.
-  void UpdateOverscrollPseudoElements(const StyleRecalcChange,
-                                      const StyleRecalcContext&);
 
   // Performs an update of the view-transition pseudo-elements.
   void UpdateTransitionPseudoElements(const StyleRecalcChange,
@@ -1997,9 +2002,9 @@ class CORE_EXPORT Element : public ContainerNode {
   bool SupportsBaseAppearance(AppearanceValue) const;
 
   OverscrollAreaTracker& EnsureOverscrollAreaTracker();
-  OverscrollAreaTracker* OverscrollAreaTracker() const;
+  OverscrollAreaTracker* GetOverscrollAreaTracker() const;
 
-  Element* OverscrollContainer() const;
+  Element* GetOverscrollContainer() const;
   void SetOverscrollContainer(Element*);
   void ClearOverscrollContainer();
 
@@ -2342,6 +2347,7 @@ class CORE_EXPORT Element : public ContainerNode {
   // These pseudo-elements are added as siblings of the contents of this
   // element's layout children.
   void AttachOverscrollPseudoElements(AttachContext& context);
+  void DetachOverscrollPseudoElements(bool performing_reattach);
 
   void AttachColumnPseudoElements(AttachContext& context);
   void AttachTransitionPseudoElements(AttachContext& context);
@@ -2352,6 +2358,7 @@ class CORE_EXPORT Element : public ContainerNode {
     DetachPseudoElement(kPseudoIdMarker, performing_reattach);
     DetachPseudoElement(kPseudoIdCheckMark, performing_reattach);
     DetachPseudoElement(kPseudoIdBefore, performing_reattach);
+    DetachOverscrollPseudoElements(performing_reattach);
   }
 
   void DetachSucceedingPseudoElements(bool performing_reattach) {
@@ -2514,9 +2521,6 @@ class CORE_EXPORT Element : public ContainerNode {
           options,
       ExceptionState&);
 
-  ElementRareDataVector* GetElementRareData() const;
-  ElementRareDataVector& EnsureElementRareData();
-
   void RemoveAttrNodeList();
   void DetachAllAttrNodesFromElement();
   void DetachAttrNodeFromElementWithValue(Attr*, const AtomicString& value);
@@ -2584,10 +2588,12 @@ class CORE_EXPORT Element : public ContainerNode {
   // scroll-marker due to a targeted scroll.
   void NotifyScrollMarkerGroupOfTargetedScroll();
 
+  // ContainerNode ends on a 32-bit member, so put this Member first
+  // to eliminate padding.
+
+  Member<const ComputedStyle> computed_style_;
+
   QualifiedName tag_name_;
-  // This `ComputedStyle` field is a hot accessed member. Keep uncompressed for
-  // performance reasons.
-  subtle::UncompressedMember<const ComputedStyle> computed_style_;
   Member<ElementData> element_data_;
 
   // A tiny Bloom filter for which attribute names and class names exist
@@ -2597,11 +2603,11 @@ class CORE_EXPORT Element : public ContainerNode {
   // We do not currently update this when attributes/classes are removed,
   // only when they are added. Attribute _values_ are not part of this
   // filter, except for the values of class="".
-  uint32_t attribute_or_class_bloom_ = 0;
+  TinyBloomFilter attribute_or_class_bloom_ = 0;
 
   // Do not add new members to Element without a good reason; prefer to
   // add to ElementRareData unless it is performance-critical. Element
-  // is 88 bytes on typical 64-bit platforms, and growing it can cause
+  // is 80 bytes on typical 64-bit platforms, and growing it can cause
   // both memory and performance regressions if you are not careful.
 };
 
@@ -2617,6 +2623,24 @@ inline bool IsDisabledFormControl(const Node* node) {
 
 inline Element* Node::parentElement() const {
   return DynamicTo<Element>(parentNode());
+}
+
+inline Node* Node::previousSibling() const {
+  if (parentNode() && parentNode()->firstChild() == this) {
+    // The previous pointer is used for lastChild(),
+    // so it cannot be trusted.
+    return nullptr;
+  } else {
+    return previous_.Get();
+  }
+}
+
+inline bool Node::HasPreviousSibling() const {
+  if (parentNode() && parentNode()->firstChild() == this) {
+    return false;
+  } else {
+    return previous_;
+  }
 }
 
 inline bool Element::FastHasAttribute(const QualifiedName& name) const {

@@ -15,6 +15,8 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "components/legion/phosphor/data_types.h"
+#include "components/legion/phosphor/token_manager.h"
 #include "components/legion/proto/legion.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,6 +31,30 @@ using ::testing::SizeIs;
 using ::testing::WithArgs;
 
 namespace {
+
+MATCHER(IsAttestationRequest, "") {
+  proto::LegionRequest request;
+  if (!request.ParseFromArray(arg.data(), arg.size())) {
+    return false;
+  }
+  return request.has_anonymous_token_request();
+}
+
+MATCHER(IsGenerateContentRequest, "") {
+  proto::LegionRequest request;
+  if (!request.ParseFromArray(arg.data(), arg.size())) {
+    return false;
+  }
+  return request.has_generate_content_request();
+}
+
+MATCHER(IsPaicRequest, "") {
+  proto::LegionRequest request;
+  if (!request.ParseFromArray(arg.data(), arg.size())) {
+    return false;
+  }
+  return request.has_paic_request();
+}
 
 // Mock implementation of the SecureChannel interface.
 class MockSecureChannelClient : public SecureChannel {
@@ -60,11 +86,20 @@ class FakeSecureChannelFactory {
     return channel;
   }
 
+  void SetExpectAttestation(bool expect) { expect_attestation_ = expect; }
+
   MockSecureChannelClient* CreateNewChannel() {
     CHECK(!next_channel_);
     auto channel =
         std::make_unique<testing::StrictMock<MockSecureChannelClient>>();
     auto* channel_ptr = channel.get();
+
+    if (expect_attestation_) {
+      // Expect the attestation call that happens on channel creation.
+      EXPECT_CALL(*channel_ptr, Write(IsAttestationRequest()))
+          .WillOnce(testing::Return(true));
+    }
+
     next_channel_ = std::move(channel);
     return channel_ptr;
   }
@@ -73,6 +108,7 @@ class FakeSecureChannelFactory {
 
  private:
   std::unique_ptr<MockSecureChannelClient> next_channel_;
+  bool expect_attestation_ = true;
 };
 
 struct ResponseErrorTestParam {
@@ -87,12 +123,11 @@ void SetUpMockWrite(
     const ClientImpl::BinaryEncodedProtoResponse& response_template,
     bool mismatch_request_id = false) {
   CHECK(mock_secure_channel);
-  EXPECT_CALL(*mock_secure_channel, Write(_))
+  EXPECT_CALL(*mock_secure_channel, Write(IsGenerateContentRequest()))
       .WillOnce([=, &response_callback](const Request& request_payload) {
         proto::LegionRequest request;
         EXPECT_TRUE(request.ParseFromArray(request_payload.data(),
                                            request_payload.size()));
-
         proto::LegionResponse response;
         ClientImpl::BinaryEncodedProtoResponse response_data;
         if (response.ParseFromArray(response_template.data(),
@@ -118,19 +153,48 @@ void SetUpMockWrite(
 
 }  // namespace
 
+class FakeTokenManager : public phosphor::TokenManager {
+ public:
+  FakeTokenManager() = default;
+  ~FakeTokenManager() override = default;
+
+  void GetAuthToken(proto::FeatureName feature_name,
+                    GetAuthTokenCallback callback) override {
+    if (!return_token_) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    std::move(callback).Run(std::make_optional<phosphor::BlindSignedAuthToken>(
+        phosphor::BlindSignedAuthToken{
+            .token = "test_token",
+            .encoded_extensions = "test_extensions",
+            .expiration = base::Time::Now() + base::Minutes(1)}));
+  }
+
+  void PrefetchAuthTokens(proto::FeatureName feature_name) override {}
+
+  void SetReturnToken(bool return_token) { return_token_ = return_token; }
+
+ private:
+  bool return_token_ = true;
+};
+
 class ClientImplTest : public ::testing::Test {
  public:
   ClientImplTest() = default;
   ~ClientImplTest() override = default;
 
   void SetUp() override {
-    client_ = base::WrapUnique(new ClientImpl(base::BindRepeating(
-        &FakeSecureChannelFactory::Create, base::Unretained(&factory_))));
+    client_ = base::WrapUnique(
+        new ClientImpl(base::BindRepeating(&FakeSecureChannelFactory::Create,
+                                           base::Unretained(&factory_)),
+                       &token_manager_));
   }
 
  protected:
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  FakeTokenManager token_manager_;
   std::unique_ptr<Client> client_;
   FakeSecureChannelFactory factory_;
   base::HistogramTester histogram_tester_;
@@ -182,10 +246,50 @@ TEST_F(ClientImplTest, SendTextRequestSuccess) {
       1);
 }
 
+// Test the successful request flow for paic requests.
+TEST_F(ClientImplTest, SendPaicRequestSuccess) {
+  ClientImpl::BinaryEncodedProtoResponse response_data;
+  proto::LegionResponse legion_response;
+  legion_response.mutable_paic_response();
+  legion_response.set_request_id(1);
+  std::string serialized_response;
+  legion_response.SerializeToString(&serialized_response);
+  response_data.assign(serialized_response.begin(), serialized_response.end());
+
+  auto* mock_channel = factory_.CreateNewChannel();
+  EXPECT_CALL(*mock_channel, Write(IsPaicRequest()))
+      .WillOnce([&](const Request& request_payload) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(factory_.response_callback_,
+                                      base::ok(std::move(response_data))));
+        return true;
+      });
+
+  base::test::TestFuture<base::expected<proto::PaicMessage, ErrorCode>> future;
+  client_->SendPaicRequest(proto::FeatureName::FEATURE_NAME_UNSPECIFIED,
+                           proto::PaicMessage(), future.GetCallback(),
+                           /*options=*/{});
+
+  const auto& result = future.Get();
+  ASSERT_TRUE(result.has_value());
+
+  histogram_tester_.ExpectTotalCount("Legion.Client.RequestLatency.Success", 1);
+  histogram_tester_.ExpectTotalCount("Legion.Client.RequestLatency.Timeout", 0);
+  histogram_tester_.ExpectTotalCount("Legion.Client.RequestLatency.Error", 0);
+  histogram_tester_.ExpectTotalCount("Legion.Client.RequestErrorCode", 0);
+  histogram_tester_.ExpectTotalCount("Legion.Client.RequestSize", 1);
+  histogram_tester_.ExpectUniqueSample("Legion.Client.ResponseSize.Success",
+                                       serialized_response.size(), 1);
+  histogram_tester_.ExpectUniqueSample(
+      "Legion.Client.FeatureName", proto::FeatureName::FEATURE_NAME_UNSPECIFIED,
+      1);
+}
+
 // Test that SendRequest fails if SecureChannel::Write fails.
 TEST_F(ClientImplTest, SendTextRequestWriteFails) {
   auto* mock_channel = factory_.CreateNewChannel();
-  EXPECT_CALL(*mock_channel, Write(_)).WillOnce(testing::Return(false));
+  EXPECT_CALL(*mock_channel, Write(IsGenerateContentRequest()))
+      .WillOnce(testing::Return(false));
 
   base::test::TestFuture<base::expected<std::string, ErrorCode>> future;
   client_->SendTextRequest(proto::FeatureName::FEATURE_NAME_UNSPECIFIED,
@@ -254,7 +358,8 @@ TEST_F(ClientImplTest, IgnoresResponseWithUnknownRequestId) {
 // Test that the secure channel is recreated after a permanent failure.
 TEST_F(ClientImplTest, SecureChannelRecreation) {
   auto* first_channel = factory_.CreateNewChannel();
-  EXPECT_CALL(*first_channel, Write(_)).WillOnce(testing::Return(true));
+  EXPECT_CALL(*first_channel, Write(IsGenerateContentRequest()))
+      .WillOnce(testing::Return(true));
 
   // Send a request that will fail.
   base::test::TestFuture<base::expected<std::string, ErrorCode>> future;
@@ -319,7 +424,8 @@ TEST_F(ClientImplTest, SecureChannelRecreation) {
 TEST_F(ClientImplTest, SendTextRequestTimeout) {
   // Mock the secure channel to never respond.
   auto* mock_channel = factory_.CreateNewChannel();
-  EXPECT_CALL(*mock_channel, Write(_)).WillOnce(testing::Return(true));
+  EXPECT_CALL(*mock_channel, Write(IsGenerateContentRequest()))
+      .WillOnce(testing::Return(true));
 
   base::test::TestFuture<base::expected<std::string, ErrorCode>> future;
   client_->SendTextRequest(proto::FeatureName::FEATURE_NAME_UNSPECIFIED,
@@ -351,7 +457,8 @@ TEST_F(ClientImplTest, SendTextRequestTimeout) {
 TEST_F(ClientImplTest, SendTextRequestResponseAfterTimeout) {
   // Mock the secure channel to not invoke the response callback.
   auto* mock_channel = factory_.CreateNewChannel();
-  EXPECT_CALL(*mock_channel, Write(_)).WillOnce(testing::Return(true));
+  EXPECT_CALL(*mock_channel, Write(IsGenerateContentRequest()))
+      .WillOnce(testing::Return(true));
 
   base::test::TestFuture<base::expected<std::string, ErrorCode>> future;
   client_->SendTextRequest(proto::FeatureName::FEATURE_NAME_UNSPECIFIED,
@@ -447,12 +554,13 @@ class ClientImplSendTextRequestSecureChannelErrorTest
 TEST_P(ClientImplSendTextRequestSecureChannelErrorTest, SendTextRequestError) {
   ErrorCode error_code = GetParam();
   auto* mock_channel = factory_.CreateNewChannel();
-  EXPECT_CALL(*mock_channel, Write(_)).WillOnce([&](const Request& request) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(factory_.response_callback_,
-                                  base::unexpected(error_code)));
-    return true;
-  });
+  EXPECT_CALL(*mock_channel, Write(IsGenerateContentRequest()))
+      .WillOnce([&](const Request& request) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(factory_.response_callback_,
+                                      base::unexpected(error_code)));
+        return true;
+      });
 
   base::test::TestFuture<base::expected<std::string, ErrorCode>> future;
   client_->SendTextRequest(proto::FeatureName::FEATURE_NAME_UNSPECIFIED,
@@ -552,7 +660,8 @@ TEST_F(ClientImplTest, EstablishSessionFailureFailsPendingRequests) {
   auto* mock_channel = factory_.CreateNewChannel();
 
   // The first write will be queued.
-  EXPECT_CALL(*mock_channel, Write(_)).WillOnce(testing::Return(true));
+  EXPECT_CALL(*mock_channel, Write(IsGenerateContentRequest()))
+      .WillOnce(testing::Return(true));
 
   // The session establishment will fail.
   EXPECT_CALL(*mock_channel, EstablishChannel(_))
@@ -590,6 +699,33 @@ TEST_F(ClientImplTest, EstablishSessionFailureFailsPendingRequests) {
   histogram_tester_.ExpectUniqueSample(
       "Legion.Client.FeatureName",
       proto::FeatureName::FEATURE_NAME_DEMO_GEMINI_GENERATE_CONTENT, 1);
+}
+
+// Tests that if the token manager can't provide a token, the request fails
+// gracefully if a server returns error.
+TEST_F(ClientImplTest, NoAuthTokenFailsRequest) {
+  token_manager_.SetReturnToken(false);
+  factory_.SetExpectAttestation(false);
+
+  auto* mock_channel = factory_.CreateNewChannel();
+  EXPECT_CALL(*mock_channel, Write(IsGenerateContentRequest()))
+      .WillOnce([&](const Request& request) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(
+                factory_.response_callback_,
+                base::unexpected(ErrorCode::kClientAttestationFailed)));
+        return true;
+      });
+
+  base::test::TestFuture<base::expected<std::string, ErrorCode>> future;
+  client_->SendTextRequest(
+      proto::FeatureName::FEATURE_NAME_DEMO_GEMINI_GENERATE_CONTENT,
+      "some text", future.GetCallback(), /*options=*/{});
+
+  const auto& result = future.Get();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), ErrorCode::kClientAttestationFailed);
 }
 
 }  // namespace legion

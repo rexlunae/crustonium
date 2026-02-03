@@ -14,10 +14,10 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "components/sessions/core/session_id.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
-#include "components/tabs/public/split_tab_id.h"
-#include "components/tabs/public/split_tab_visual_data.h"
 #include "components/tabs/public/tab_interface.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/base/models/list_selection_model.h"
@@ -157,7 +157,7 @@ class TabStripModelChange {
     // { F, 5 }, { C, 2 }, { B, 1 }
     //
     // Therefore all observers which store indices of tabs should update them
-    // in the order the tabs appear in `contents`. Observers should  not do
+    // in the order the tabs appear in `contents`. Observers should not do
     // index-based queries based on their own internally-stored indices until
     // after processing all of `contents`.
     std::vector<RemovedTab> contents;
@@ -562,11 +562,6 @@ class TabStripModelObserver {
   // window.
   virtual void OnTabBlockedStateChanged(tabs::TabInterface* tab, int index);
 
-  // The specified tab at `index` requires the display of a UI indication to the
-  // user that it needs their attention. The UI indication is set iff
-  // `attention` is true.
-  virtual void OnTabNeedsAttentionChanged(int index, bool attention);
-
   // Called when the tab at `index` is added to the group with id `new_group` or
   // removed from a group with id `old_group`.
   virtual void TabGroupedStateChanged(
@@ -586,12 +581,6 @@ class TabStripModelObserver {
   virtual void OnTabGroupFocusChanged(
       std::optional<tab_groups::TabGroupId> new_focused_group_id,
       std::optional<tab_groups::TabGroupId> old_focused_group_id);
-
-  // Similar to OnTabNeedsAttentionChanged but for Tab Groups. The UI indication
-  // is set iff `attention` is true.
-  virtual void OnTabGroupNeedsAttentionChanged(
-      const tab_groups::TabGroupId& group,
-      bool attention);
 
   // Notfies us when a Tab Group is added to the Tab Group Model.
   virtual void OnTabGroupAdded(const tab_groups::TabGroupId& group_id);

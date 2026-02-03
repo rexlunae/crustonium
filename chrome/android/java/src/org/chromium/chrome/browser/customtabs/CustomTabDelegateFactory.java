@@ -8,8 +8,6 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
 
 import android.app.Activity;
-import android.app.ActivityManager;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.graphics.Rect;
@@ -17,6 +15,7 @@ import android.text.TextUtils;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.blink.mojom.DisplayMode;
@@ -239,7 +238,7 @@ public class CustomTabDelegateFactory implements TabDelegateFactory {
                 FullscreenManager fullscreenManager,
                 TabCreatorManager tabCreatorManager,
                 Supplier<TabModelSelector> tabModelSelectorSupplier,
-                Supplier<CompositorViewHolder> compositorViewHolderSupplier,
+                Supplier<@Nullable CompositorViewHolder> compositorViewHolderSupplier,
                 Supplier<ModalDialogManager> modalDialogManagerSupplier,
                 Supplier<Boolean> headerControlsVisibilitySupplier,
                 Supplier<Boolean> headerAsOverlaySupplier,
@@ -276,8 +275,7 @@ public class CustomTabDelegateFactory implements TabDelegateFactory {
         @Override
         protected void bringActivityToForeground() {
             assert mActivity != null;
-            ((ActivityManager) mActivity.getSystemService(Context.ACTIVITY_SERVICE))
-                    .moveTaskToFront(mActivity.getTaskId(), 0);
+            ApiCompatibilityUtils.moveTaskToFront(mActivity, mActivity.getTaskId(), 0);
         }
 
         @Override
@@ -375,7 +373,7 @@ public class CustomTabDelegateFactory implements TabDelegateFactory {
     private final TabCreatorManager mTabCreatorManager;
     private final BrowserControlsManager mBrowserControlsManager;
     private final Supplier<TabModelSelector> mTabModelSelectorSupplier;
-    private final Supplier<CompositorViewHolder> mCompositorViewHolderSupplier;
+    private final Supplier<@Nullable CompositorViewHolder> mCompositorViewHolderSupplier;
     private final Supplier<ModalDialogManager> mModalDialogManagerSupplier;
     // Should only be used after inflation.
     private final Supplier<SnackbarManager> mSnackbarManager;
@@ -431,7 +429,7 @@ public class CustomTabDelegateFactory implements TabDelegateFactory {
             FullscreenManager fullscreenManager,
             TabCreatorManager tabCreatorManager,
             Supplier<TabModelSelector> tabModelSelectorSupplier,
-            Supplier<CompositorViewHolder> compositorViewHolderSupplier,
+            Supplier<@Nullable CompositorViewHolder> compositorViewHolderSupplier,
             Supplier<ModalDialogManager> modalDialogManagerSupplier,
             Supplier<SnackbarManager> snackbarManager,
             Supplier<ShareDelegate> shareDelegateSupplier,

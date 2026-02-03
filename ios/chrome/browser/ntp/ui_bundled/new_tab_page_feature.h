@@ -52,9 +52,6 @@ BASE_DECLARE_FEATURE(kFeedHeaderSettings);
 // its own does nothing; relies on feature parameters.
 BASE_DECLARE_FEATURE(kOverrideFeedSettings);
 
-// Feature flag to enable sending discover feedback to an updated target
-BASE_DECLARE_FEATURE(kWebFeedFeedbackReroute);
-
 // Feature flag to enable in-product help for swipe action on the Feed.
 BASE_DECLARE_FEATURE(kFeedSwipeInProductHelp);
 
@@ -70,16 +67,6 @@ BASE_DECLARE_FEATURE(kMostVisitedTilesCustomizationIOS);
 BASE_DECLARE_FEATURE(kConsistentLogoDoodleHeight);
 
 #pragma mark - Feature parameters
-
-// A parameter to indicate whether Reconstructed Templates is enabled for static
-// resource serving.
-// TODO(crbug.com/40246814): Remove this.
-extern const char kDiscoverFeedSRSReconstructedTemplatesEnabled[];
-
-// A parameter to indicate whether Preload Templates is enabled for static
-// resource serving.
-// TODO(crbug.com/40246814): Remove this.
-extern const char kDiscoverFeedSRSPreloadTemplatesEnabled[];
 
 // A parameter value for the feed's refresh threshold when the feed has already
 // been seen by the user.
@@ -112,9 +99,6 @@ bool IsDiscoverFeedTopSyncPromoEnabled();
 
 // Whether content suggestions are enabled for supervised users.
 bool IsContentSuggestionsForSupervisedUserEnabled(PrefService* pref_service);
-
-// YES if discover feedback is going to be sent to the updated target.
-bool IsWebFeedFeedbackRerouteEnabled();
 
 // Returns the enabled variation of feature kFeedSwipeInProductHelp.
 FeedSwipeIPHVariation GetFeedSwipeIPHVariation();

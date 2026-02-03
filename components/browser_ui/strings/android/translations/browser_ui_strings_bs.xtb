@@ -3,6 +3,7 @@
 <translationbundle lang="bs">
 <translation id="1006017844123154345">Otvori na mreži</translation>
 <translation id="1036348656032585052">Isključi</translation>
+<translation id="1046742265332833834">Plava tema</translation>
 <translation id="1070329623210597193">Fajlovi koje ova web lokacija može pregledati ili urediti</translation>
 <translation id="1073417869336441572">Kažite nam zašto ste dozvolili kolačiće treće strane i pomozite nam da poboljšamo Chrome. <ph name="BEGIN_LINK" />Pošaljite povratne informacije<ph name="END_LINK" /></translation>
 <translation id="1074758928858737435">Možete zatražiti da vidite računarsku verziju web lokacija</translation>
@@ -12,6 +13,7 @@
 <translation id="1178581264944972037">Pauziraj</translation>
 <translation id="1181037720776840403">Ukloni</translation>
 <translation id="1192844206376121885">Ovim će se izbrisati svi podaci i kolačići koje je pohranila web lokacija <ph name="ORIGIN" />.</translation>
+<translation id="1199963004393929848">Zelena tema</translation>
 <translation id="1201402288615127009">Naprijed</translation>
 <translation id="1240190568154816272">Savjeti za Chrome</translation>
 <translation id="1242008676835033345">Ugrađeno na <ph name="WEBSITE_URL" /></translation>
@@ -64,6 +66,7 @@
 <translation id="1717996979683942279">Kada je uključeno, web lokacije mogu zatražiti da upravljaju prozorima na svim vašim ekranima. Kada je isključeno, web lokacije ne mogu zatražiti da upravljaju prozorima na svim vašim ekranima.</translation>
 <translation id="1738912554587725807">Donja tabela kolekcija tema izgleda stranice Nova kartica</translation>
 <translation id="1743802530341753419">Web lokacije moraju tražiti dozvolu za povezivanje na uređaj (preporučeno)</translation>
+<translation id="1766455884659449403">Dobijajte obavještenja o savjetima za Chrome</translation>
 <translation id="1777815584158991902">Donja tabela sažetka sadržaja Discover</translation>
 <translation id="1779089405699405702">Dekoder slike</translation>
 <translation id="1785415724048343560">Preporučeno za najbolje iskustvo</translation>
@@ -188,11 +191,9 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="2903493209154104877">Adrese</translation>
 <translation id="2910701580606108292">Web lokacije moraju tražiti dozvolu za reprodukciju zaštićenog sadržaja</translation>
 <translation id="2918484639460781603">Idi u postavke</translation>
-<translation id="293060180538644702">Dobijajte obavještenja sa savjetima za Chrome</translation>
 <translation id="2932883381142163287">Prijavite zloupotrebu</translation>
 <translation id="2939338015096024043">Kada je postavka uključena, web lokacije mogu zatražiti da prate položaj vaše kamere i saznaju više o vašem okruženju. Kada je postavka isključena, web lokacije ne mogu pratiti položaj vaše kamere niti saznati više o vašem okruženju.</translation>
 <translation id="2968755619301702150">Preglednik certifikata</translation>
-<translation id="2979365474350987274">Kolačići trećih strana su ograničeni</translation>
 <translation id="2990583317361835189">Nemoj dozvoliti web lokacijama korištenje senzora kretanja</translation>
 <translation id="3004438526346162184">Web lokacije mogu koristiti ovu funkciju da upravljaju prozorima na svim vašim ekranima</translation>
 <translation id="3008272652534848354">Poništi odobrenja</translation>
@@ -216,11 +217,11 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="3167868116600277716">Sažetak sadržaja na Discoveru</translation>
 <translation id="3198916472715691905"><ph name="STORAGE_AMOUNT" /> pohranjenih podataka</translation>
 <translation id="3199078925536734975">Dozvoljeno je ovaj put • Približno</translation>
+<translation id="3208584281581115441">Provjeri sada</translation>
 <translation id="321187648315454507">Da dozvolite da vam aplikacija <ph name="APP_NAME" /> šalje obavještenja, također uključite obavještenja u <ph name="BEGIN_LINK" />Postavkama Androida<ph name="END_LINK" />.</translation>
 <translation id="3223425961342298674">Lokacija nije dozvoljena</translation>
 <translation id="3227137524299004712">Mikrofon</translation>
 <translation id="3232293466644486101">Izbrišite podatke pregledanja…</translation>
-<translation id="3241320538788585298">Mreža s povratnom petljom</translation>
 <translation id="3242646949159196181">Kada je postavka uključena, web lokacije mogu reproducirati zvuk. Kada je postavka isključena, web lokacije ne mogu reproducirati zvuk.</translation>
 <translation id="3273479183583863618">Padovi cijena na karticama</translation>
 <translation id="3277252321222022663">Dozvolite web lokacijama pristup senzorima (preporučeno)</translation>
@@ -266,6 +267,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="3721953990244350188">Odbacivanje i prikazivanje sljedeće dostupne radnje</translation>
 <translation id="3744111561329211289">Sinhronizacija u pozadini</translation>
 <translation id="3746834924069123416">Prikaz više nedavnih kartica</translation>
+<translation id="3753618528540214374">Plavo-zelena tema</translation>
 <translation id="3763247130972274048">Dvaput dodirnite videozapis lijevo ili desno da preskočite 10 s</translation>
 <translation id="3776508619697147021">Web lokacije mogu tražiti da automatski preuzimaju više fajlova</translation>
 <translation id="3779154269823594982">Promijenite lozinke</translation>
@@ -275,6 +277,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="381841723434055211">Brojevi telefona</translation>
 <translation id="3823453485268218808">Font Mono</translation>
 <translation id="3826050100957962900">Prijava treće strane</translation>
+<translation id="3831065134033923230">Provjerite sačuvane lozinke</translation>
 <translation id="3835233591525155343">Korištenje vašeg uređaja</translation>
 <translation id="3843916486309149084">Chrome će ponovo blokirati kolačiće danas</translation>
 <translation id="385051799172605136">Nazad</translation>
@@ -403,6 +406,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="5246825184569358663">Ova radnja će izbrisati sve lokalne podatke, uključujući kolačiće, i poništiti sva odobrenja za domenu <ph name="DOMAIN" /> i sve web lokacije na njoj</translation>
 <translation id="5264323282659631142">Uklanjanje stavke "<ph name="CHIP_LABEL" />"</translation>
 <translation id="528192093759286357">Povucite s vrha i dodirnite dugme za nazad da napustite prikaz preko cijelog ekrana.</translation>
+<translation id="5286194356314741248">Skeniranje</translation>
 <translation id="5300589172476337783">Prikaži</translation>
 <translation id="5301954838959518834">Uredu, razumijem</translation>
 <translation id="5317780077021120954">Sačuvaj</translation>
@@ -413,6 +417,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(i još 1)}one{(i još #)}few{(i još #)}other{(i još #)}}</translation>
 <translation id="5403592356182871684">Imena</translation>
 <translation id="5407203562970638234">Poboljšajte sigurnost</translation>
+<translation id="5436307623797390637">Aplikacije na uređaju</translation>
 <translation id="5438097262470833822">Ovim odabirom će se poništiti odobrenja za web lokaciju <ph name="WEBSITE" /></translation>
 <translation id="5459413148890178711">Kada je postavka uključena, web lokacije mogu zatražiti vašu lokaciju. Kada je postavka isključena, web lokacije ne mogu vidjeti vašu lokaciju.</translation>
 <translation id="5489227211564503167">Proteklo vrijeme <ph name="ELAPSED_TIME" /> od <ph name="TOTAL_TIME" />.</translation>
@@ -475,6 +480,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="5998071268779572583">Uključivanje sažetka sadržaja Discovera</translation>
 <translation id="6012967556075291653">Zakačena prečica</translation>
 <translation id="6015775454662021376">Upravljanje pristupom ove web lokacije vašem uređaju</translation>
+<translation id="6022659036123304283">Prilagodite Chrome svojim potrebama</translation>
 <translation id="6040143037577758943">Zatvori</translation>
 <translation id="6042308850641462728">Više</translation>
 <translation id="6064125863973209585">Završena preuzimanja</translation>
@@ -492,13 +498,13 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="6196640612572343990">Blokiraj kolačiće treće strane</translation>
 <translation id="6205314730813004066">Privatnost pri izloženosti oglasima</translation>
 <translation id="6207207788774442484">Izbriši podatke i poništi odobrenja</translation>
+<translation id="6218508144653756827">Ljubičasto-crvena tema</translation>
 <translation id="6231752747840485235">Deinstalirati aplikaciju <ph name="APP_NAME" />?</translation>
 <translation id="6234351944623978659">Dodirnite aplikaciju Preglednik &gt; Chrome.</translation>
 <translation id="6260830281887654268">Donja tabela kolekcija tema izgleda stranice Nova kartica je otvorena na pola visine</translation>
 <translation id="6262191102408817757">Na osnovu vaše posljednje kartice</translation>
 <translation id="6262279340360821358">Blokirano: <ph name="PERMISSION_1" /> i <ph name="PERMISSION_2" /></translation>
 <translation id="6270391203985052864">Web lokacije mogu tražiti da šalju obavještenja</translation>
-<translation id="6278428485366576908">Tema</translation>
 <translation id="6295158916970320988">Sve web lokacije</translation>
 <translation id="6320088164292336938">Vibracija</translation>
 <translation id="6367753977865761591">Blokirajte prijavu trećih stana za određenu web lokaciju.</translation>
@@ -525,6 +531,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="659938948789980540">{COUNT,plural, =1{Kolačići su dozvoljeni za <ph name="RWS_MEMBERS_COUNT" /> web lokaciju čiji je vlasnik <ph name="RWS_OWNER" />}one{Kolačići su dozvoljeni za <ph name="RWS_MEMBERS_COUNT" /> web lokaciju čiji je vlasnik <ph name="RWS_OWNER" />}few{Kolačići su dozvoljeni za <ph name="RWS_MEMBERS_COUNT" /> web lokacije čiji je vlasnik <ph name="RWS_OWNER" />}other{Kolačići su dozvoljeni za <ph name="RWS_MEMBERS_COUNT" /> web lokacija čiji je vlasnik <ph name="RWS_OWNER" />}}</translation>
 <translation id="6608650720463149374"><ph name="GIGABYTES" /> GB</translation>
 <translation id="6612358246767739896">Zaštićeni sadržaj</translation>
+<translation id="6619015782482868078">Tirkizno-plava tema</translation>
 <translation id="662080504995468778">Ostani</translation>
 <translation id="6630443592285535486">Ovdje upišite heksadecimalni kôd</translation>
 <translation id="6635327442719709864">Kada je postavka uključena, web lokacije mogu zatražiti da koriste serijske priključke. Kada je isključena, web lokacije ne mogu koristiti serijske priključke.</translation>
@@ -553,6 +560,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="6945221475159498467">Odaberi</translation>
 <translation id="6950072572526089586">Web lokacija koju posjetite može sačuvati informacije o tome šta radite kako bi funkcionirala prema očekivanjima – naprimjer, da ostanete prijavljeni na web lokaciju ili sačuvate artikle u kolica za kupovinu. Web lokacije često privremeno pohranjuju te informacije na vaš uređaj.</translation>
 <translation id="6965382102122355670">Uredu</translation>
+<translation id="6980507581230208647">Ružičasta tema</translation>
 <translation id="6980861169612950611">Izbrisati podatke web lokacije? <ph name="SITE_NAME" /></translation>
 <translation id="6981982820502123353">Pristupačnost</translation>
 <translation id="6991142177939282156">Dozvoljeno • Korištenje približne lokacije</translation>
@@ -581,6 +589,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="7250468141469952378">Odabrano <ph name="ITEM_COUNT" /></translation>
 <translation id="7260727271532453612">Dozvoljeno: <ph name="PERMISSION_1" /> i <ph name="PERMISSION_2" /></translation>
 <translation id="7276071417425470385">Kada je postavka uključena, web lokacije mogu zatražiti da koriste uređaje virtuelne realnosti. Kada je postavka isključena, web lokacije ne mogu koristiti uređaje virtuelne realnosti.</translation>
+<translation id="7282197670900591579">Tema u boji limuna</translation>
 <translation id="728412880473384942">Web lokacije su brže, ali su manje sigurne</translation>
 <translation id="7366415735885268578">Dodajte web lokaciju</translation>
 <translation id="7368695150573390554">Svi offline podaci će se izbrisati</translation>
@@ -619,6 +628,7 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="7688240020069572972">Sakrij karticu sa savjetima za Chrome</translation>
 <translation id="7719367874908701697">Zumiranje stranice</translation>
 <translation id="775043444390799886">Opozovi odobrenje</translation>
+<translation id="7758789811447313947">Ljubičasta tema</translation>
 <translation id="7759147511335618829">Kontrola/reprogram. MIDI uređaja</translation>
 <translation id="7781829728241885113">Jučer</translation>
 <translation id="7791543448312431591">Dodaj</translation>
@@ -631,13 +641,13 @@ Napredna zaštita upravlja ovim postavkama Chromea:
 <translation id="7835852323729233924">Reproduciranje medija</translation>
 <translation id="783819812427904514">Uključi zvuk videozapisa</translation>
 <translation id="7846076177841592234">Otkazivanje odabira</translation>
-<translation id="7881140103901777395">Chrome ograničava većini web lokacija da koriste kolačiće trećih strana. Međutim, kolačići trećih strana su dozvoljeni na ovoj web lokaciji jer se ona oslanja na njih radi pružanja osnovnih usluga.\n\nIdite u postavke da <ph name="BEGIN_LINK" />upravljate pristupom kolačićima trećih strana<ph name="END_LINK" />.</translation>
 <translation id="7882806643839505685">Omogućavanje zvuka za određenu web lokaciju.</translation>
 <translation id="7891547341794213004">Sakrij karticu Nastavi s ovom karticom</translation>
 <translation id="789722939441020330">Nemoj dozvoliti web lokacijama automatsko preuzimanje više fajlova</translation>
 <translation id="7940722705963108451">Podsjeti me</translation>
 <translation id="7948081750384205628">Saznajte više o postavci <ph name="SETTING_TITLE" /></translation>
 <translation id="7952708427581814389">Web lokacije mogu tražiti da vide tekst i slike u međumemoriji</translation>
+<translation id="798299424881500862">Narandžasta tema</translation>
 <translation id="7986741934819883144">Odaberite kontakt</translation>
 <translation id="7990211076305263060">Kada je postavka uključena, web lokacije mogu zatražiti da koriste vaš mikrofon. Kada je postavka isključena, web lokacije ne mogu koristiti vaš mikrofon.</translation>
 <translation id="8007176423574883786">Isključeno za ovaj uređaj</translation>

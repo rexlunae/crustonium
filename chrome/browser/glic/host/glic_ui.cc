@@ -150,16 +150,9 @@ GlicUI::GlicUI(content::WebUI* web_ui)
     source->AddResourcePath(base::StrCat({"fre/", resource.path}), resource.id);
   }
 
-  // Setup chrome://browser-switch/internals debug UI.
-
-  PrefService* local_state = g_browser_process->local_state();
-  DCHECK(local_state);
-  if (local_state->GetBoolean(chrome_urls::kInternalOnlyUisEnabled)) {
-    source->AddResourcePath("internals/",
-                            IDR_GLIC_INTERNALS_GLIC_INTERNALS_HTML);
-    source->AddResourcePath("internals",
-                            IDR_GLIC_INTERNALS_GLIC_INTERNALS_HTML);
-  }
+  // Setup chrome://glic/internals debug UI.
+  source->AddResourcePath("internals/", IDR_GLIC_INTERNALS_GLIC_INTERNALS_HTML);
+  source->AddResourcePath("internals", IDR_GLIC_INTERNALS_GLIC_INTERNALS_HTML);
 
   // Add localized strings.
   source->AddLocalizedStrings(kStrings);
@@ -181,8 +174,10 @@ GlicUI::GlicUI(content::WebUI* web_ui)
   source->AddBoolean("loggingEnabled",
                      command_line->HasSwitch(::switches::kGlicHostLogging));
 
+  auto* profile = Profile::FromBrowserContext(browser_context);
+
   // Set up guest URL via cli flag or default to finch param value.
-  const GURL guest_url = GetGuestURL();
+  const GURL guest_url = GetGuestURL(profile);
   source->AddString("glicGuestURL", guest_url.spec());
   net_log::LogDummyNetworkRequestForTrafficAnnotation(guest_url,
                                                       net_log::GlicPage::kGlic);
@@ -203,8 +198,6 @@ GlicUI::GlicUI(content::WebUI* web_ui)
   if (allowed_origins.empty()) {
     allowed_origins = features::kGlicAllowedOriginsOverride.Get();
   }
-
-  auto* profile = Profile::FromBrowserContext(browser_context);
 
   // Allow corp origins for @google accounts.
   signin::IdentityManager* identity_manager =
@@ -258,10 +251,9 @@ GlicUI::GlicUI(content::WebUI* web_ui)
   source->AddString("glicFreURL", GetFreURL(profile).spec());
   source->AddBoolean("isUnifiedFre",
                      GlicEnabling::IsUnifiedFreEnabled(profile));
-  source->AddBoolean(
-      "shouldShowFre",
-      !base::FeatureList::IsEnabled(features::kGlicTrustFirstOnboarding) &&
-          !GlicEnabling::HasConsentedForProfile(profile));
+  source->AddBoolean("shouldShowFre",
+                     !GlicEnabling::IsTrustFirstOnboardingEnabled() &&
+                         !GlicEnabling::HasConsentedForProfile(profile));
   source->AddInteger("reloadMaxLoadingTimeMs",
                      features::kGlicReloadMaxLoadingTimeMs.Get());
   source->AddBoolean("caaGuestError", base::FeatureList::IsEnabled(

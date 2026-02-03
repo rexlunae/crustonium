@@ -41,6 +41,9 @@
 <translation id="1707458603865303524">每次点按消息或其他应用中的链接时，都使用 Chromium 打开。</translation>
 <translation id="1722370509450468186">您的密码将会保存到您的账号 (<ph name="EMAIL" />) 中。</translation>
 <translation id="1747088204252710672">专为您打造的自定义信息流</translation>
+<translation id="1761196287436320018">您的 Chromium 书签数量已达到上限（<ph name="LIMIT" /> 个），因此部分书签尚未保存到您的 Google 账号中。
+
+请先删除一些书签，否则新书签将无法保存到您的账号中。如果现在退出账号，未保存的书签将被删除。</translation>
 <translation id="1811860791247653035">若要获得个性化体验和其他功能，请在 <ph name="FEATURE_NAME_1" /> 和 <ph name="FEATURE_NAME_2" /> 中包含 Chromium</translation>
 <translation id="1838412507805038478">Chromium 已证实：此网站的证书是由 <ph name="ISSUER" /> 签发的。</translation>
 <translation id="1839447949248872139">默认在 Chromium 中打开链接</translation>
@@ -129,6 +132,7 @@
 <translation id="3728124580182886854">关联 Chromium 和其他 Google 服务，以便获得个性化体验和实现其他用途</translation>
 <translation id="377649297473651452">Chromium 自动填充视图已展开</translation>
 <translation id="3780779443901618967">通过比“标准保护”机制分析更多的网站数据，针对危险网站（甚至是 Google 未曾得知的网站）向您发出警告。您可以选择忽略 Chromium 警告。</translation>
+<translation id="3793136096560888222">使用 Chromium 中的 Gemini 编辑图片</translation>
 <translation id="3805899903892079518">Chromium 无权访问您的照片或视频。请依次点按 iOS 中的“设置”&gt;“隐私”&gt;“照片”，授予其访问权限。</translation>
 <translation id="3816686541346279443">Chromium 会询问您是否保存密码。</translation>
 <translation id="3827545470516145620">此设备正在为您提供标准安全保护</translation>
@@ -296,7 +300,6 @@
 <translation id="7554983317097061001">Chromium 提示：将 Chromium 移至程序坞</translation>
 <translation id="7576863740961052505">管理 Chromium 设置</translation>
 <translation id="7674213385180944843">打开“设置”&gt;“隐私”&gt;“相机”&gt;“Chromium”，然后开启相机。</translation>
-<translation id="7685160423563372998">使用 Chromium 中的 Gemini 制作图片</translation>
 <translation id="7733418656985455268">Chromium 提示：使用智能镜头搜索</translation>
 <translation id="7747820849741499258">在 Chromium 中搜索</translation>
 <translation id="7753923083404296545">已在 Chromium 无痕模式下打开</translation>

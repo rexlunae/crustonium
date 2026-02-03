@@ -15,9 +15,9 @@
 #include "chrome/browser/extensions/window_controller.h"
 #include "chrome/common/extensions/api/tab_groups.h"
 #include "chrome/common/extensions/api/tabs.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_color.h"  // nogncheck
 #include "components/tab_groups/tab_group_id.h"     // nogncheck
-#include "components/tabs/public/split_tab_id.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/mojom/context_type.mojom-forward.h"
 #include "ui/base/window_open_disposition.h"
@@ -65,10 +65,8 @@ class ExtensionTabUtil {
   static constexpr char kWindowNotFoundError[] = "No window with id: *.";
   static constexpr char kTabStripNotEditableError[] =
       "Tabs cannot be edited right now (user may be dragging a tab).";
-#if BUILDFLAG(ENABLE_EXTENSIONS)
   static constexpr char kTabStripDoesNotSupportTabGroupsError[] =
       "Grouping is not supported by tabs in this window.";
-#endif
   static constexpr char kJavaScriptUrlsNotAllowedInExtensionNavigations[] =
       "JavaScript URLs are not allowed in API based extension navigations. Use "
       "chrome.scripting.executeScript instead.";
@@ -100,9 +98,9 @@ class ExtensionTabUtil {
   static int GetTabId(const content::WebContents* web_contents);
   static int GetWindowIdOfTab(const content::WebContents* web_contents);
 
-  static base::Value::List CreateTabList(BrowserWindowInterface* browser,
-                                         const Extension* extension,
-                                         mojom::ContextType context);
+  static base::ListValue CreateTabList(BrowserWindowInterface* browser,
+                                       const Extension* extension,
+                                       mojom::ContextType context);
 
   static WindowController* GetControllerFromWindowID(
       const ChromeExtensionFunctionDetails& details,
@@ -137,13 +135,13 @@ class ExtensionTabUtil {
                                         const Extension* extension,
                                         TabListInterface* tab_list,
                                         int tab_index);
-  // Creates a base::Value::Dict representing the window for the given
+  // Creates a base::DictValue representing the window for the given
   // `browser`, and scrubs any privacy-sensitive data that `extension` does not
   // have access to. `populate_tab_behavior` determines whether tabs will be
   // populated in the result. `context` is used to determine the
   // ScrubTabBehavior for the populated tabs data.
   // TODO(devlin): Convert this to a api::Windows::Window object.
-  static base::Value::Dict CreateWindowValueForExtension(
+  static base::DictValue CreateWindowValueForExtension(
       BrowserWindowInterface& browser,
       const Extension* extension,
       WindowController::PopulateTabBehavior populate_tab_behavior,
@@ -203,16 +201,20 @@ class ExtensionTabUtil {
   // Gets the extensions-specific split view ID.
   static int GetSplitId(const split_tabs::SplitTabId& id);
 
+  // Returns true if the `browser` supports tab groups in its tab strip. For
+  // example, tab groups are not supported by many app types (PWAs, WebApks,
+  // Chrome Apps, etc.).
+  static bool SupportsTabGroups(BrowserWindowInterface* browser);
+
   // Gets the metadata for the group with ID `group_id`. Sets the `error` if not
-  // found. `window`, `id`, or `visual_data` may be nullptr and will not be set
-  // within the function if so.
-  // TODO(crbug.com/405219902): Visual data is not yet supported on Android.
+  // found. `out_window`, `out_id`, or `out_visual_data` may be nullptr and will
+  // not be set within the function if so.
   static bool GetGroupById(int group_id,
                            content::BrowserContext* browser_context,
                            bool include_incognito,
-                           WindowController** window,
-                           tab_groups::TabGroupId* id,
-                           const tab_groups::TabGroupVisualData** visual_data,
+                           WindowController** out_window,
+                           tab_groups::TabGroupId* out_id,
+                           tab_groups::TabGroupVisualData* out_visual_data,
                            std::string* error);
 
   // Returns whether the group is shared or not.
@@ -225,10 +227,8 @@ class ExtensionTabUtil {
   static api::tab_groups::TabGroup CreateTabGroupObject(
       const tab_groups::TabGroupId& id,
       const tab_groups::TabGroupVisualData& visual_data);
-#if BUILDFLAG(ENABLE_EXTENSIONS)
   static std::optional<api::tab_groups::TabGroup> CreateTabGroupObject(
       const tab_groups::TabGroupId& id);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   // Conversions between the api::tab_groups::Color enum and the TabGroupColorId
   // enum.
@@ -306,7 +306,7 @@ class ExtensionTabUtil {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // Open the extension's options page. Returns true if an options page was
   // successfully opened (though it may not necessarily *load*, e.g. if the
-  // URL does not exist). This call to open the options page is iniatiated by
+  // URL does not exist). This call to open the options page is initiated by
   // the extension via chrome.runtime.openOptionsPage.
   static bool OpenOptionsPageFromAPI(const Extension* extension,
                                      content::BrowserContext* browser_context);
@@ -318,11 +318,9 @@ class ExtensionTabUtil {
   static bool OpenOptionsPage(const Extension* extension,
                               BrowserWindowInterface* browser);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Returns true if the given Browser can report tabs to extensions.
   // Example of Browsers which don't support tabs include apps and devtools.
   static bool BrowserSupportsTabs(BrowserWindowInterface* browser);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   // Determines the loading status of the given `contents`. This needs to access
   // some non-const member functions of `contents`, but actually leaves it

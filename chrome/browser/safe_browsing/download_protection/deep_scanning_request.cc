@@ -63,6 +63,26 @@ namespace safe_browsing {
 namespace {
 
 using ::enterprise_connectors::BinaryUploadRequest;
+using ::enterprise_connectors::TriggeredRule;
+
+TriggeredRule::ForceSaveToCloudDestination
+GetHighestPrecedenceForceSaveToCloudDestination(
+    TriggeredRule::ForceSaveToCloudDestination destination_1,
+    TriggeredRule::ForceSaveToCloudDestination destination_2) {
+  // Prefer G_DRIVE over ONEDRIVE.
+  if (base::FeatureList::IsEnabled(
+          enterprise_data_protection::kEnableForceDownloadToCloud) &&
+      (destination_1 == TriggeredRule::CORP_G_DRIVE ||
+       destination_2 == TriggeredRule::CORP_G_DRIVE)) {
+    return TriggeredRule::CORP_G_DRIVE;
+  } else if (base::FeatureList::IsEnabled(
+                 enterprise_data_protection::kEnableForceDownloadToOneDrive) &&
+             (destination_1 == TriggeredRule::CORP_ONEDRIVE ||
+              destination_2 == TriggeredRule::CORP_ONEDRIVE)) {
+    return TriggeredRule::CORP_ONEDRIVE;
+  }
+  return TriggeredRule::UNSPECIFIED;
+}
 
 DownloadCheckResult GetHighestPrecedenceResult(DownloadCheckResult result_1,
                                                DownloadCheckResult result_2) {
@@ -81,6 +101,7 @@ DownloadCheckResult GetHighestPrecedenceResult(DownloadCheckResult result_1,
       DownloadCheckResult::BLOCKED_PASSWORD_PROTECTED,
       DownloadCheckResult::BLOCKED_SCAN_FAILED,
       DownloadCheckResult::FORCE_SAVE_TO_GDRIVE,
+      DownloadCheckResult::FORCE_SAVE_TO_ONEDRIVE,
       DownloadCheckResult::POTENTIALLY_UNWANTED,
       DownloadCheckResult::SENSITIVE_CONTENT_WARNING,
       DownloadCheckResult::PROMPT_FOR_SCANNING,
@@ -95,6 +116,17 @@ DownloadCheckResult GetHighestPrecedenceResult(DownloadCheckResult result_1,
   }
 
   NOTREACHED();
+}
+
+std::string GetDestinationString(DownloadCheckResult result) {
+  switch (result) {
+    case DownloadCheckResult::FORCE_SAVE_TO_GDRIVE:
+      return "Google Drive";
+    case DownloadCheckResult::FORCE_SAVE_TO_ONEDRIVE:
+      return "OneDrive";
+    default:
+      return "";
+  }
 }
 
 enterprise_connectors::EventResult GetEventResult(
@@ -133,6 +165,8 @@ enterprise_connectors::EventResult GetEventResult(
       return enterprise_connectors::EventResult::WARNED;
 
     case DownloadCheckResult::FORCE_SAVE_TO_GDRIVE:
+      return enterprise_connectors::EventResult::FORCED_SAVE_TO_CLOUD;
+    case DownloadCheckResult::FORCE_SAVE_TO_ONEDRIVE:
       return enterprise_connectors::EventResult::FORCED_SAVE_TO_CLOUD;
     case DownloadCheckResult::BLOCKED_PASSWORD_PROTECTED:
     case DownloadCheckResult::BLOCKED_TOO_LARGE:
@@ -227,12 +261,13 @@ bool EnterpriseResultIsFailure(
 void RecordEnterpriseScan(
     std::unique_ptr<FileAnalysisRequest> request,
     enterprise_connectors::ScanRequestUploadResult result) {
-  const std::string result_info =
-      enterprise_connectors::ScanRequestUploadResultToString(result);
+  const std::string result_info = base::StrCat(
+      {"Skipped - ",
+       enterprise_connectors::ScanRequestUploadResultToString(result)});
   safe_browsing::WebUIContentInfoSingleton::GetInstance()
       ->AddToDeepScanRequests(
           request->per_profile_request(), /*access_token*/ "",
-          /*upload_info*/ base::StrCat({"Skipped - ", result_info}),
+          /*upload_info*/ result_info,
           /*upload_url*/ "", request->content_analysis_request());
   safe_browsing::WebUIContentInfoSingleton::GetInstance()
       ->AddToDeepScanResponses(
@@ -249,6 +284,8 @@ DownloadCheckResult ResponseToDownloadCheckResult(
   auto malware_action =
       enterprise_connectors::TriggeredRule::ACTION_UNSPECIFIED;
   auto dlp_action = enterprise_connectors::TriggeredRule::ACTION_UNSPECIFIED;
+  auto force_save_to_cloud_destination =
+      enterprise_connectors::TriggeredRule::UNSPECIFIED;
 
   for (const auto& result : response.results()) {
     if (result.tag() == "malware") {
@@ -271,6 +308,14 @@ DownloadCheckResult ResponseToDownloadCheckResult(
       for (const auto& rule : result.triggered_rules()) {
         dlp_action = enterprise_connectors::GetHighestPrecedenceAction(
             dlp_action, rule.action());
+
+        if (rule.has_force_save_to_cloud_destination()) {
+          DCHECK(rule.action() == TriggeredRule::FORCE_SAVE_TO_CLOUD);
+          force_save_to_cloud_destination =
+              GetHighestPrecedenceForceSaveToCloudDestination(
+                  force_save_to_cloud_destination,
+                  rule.force_save_to_cloud_destination());
+        }
       }
     }
   }
@@ -294,7 +339,17 @@ DownloadCheckResult ResponseToDownloadCheckResult(
   } else {
     switch (dlp_action) {
       case enterprise_connectors::TriggeredRule::FORCE_SAVE_TO_CLOUD:
-        return DownloadCheckResult::FORCE_SAVE_TO_GDRIVE;
+        switch (force_save_to_cloud_destination) {
+          case enterprise_connectors::TriggeredRule::CORP_G_DRIVE:
+            return DownloadCheckResult::FORCE_SAVE_TO_GDRIVE;
+          case enterprise_connectors::TriggeredRule::CORP_ONEDRIVE:
+            return DownloadCheckResult::FORCE_SAVE_TO_ONEDRIVE;
+          case enterprise_connectors::TriggeredRule::UNSPECIFIED:
+            // If the destination is unspecified, we default to blocking the
+            // download. This should never happen unless both finch flag for
+            // gdrive and onedrive are disabled.
+            return DownloadCheckResult::SENSITIVE_CONTENT_BLOCK;
+        }
       case enterprise_connectors::TriggeredRule::BLOCK:
         return DownloadCheckResult::SENSITIVE_CONTENT_BLOCK;
       case enterprise_connectors::TriggeredRule::WARN:
@@ -682,9 +737,16 @@ void DeepScanningRequest::OnEnterpriseScanComplete(
              enterprise_connectors::ScanRequestUploadResult::kSuccess) {
     request_tokens_.push_back(response.request_token());
     download_result = ResponseToDownloadCheckResult(response);
-    if (download_result == DownloadCheckResult::FORCE_SAVE_TO_GDRIVE) {
-      if (!base::FeatureList::IsEnabled(
-              enterprise_data_protection::kEnableForceDownloadToCloud)) {
+
+    // Handle force save to cloud if the feature is enabled.
+    if (download_result == DownloadCheckResult::FORCE_SAVE_TO_GDRIVE ||
+        download_result == DownloadCheckResult::FORCE_SAVE_TO_ONEDRIVE) {
+      const auto& force_save_to_cloud_feature =
+          download_result == DownloadCheckResult::FORCE_SAVE_TO_GDRIVE
+              ? enterprise_data_protection::kEnableForceDownloadToCloud
+              : enterprise_data_protection::kEnableForceDownloadToOneDrive;
+
+      if (!base::FeatureList::IsEnabled(force_save_to_cloud_feature)) {
         download_result = DownloadCheckResult::SENSITIVE_CONTENT_BLOCK;
       } else if (web_contents()) {
         // `web_contents()` may be nullptr in several cases, if the tab owning
@@ -696,8 +758,7 @@ void DeepScanningRequest::OnEnterpriseScanComplete(
         // dialog callback.
         base::OnceClosure keep_closure = base::BindOnce(
             &DeepScanningRequest::ProcessEnterpriseDownloadResult,
-            weak_ptr_factory_.GetWeakPtr(),
-            DownloadCheckResult::FORCE_SAVE_TO_GDRIVE);
+            weak_ptr_factory_.GetWeakPtr(), download_result);
         base::OnceClosure discard_closure = base::BindOnce(
             &DeepScanningRequest::ProcessEnterpriseDownloadResult,
             weak_ptr_factory_.GetWeakPtr(),
@@ -706,7 +767,8 @@ void DeepScanningRequest::OnEnterpriseScanComplete(
         new enterprise_connectors::ContentAnalysisDialogController(
             std::make_unique<
                 enterprise_connectors::ContentAnalysisDownloadsDelegate>(
-                u"", u"", GURL(), false, std::move(keep_closure),
+                metadata_->GetTargetFilePath().BaseName().AsUTF16Unsafe(), u"",
+                GURL(), false, std::move(keep_closure),
                 std::move(discard_closure), nullptr,
                 enterprise_connectors::ContentAnalysisResponse::Result::
                     TriggeredRule::CustomRuleMessage()),
@@ -738,7 +800,8 @@ void DeepScanningRequest::OnEnterpriseScanComplete(
     const auto& file_metadata = file_metadata_.at(current_path);
     report_callbacks_.AddUnsafe(base::BindOnce(
         &MaybeReportDeepScanningVerdict, profile, this, /*source=*/"",
-        /*destination=*/"", file_metadata.filename, file_metadata.sha256,
+        /*destination=*/GetDestinationString(download_result),
+        file_metadata.filename, file_metadata.sha256,
         file_metadata.mime_type,
         enterprise_connectors::kFileDownloadDataTransferEventTrigger,
         /*content_transfer_method=*/"", GetContentAreaAccountEmail(),
@@ -783,8 +846,8 @@ void DeepScanningRequest::OnDownloadDestroyed(
 
   // We can't safely return a verdict for this download because it's already
   // been destroyed, so reset the callback here. We still need to run
-  // `FinishRequest` to notify the DownloadProtectionService that this deep scan
-  // has finished.
+  // `FinishRequest` to notify the DownloadProtectionService that this deep
+  // scan has finished.
   callback_.Reset();
 
   // `FinishRequest` always clears the `download_observation` and `metadata`,
@@ -874,17 +937,17 @@ void DeepScanningRequest::FinishRequest(DownloadCheckResult result) {
     DCHECK(IsEnterpriseTriggered());
 
     if (ReportOnlyScan()) {
-      // The event result in report-only will always match whatever danger type
-      // known before deep scanning since the UI will never be updated based on
-      // `result`.
+      // The event result in report-only will always match whatever danger
+      // type known before deep scanning since the UI will never be updated
+      // based on `result`.
       event_result = metadata_->GetPreScanEventResult(pre_scan_danger_type_);
     } else {
       Profile* profile =
           Profile::FromBrowserContext(metadata_->GetBrowserContext());
       // If FinishRequest is reached with an unknown `result` or an explicit
-      // failure, then it means no scanning request ever completed successfully,
-      // so `event_result` needs to reflect whatever danger type was known
-      // pre-deep scanning.
+      // failure, then it means no scanning request ever completed
+      // successfully, so `event_result` needs to reflect whatever danger type
+      // was known pre-deep scanning.
       event_result =
           (result == DownloadCheckResult::DEEP_SCANNED_FAILED ||
            result == DownloadCheckResult::UNKNOWN)
@@ -896,7 +959,8 @@ void DeepScanningRequest::FinishRequest(DownloadCheckResult result) {
   }
 
   // If the deep-scanning result is unknown for whatever reason, `callback_`
-  // should be called with whatever SB result was known prior to deep scanning.
+  // should be called with whatever SB result was known prior to deep
+  // scanning.
   if ((result == DownloadCheckResult::UNKNOWN ||
        result == DownloadCheckResult::DEEP_SCANNED_FAILED) &&
       IsEnterpriseTriggered()) {

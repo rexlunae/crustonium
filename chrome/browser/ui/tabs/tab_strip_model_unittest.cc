@@ -29,6 +29,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
@@ -48,11 +49,11 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/commerce/core/commerce_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/split_tabs/split_tab_id.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/split_tab_data.h"
-#include "components/tabs/public/split_tab_id.h"
-#include "components/tabs/public/split_tab_visual_data.h"
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_group_tab_collection.h"
 #include "components/tabs/public/tab_interface.h"
@@ -517,9 +518,11 @@ class TabStripModelTest : public testing::TestWithParam<bool> {
   void ExpectSelectionIsExactly(TabStripModel* tabstrip,
                                 std::vector<int> selected) {
     for (const int i : selected) {
-      EXPECT_TRUE(tabstrip_->selection_model().IsSelected(i));
+      EXPECT_TRUE(
+          tabstrip_->selection_model().GetListSelectionModel().IsSelected(i));
     }
-    EXPECT_EQ(tabstrip_->selection_model().size(), selected.size());
+    EXPECT_EQ(tabstrip_->selection_model().GetListSelectionModel().size(),
+              selected.size());
   }
 
   bool HasTabSwitchStartTimeAtIndex(int index) {
@@ -2333,8 +2336,9 @@ TEST_P(TabStripModelTest, SplitTabPinningBulk) {
   tabstrip()->SelectTabAt(7);
   tabstrip()->SelectTabAt(10);
   // tabs 0 2 4 5 7 8 9 10 should be selected
-  ASSERT_EQ(base::MakeFlatSet<size_t>(std::vector{0, 2, 4, 5, 7, 8, 9, 10}),
-            tabstrip()->selection_model().selected_indices());
+  ASSERT_EQ(
+      base::MakeFlatSet<size_t>(std::vector{0, 2, 4, 5, 7, 8, 9, 10}),
+      tabstrip()->selection_model().GetListSelectionModel().selected_indices());
 
   // pin multiple selected tabs and splits
   tabstrip()->ExecuteContextMenuCommand(
@@ -2346,8 +2350,9 @@ TEST_P(TabStripModelTest, SplitTabPinningBulk) {
   tabstrip()->DeselectTabAt(2);  // tab 2
   tabstrip()->DeselectTabAt(8);  // tab 10
   // tabs 0 4 5 7 8 9 should be selected
-  ASSERT_EQ(base::MakeFlatSet<size_t>(std::vector{0, 3, 4, 5, 6, 7}),
-            tabstrip()->selection_model().selected_indices());
+  ASSERT_EQ(
+      base::MakeFlatSet<size_t>(std::vector{0, 3, 4, 5, 6, 7}),
+      tabstrip()->selection_model().GetListSelectionModel().selected_indices());
   tabstrip()->ExecuteContextMenuCommand(
       0, TabStripModel::CommandTogglePinned);  // tab 0
   EXPECT_EQ("1p 2p 10p 0 4s 5s 7 8s 9s 3 6 11",
@@ -2426,8 +2431,10 @@ TEST_P(TabStripModelTest, AddToSplitInSelected) {
 
   EXPECT_EQ("0s 1s 2 3 4", GetTabStripStateString(tabstrip()));
   EXPECT_EQ(tabstrip()->active_index(), 0);
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(0));
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(1));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(0));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(1));
 
   tabstrip()->CloseAllTabs();
   EXPECT_TRUE(tabstrip()->empty());
@@ -2446,8 +2453,10 @@ TEST_P(TabStripModelTest, AddToSplitBlocked) {
 
   EXPECT_EQ("0s 1s 2 3 4", GetTabStripStateString(tabstrip()));
   EXPECT_EQ(tabstrip()->active_index(), 0);
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(0));
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(1));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(0));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(1));
 
   tabstrip()->CloseAllTabs();
   EXPECT_TRUE(tabstrip()->empty());
@@ -6189,7 +6198,8 @@ TEST_P(TabStripModelTest, ToggleMuteUnmuteMultipleSites) {
   EXPECT_FALSE(IsSiteMuted(*tabstrip(), 1));
 
   tabstrip()->SelectTabAt(0);
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(1));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(1));
 
   tabstrip()->ExecuteContextMenuCommand(0,
                                         TabStripModel::CommandToggleSiteMuted);
@@ -6328,8 +6338,9 @@ TEST_P(TabStripModelTest, SelectionChangedForMoveGroupWithSelectedTab) {
   tabstrip()->SelectTabAt(0);
 
   // Verify the selection model before moving the group.
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(2));
-  EXPECT_EQ(tabstrip()->selection_model().active(), 0u);
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(2));
+  EXPECT_EQ(tabstrip()->selection_model().GetListSelectionModel().active(), 0u);
 
   // Check selection change after moving the group.
   tabstrip()->MoveGroupTo(group, 2);
@@ -6359,10 +6370,13 @@ TEST_P(TabStripModelTest, SelectionChangedForMoveSelectedTabsTo) {
   tabstrip()->SelectTabAt(4);
 
   // Verify the selection model before moving the tabs.
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(0));
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(2));
-  EXPECT_TRUE(tabstrip()->selection_model().IsSelected(4));
-  EXPECT_EQ(tabstrip()->selection_model().active(), 4u);
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(0));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(2));
+  EXPECT_TRUE(
+      tabstrip()->selection_model().GetListSelectionModel().IsSelected(4));
+  EXPECT_EQ(tabstrip()->selection_model().GetListSelectionModel().active(), 4u);
 
   // Move the selected tabs to index 3.
   tabstrip()->MoveSelectedTabsTo(3, std::nullopt);
@@ -6762,8 +6776,9 @@ TEST_P(TabStripModelTest, SplitSelectionTestFromModel) {
   expected_sel_indices.insert(1);
   expected_sel_indices.insert(2);
 
-  EXPECT_EQ(tabstrip.selection_model().selected_indices(),
-            expected_sel_indices);
+  EXPECT_EQ(
+      tabstrip.selection_model().GetListSelectionModel().selected_indices(),
+      expected_sel_indices);
 }
 
 TEST_P(TabStripModelTest, RemoveLeftTabInSplitActivatesRemainingTab) {
@@ -6895,7 +6910,8 @@ TEST_P(TabStripModelTest, TestSelectionModelAccessor) {
   expected_model.set_active(2);
   expected_model.set_anchor(2);
 
-  EXPECT_EQ(expected_model, tabstrip()->selection_model());
+  EXPECT_EQ(expected_model,
+            tabstrip()->selection_model().GetListSelectionModel());
 }
 
 INSTANTIATE_TEST_SUITE_P(SelectionWithPointers,
@@ -7010,4 +7026,28 @@ TEST_F(TabStripModelCallbackTest, MoveTabToGroupThenDeleteGroup) {
   delegate()->RunCallback();
   EXPECT_EQ(tabstrip()->group_model()->ListTabGroups().size(), 0u);
   tabstrip()->CloseAllTabs();
+}
+
+#if BUILDFLAG(ENABLE_GLIC)
+TEST_P(TabStripModelTest, CommandGlicUnshare) {
+  tabstrip()->AppendWebContents(CreateWebContentsWithID(1), true);
+  EXPECT_TRUE(tabstrip()->IsContextMenuCommandEnabled(
+      0, TabStripModel::CommandGlicUnshare));
+
+  // This should not crash (it CHECKs the delegate returns true).
+  tabstrip()->ExecuteContextMenuCommand(0, TabStripModel::CommandGlicUnshare);
+}
+#endif
+
+TEST_P(TabStripModelTest, TabStripUIWasSetResetOnObserverRemoval) {
+  MockTabStripModelObserver observer;
+  tabstrip()->SetTabStripUI(&observer);
+
+  // Removing the UI observer should reset the internal flag.
+  tabstrip()->RemoveObserver(&observer);
+
+  // This should not crash (DCHECK failure) if the flag was properly reset.
+  MockTabStripModelObserver observer2;
+  tabstrip()->SetTabStripUI(&observer2);
+  tabstrip()->RemoveObserver(&observer2);
 }

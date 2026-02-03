@@ -16,6 +16,8 @@
 #include "chrome/browser/contextual_search/contextual_search_service_factory.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_service_factory.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,6 +30,7 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_gen204_controller.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
@@ -112,6 +115,32 @@ class TestingAimEligibilityService : public ChromeAimEligibilityService {
   bool is_locally_eligible_;
   bool is_server_eligible_;
   bool server_eligibility_enabled_;
+};
+
+class TestingContextualTasksUiService
+    : public contextual_tasks::ContextualTasksUiService {
+ public:
+  TestingContextualTasksUiService(
+      Profile* profile,
+      contextual_tasks::ContextualTasksService* contextual_tasks_service,
+      signin::IdentityManager* identity_manager,
+      AimEligibilityService* aim_eligibility_service)
+      : ContextualTasksUiService(profile,
+                                 contextual_tasks_service,
+                                 identity_manager,
+                                 aim_eligibility_service) {}
+  ~TestingContextualTasksUiService() override = default;
+
+  bool CookieJarContainsPrimaryAccount() override {
+    return cookie_jar_contains_primary_account_;
+  }
+
+  void SetCookieJarContainsPrimaryAccount(bool contains) {
+    cookie_jar_contains_primary_account_ = contains;
+  }
+
+ private:
+  bool cookie_jar_contains_primary_account_ = true;
 };
 
 class LensOverlayControllerCUJTest : public InteractiveFeaturePromoTest {
@@ -1583,6 +1612,19 @@ class ContextualTasksLensOverlayControllerInteractiveUiTest
               /*server_eligibility_enabled=*/true, *profile->GetPrefs(),
               /*template_url_service=*/nullptr);
         }));
+    contextual_tasks::ContextualTasksUiServiceFactory::GetInstance()
+        ->SetTestingFactory(
+            context,
+            base::BindLambdaForTesting([](content::BrowserContext* context) {
+              Profile* profile = Profile::FromBrowserContext(context);
+              return static_cast<std::unique_ptr<KeyedService>>(
+                  std::make_unique<TestingContextualTasksUiService>(
+                      profile,
+                      contextual_tasks::ContextualTasksServiceFactory::
+                          GetForProfile(profile),
+                      IdentityManagerFactory::GetForProfile(profile),
+                      AimEligibilityServiceFactory::GetForProfile(profile)));
+            }));
   }
 
   void SetUpOnMainThread() override {
@@ -1754,7 +1796,7 @@ class TabScopedContextualTasksLensOverlayControllerInteractiveUiTest
     feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/{{
             contextual_tasks::kContextualTasks,
-            {{"TaskScopedSidePanel", "false"}},
+            {{"ContextualTasksTaskScopedSidePanel", "false"}},
         }},
         /*disabled_features=*/{lens::features::kLensSearchZeroStateCsb});
   }
@@ -1837,6 +1879,83 @@ IN_PROC_BROWSER_TEST_F(
             LensSearchController::FromTabWebContents(web_contents);
         EXPECT_FALSE(lens_controller->IsClosing() || lens_controller->IsOff());
       }));
+}
+
+class LensOverlayControllerCsbTest : public LensOverlayControllerCUJTest {
+ public:
+  LensOverlayControllerCsbTest() = default;
+  ~LensOverlayControllerCsbTest() override = default;
+
+  InteractiveTestApi::MultiStep OpenLensOverlayProgrammatically(
+      bool should_show_csb) {
+    DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTab);
+    const GURL url = embedded_test_server()->GetURL(kDocumentWithNamedElement);
+
+    // In kDocumentWithNamedElement.
+    const DeepQuery kPathToBody{
+        "body",
+    };
+
+    return Steps(
+        InstrumentTab(kActiveTab), NavigateWebContents(kActiveTab, url),
+        EnsurePresent(kActiveTab, kPathToBody),
+        WaitForWebContentsPainted(kActiveTab), Do([=, this]() {
+          content::WebContents* web_contents =
+              browser()->tab_strip_model()->GetActiveWebContents();
+          auto* controller =
+              LensSearchController::FromTabWebContents(web_contents);
+          controller->OpenLensOverlay(
+              lens::LensOverlayInvocationSource::kAppMenu, should_show_csb);
+        }));
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(LensOverlayControllerCsbTest, ShowsCsbWhenEnabled) {
+  WaitForTemplateURLServiceToLoad();
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOverlayId);
+
+  const DeepQuery kPathToOverlaySearchboxInput{
+      "lens-overlay-app",
+      "cr-searchbox",
+      "input",
+  };
+
+  RunTestSequence(
+      OpenLensOverlayProgrammatically(/*should_show_csb=*/true),
+      InAnyContext(
+          InstrumentNonTabWebView(kOverlayId,
+                                  LensOverlayController::kOverlayId),
+          WaitForWebContentsReady(
+              kOverlayId, GURL(chrome::kChromeUILensOverlayUntrustedURL))),
+      InSameContext(WaitForShow(LensOverlayController::kOverlayId),
+                    WaitForScreenshotRendered(kOverlayId),
+                    EnsurePresent(kOverlayId, kPathToOverlaySearchboxInput)));
+}
+
+IN_PROC_BROWSER_TEST_F(LensOverlayControllerCsbTest, HidesCsbWhenDisabled) {
+  WaitForTemplateURLServiceToLoad();
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOverlayId);
+
+  const DeepQuery kPathToOverlaySearchboxInput{
+      "lens-overlay-app",
+      "cr-searchbox",
+      "input",
+  };
+
+  RunTestSequence(
+      OpenLensOverlayProgrammatically(/*should_show_csb=*/false),
+      InAnyContext(
+          InstrumentNonTabWebView(kOverlayId,
+                                  LensOverlayController::kOverlayId),
+          WaitForWebContentsReady(
+              kOverlayId, GURL(chrome::kChromeUILensOverlayUntrustedURL))),
+      InSameContext(
+          WaitForShow(LensOverlayController::kOverlayId),
+          WaitForScreenshotRendered(kOverlayId),
+          CheckJsResultAt(kOverlayId, kPathToOverlaySearchboxInput,
+                          "(el) => el.offsetParent === null || "
+                          "el.getBoundingClientRect().width === 0 || "
+                          "el.getBoundingClientRect().height === 0")));
 }
 
 }  // namespace

@@ -24,6 +24,7 @@
 #include "chrome/common/buildflags.h"
 #include "chrome/test/base/testing_browser_process_platform_part.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/activity_reporter/activity_reporter.h"
 #include "components/signin/core/browser/active_primary_accounts_metrics_recorder.h"
 #include "extensions/buildflags/buildflags.h"
 #include "media/media_buildflags.h"
@@ -69,6 +70,13 @@ class PolicyService;
 namespace resource_coordinator {
 class ResourceCoordinatorParts;
 }
+
+namespace supervised_user {
+#if BUILDFLAG(IS_ANDROID)
+class AndroidParentalControls;
+#endif
+class DeviceParentalControls;
+}  // namespace supervised_user
 
 namespace variations {
 class VariationsService;
@@ -152,6 +160,12 @@ class TestingBrowserProcess
   printing::PrintPreviewDialogController* print_preview_dialog_controller()
       override;
   printing::BackgroundPrintingManager* background_printing_manager() override;
+  supervised_user::DeviceParentalControls& device_parental_controls() override;
+#if BUILDFLAG(IS_ANDROID)
+  // Additional convenience accessor to device_parental_controls() that returns
+  // the value cast to specific implementation.
+  supervised_user::AndroidParentalControls& android_parental_controls();
+#endif
   const std::string& GetApplicationLocale() override;
   void SetApplicationLocale(const std::string& actual_locale) override;
   DownloadStatusUpdater* download_status_updater() override;
@@ -162,6 +176,7 @@ class TestingBrowserProcess
   void StartAutoupdateTimer() override {}
 #endif
 
+  activity_reporter::ActivityReporter* activity_reporter() override;
   component_updater::ComponentUpdateService* component_updater() override;
 #if BUILDFLAG(IS_CHROMEOS)
   MediaFileSystemRegistry* media_file_system_registry() override;
@@ -295,6 +310,15 @@ class TestingBrowserProcess
       print_preview_dialog_controller_;
 #endif
 
+// TODO(crbug.com/474377651): instead ForTesting(), offer proper fake.
+#if BUILDFLAG(IS_ANDROID)
+  std::unique_ptr<supervised_user::AndroidParentalControls>
+      device_parental_controls_;
+#else
+  std::unique_ptr<supervised_user::DeviceParentalControls>
+      device_parental_controls_;
+#endif
+
   scoped_refptr<safe_browsing::SafeBrowsingService> sb_service_;
   std::unique_ptr<subresource_filter::RulesetService>
       subresource_filter_ruleset_service_;
@@ -322,6 +346,7 @@ class TestingBrowserProcess
       resource_coordinator_parts_;
 
   std::unique_ptr<SerialPolicyAllowedPorts> serial_policy_allowed_ports_;
+  std::unique_ptr<activity_reporter::ActivityReporter> activity_reporter_;
 #if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<HidSystemTrayIcon> hid_system_tray_icon_;
   std::unique_ptr<UsbSystemTrayIcon> usb_system_tray_icon_;

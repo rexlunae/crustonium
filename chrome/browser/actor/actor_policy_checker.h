@@ -39,6 +39,7 @@ namespace actor {
 
 class ActorKeyedService;
 class AggregatedJournal;
+class OriginChecker;
 
 // The central hub for checking various policies that determine whether Actor is
 // enabled for the profile, or is Actor allowed to act on a given tab or URL.
@@ -66,7 +67,7 @@ class ActorPolicyChecker : public signin::IdentityManager::Observer,
   void MayActOnTab(const tabs::TabInterface& tab,
                    AggregatedJournal& journal,
                    TaskId task_id,
-                   const ConfirmedOriginSet& confirmed_origins,
+                   const OriginChecker& origin_checker,
                    DecisionCallbackWithReason callback);
   void MayActOnUrl(const GURL& url,
                    bool allow_insecure_http,
@@ -75,18 +76,6 @@ class ActorPolicyChecker : public signin::IdentityManager::Observer,
                    TaskId task_id,
                    DecisionCallbackWithReason callback);
 
-  // Set the return value of `CanActOnWeb()` for testing. Use this to bypass
-  // all the checks enforced by this class.
-  void set_act_on_web_for_testing(bool enabled) {
-    can_act_on_web_for_testing_ = enabled;
-  }
-
-  // Allows the test to bypass the enterprise account eligibility checking
-  // completely. Does NOT bypass the policy checks for management.
-  void set_account_eligible_for_actuation_for_testing(bool enabled) {
-    account_eligible_for_actuation_for_testing_ = enabled;
-  }
-
 #if BUILDFLAG(ENABLE_GLIC)
   // Allows tests to synchronize on allow/blocklist updates.
   base::CallbackListSubscription AddUrlListsUpdateObserverForTesting(
@@ -94,6 +83,21 @@ class ActorPolicyChecker : public signin::IdentityManager::Observer,
 #endif  // BUILDFLAG(ENABLE_GLIC)
 
   bool CanActOnWeb() const;
+
+  enum class CannotActReason {
+    kNone,
+    kManagedOrDataProtected,
+    kAccountCapabilityIneligible,
+    // The account is not subscribed to one of the required AI subscription
+    // tiers.
+    kAccountMissingChromeBenefits,
+  };
+
+  // The reason why `CanActOnWeb()` returns false (or `kNone` otherwise).
+  // The `CanActOnWeb()` method should be used for feature logic; this method
+  // is intended for presenting additional information (to the user,  or for
+  // debugging) where useful.
+  CannotActReason CannotActOnWebReason() const;
 
   EnterprisePolicyBlockReason EvaluateEnterprisePolicyForUrl(
       const GURL& url) const;
@@ -106,8 +110,9 @@ class ActorPolicyChecker : public signin::IdentityManager::Observer,
     kNo,
     kByAllowlistOnly,
   };
+  friend std::ostream& operator<<(std::ostream& os, CanActOutcome value);
 
-  CanActOutcome ComputeActOnWebCapability();
+  std::pair<CanActOutcome, CannotActReason> ComputeActOnWebCapability();
 
   // Owns `this`.
   base::raw_ref<ActorKeyedService> service_;
@@ -115,10 +120,7 @@ class ActorPolicyChecker : public signin::IdentityManager::Observer,
   PrefChangeRegistrar pref_change_registrar_;
 
   CanActOutcome can_act_on_web_ = CanActOutcome::kYes;
-
-  bool can_act_on_web_for_testing_ = false;
-
-  bool account_eligible_for_actuation_for_testing_ = false;
+  CannotActReason cannot_act_on_web_reason_;
 
 #if BUILDFLAG(ENABLE_GLIC)
   // Stores enterprise allowlist/blocklist policies for specific URLs.

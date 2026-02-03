@@ -1201,7 +1201,7 @@ class PasskeyStateProvider : public StateProvider,
   }
 
  private:
-  void OnPasskeyUnlockManagerStateChanged() final { RequestUpdate(); }
+  void OnPasskeyErrorUiStateChanged() final { RequestUpdate(); }
 
   void OnPasskeyUnlockManagerShuttingDown() final {
     passkey_manager_observation_.Reset();
@@ -1450,10 +1450,10 @@ class PassphraseErrorStateProvider : public SyncErrorBaseStateProvider {
 
 class BookmarksLimitExceededStateProvider : public SyncErrorBaseStateProvider {
  public:
-  explicit BookmarksLimitExceededStateProvider(Profile* profile,
+  explicit BookmarksLimitExceededStateProvider(Browser* browser,
                                                StateObserver* state_observer)
       : SyncErrorBaseStateProvider(
-            profile,
+            browser->profile(),
             state_observer,
             syncer::SyncService::UserActionableError::kBookmarksLimitExceeded) {
   }
@@ -1979,7 +1979,7 @@ void AvatarToolbarButtonStateManager::CreateStatesAndListeners(
 
     states_[ButtonState::kBookmarksLimitExceeded] =
         std::make_unique<BookmarksLimitExceededStateProvider>(
-            profile, /*state_observer=*/this);
+            browser, /*state_observer=*/this);
 
     if (AccountConsistencyModeManager::IsDiceEnabledForProfile(profile)) {
       states_[ButtonState::kSyncPaused] =

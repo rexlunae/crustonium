@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <concepts>
 #include <memory>
 #include <optional>
@@ -19,7 +20,6 @@
 #include "base/auto_reset.h"
 #include "base/callback_list.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/advanced_memory_safety_checks.h"
@@ -531,7 +531,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
     CHECK(!view->owned_by_client())
         << "This should only be called if the client doesn't already have "
            "ownership of |view|.";
-    DCHECK(base::Contains(children_, view));
+    DCHECK(std::ranges::contains(children_, view));
     RemoveChildView(view);
     return base::WrapUnique(view);
   }
@@ -1065,6 +1065,11 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
 
   // Converts a rect from a View's coordinate system to that of the screen.
   static void ConvertRectToScreen(const View* src, gfx::Rect* rect);
+
+  // Converts a rect from the screen coordinate system to that View's
+  // coordinate system.
+  [[nodiscard]] static gfx::Rect ConvertRectFromScreen(const View* dst,
+                                                       const gfx::Rect& rect);
 
   // Applies transformation on the rectangle, which is in the view's coordinate
   // system, to convert it into the parent's coordinate system.

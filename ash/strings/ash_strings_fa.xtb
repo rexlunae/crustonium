@@ -83,7 +83,7 @@
 <translation id="1256734167083229794">میان‌بر صفحه‌کلید مربوط به «ذره‌بین تمام‌صفحه» را فشار دادید. از کلیدهای <ph name="ZOOM_IN_ACCELERATOR" /> برای زوم‌پیش کردن و از کلیدهای <ph name="ZOOM_OUT_ACCELERATOR" /> برای زوم‌پس کردن استفاده کنید. از کلیدهای مهار + دگرساز + جهت‌نما برای حرکت در نمای زوم‌پیش‌شده استفاده کنید.</translation>
 <translation id="1269405891096105529">دستگاه جانبی در «حالت مهمان» پشتیبانی نمی‌شود</translation>
 <translation id="1270290102613614947">صفحه‌کلید مجازی غیرفعال شد</translation>
-<translation id="1272079795634619415">توقف</translation>
+<translation id="1272079795634619415">ایست</translation>
 <translation id="12741168609094094">برای جستجو کردن، کپی کردن نوشتار، و کارهای دیگر هر چیزی را که می‌خواهید در صفحه‌نمایش انتخاب کنید</translation>
 <translation id="1275285675049378717">درحال تأمین برق <ph name="POWER_SOURCE" /></translation>
 <translation id="1275718070701477396">انتخاب شد</translation>
@@ -192,7 +192,7 @@
 <translation id="1607312127821884567">بستن راه‌اندازی مشاهده برنامه‌های تلفن</translation>
 <translation id="1610778689852195798">«واگرد»</translation>
 <translation id="1611993646327628135">روشن</translation>
-<translation id="1612679292338846734">‏وقتی این ویژگی‌ها را روشن می‌کنید، ممکن است نوشتار ورودی، محتوای سند، و نشانی صفحه وب برای سرورهای هوش مصنوعی Google ارسال شود. از این اطلاعات برای تولید پیشنهاد نوشتاری، تولید خلاصه، پاسخ به سؤالات، و بهبود محصول منوط به <ph name="LINK_TO_SERVICE_TERMS" /> استفاده می‌شود. اطلاعات شخصی، حساس، یا محرمانه را وارد نکنید.</translation>
+<translation id="1612679292338846734">‏وقتی این ویژگی‌ها را روشن می‌کنید، ممکن است نوشتار ورودی، محتوای سند، و نشانی صفحه وب برای سرورهای «هوشواره Google» ارسال شود. از این اطلاعات برای تولید پیشنهاد نوشتاری، تولید خلاصه، پاسخ به سؤالات، و بهبود محصول منوط به <ph name="LINK_TO_SERVICE_TERMS" /> استفاده می‌شود. اطلاعات شخصی، حساس، یا محرمانه را وارد نکنید.</translation>
 <translation id="1620510694547887537">دوربین</translation>
 <translation id="1623768535032616219">‏جمع کردن Google Classroom</translation>
 <translation id="163032029566320584"><ph name="UNAVAILABLE_DLC" /> دردسترس نیست.</translation>
@@ -237,7 +237,7 @@
 <translation id="1751335846119670066">کمک گرفتن در خواندن</translation>
 <translation id="1755408179247123630">«انتخاب برای شنیدن» روشن شود؟</translation>
 <translation id="1755556344721611131">برنامه عیب‌یابی</translation>
-<translation id="1756833229520115364">الگو ذخیره نشد. تعداد پنجره‌ها یا برگه‌ها خیلی زیاد است.</translation>
+<translation id="1756833229520115364">الگو ذخیره نشد. تعداد پنجره‌ها یا زبانه‌ها خیلی زیاد است.</translation>
 <translation id="1757857692711134412">خاموش تا غروب آفتاب</translation>
 <translation id="1763084151787818322">کنش‌های دیگر</translation>
 <translation id="1768138163688567246">بستن جستجو در صفحه‌نمایش</translation>
@@ -862,7 +862,7 @@
 <translation id="3943857333388298514">جاگذاری</translation>
 <translation id="394485226368336402">تنظیمات صوتی</translation>
 <translation id="3945319193631853098">برای تمام کردن راه‌اندازی، تک‌ضرب بزنید</translation>
-<translation id="3945867833895287237">درحال اتصال به نقطه اتصال…</translation>
+<translation id="3945867833895287237">درحال متصل شدن به نقطه اتصال…</translation>
 <translation id="3950272133184491871">همین حالا از سیستم خارج می‌شوید؟</translation>
 <translation id="3950820424414687140">ورود به سیستم</translation>
 <translation id="3953130726459169782">هنوز تکلیفی انجام نشده است.</translation>
@@ -974,7 +974,7 @@
 <translation id="4280601795273309128">به‌روزرسانی‌های امنیتی به‌پایان رسیده است. دستگاهتان را ارتقا دهید.</translation>
 <translation id="4283888303416325161">برای ایمنی بیشتر، گذرواژه را وارد کنید</translation>
 <translation id="4285498937028063278">برداشتن سنجاق</translation>
-<translation id="428715201724021596">درحال اتصال به نمایه. ممکن است چند دقیقه طول بکشد.</translation>
+<translation id="428715201724021596">درحال متصل شدن به نمایه. ممکن است چند دقیقه طول بکشد.</translation>
 <translation id="4287250812980588583">‏پنجره Chrome</translation>
 <translation id="4291322857434980285">{NUM_APPS,plural, =1{میزان صدای میکروفون را <ph name="APP_NAME" /> کنترل می‌کند}one{میزان صدای میکروفون را # برنامه کنترل می‌کند}other{میزان صدای میکروفون را # برنامه کنترل می‌کند}}</translation>
 <translation id="4296136865091727875">پاک کردن همه <ph name="COUNT" /> اعلان</translation>
@@ -1540,7 +1540,7 @@
 <translation id="6068258534237496331">کنترل‌های تماس تصویری</translation>
 <translation id="6073451960410192870">توقف ضبط</translation>
 <translation id="6074087755403037157">کانال بتا</translation>
-<translation id="6075098173600599596">تغییر دادن بزرگ و کوچک بودن حروف</translation>
+<translation id="6075098173600599596">تغییر دادن بزرگ‌نویسی</translation>
 <translation id="6091929401758362855">فهرست پخش: <ph name="PLAYLIST_TITLE" /></translation>
 <translation id="6093867385179428431">توسط سرپرست غیرفعال شده است</translation>
 <translation id="6095008505822982596">سرعت گفتار</translation>
@@ -1601,7 +1601,7 @@
 <translation id="6260038345397266744"><ph name="TITLE" />. <ph name="DESCRIPTION" /></translation>
 <translation id="6267036997247669271"><ph name="NAME" />: در حال فعال‌سازی…</translation>
 <translation id="6274202259872570803">ضبط ویدیویی از صفحه</translation>
-<translation id="6274422179279280249">‏پیوند، اموجی، و موارد دیگر درج کنید. همچنین می‌توانید از «هوش مصنوعی Google» برای نوشتن کمک بگیرید. <ph name="LINK_TO_LEARN_MORE" /></translation>
+<translation id="6274422179279280249">‏پیوند، اموجی، و موارد دیگر درج کنید. همچنین می‌توانید از «هوشواره Google» برای نوشتن کمک بگیرید. <ph name="LINK_TO_LEARN_MORE" /></translation>
 <translation id="6276708887952587684">مشاهده منبع صفحه</translation>
 <translation id="6285871695023807425">افزودن به «تقویم»</translation>
 <translation id="6288235558961782912">بعداً می‌توانید <ph name="USER_EMAIL_ADDRESS" /> را با اجازه ولی دوباره اضافه کنید.</translation>
@@ -1749,7 +1749,7 @@
 <translation id="6751052314767925245">به‌اجبار اجراشده توسط سرپرست</translation>
 <translation id="6751826523481687655">ردیابی عملکرد روشن است</translation>
 <translation id="6752912906630585008">میز <ph name="REMOVED_DESK" /> برداشته شد و با میز <ph name="RECEIVE_DESK" /> ادغام شد</translation>
-<translation id="6753390234084146956">برگه‌ها</translation>
+<translation id="6753390234084146956">زبانه‌ها</translation>
 <translation id="6754918760968695779">درج سریع</translation>
 <translation id="6757237461819837179">هیچ رسانه‌ای درحال پخش نیست</translation>
 <translation id="6760438044935091345">داشبورد بازی‌ها</translation>
@@ -1770,7 +1770,7 @@
 <translation id="6802687695197837794">با این کار، دسترسی برای <ph name="APP1_NAME" />، <ph name="APP2_NAME" />، و همه برنامه‌ها و وب‌سایت‌های دارای اجازه دوربین و میکروفون مجاز می‌شود</translation>
 <translation id="6803622936009808957">نمایش یک تصویر واحد در چند صفحه نمایش ممکن نیست زیرا وضوح تصویر پشتیبانی شده‌ای وجود ندارد. بجای آن حالت نمایش دسک‌تاپ چند بخشی استفاده می‌شود.</translation>
 <translation id="6809556495807506746">کنترل‌ها دردسترس نیست</translation>
-<translation id="6812232930908427253">میز کار ذخیره نشد. تعداد پنجره‌ها یا برگه‌ها خیلی زیاد است.</translation>
+<translation id="6812232930908427253">میز کار ذخیره نشد. تعداد پنجره‌ها یا زبانه‌ها خیلی زیاد است.</translation>
 <translation id="6818242057446442178">عقب رفتن کلمه‌به‌کلمه</translation>
 <translation id="6819327813400217281">دوربین به گوشه پایین سمت چپ چسبید</translation>
 <translation id="6820676911989879663">استراحت کنید!</translation>
@@ -2139,7 +2139,7 @@
 <translation id="8051716679295756675">الگویی با نام <ph name="DESK_TEMPLATE_NAME" /> ازقبل وجود دارد</translation>
 <translation id="8052898407431791827">در بریده‌دان کپی شد</translation>
 <translation id="8054466585765276473">درحال محاسبه زمان شارژ باتری.</translation>
-<translation id="8076492880354921740">برگه‌ها</translation>
+<translation id="8076492880354921740">زبانه‌ها</translation>
 <translation id="8079538659226626406">هم‌رسانی صفحه‌نمایش</translation>
 <translation id="8083540854303889870">ذخیره‌شده برای بعد</translation>
 <translation id="8085765914647468715">YouTube Music</translation>
@@ -2439,11 +2439,11 @@
 <translation id="9129245940793250979">دکمه پشت</translation>
 <translation id="9133335900048457298">نمی‌توان محتوای محافظت‌شده را ضبط کرد</translation>
 <translation id="9139720510312328767">حذف حرف بعدی</translation>
-<translation id="9148058034647219655">خروج</translation>
+<translation id="9148058034647219655">خارج شدن</translation>
 <translation id="9151906066336345901">پایان</translation>
 <translation id="9159421884295554245">در «بریده‌دان» جستجو کنید</translation>
 <translation id="9161053988251441839">برنامه‌های پیشنهادشده</translation>
-<translation id="9168436347345867845">بعداً انجام شود</translation>
+<translation id="9168436347345867845">بعداً انجام دادن</translation>
 <translation id="9178475906033259337">نمایش ۱ نتیجه برای <ph name="QUERY" /></translation>
 <translation id="9179259655489829027">این ویژگی امکان می‌دهد بدون نیاز به گذرواژه، به هر کاربری که به سیستم واردشده به‌سرعت دسترسی داشته باشید. تنها برای حساب‌های مورد اعتمادتان از این ویژگی استفاده کنید.</translation>
 <translation id="9183302530794969518">‏سندنگار Google</translation>

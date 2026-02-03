@@ -86,6 +86,9 @@ std::u16string FailStateDescription(FailState fail_state) {
     case FailState::FILE_BLOCKED:
       string_id = IDS_DOWNLOAD_INTERRUPTED_DESCRIPTION_BLOCKED;
       break;
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_LOCAL_DOWNLOAD_BLOCKED;
+      break;
     case FailState::FILE_SECURITY_CHECK_FAILED:
       string_id = IDS_DOWNLOAD_INTERRUPTED_DESCRIPTION_SECURITY_CHECK_FAILED;
       break;
@@ -326,8 +329,9 @@ std::u16string DownloadUIModel::GetWarningText(const std::u16string& filename,
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_WARNING);
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
       return l10n_util::GetStringUTF16(
-          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_GDRIVE);
+          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_BLOCKED);
@@ -924,9 +928,9 @@ DownloadUIModel::BubbleStatusTextBuilder::GetBubbleWarningStatusText() const {
       // "Sensitive content"
       return l10n_util::GetStringUTF16(
           IDS_DOWNLOAD_BUBBLE_STATUS_SENSITIVE_CONTENT);
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
-      // "Local download blocked"
-      return l10n_util::GetStringUTF16(IDS_POLICY_ACTION_FORCED_SAVE_TO_GDRIVE);
+      return l10n_util::GetStringUTF16(IDS_POLICY_ACTION_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
       // "Blocked by your organization"
       return l10n_util::GetStringUTF16(
@@ -1213,6 +1217,9 @@ DownloadUIModel::BubbleStatusTextBuilder::GetInterruptedStatusText(
       break;
     case FailState::FILE_BLOCKED:
       string_id = IDS_POLICY_ACTION_BLOCKED_BY_ORGANIZATION;
+      break;
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_LOCAL_DOWNLOAD_BLOCKED;
       break;
     case FailState::FILE_SECURITY_CHECK_FAILED:
       string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_SECURITY_CHECK_FAILED;

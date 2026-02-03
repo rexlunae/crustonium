@@ -13,7 +13,6 @@
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/containers/contains.h"
 #include "base/containers/variant_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -382,7 +381,7 @@ class ReceiverSetBase {
   //
   // Returns |true| if the receiver is in the set and |false| if not.
   bool HasReceiver(ReceiverId id) const {
-    return base::Contains(state_.entries(), id);
+    return state_.entries().contains(id);
   }
 
   // Returns a pointer to the context associated with a receiver.

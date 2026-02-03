@@ -98,8 +98,8 @@ class AutocompleteResult {
   // AutocompleteResult is correct.
   bool VerifyCoherency(JNIEnv* env,
                        const base::android::JavaRef<jlongArray>& matches,
-                       jint match_index,
-                       jint verification_point);
+                       int32_t match_index,
+                       int32_t verification_point);
 #endif
 
   // Moves matches from |old_matches| to provide a consistent result set.
@@ -187,13 +187,6 @@ class AutocompleteResult {
   // Sets |action| in matches that have Pedal-triggering text.
   void AttachPedalsToMatches(const AutocompleteInput& input,
                              const AutocompleteProviderClient& client);
-
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
-  // Attaches AIM action to the highest-scoring eligible match in the result
-  // set, if no other actions are present.
-  void AttachAimAction(TemplateURLService* template_url_service,
-                       AutocompleteProviderClient* client);
-#endif
 
   // Sets a takeover action on all matches to issue a contextual search.
   void AttachContextualSearchFulfillmentActionToMatches();

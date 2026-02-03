@@ -41,10 +41,10 @@ import androidx.appcompat.widget.Toolbar;
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.view.ViewCompat;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
-import org.chromium.base.supplier.SettableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
@@ -123,7 +123,7 @@ public class SelectableListToolbar<E> extends Toolbar
     @SuppressWarnings("NullAway.Init")
     protected SelectionDelegate<E> mSelectionDelegate;
 
-    private final SettableObservableSupplier<Boolean> mIsSearchingSupplier =
+    private final SettableMonotonicObservableSupplier<Boolean> mIsSearchingSupplier =
             ObservableSuppliers.createMonotonic();
     private boolean mHasSearchView;
 
@@ -584,7 +584,7 @@ public class SelectableListToolbar<E> extends Toolbar
     /**
      * @return An observable supplier that notifies observers if the search box has text.
      */
-    public ObservableSupplier<Boolean> hasSearchTextSupplier() {
+    public MonotonicObservableSupplier<Boolean> hasSearchTextSupplier() {
         return mHasSearchTextSupplier;
     }
 
@@ -705,11 +705,7 @@ public class SelectableListToolbar<E> extends Toolbar
                 this.getPaddingBottom());
 
         if (mInlineSearchBox != null) {
-            mInlineSearchBox.setInlinePadding(
-                    padding + paddingStartOffset + navigationButtonStartOffsetPx,
-                    this.getPaddingTop(),
-                    0,
-                    0);
+            mInlineSearchBox.updatePadding(padding, this.getPaddingTop());
         }
     }
 
@@ -724,7 +720,7 @@ public class SelectableListToolbar<E> extends Toolbar
         return mIsSearchingSupplier.get();
     }
 
-    public ObservableSupplier<Boolean> isSearchingSupplier() {
+    public MonotonicObservableSupplier<Boolean> isSearchingSupplier() {
         return mIsSearchingSupplier;
     }
 
@@ -924,6 +920,7 @@ public class SelectableListToolbar<E> extends Toolbar
         this.getMenu().removeItem(searchMenuItemId);
         mInlineSearchBox =
                 new InlineSearchBox(
+                        getContext(),
                         mSearchDelegate,
                         mHasSearchTextSupplier,
                         KeyboardVisibilityDelegate.getInstance());

@@ -62,8 +62,10 @@ class AccountCapabilities {
   // group for accounts with this capability.
   signin::Tribool can_fetch_family_member_info() const;
 
+#if !BUILDFLAG(IS_IOS)
   // Chrome can display the email address for accounts with this capability.
   signin::Tribool can_have_email_address_displayed() const;
+#endif
 
 #if !BUILDFLAG(IS_ANDROID)
   // The primary account type is suitable for choice screens. Signals that are
@@ -94,27 +96,30 @@ class AccountCapabilities {
   signin::Tribool can_use_chromeos_generative_ai() const;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  // The user account is able to use copyeditor feature.
-  signin::Tribool can_use_copyeditor_feature() const;
-
 #if !BUILDFLAG(IS_IOS)
   // The user account is able to use DevTools AI features.
   signin::Tribool can_use_devtools_generative_ai_features() const;
 #endif
 
+#if !BUILDFLAG(IS_IOS)
   // The user account is able to use edu features.
   signin::Tribool can_use_edu_features() const;
+#endif
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // The user account is able to use Gemini in Chrome.
   signin::Tribool can_use_gemini_in_chrome() const;
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS)
   // The user account is able to use generative AI in recorder app.
   signin::Tribool can_use_generative_ai_in_recorder_app() const;
+#endif
 
+#if BUILDFLAG(IS_CHROMEOS)
   // The user account is able to use generative AI photo editing.
   signin::Tribool can_use_generative_ai_photo_editing() const;
+#endif
 
   // The user account is able to use manta service.
   signin::Tribool can_use_manta_service() const;
@@ -182,11 +187,11 @@ class AccountCapabilities {
 
   friend std::optional<AccountCapabilities>
   signin::AccountCapabilitiesFromServerResponse(
-      const base::Value::Dict& account_capabilities);
-  friend base::Value::Dict signin::SerializeAccountCapabilities(
+      const base::DictValue& account_capabilities);
+  friend base::DictValue signin::SerializeAccountCapabilities(
       const AccountCapabilities& account_capabilities);
   friend AccountCapabilities signin::DeserializeAccountCapabilities(
-      const base::Value::Dict& dict);
+      const base::DictValue& dict);
   friend class AccountCapabilitiesFetcherGaia;
 #if BUILDFLAG(IS_IOS)
   friend base::span<const std::string_view>

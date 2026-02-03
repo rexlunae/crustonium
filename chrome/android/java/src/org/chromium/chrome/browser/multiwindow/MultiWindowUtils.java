@@ -58,10 +58,10 @@ import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.InstanceAllocationType;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.SupportedProfileType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
@@ -174,7 +174,8 @@ public class MultiWindowUtils implements ActivityStateListener {
         String className = ChromeTabbedActivity.class.getCanonicalName();
         ComponentName comp = new ComponentName(packageName, className);
         try {
-            int launchMode = context.getPackageManager().getActivityInfo(comp, 0).launchMode;
+            ActivityInfo info = context.getPackageManager().getActivityInfo(comp, 0);
+            int launchMode = info == null ? ActivityInfo.LAUNCH_MULTIPLE : info.launchMode;
             boolean isSingleInstancePerTaskConfigured =
                     launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE_PER_TASK;
             sIsMultiInstanceApi31Enabled = isSingleInstancePerTaskConfigured;
@@ -553,6 +554,8 @@ public class MultiWindowUtils implements ActivityStateListener {
 
     static boolean isRestorableInstance(int index) {
         return MultiInstancePersistentStore.readNormalTabCount(index) != 0
+                || (IncognitoUtils.shouldOpenIncognitoAsWindow()
+                        && MultiInstancePersistentStore.readIncognitoTabCount(index) != 0)
                 || MultiInstancePersistentStore.readTaskId(index) != INVALID_TASK_ID;
     }
 
@@ -649,6 +652,18 @@ public class MultiWindowUtils implements ActivityStateListener {
         } else {
             return supportedProfileType == SupportedProfileType.MIXED
                     || supportedProfileType == SupportedProfileType.REGULAR;
+        }
+    }
+
+    /**
+     * @param instanceId The id of the instance.
+     * @return The {@link SupportedProfileType} of the instance.
+     */
+    public static @SupportedProfileType int readProfileType(int instanceId) {
+        if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+            return MultiInstancePersistentStore.readProfileType(instanceId);
+        } else {
+            return SupportedProfileType.MIXED;
         }
     }
 
@@ -1002,9 +1017,10 @@ public class MultiWindowUtils implements ActivityStateListener {
      *
      * @param intent The intent to launch.
      * @param instanceId ID of the instance to launch the intent in.
+     * @return Whether the intent was launched successfully.
      */
-    public static void launchIntentInInstance(Intent intent, int instanceId) {
-        MultiInstanceManagerApi31.launchIntentInExistingActivity(intent, instanceId);
+    public static boolean launchIntentInInstance(Intent intent, int instanceId) {
+        return MultiInstanceManagerApi31.launchIntentInExistingActivity(intent, instanceId);
     }
 
     /**

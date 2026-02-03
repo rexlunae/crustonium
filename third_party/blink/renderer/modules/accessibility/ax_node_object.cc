@@ -37,7 +37,6 @@
 #include <queue>
 
 #include "base/auto_reset.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
@@ -1165,7 +1164,7 @@ AXObjectInclusion AXNodeObject::ShouldIncludeBasedOnSemantics(
           ax::mojom::blink::Role::kVideo,
       });
 
-  if (base::Contains(always_included_computed_roles, RoleValue())) {
+  if (always_included_computed_roles.contains(RoleValue())) {
     return kIncludeObject;
   }
 
@@ -1220,8 +1219,7 @@ AXObjectInclusion AXNodeObject::ShouldIncludeBasedOnSemantics(
     // next layer. All nodes have a single child, meaning that this child has no
     // siblings.
     if (!IsExemptFromInlineBlockCheck(native_role_) && GetLayoutObject() &&
-        GetLayoutObject()->IsInline() &&
-        GetLayoutObject()->IsAtomicInlineLevel() &&
+        GetLayoutObject()->IsAtomicInline() &&
         node->parentNode()->childElementCount() > 1) {
       return kIncludeObject;
     }
@@ -3414,8 +3412,7 @@ AccessibilityExpanded AXNodeObject::IsExpanded() const {
       CommandEventType command = command_for_element->GetCommandEventType(
           html_element->command(), html_element->GetExecutionContext());
       bool is_popover_command =
-          command_for_element->IsValidBuiltinPopoverCommand(*html_element,
-                                                            command);
+          command_for_element->IsValidBuiltinPopoverCommand(command);
       if (command_for_element && is_popover_command &&
           !element->IsDescendantOrShadowDescendantOf(command_for_element)) {
         return command_for_element->popoverOpen() ? kExpandedExpanded
@@ -5387,8 +5384,7 @@ static bool ShouldInsertSpaceBetweenObjectsIfNeeded(
   // spec: https://www.w3.org/TR/css-display-3/#the-display-properties
   CHECK(next_layout);
   CHECK(prev_layout);
-  if (next_layout->IsAtomicInlineLevel() ||
-      prev_layout->IsAtomicInlineLevel()) {
+  if (next_layout->IsAtomicInline() || prev_layout->IsAtomicInline()) {
     return true;
   }
 
@@ -5849,12 +5845,7 @@ int AXNodeObject::TextOffsetInFormattingContext(int offset) const {
                        : offset;
   }
 
-  // TODO(crbug.com/567964): LayoutObject::IsAtomicInlineLevel() also includes
-  // block-level replaced elements. We need to explicitly exclude them via
-  // LayoutObject::IsInline().
-  const bool is_atomic_inline_level =
-      layout_obj->IsInline() && layout_obj->IsAtomicInlineLevel();
-  if (!is_atomic_inline_level && !layout_obj->IsText()) {
+  if (!layout_obj->IsAtomicInline() && !layout_obj->IsText()) {
     // Not in a formatting context in which text offsets are meaningful.
     return AXObject::TextOffsetInFormattingContext(offset);
   }
@@ -6329,6 +6320,12 @@ void AXNodeObject::AddNodeChildImpl(Node* node) {
   // Should not have another parent unless owned.
   if (AXObjectCache().IsAriaOwned(ax_child))
     return;  // Do not add owned children to their natural parent.
+  if (Element* element = DynamicTo<Element>(node);
+      element && element->GetOverscrollContainer()) {
+    // Targets of toggle-overscroll actions have an overscroll container
+    // with a ::-internal-overscroll-area-parent which owns them.
+    return;
+  }
 
   AXObject* ax_cached_parent =
       ax_child ? ax_child->ParentObjectIfPresent() : nullptr;
@@ -6929,8 +6926,12 @@ String AXNodeObject::TextAlternativeFromTooltip(
   }
 
   if (name_sources) {
-    name_sources->push_back(
-        NameSource(*found_text_alternative, html_names::kPopovertargetAttr));
+    // Map NameFrom enum to corresponding HTML attribute
+    const QualifiedName& attr_name =
+        name_from == ax::mojom::blink::NameFrom::kInterestFor
+            ? html_names::kInterestforAttr
+            : html_names::kPopovertargetAttr;
+    name_sources->push_back(NameSource(*found_text_alternative, attr_name));
     name_sources->back().type = name_from;
   }
 
@@ -8335,8 +8336,7 @@ AXObject* AXNodeObject::GetFirstInlineBlockOrDeepestInlineAXChildInLayoutTree(
     if (ax_object && ax_object->IsIncludedInTree() &&
         !current_node->IsMarkerPseudoElement()) {
       if (ax_object->GetLayoutObject() &&
-          ax_object->GetLayoutObject()->IsInline() &&
-          ax_object->GetLayoutObject()->IsAtomicInlineLevel()) {
+          ax_object->GetLayoutObject()->IsAtomicInline()) {
         return ax_object;
       }
     }

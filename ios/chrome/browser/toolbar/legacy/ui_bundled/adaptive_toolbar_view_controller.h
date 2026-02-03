@@ -9,18 +9,18 @@
 
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_ui_updating.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/legacy_toolbar_consumer.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_type.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/toolbar_consumer.h"
 
 @protocol AdaptiveToolbarMenusProvider;
 @class AdaptiveToolbarViewController;
 @protocol AdaptiveToolbarViewControllerDelegate;
 @protocol BrowserCommands;
+@protocol BrowserCoordinatorCommands;
 @class LayoutGuideCenter;
-@protocol OmniboxCommands;
 @protocol PopupMenuCommands;
-@class ToolbarButton;
-@class ToolbarButtonFactory;
+@class LegacyToolbarButton;
+@class LegacyToolbarButtonFactory;
 
 // ViewController for the adaptive toolbar. This ViewController is the super
 // class of the different implementation (primary or secondary).
@@ -32,10 +32,10 @@
 @interface AdaptiveToolbarViewController
     : UIViewController <FullscreenUIElement,
                         PopupMenuUIUpdating,
-                        ToolbarConsumer>
+                        LegacyToolbarConsumer>
 
 // Button factory.
-@property(nonatomic, strong) ToolbarButtonFactory* buttonFactory;
+@property(nonatomic, strong) LegacyToolbarButtonFactory* buttonFactory;
 // Layout Guide Center.
 @property(nonatomic, strong) LayoutGuideCenter* layoutGuideCenter;
 // Whether the location bar is currently focused. This is used to prevent
@@ -45,11 +45,11 @@
 // View controller for the location bar containing the omnibox. Nil when the
 // toolbar doesn't have the omnibox.
 @property(nonatomic, weak) UIViewController* locationBarViewController;
-// Omnibox commands handler for the ViewController.
-@property(nonatomic, weak) id<OmniboxCommands> omniboxCommandsHandler;
+// BrowserCoordinator commands handler for the ViewController.
+@property(nonatomic, weak) id<BrowserCoordinatorCommands>
+    browserCoordinatorHandler;
 // Popup menu commands handler for the ViewController.
 @property(nonatomic, weak) id<PopupMenuCommands> popupMenuCommandsHandler;
-
 // Provider for the context menus.
 @property(nonatomic, weak) id<AdaptiveToolbarMenusProvider> menuProvider;
 // Delegate for events in `AdaptiveToolbarViewController`.
@@ -60,10 +60,10 @@
 - (UIView*)locationBarContainer;
 
 // Returns the tab grid button.
-- (ToolbarButton*)tabGridButton;
+- (LegacyToolbarButton*)tabGridButton;
 
 // Returns the tools menu button.
-- (ToolbarButton*)toolsMenuButton;
+- (LegacyToolbarButton*)toolsMenuButton;
 
 // Whether the toolbar has the omnibox.
 - (BOOL)hasOmnibox;
@@ -84,6 +84,8 @@
 - (void)IPHHighlightTabGridButton:(BOOL)highlight;
 // Sets the height of the location bar. Used when the omnibox is multiline.
 - (void)setLocationBarHeight:(CGFloat)height;
+// Used for any additional clean up on shutdown.
+- (void)disconnect;
 
 @end
 

@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
@@ -329,7 +328,8 @@ OnHostResolutionCallbackResult SpdySessionPool::OnHostResolutionComplete(
     // If `endpoint` has no associated ALPN protocols, it is TCP-based and thus
     // would have been eligible for connecting with HTTP/2.
     if (!endpoint.metadata.supported_protocol_alpns.empty() &&
-        !base::Contains(endpoint.metadata.supported_protocol_alpns, "h2")) {
+        !std::ranges::contains(endpoint.metadata.supported_protocol_alpns,
+                               "h2")) {
       continue;
     }
     for (const auto& address : endpoint.ip_endpoints) {
@@ -530,7 +530,7 @@ void SpdySessionPool::MakeCurrentSessionsGoingAway(Error error) {
 }
 
 base::Value SpdySessionPool::SpdySessionPoolInfoToValue() const {
-  auto list = base::Value::List::with_capacity(sessions_.size());
+  auto list = base::ListValue::with_capacity(sessions_.size());
 
   for (const auto& session : sessions_) {
     list.Append(session->GetInfoAsValue());
@@ -634,7 +634,7 @@ void SpdySessionPool::RemoveRequestForSpdySession(SpdySessionRequest* request) {
                        weak_ptr_factory_.GetWeakPtr(), request->key()));
   }
 
-  DCHECK(base::Contains(iter->second.request_set, request));
+  DCHECK(iter->second.request_set.contains(request));
   RemoveRequestInternal(iter, iter->second.request_set.find(request));
 }
 
@@ -654,7 +654,7 @@ void SpdySessionPool::MapKeyToAvailableSession(
     const SpdySessionKey& key,
     const base::WeakPtr<SpdySession>& session,
     std::set<std::string> dns_aliases) {
-  DCHECK(base::Contains(sessions_, session.get()));
+  DCHECK(sessions_.contains(session.get()));
   std::pair<AvailableSessionMap::iterator, bool> result =
       available_sessions_.emplace(key, session);
   CHECK(result.second);
@@ -946,7 +946,7 @@ void SpdySessionPool::AddConnectionManagementConfig(
   // We only want to use the connection management config for the session if the
   // feature is enabled.
   if (connection_management_config.connection_change_observer) {
-    if (!base::Contains(connection_change_notifier_map_, key)) {
+    if (!connection_change_notifier_map_.contains(key)) {
       connection_change_notifier_map_[key] =
           std::make_unique<ConnectionChangeNotifier>();
     }

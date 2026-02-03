@@ -797,15 +797,22 @@ void TaskManagerTableModel::GetRowsGroupRange(size_t row_index,
                                               size_t* out_length) {
   size_t i = row_index;
   size_t limit = row_index + 1;
-  if (!observed_task_manager()->IsRunningInVM(tasks_[row_index])) {
+
+  // During task removal, this function may be called back while some tasks are
+  // being removed from the TaskManagerImpl's internal data structures. Validate
+  // that the task is still valid before querying its properties.
+  // See crbug.com/396002122 for similar issue.
+  if (observed_task_manager()->IsTaskValid(tasks_[row_index]) &&
+      !observed_task_manager()->IsRunningInVM(tasks_[row_index])) {
     const base::ProcessId process_id =
         observed_task_manager()->GetProcessId(tasks_[row_index]);
-    while (i > 0 &&
+    while (i > 0 && observed_task_manager()->IsTaskValid(tasks_[i - 1]) &&
            observed_task_manager()->GetProcessId(tasks_[i - 1]) == process_id &&
            !observed_task_manager()->IsRunningInVM(tasks_[i - 1])) {
       --i;
     }
     while (limit < RowCount() &&
+           observed_task_manager()->IsTaskValid(tasks_[limit]) &&
            observed_task_manager()->GetProcessId(tasks_[limit]) == process_id &&
            !observed_task_manager()->IsRunningInVM(tasks_[limit])) {
       ++limit;
@@ -1005,9 +1012,8 @@ void TaskManagerTableModel::RetrieveSavedColumnsSettingsAndUpdateTable(
     return;
   }
 
-  const base::Value::Dict& dictionary =
-      g_browser_process->local_state()->GetDict(
-          prefs::kTaskManagerColumnVisibility);
+  const base::DictValue& dictionary = g_browser_process->local_state()->GetDict(
+      prefs::kTaskManagerColumnVisibility);
 
   // Do a best effort of retrieving the correct settings from the local state.
   // Use the default settings of the value if it fails to be retrieved.

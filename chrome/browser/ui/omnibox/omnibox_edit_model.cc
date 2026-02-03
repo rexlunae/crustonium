@@ -41,6 +41,7 @@
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/history_embeddings/history_embeddings_features.h"
+#include "components/lens/lens_overlay_invocation_source.h"
 #include "components/navigation_metrics/navigation_metrics.h"
 #include "components/omnibox/browser/actions/omnibox_action.h"
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
@@ -589,6 +590,7 @@ void OmniboxEditModel::SetInputInProgress(bool in_progress) {
 }
 
 void OmniboxEditModel::Revert() {
+  TRACE_EVENT("omnibox", "OmniboxEditModel::Revert");
   SetInputInProgress(false);
   input_.Clear();
   paste_state_ = PasteState::kNone;
@@ -809,7 +811,9 @@ void OmniboxEditModel::OpenAiMode(bool via_keyboard, bool via_context_menu) {
   GURL ai_mode_url =
       GetUrlForAim(controller_->client()->GetTemplateURLService(),
                    omnibox::DESKTOP_CHROME_OMNIBOX_KEYWORD_ENTRY_POINT,
-                   /*query_start_time=*/base::Time::Now(), query_text);
+                   /*query_start_time=*/base::Time::Now(), query_text,
+                   lens::LensOverlayInvocationSource::kOmniboxContextualQuery,
+                   /*additional_params=*/{});
   controller_->client()->OpenUrl(ai_mode_url);
 }
 
@@ -1346,11 +1350,17 @@ void OmniboxEditModel::OnPopupDataChanged(
     if (view_) {
       view_->OnKeywordPlaceholderTextChange();
     }
-    observers_.Notify(&Observer::OnKeywordStateChanged, is_keyword_hint);
 
     // |is_keyword_hint_| should always be false if |keyword_| is empty.
     DCHECK(!keyword_.empty() || !is_keyword_hint_);
   }
+  // This updates the web UI state and affects presence/absence of the '+'
+  // context menu button. This should reflect whether keyword mode is actually
+  // entered, not simply match selection state (a match with keyword may be
+  // selected but the keyword mode still not entered yet).
+  // Note, this doesn't do edge detection with `keyword_was_selected` because
+  // keyword state can be changed elsewhere, not only from here.
+  observers_.Notify(&Observer::OnKeywordStateChanged, is_keyword_selected());
 
   // Handle changes to temporary text.
   if (is_temporary_text) {
@@ -2185,6 +2195,8 @@ void OmniboxEditModel::UpdatePopupSelectionOnResultChanged() {
   if (!popup_view_) {
     return;
   }
+  TRACE_EVENT("omnibox",
+              "OmniboxEditModel::UpdatePopupSelectionOnResultChanged");
   rich_suggestion_bitmaps_.clear();
   const AutocompleteResult& result = autocomplete_controller()->result();
 
@@ -2206,6 +2218,7 @@ void OmniboxEditModel::OnPopupResultChanged() {
   if (!popup_view_) {
     return;
   }
+  TRACE_EVENT("omnibox", "OmniboxEditModel::OnPopupResultChanged");
   UpdatePopupSelectionOnResultChanged();
   observers_.Notify(&Observer::OnContentsChanged);
 }

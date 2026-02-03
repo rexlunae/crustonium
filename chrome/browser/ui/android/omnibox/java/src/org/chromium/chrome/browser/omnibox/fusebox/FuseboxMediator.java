@@ -23,8 +23,8 @@ import android.provider.MediaStore;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -70,15 +70,14 @@ public class FuseboxMediator {
     private final PropertyModel mModel;
     private final FuseboxPopup mPopup;
     private final FuseboxAttachmentModelList mModelList;
-    private final ObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
-    private final ObservableSupplierImpl<@AutocompleteRequestType Integer>
+    private final MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
+    private final SettableNonNullObservableSupplier<@AutocompleteRequestType Integer>
             mAutocompleteRequestTypeSupplier;
     private final ComposeBoxQueryControllerBridge mComposeBoxQueryControllerBridge;
-    private final ObservableSupplierImpl<@FuseboxState Integer> mFuseboxStateSupplier;
+    private final SettableNonNullObservableSupplier<@FuseboxState Integer> mFuseboxStateSupplier;
     private final Callback<@AutocompleteRequestType Integer> mOnAutocompleteRequestTypeChanged =
             this::onAutocompleteRequestTypeChanged;
     private final SnackbarManager mSnackbarManager;
-    private final Snackbar mAttachmentLimitSnackbar;
     private final Snackbar mAttachmentUploadFailedSnackbar;
 
     FuseboxMediator(
@@ -88,11 +87,11 @@ public class FuseboxMediator {
             PropertyModel model,
             FuseboxViewHolder viewHolder,
             FuseboxAttachmentModelList modelList,
-            ObservableSupplierImpl<@AutocompleteRequestType Integer>
+            SettableNonNullObservableSupplier<@AutocompleteRequestType Integer>
                     autocompleteRequestTypeSupplier,
-            ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
+            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
             ComposeBoxQueryControllerBridge composeBoxQueryControllerBridge,
-            ObservableSupplierImpl<@FuseboxState Integer> fuseboxStateSupplier,
+            SettableNonNullObservableSupplier<@FuseboxState Integer> fuseboxStateSupplier,
             SnackbarManager snackbarManager) {
         mContext = context;
         mProfile = profile;
@@ -108,12 +107,6 @@ public class FuseboxMediator {
         mSnackbarManager = snackbarManager;
 
         mAutocompleteRequestTypeSupplier.addObserver(mOnAutocompleteRequestTypeChanged);
-
-        // Create the limit reached snackbar
-        mAttachmentLimitSnackbar =
-                createStyledSnackbar(
-                        context.getText(R.string.fusebox_max_attachments),
-                        Snackbar.UMA_FUSEBOX_MAX_ATTACHMENTS);
 
         // Create the upload failed snackbar
         mAttachmentUploadFailedSnackbar =
@@ -325,9 +318,7 @@ public class FuseboxMediator {
         var attachment = FuseboxAttachment.forTab(tab, mContext.getResources());
 
         // Use FuseboxModelList's add method which handles upload automatically
-        if (!mModelList.add(attachment)) {
-            warnForMaxAttachments();
-        }
+        mModelList.add(attachment);
     }
 
     /**
@@ -355,8 +346,6 @@ public class FuseboxMediator {
         if (mModelList.getRemainingAttachments() > 0 && !isImageGenerationUsed) {
             return false;
         }
-
-        warnForMaxAttachments();
         return true;
     }
 
@@ -474,7 +463,6 @@ public class FuseboxMediator {
                                     FuseboxAttachment.forTab(
                                             assumeNonNull(tab), mContext.getResources()));
                     if (addFailed) {
-                        warnForMaxAttachments();
                         break;
                     }
                 }
@@ -674,10 +662,6 @@ public class FuseboxMediator {
                 .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
-    private void warnForMaxAttachments() {
-        mSnackbarManager.showSnackbar(mAttachmentLimitSnackbar);
-    }
-
     /**
      * Add an attachment to the Fusebox toolbar.
      *
@@ -690,9 +674,7 @@ public class FuseboxMediator {
         }
 
         // Use FuseboxModelList's unified add method.
-        if (!mModelList.add(attachment)) {
-            warnForMaxAttachments();
-        }
+        mModelList.add(attachment);
         maybeActivateAiMode(AiModeActivationSource.IMPLICIT);
     }
 

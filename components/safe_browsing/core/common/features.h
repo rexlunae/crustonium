@@ -50,8 +50,13 @@ extern const base::FeatureParam<double>
 extern const base::FeatureParam<int>
     kAutoRevokeSuspiciousNotificationMinNotificationCount;
 
-// Enables Bundled Security Settings UI on chrome://settings/security
+// Enables Bundled Security Settings UI on chrome://settings/security.
 BASE_DECLARE_FEATURE(kBundledSecuritySettings);
+
+// Enables new Secure DNS V2 UI in Bundled Security Settings UI on the
+// chrome://settings/security page. Requires that kBundledSecuritySettings is
+// also enabled.
+BASE_DECLARE_FEATURE(kBundledSecuritySettingsSecureDnsV2);
 
 // Expand CSPP beyond phishing and trigger when clipboard copy API is called on
 // the page.
@@ -82,6 +87,9 @@ extern const base::FeatureParam<bool> kCsdCreditCardFormEnableHeuristicFilter;
 // Specifies whether to filter credit card CSD pings based on the referring app.
 extern const base::FeatureParam<bool>
     kCsdCreditCardFormEnableReferringAppFilter;
+
+// Deprecate the DOM model and do not onboard to renderer.
+BASE_DECLARE_FEATURE(kClientSideDetectionDeprecateDOMModel);
 
 // Killswitch for Llama forced trigger info redirect chain check.
 BASE_DECLARE_FEATURE(kClientSideDetectionForcedLlamaRedirectChainKillswitch);
@@ -144,6 +152,8 @@ BASE_DECLARE_FEATURE(kClientSideDetectionShowLlamaScamVerdictWarning);
 BASE_DECLARE_FEATURE(kClientSideDetectionShowScamVerdictWarningAndroid);
 #endif
 
+BASE_DECLARE_FEATURE(kClientSideDetectionSkipErrorPage);
+
 // Expand CSPP beyond phishing and trigger when vibration API is called on the
 // web page.
 BASE_DECLARE_FEATURE(kClientSideDetectionVibrationApi);
@@ -199,6 +209,9 @@ BASE_DECLARE_FEATURE(kEnterpriseFileSystemAccessDeepScan);
 // Enables showing an updated Password Reuse UI for enterprise users.
 BASE_DECLARE_FEATURE(kEnterprisePasswordReuseUiRefresh);
 
+// Use a new URL for the enterprise real-time URL check.
+BASE_DECLARE_FEATURE(kEnterpriseRealTimeUrlCheckNewUrl);
+
 // Makes the Enhanced Protection a syncable setting.
 // Check the design doc (go/esb-as-a-synced-setting-dd) for further details.
 BASE_DECLARE_FEATURE(kEsbAsASyncedSetting);
@@ -210,12 +223,6 @@ BASE_DECLARE_FEATURE(kEsbAsASyncedSetting);
 // - features will not depend on the SBER preference value,
 //   safebrowsing.scout_reporting_enabled
 BASE_DECLARE_FEATURE(kExtendedReportingRemovePrefDependency);
-
-// Controls whether Safe Browsing Extended Reporting (SBER) is deprecated for
-// Chrome on iOS.
-// This has the same behavior as kExtendedReportingRemovePrefDependency but
-// is separate for rollout purposes.
-BASE_DECLARE_FEATURE(kExtendedReportingRemovePrefDependencyIos);
 
 // Allows the Extension Telemetry Service to accept and use configurations
 // sent by the server.
@@ -233,6 +240,9 @@ extern const base::FeatureParam<int>
 
 // Enables reporting of external app redirects
 BASE_DECLARE_FEATURE(kExternalAppRedirectTelemetry);
+
+// Enables querying server-side Gemini model for scam detection.
+BASE_DECLARE_FEATURE(kGeminiAntiscamProtectionForMetricsCollection);
 
 // Replace the high confidence allowlist check gating notification warnings with
 // a check of the global cache list specific to safe notification sites.
@@ -300,6 +310,14 @@ BASE_DECLARE_FEATURE_PARAM(bool, kMaliciousApkDownloadCheckTelemetryOnly);
 // Enables one-time migration of enhanced-safe-browsing users to the enhanced
 // bundle.
 BASE_DECLARE_FEATURE(kMigrateEnhancedSbUserToEnhancedBundle);
+
+// When enabled, performs a one-time migration that selects the JavaScript
+// optimizer content setting that automatically blocks the browser from using
+// JavaScript optimizers on unfamiliar sites. Only profiles that have Safe
+// Browsing enabled, have the JavaScript optimizer set to allowed for all sites,
+// and have the kBlockV8OptimizerOnUnfamiliarSitesSetting feature enabled will
+// be eligible for the migration.
+BASE_DECLARE_FEATURE(kMigrateToBlockV8OptimizerOnUnfamiliarSites);
 
 // TODO(crbug.com/449960661): Remove this flag once the MigrateAccountPrefs
 // feature is launched and the regression of users with ESB enhanced protection
@@ -398,6 +416,10 @@ extern const base::FeatureParam<int>
 extern const base::FeatureParam<bool>
     kShowWarningsForSuspiciousNotificationsShouldSwapButtons;
 
+// Controls whether to skip image classification scoring for non-page load
+// triggers.
+BASE_DECLARE_FEATURE(kSkipImageClassificationScoringForNonPageLoadTriggers);
+
 // Controls the daily quota for the suspicious site trigger.
 BASE_DECLARE_FEATURE(kSuspiciousSiteTriggerQuotaFeature);
 
@@ -419,7 +441,7 @@ BASE_DECLARE_FEATURE(kVisualFeaturesSizes);
 
 // keep-sorted end
 
-base::Value::List GetFeatureStatusList();
+base::ListValue GetFeatureStatusList();
 
 }  // namespace safe_browsing
 #endif  // COMPONENTS_SAFE_BROWSING_CORE_COMMON_FEATURES_H_

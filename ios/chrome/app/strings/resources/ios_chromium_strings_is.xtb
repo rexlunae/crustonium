@@ -41,6 +41,9 @@
 <translation id="1707458603865303524">Notaðu Chromium þegar þú ýtir á tengla í skilaboðum eða öðrum forritum.</translation>
 <translation id="1722370509450468186">Aðgangsorðið þitt verður vistað á reikningnum þínum (<ph name="EMAIL" />).</translation>
 <translation id="1747088204252710672">Sérsniðinn straumur, búinn til fyrir þig</translation>
+<translation id="1761196287436320018">Þú náðir hámarksfjölda bókamerkja í Chromium (<ph name="LIMIT" />) og því hafa sum bókamerkin þín ekki verið vistuð á Google-reikningnum enn sem komið er.
+
+Ekki er hægt að vista ný bókamerki á reikningnum þínum fyrr en þú eyðir einhverjum. Ef þú skráir þig út núna verður óvistuðum bókamerkjum eytt.</translation>
 <translation id="1811860791247653035">Hafðu Chromium með í <ph name="FEATURE_NAME_1" /> og <ph name="FEATURE_NAME_2" /> til að fá aðgang að sérsniði og öðrum eiginleikum</translation>
 <translation id="1838412507805038478">Chromium staðfesti að <ph name="ISSUER" /> gaf út vottorð þessa vefsvæðis.</translation>
 <translation id="1839447949248872139">Opnaðu tengla sjálfkrafa í Chromium</translation>
@@ -129,6 +132,7 @@ Prófaðu að bíða í nokkrar mínútur áður en þú skiptir um reikning. Ef
 <translation id="3728124580182886854">Tengdu Chromium við aðrar Google-þjónustur til að sérsníða upplifun þína og fleira</translation>
 <translation id="377649297473651452">Stækkað yfirlit yfir sjálfvirka útfyllingu í Chromium</translation>
 <translation id="3780779443901618967">Varar þig við hættulegum vefsvæðum, jafnvel þeim sem Google hafði enga vitneskju um, með því að greina fleiri gögn frá vefsvæðum en hefðbundin vörn. Þú getur valið að sleppa Chromium-viðvörunum.</translation>
+<translation id="3793136096560888222">Breyttu mynd með Gemini í Chromium</translation>
 <translation id="3805899903892079518">Chromium hefur ekki aðgang að myndunum þínum eða myndskeiðum. Veittu aðgang í iOS Settings &gt; Privacy &gt; Photos.</translation>
 <translation id="3816686541346279443">Chromium býðst til að vista aðgangsorðið þitt.</translation>
 <translation id="3827545470516145620">Þú er með staðlaða öryggisvörn í þessu tæki</translation>
@@ -296,7 +300,6 @@ Aðeins einstaklingar sem eru með aðgangsorðið þitt geta lesið dulkóðuð
 <translation id="7554983317097061001">Ábending frá Chromium: Færðu Chromium á stikuna</translation>
 <translation id="7576863740961052505">Stjórna stillingum Chromium</translation>
 <translation id="7674213385180944843">Opnaðu Stillingar &gt; Persónuvernd &gt; Myndavél &gt; Chromium og kveiktu á myndavélinni.</translation>
-<translation id="7685160423563372998">Búðu til mynd með Gemini í Chromium</translation>
 <translation id="7733418656985455268">Ábending frá Chromium: Leitaðu með Linsu</translation>
 <translation id="7747820849741499258">Leita í Chromium</translation>
 <translation id="7753923083404296545">Opnað í huliðsstillingu Chromium</translation>

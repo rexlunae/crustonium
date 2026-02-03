@@ -16,7 +16,7 @@ import type {SecureDnsInputElement, SettingsSecureDnsV2Element, SecurityPageFeat
 import {SecureDnsV2ResolverType} from 'chrome://settings/lazy_load.js';
 import type {ResolverOption, SettingsToggleButtonElement} from 'chrome://settings/settings.js';
 import {PrivacyPageBrowserProxyImpl, loadTimeData, SecureDnsMode, SecureDnsUiManagementMode} from 'chrome://settings/settings.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {assertEquals, assertNotEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
 
@@ -177,15 +177,11 @@ suite('SettingsSecureDnsV2', function() {
     await testBrowserProxy.whenCalled('getSecureDnsSetting');
     await flushTasks();
 
-    // Access toggle
-    secureDnsToggle =
-        testElement.shadowRoot!.querySelector('#secureDnsToggle')!;
-    assertTrue(!!secureDnsToggle);
+    secureDnsToggle = testElement.$.featureRow;
 
-    // Access expand button
-    const expandButton = secureDnsToggle.$.expandButton;
 
     // Expand the row.
+    const expandButton = secureDnsToggle.$.expandButton;
     expandButton.click();
     await flushTasks();
     assertTrue(isVisible(secureDnsToggle));
@@ -246,7 +242,9 @@ suite('SettingsSecureDnsV2', function() {
       config: '',
       managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
     });
-    flush();
+    testElement.setPrefValue(
+        'dns_over_https.automatic_mode_fallback_to_doh', true);
+    await flushTasks();
     const toggleButton =
         secureDnsToggle.shadowRoot!.querySelector<SettingsToggleButtonElement>(
             '#toggleButton');
@@ -258,8 +256,6 @@ suite('SettingsSecureDnsV2', function() {
 
     // Make sure fallback radio button is selected.
     const fallbackRadioButton = testElement.$.fallbackRadioButton;
-    fallbackRadioButton.click();
-    await flushTasks();
     assertTrue(fallbackRadioButton.checked);
     assertEquals(SecureDnsV2ResolverType.FALLBACK, fallbackRadioButton.name);
   });
@@ -270,7 +266,7 @@ suite('SettingsSecureDnsV2', function() {
       config: resolverList[0]!.value,
       managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
     });
-    flush();
+    await flushTasks();
     const toggleButton =
         secureDnsToggle.shadowRoot!.querySelector<SettingsToggleButtonElement>(
             '#toggleButton');
@@ -282,9 +278,161 @@ suite('SettingsSecureDnsV2', function() {
 
     // Make sure custom radio button is selected.
     const customRadioButton = testElement.$.customRadioButton;
-    customRadioButton.click();
-    await flushTasks();
     assertTrue(customRadioButton.checked);
     assertEquals(SecureDnsV2ResolverType.CUSTOM, customRadioButton.name);
+  });
+
+  test('SecureDnsWarningIcon', async function() {
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.AUTOMATIC,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+    assertFalse(
+        secureDnsToggle.iconVisible,
+        'The icon should not be visible, Secure DNS is ON');
+
+    // Switch to OFF (without enforcement).
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.OFF,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+    assertTrue(secureDnsToggle.iconVisible, 'The icon should be visible');
+
+    // Switch to OFF by enforcement.
+    testElement.prefs.dns_over_https.mode.enforcement =
+        chrome.settingsPrivate.Enforcement.ENFORCED;
+    testElement.prefs.dns_over_https.mode.controlledBy =
+        chrome.settingsPrivate.ControlledBy.DEVICE_POLICY;
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.OFF,
+      config: '',
+      // TODO(crbug.com/440389379): Remove or update this, `managementMode` is
+      // currently unused by the element.
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+    assertFalse(
+        secureDnsToggle.iconVisible,
+        'The icon should not be visible, a policy set Secure DNS to OFF');
+    // TODO(crbug.com/441316657): Add a check for the policy indicator icon.
+  });
+
+  test('RadioButtonsDisabledWhenEnforced', async function() {
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.AUTOMATIC,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    assertNotEquals(
+        testElement.getPref('dns_over_https.mode').enforcement,
+        chrome.settingsPrivate.Enforcement.ENFORCED);
+    assertFalse(testElement.$.automaticRadioButton.disabled);
+    assertFalse(testElement.$.fallbackRadioButton.disabled);
+    assertFalse(testElement.$.customRadioButton.disabled);
+
+    testElement.prefs.dns_over_https.mode.enforcement =
+        chrome.settingsPrivate.Enforcement.ENFORCED;
+    testElement.prefs.dns_over_https.mode.controlledBy =
+        chrome.settingsPrivate.ControlledBy.DEVICE_POLICY;
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.AUTOMATIC,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    assertEquals(
+        testElement.getPref('dns_over_https.mode').enforcement,
+        chrome.settingsPrivate.Enforcement.ENFORCED);
+    assertTrue(testElement.$.automaticRadioButton.disabled);
+    assertTrue(testElement.$.fallbackRadioButton.disabled);
+    assertTrue(testElement.$.customRadioButton.disabled);
+
+    testElement.prefs.dns_over_https.mode.enforcement = null;
+    testElement.prefs.dns_over_https.mode.controlledBy = null;
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.AUTOMATIC,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    assertNotEquals(
+        testElement.getPref('dns_over_https.mode').enforcement,
+        chrome.settingsPrivate.Enforcement.ENFORCED);
+    assertFalse(testElement.$.automaticRadioButton.disabled);
+    assertFalse(testElement.$.fallbackRadioButton.disabled);
+    assertFalse(testElement.$.customRadioButton.disabled);
+  });
+
+  test('SecureDnsFeatureStateStrings', async function() {
+    // Collapse row to see feature state string.
+    secureDnsToggle.$.expandButton.click();
+    await flushTasks();
+
+    const stateOff = loadTimeData.getString('securityFeatureRowStateOff');
+    const stateStandard =
+        loadTimeData.getString('securityFeatureRowStateStandard');
+    const stateEnhanced =
+        loadTimeData.getString('securityFeatureRowStateEnhanced');
+    const stateEnhancedCustom =
+        loadTimeData.getString('securityFeatureRowStateEnhancedCustom');
+
+    // Off toggle.
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.OFF,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    let label = secureDnsToggle.shadowRoot!.querySelector('#stateLabel');
+    assertTrue(!!label);
+    assertEquals(stateOff, label.textContent.trim());
+
+    // Standard Radio Button.
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.AUTOMATIC,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    label = secureDnsToggle.shadowRoot!.querySelector('#stateLabel');
+    assertTrue(!!label);
+    assertEquals(stateStandard, label.textContent.trim());
+
+    // Fallback Radio Button.
+    testElement.setPrefValue(
+        'dns_over_https.automatic_mode_fallback_to_doh', true);
+
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.AUTOMATIC,
+      config: '',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    label = secureDnsToggle.shadowRoot!.querySelector('#stateLabel');
+    assertTrue(!!label);
+    assertEquals(stateEnhanced, label.textContent.trim());
+
+    // Custom Radio Button.
+    webUIListenerCallback('secure-dns-setting-changed', {
+      mode: SecureDnsMode.SECURE,
+      config: 'https://custom.dns',
+      managementMode: SecureDnsUiManagementMode.NO_OVERRIDE,
+    });
+    await flushTasks();
+
+    label = secureDnsToggle.shadowRoot!.querySelector('#stateLabel');
+    assertTrue(!!label);
+    assertEquals(stateEnhancedCustom, label.textContent.trim());
   });
 });

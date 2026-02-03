@@ -91,7 +91,7 @@ void AddCancelButton(ui::DialogModel::Builder* dialog_model_builder,
 // static
 views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
     Browser* browser,
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     MemorySaverBubbleObserver* observer) {
   auto bubble_delegate_unique =
       std::make_unique<MemorySaverBubbleDelegate>(browser, observer);
@@ -112,8 +112,8 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
                        .SetLabel(l10n_util::GetStringUTF16(IDS_OK))
                        .SetId(kMemorySaverDialogOkButton));
 
-  const base::ByteSize memory_savings = base::ByteSize::FromDeprecatedByteCount(
-      memory_saver::GetDiscardedMemorySavings(web_contents));
+  const base::ByteSize memory_savings =
+      memory_saver::GetDiscardedMemorySavings(web_contents);
 
   ui::DialogModelLabel::TextReplacement memory_savings_text =
       ui::DialogModelLabel::CreatePlainText(ui::FormatBytes(memory_savings));
@@ -124,8 +124,7 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
   if (memory_savings > kMemoryUsageThreshold) {
     dialog_model_builder.AddCustomField(
         std::make_unique<views::BubbleDialogModelHost::CustomView>(
-            std::make_unique<MemorySaverResourceView>(
-                memory_savings.AsDeprecatedByteCount()),
+            std::make_unique<MemorySaverResourceView>(memory_savings),
             views::BubbleDialogModelHost::FieldType::kText),
         kMemorySaverDialogResourceViewElementId);
   }
@@ -144,7 +143,7 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
   auto dialog_model = dialog_model_builder.Build();
 
   auto bubble_unique = std::make_unique<views::BubbleDialogModelHost>(
-      std::move(dialog_model), anchor_view, views::BubbleBorder::TOP_RIGHT);
+      std::move(dialog_model), anchor, views::BubbleBorder::TOP_RIGHT);
   auto* bubble = bubble_unique.get();
   auto* const toolbar_button_provider =
       BrowserView::GetBrowserViewForBrowser(browser)->toolbar_button_provider();

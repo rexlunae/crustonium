@@ -45,14 +45,14 @@ class CONTENT_EXPORT GestureListenerManager
   ~GestureListenerManager() override;
 
   void ResetGestureDetection(JNIEnv* env);
-  void SetDoubleTapSupportEnabled(JNIEnv* env, jboolean enabled);
-  void SetMultiTouchZoomSupportEnabled(JNIEnv* env, jboolean enabled);
+  void SetDoubleTapSupportEnabled(JNIEnv* env, bool enabled);
+  void SetMultiTouchZoomSupportEnabled(JNIEnv* env, bool enabled);
   cc::mojom::RootScrollOffsetUpdateFrequency
   root_scroll_offset_update_frequency() const {
     return root_scroll_offset_update_frequency_.value_or(
         cc::mojom::RootScrollOffsetUpdateFrequency::kNone);
   }
-  void SetRootScrollOffsetUpdateFrequency(JNIEnv* env, jint frequency);
+  void SetRootScrollOffsetUpdateFrequency(JNIEnv* env, int32_t frequency);
   void GestureEventAck(const blink::WebGestureEvent& event,
                        blink::mojom::InputEventResultState ack_result);
   void DidStopFlinging();

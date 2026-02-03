@@ -86,6 +86,9 @@
 <translation id="2767464022270041271">Ешқандай құпия сөз сақталмаған. Google Password Manager құпия сөздерді сақтаған кезде оларды тексере алады.</translation>
 <translation id="2788811701191021538">Chrome-дағы "Төлеу әдістерін орнату" бетін ашады.</translation>
 <translation id="2876628302275096482"><ph name="BEGIN_LINK" />Chrome-ның деректеріңізді құпия сақтау жолы<ph name="END_LINK" /> туралы толық ақпарат</translation>
+<translation id="288992067439702510">Google Chrome-ның <ph name="LIMIT" /> бетбелгі шегіне жеттіңіз, сондықтан кейбір бетбелгілер Google аккаунтыңызға әлі сақталмады.
+
+Кейбір бетбелгілерді жоймайынша, аккаунтыңызға жаңа бетбелгілерді сақтау мүмкін емес. Аккаунттан қазір шықсаңыз, сақталмаған бетбелгілер жойылады.</translation>
 <translation id="2922914028977213693">Chrome-ды iPad-та барынша тиімді пайдалану үшін осы жерді түртіңіз.</translation>
 <translation id="292371311537977079">Chrome параметрлері</translation>
 <translation id="2923827943290349720">Chrome браузерін жабу кезінде инкогнито қойындыларын құлыптау</translation>
@@ -304,11 +307,11 @@ Chrome тәжірибесін жақсарту үшін деректерді қ�
 <translation id="7787205077729386167">iOS жүйесінде Chrome параметрлерін ашып, "Әдепкі браузер қолданбасы" түймесін түртіп, Chrome опциясын таңдаңыз.</translation>
 <translation id="778855399387580014">Жаңа Chrome қойындысында іздеуді бастаңыз.</translation>
 <translation id="7792140019572081272">Chrome браузері құпия деректеріңізді Face ID-мен қорғайды.</translation>
+<translation id="7825648984449922731">Chrome-дағы Gemini көмегімен суретті өзгерту</translation>
 <translation id="7855730255114109580">Google Chrome жаңартылған</translation>
 <translation id="787226752901403048">Қойындылар топтарын бөлісу, оларға қосылу және идеялар төңірегінде бірлесіп жұмыс істеу үшін Chrome-ға кіріңіз.</translation>
 <translation id="7897703007638178753">Chrome-дағы соңғы қойындыларды көру</translation>
 <translation id="7948283758957877064">Chrome-дағы жаңалықтар</translation>
-<translation id="7996707498590516621">Chrome-дағы Gemini көмегімен сурет жасау</translation>
 <translation id="8000174216052461231">Chrome кеңесі: Chrome браузерінің ең күшті қорғанысын қолданыңыз</translation>
 <translation id="8006014511203279255">Хабарларда немесе басқа қолданбаларда сілтемелерді түрткенде, Chrome браузері ашылады.</translation>
 <translation id="8014670471808569312">Chrome құпия сөзіңізді сақтауды ұсынады.</translation>

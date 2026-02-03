@@ -43,6 +43,8 @@ BASE_FEATURE(kAnnotatedPageContentAutofillCreditCardRedactions,
 
 namespace {
 
+constexpr char kHasMediaTranscripts[] = "has_media_transcripts";
+
 std::optional<AutofillFieldMetadata> GetAutofillFieldData(
     std::optional<content::GlobalRenderFrameHostToken> source_frame_token,
     ConvertAIPageContentToProtoSession& session,
@@ -178,7 +180,7 @@ optimization_guide::proto::ContentAttributeType ConvertAttributeType(
     case blink::mojom::AIPageContentAttributeType::kImage:
       return optimization_guide::proto::CONTENT_ATTRIBUTE_IMAGE;
     case blink::mojom::AIPageContentAttributeType::kSvgRoot:
-      return optimization_guide::proto::CONTENT_ATTRIBUTE_SVG;
+      return optimization_guide::proto::CONTENT_ATTRIBUTE_SVG_ROOT;
     case blink::mojom::AIPageContentAttributeType::kCanvas:
       return optimization_guide::proto::CONTENT_ATTRIBUTE_CANVAS;
     case blink::mojom::AIPageContentAttributeType::kVideo:
@@ -401,9 +403,9 @@ void ConvertImageInfo(
 
 void ConvertSvgRootData(
     const blink::mojom::AIPageContentSvgRootData& mojom_svg_root_data,
-    optimization_guide::proto::SVGData* proto_svg_data) {
+    optimization_guide::proto::SVGRootData* proto_svg_root_data) {
   if (mojom_svg_root_data.inner_text) {
-    proto_svg_data->set_inner_text(*mojom_svg_root_data.inner_text);
+    proto_svg_root_data->set_inner_text(*mojom_svg_root_data.inner_text);
   }
 }
 
@@ -689,7 +691,7 @@ base::expected<void, std::string> ConvertAttributes(
       return base::unexpected("svg_root_data present, but node isn't kSvgRoot");
     }
     ConvertSvgRootData(*mojom_attributes.svg_root_data,
-                       proto_attributes->mutable_svg_data());
+                       proto_attributes->mutable_svg_root_data());
   } else if (mojom_attributes.canvas_data) {
     if (mojom_attributes.attribute_type !=
         blink::mojom::AIPageContentAttributeType::kCanvas) {
@@ -835,8 +837,13 @@ void ConvertFrameData(
 
   if (render_frame_info.media_data) {
     *proto_frame_data->mutable_media_data() = *render_frame_info.media_data;
+    if (!render_frame_info.media_data->transcripts().empty()) {
+      auto meta_tag = blink::mojom::MetaTag::New();
+      meta_tag->name = kHasMediaTranscripts;
+      meta_tag->content = "true";
+      metadata.frame_metadata.back()->meta_tags.push_back(std::move(meta_tag));
+    }
   }
-
   for (const auto& tool : mojom_frame_data.script_tools) {
     ConvertScriptTool(*tool, proto_frame_data->add_script_tools());
   }

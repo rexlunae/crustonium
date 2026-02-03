@@ -33,8 +33,8 @@
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
-#include "chrome/browser/ui/views/tabs/glic_actor_task_icon.h"
-#include "chrome/browser/ui/views/tabs/glic_button.h"
+#include "chrome/browser/ui/views/tabs/glic/glic_actor_task_icon.h"
+#include "chrome/browser/ui/views/tabs/glic/glic_button.h"
 #include "chrome/browser/ui/views/tabs/tab_search_button.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
@@ -88,20 +88,21 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
 #if BUILDFLAG(ENABLE_GLIC)
             {features::kGlicRollout, {}},
             {features::kGlicFreWarming, {}},
-            {features::kGlicActor, {}},
+            {features::kGlicActor,
+             { {features::kGlicActorPolicyControlExemption.name, "true"} }},
             {features::kGlicActorUi,
              { {features::kGlicActorUiTaskIconName, "true"} }},
+            {features::kGlicActorUiGlobalTaskIndicator, {}},
 #endif  // BUILDFLAG(ENABLE_GLIC)
-            {features::kTabstripComboButton, {}},
             {features::kTabstripDeclutter, {}},
             {contextual_cueing::kContextualCueing, {}},
         },
         {});
-    TabOrganizationUtils::GetInstance()->SetIgnoreOptGuideForTesting(true);
   }
 
 #if BUILDFLAG(ENABLE_GLIC)
   void SetUp() override {
+    TabOrganizationUtils::GetInstance()->SetIgnoreOptGuideForTesting(true);
     // This will temporarily disable preloading.
     glic::GlicProfileManager::SetPrewarmingEnabledForTesting(false);
     fre_server_.ServeFilesFromDirectory(
@@ -162,9 +163,11 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
     return tab_strip_action_container()->glic_actor_task_icon();
   }
 
+#if BUILDFLAG(ENABLE_GLIC)
   views::FlexLayoutView* GlicActorButtonContainer() {
     return tab_strip_action_container()->glic_actor_button_container();
   }
+#endif
 
   void ShowTabStripNudgeButton(TabStripNudgeButton* button) {
     tab_strip_action_container()->ShowTabStripNudge(button);
@@ -250,6 +253,23 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
     clickable_view->OnMouseReleased(ui::MouseEvent(
         ui::EventType::kMouseReleased, gfx::Point(), gfx::Point(),
         ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
+  }
+
+  actor::ActorKeyedService* actor_service() {
+    return actor::ActorKeyedService::Get(browser()->GetProfile());
+  }
+
+  actor::TaskId CreateTask() {
+    actor::TaskId task_id = actor_service()->CreateTask();
+    actor::ActorTask* task = actor_service()->GetTask(task_id);
+    actor::ui::StartTask start_task_event(task_id);
+    actor_service()->GetActorUiStateManager()->OnUiEvent(start_task_event);
+
+    // Add tab to task.
+    base::test::TestFuture<actor::mojom::ActionResultPtr> add_tab_future;
+    task->AddTab(browser()->GetActiveTabInterface()->GetHandle(),
+                 add_tab_future.GetCallback());
+    return task_id;
   }
 
  protected:
@@ -379,7 +399,14 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
   SetLockedExpansionMode(LockedExpansionMode::kWillHide, GlicNudgeButton());
 
   OnButtonDismissed(GlicNudgeButton());
-  EXPECT_TRUE(GetExpansionAnimation(GlicNudgeButton())->IsClosing());
+  if (base::FeatureList::IsEnabled(features::kGlicEntrypointVariations)) {
+    // Animation always runs from 0 to 1, even for dismissal, so IsShowing()
+    // should return true.
+    EXPECT_TRUE(GetExpansionAnimation(GlicNudgeButton())->IsShowing());
+  } else {
+    // TODO(crbug.com/469850069): Clean up GlicEntrypointVariations.
+    EXPECT_TRUE(GetExpansionAnimation(GlicNudgeButton())->IsClosing());
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
@@ -403,6 +430,9 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
 IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest, PreloadFreOnNudge) {
   // We set an artificial activity callback here because it is required for
   // OnTriggerGlicNudgeUI to actually show the nudge.
+  if (base::FeatureList::IsEnabled(features::kGlicTrustFirstOnboarding)) {
+    GTEST_SKIP() << "Skipping for kGlicTrustFirstOnboarding";
+  }
   auto* nudge_controller =
       browser()->browser_window_features()->glic_nudge_controller();
   nudge_controller->SetNudgeActivityCallbackForTesting();
@@ -456,58 +486,6 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
   EXPECT_EQ(0, tab_strip_action_container()
                    ->GetGlicButton()
                    ->width_factor_for_testing());
-}
-
-IN_PROC_BROWSER_TEST_F(
-    TabStripActionContainerBrowserTest,
-    ActivatesTabAndRemoveRowOnGlicActorTaskListBubbleRowClick) {
-  ASSERT_TRUE(embedded_https_test_server().Start());
-  auto* actor_service = actor::ActorKeyedService::Get(browser()->GetProfile());
-  actor_service->GetPolicyChecker().set_act_on_web_for_testing(true);
-  actor::TaskId task_id = actor_service->CreateTask();
-  actor::ActorTask* task = actor_service->GetTask(task_id);
-  actor::ui::StartTask start_task_event(task_id);
-  actor_service->GetActorUiStateManager()->OnUiEvent(start_task_event);
-
-  // Navigate the active tab to a new page.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_https_test_server().GetURL("/actor/blank.html")));
-
-  // Add tab to task.
-  base::test::TestFuture<actor::mojom::ActionResultPtr> add_tab_future;
-  task->AddTab(browser()->GetActiveTabInterface()->GetHandle(),
-               add_tab_future.GetCallback());
-  auto add_tab_result = add_tab_future.Take();
-  ASSERT_TRUE(add_tab_result);
-
-  // Add and activate the non-actuation tab.
-  ASSERT_TRUE(AddTabAtIndexToBrowser(browser(), 1,
-                                     GURL(chrome::kChromeUINewTabURL),
-                                     ui::PAGE_TRANSITION_LINK));
-  browser()->GetTabStripModel()->ActivateTabAt(1);
-
-  actor_service->GetTask(task_id)->Pause(/*from_actor=*/true);
-  ASSERT_TRUE(base::test::RunUntil(
-      [&] { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
-
-  ResetAnimation(1);
-
-  auto* bubble_controller = ActorTaskListBubbleController::From(browser());
-  auto* content_view = bubble_controller->GetBubbleWidget()
-                           ->widget_delegate()
-                           ->AsBubbleDialogDelegate()
-                           ->GetContentsView();
-  EXPECT_EQ(1u, content_view->children().size());
-  auto* button = static_cast<RichHoverButton*>(
-      content_view->children().front()->children().front());
-  Click(button);
-
-  // Nudge should hide and row list should be emptied.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&] { return !GlicActorTaskIcon()->GetIsShowingNudge(); }));
-  auto* manager = tabs::GlicActorTaskIconManagerFactory::GetForProfile(
-      browser()->GetProfile());
-  EXPECT_EQ(0u, manager->GetActorTaskListBubbleRows().size());
 }
 
 IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
@@ -589,40 +567,250 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
-                       LogsWhenGlicActorTaskNudgeClicked) {
-  base::HistogramTester histogram_tester;
+                       ShowAndHideGlicActorCheckTasksNudge) {
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
+  ASSERT_FALSE(tab_strip_action_container()->animation_session_for_testing());
   EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
-  ASSERT_THAT(GlicActorButtonContainer()->children(), SizeIs(1));
+
+  actor::TaskId task_id = CreateTask();
+
+  actor_service()->GetTask(task_id)->Pause(/*from_actor=*/true);
+  EXPECT_TRUE(
+      RunUntil([&]() { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
+            l10n_util::GetPluralStringFUTF16(
+                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 1));
+
+  ResetAnimation(1);
+
+  actor_service()->GetTask(task_id)->Resume();
+
+  EXPECT_TRUE(
+      RunUntil([&]() { return !GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
+}
+
+IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
+                       ResetGlicActorTaskNudgeOnCheckTaskToActiveStateChange) {
+  base::HistogramTester histogram_tester;
+  actor::TaskId task_id = CreateTask();
+
+  actor_service()->GetTask(task_id)->Pause(/*from_actor=*/true);
+
+  EXPECT_TRUE(
+      RunUntil([&]() { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
+            l10n_util::GetPluralStringFUTF16(
+                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 1));
+
+  ResetAnimation(1);
+
+  actor_service()->GetTask(task_id)->Resume();
+
+  EXPECT_TRUE(
+      RunUntil([&]() { return !GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  // Ensure the shown histogram was not recorded as the default state doesn't
+  // show a nudge.
+  EXPECT_EQ(
+      histogram_tester.GetBucketCount("Actor.Ui.TaskNudge.Shown",
+                                      ActorTaskNudgeState::Text::kDefault),
+      0);
+  // Check that Task Icon remains in the GlicActorButtonContainer.
+  ASSERT_THAT(GlicActorButtonContainer()->children(), SizeIs(3));
+  EXPECT_EQ(GlicActorTaskIcon(), GlicActorButtonContainer()->children()[2]);
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
+  EXPECT_FALSE(GlicActorTaskIcon()->GetIsShowingNudge());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    TabStripActionContainerBrowserTest,
+    GlicActorNudgeDoesNotRetriggerOnSingleTaskNeedsAttentionToMultipleTextChange) {
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
+  ASSERT_FALSE(tab_strip_action_container()->animation_session_for_testing());
+  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
+
+  actor::TaskId task_id = CreateTask();
+
+  actor_service()->GetTask(task_id)->Pause(/*from_actor=*/true);
+
+  EXPECT_TRUE(
+      RunUntil([&]() { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
+            l10n_util::GetPluralStringFUTF16(
+                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 1));
+
+  ResetAnimation(1);
+
+  actor::TaskId task_id2 = CreateTask();
+
+  actor_service()->GetTask(task_id2)->Pause(/*from_actor=*/true);
+
+  auto* manager = tabs::GlicActorTaskIconManagerFactory::GetForProfile(
+      browser()->GetProfile());
+  EXPECT_TRUE(RunUntil(
+      [&]() { return manager->actor_task_list_bubble_rows().size() == 2; }));
+  EXPECT_TRUE(
+      RunUntil([&]() { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
+            l10n_util::GetPluralStringFUTF16(
+                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 2));
+}
+
+class GlicActorGlobalFlagEnabledBrowserTest
+    : public TabStripActionContainerBrowserTest {
+ public:
+  GlicActorGlobalFlagEnabledBrowserTest() {
+    features_.InitWithFeaturesAndParameters(
+        {
+            {features::kTabOrganization, {}},
+            {features::kGlicRollout, {}},
+            {features::kGlicFreWarming, {}},
+            {features::kGlicActorUiGlobalTaskIndicator, {}},
+            {features::kGlicActor,
+             {{features::kGlicActorPolicyControlExemption.name, "true"}}},
+            {features::kGlicActorUi,
+             {{features::kGlicActorUiTaskIconName, "true"}}},
+            {features::kTabstripDeclutter, {}},
+            {contextual_cueing::kContextualCueing, {}},
+        },
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList features_;
+};
+
+IN_PROC_BROWSER_TEST_F(GlicActorGlobalFlagEnabledBrowserTest,
+                       GlicActorCompleteShowsNudgeWithGlobalFlagEnabled) {
+  base::HistogramTester histogram_tester;
+  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
+  ASSERT_FALSE(tab_strip_action_container()->animation_session_for_testing());
+  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
 
   auto* actor_service = actor::ActorKeyedService::Get(browser()->GetProfile());
-  actor_service->GetPolicyChecker().set_act_on_web_for_testing(true);
   actor::TaskId task_id = actor_service->CreateTask();
-  actor::ActorTask* task = actor_service->GetTask(task_id);
+  actor::ui::StartTask start_task_event(task_id);
+  actor_service->GetActorUiStateManager()->OnUiEvent(start_task_event);
+  actor_service->StopTask(task_id,
+                          actor::ActorTask::StoppedReason::kTaskComplete);
+
+  ASSERT_TRUE(RunUntil([&]() {
+    return GlicActorTaskIcon()->GetText() ==
+           l10n_util::GetPluralStringFUTF16(
+               IDS_ACTOR_TASK_NUDGE_TASK_COMPLETE_LABEL, 1);
+  }));
+  EXPECT_TRUE(GlicActorButtonContainer()->GetVisible());
+  EXPECT_TRUE(GlicActorTaskIcon()->GetIsShowingNudge());
+  EXPECT_EQ(histogram_tester.GetBucketCount(
+                "Actor.Ui.GlobalTaskIndicator.Nudge.Shown",
+                ActorTaskNudgeState::Text::kCompleteTasks),
+            1);
+}
+
+IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
+                       LogsWhenGlicActorTaskIconClicked) {
+  base::HistogramTester histogram_tester;
+  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
+  ASSERT_THAT(GlicActorButtonContainer()->children(), SizeIs(2));
+
+  actor::TaskId task_id = CreateTask();
 
   auto* manager = tabs::GlicActorTaskIconManagerFactory::GetForProfile(
       browser()->GetProfile());
 
-  task->SetState(actor::ActorTask::State::kActing);
-  task->Interrupt();
+  actor_service()->GetTask(task_id)->SetState(actor::ActorTask::State::kActing);
+  actor_service()->GetTask(task_id)->Interrupt();
   manager->UpdateTaskIconComponents(task_id);
 
-  EXPECT_TRUE(RunUntil([&]() { return GlicActorTaskIcon()->GetVisible(); }));
+  EXPECT_TRUE(
+      RunUntil([&]() { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
   EXPECT_TRUE(GlicActorButtonContainer()->GetVisible());
-  EXPECT_TRUE(GlicActorTaskIcon()->GetIsShowingNudge());
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return histogram_tester.GetBucketCount(
-               "Actor.Ui.TaskNudge.Shown",
+               "Actor.Ui.GlobalTaskIndicator.Nudge.Shown",
                ActorTaskNudgeState::Text::kNeedsAttention) == 1;
   }));
 
   base::UserActionTester user_action_tester;
   OnButtonClicked(GlicActorTaskIcon());
   EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "Actor.Ui.GlobalTaskIndicator.NeedsAttention.Click"));
+
+  // Ensure no traffic is going to the TaskNudge metrics.
+  EXPECT_EQ(histogram_tester.GetBucketCount(
+                "Actor.Ui.TaskNudge.Shown",
+                ActorTaskNudgeState::Text::kNeedsAttention),
+            0);
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
                    "Actor.Ui.TaskNudge.NeedsAttention.Click"));
 }
 
-IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
+class GlicActorGlobalFlagDisabledBrowserTest
+    : public TabStripActionContainerBrowserTest {
+ public:
+  GlicActorGlobalFlagDisabledBrowserTest() {
+    features_.InitWithFeaturesAndParameters(
+        {
+            {features::kTabOrganization, {}},
+            {features::kGlicRollout, {}},
+            {features::kGlicFreWarming, {}},
+            {features::kGlicActor,
+             {{features::kGlicActorPolicyControlExemption.name, "true"}}},
+            {features::kGlicActorUi,
+             {{features::kGlicActorUiTaskIconName, "true"}}},
+            {features::kTabstripDeclutter, {}},
+            {contextual_cueing::kContextualCueing, {}},
+        },
+        {features::kGlicActorUiGlobalTaskIndicator});
+  }
+
+ private:
+  base::test::ScopedFeatureList features_;
+};
+
+// TODO(crbug.com/444706814): Fix flaky test for Linux or remove when feature is
+// launched.
+IN_PROC_BROWSER_TEST_F(
+    GlicActorGlobalFlagDisabledBrowserTest,
+    ActivatesTabAndRemoveRowOnGlicActorTaskListBubbleRowClick) {
+  ASSERT_TRUE(embedded_https_test_server().Start());
+  // Navigate the active tab to a new page.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_https_test_server().GetURL("/actor/blank.html")));
+  actor::TaskId task_id = CreateTask();
+
+  // Add and activate the non-actuation tab.
+  ASSERT_TRUE(AddTabAtIndexToBrowser(browser(), 1,
+                                     GURL(chrome::kChromeUINewTabURL),
+                                     ui::PAGE_TRANSITION_LINK));
+  browser()->GetTabStripModel()->ActivateTabAt(1);
+
+  actor_service()->GetTask(task_id)->Pause(/*from_actor=*/true);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
+
+  ResetAnimation(1);
+
+  auto* bubble_controller = ActorTaskListBubbleController::From(browser());
+  auto* content_view = bubble_controller->GetBubbleWidget()
+                           ->widget_delegate()
+                           ->AsBubbleDialogDelegate()
+                           ->GetContentsView();
+  EXPECT_EQ(1u, content_view->children().size());
+  auto* button = static_cast<RichHoverButton*>(
+      content_view->children().front()->children().front());
+  Click(button);
+
+  // Nudge should hide and row list should be emptied.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  auto* manager = tabs::GlicActorTaskIconManagerFactory::GetForProfile(
+      browser()->GetProfile());
+  EXPECT_EQ(0u, manager->actor_task_list_bubble_rows().size());
+}
+
+IN_PROC_BROWSER_TEST_F(GlicActorGlobalFlagDisabledBrowserTest,
                        GlicActorCompleteDoesNotShowTaskNudge) {
   base::HistogramTester histogram_tester;
   EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
@@ -646,124 +834,34 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
             0);
 }
 
-IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
-                       ShowAndHideGlicActorCheckTasksNudge) {
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
-  ASSERT_FALSE(tab_strip_action_container()->animation_session_for_testing());
-  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
-
-  auto* actor_nudge_controller =
-      tabs::GlicActorNudgeController::From(browser());
-  auto actor_task_nudge_state = ActorTaskNudgeState();
-  actor_task_nudge_state.text = ActorTaskNudgeState::Text::kNeedsAttention;
-  actor_task_nudge_state.task_list_size = 1;
-  actor_nudge_controller->OnStateUpdate(actor_task_nudge_state);
-
-  ASSERT_TRUE(RunUntil([&]() {
-    return tab_strip_action_container()
-        ->animation_session_for_testing()
-        ->expansion_animation()
-        ->IsShowing();
-  }));
-  EXPECT_TRUE(RunUntil([&]() { return GlicActorTaskIcon()->GetVisible(); }));
-  EXPECT_TRUE(GlicActorButtonContainer()->GetVisible());
-  EXPECT_TRUE(GlicActorTaskIcon()->GetIsShowingNudge());
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
-            l10n_util::GetPluralStringFUTF16(
-                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 1));
-
-  ResetAnimation(1);
-
-  actor_task_nudge_state.text = ActorTaskNudgeState::Text::kDefault;
-  actor_nudge_controller->OnStateUpdate(actor_task_nudge_state);
-
-  EXPECT_TRUE(RunUntil([&]() { return !GlicActorTaskIcon()->GetVisible(); }));
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
-  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
-  EXPECT_FALSE(GlicActorTaskIcon()->GetIsShowingNudge());
-}
-
-IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
-                       ResetGlicActorTaskNudgeOnCheckTaskToActiveStateChange) {
+IN_PROC_BROWSER_TEST_F(GlicActorGlobalFlagDisabledBrowserTest,
+                       LogsWhenGlicActorTaskNudgeClicked) {
   base::HistogramTester histogram_tester;
-  auto* actor_nudge_controller =
-      tabs::GlicActorNudgeController::From(browser());
-  auto actor_task_nudge_state = ActorTaskNudgeState();
-  actor_task_nudge_state.text = ActorTaskNudgeState::Text::kNeedsAttention;
-  actor_task_nudge_state.task_list_size = 1;
-  actor_nudge_controller->OnStateUpdate(actor_task_nudge_state);
+  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
+  ASSERT_THAT(GlicActorButtonContainer()->children(), SizeIs(2));
 
-  ASSERT_TRUE(RunUntil([&]() {
-    return tab_strip_action_container()
-        ->animation_session_for_testing()
-        ->expansion_animation()
-        ->IsShowing();
+  actor::TaskId task_id = CreateTask();
+
+  auto* manager = tabs::GlicActorTaskIconManagerFactory::GetForProfile(
+      browser()->GetProfile());
+
+  actor_service()->GetTask(task_id)->SetState(actor::ActorTask::State::kActing);
+  actor_service()->GetTask(task_id)->Interrupt();
+  manager->UpdateTaskIconComponents(task_id);
+
+  EXPECT_TRUE(
+      RunUntil([&]() { return GlicActorTaskIcon()->GetIsShowingNudge(); }));
+  EXPECT_TRUE(GlicActorButtonContainer()->GetVisible());
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount(
+               "Actor.Ui.TaskNudge.Shown",
+               ActorTaskNudgeState::Text::kNeedsAttention) == 1;
   }));
 
-  EXPECT_TRUE(RunUntil([&]() { return GlicActorTaskIcon()->GetVisible(); }));
-  EXPECT_TRUE(GlicActorButtonContainer()->GetVisible());
-  EXPECT_TRUE(GlicActorTaskIcon()->GetIsShowingNudge());
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
-            l10n_util::GetPluralStringFUTF16(
-                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 1));
-
-  ResetAnimation(1);
-
-  actor_task_nudge_state.text = ActorTaskNudgeState::Text::kDefault;
-  actor_nudge_controller->OnStateUpdate(actor_task_nudge_state);
-
-  EXPECT_TRUE(RunUntil([&]() { return !GlicActorTaskIcon()->GetVisible(); }));
-  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
-  // Ensure the shown histogram was not recorded as the default state doesn't
-  // show a nudge.
-  EXPECT_EQ(
-      histogram_tester.GetBucketCount("Actor.Ui.TaskNudge.Shown",
-                                      ActorTaskNudgeState::Text::kDefault),
-      0);
-  // Check that GlicButton was removed from the GlicActorButtonContainer.
-  ASSERT_THAT(GlicActorButtonContainer()->children(), SizeIs(1));
-  EXPECT_EQ(GlicActorTaskIcon(), GlicActorButtonContainer()->children()[0]);
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
-  EXPECT_FALSE(GlicActorTaskIcon()->GetIsShowingNudge());
-}
-
-IN_PROC_BROWSER_TEST_F(
-    TabStripActionContainerBrowserTest,
-    GlicActorNudgeDoesNotRetriggerOnSingleTaskNeedsAttentionToMultipleTextChange) {
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(), std::u16string());
-  ASSERT_FALSE(tab_strip_action_container()->animation_session_for_testing());
-  EXPECT_FALSE(GlicActorButtonContainer()->GetVisible());
-
-  auto* actor_nudge_controller =
-      tabs::GlicActorNudgeController::From(browser());
-  auto actor_task_nudge_state = ActorTaskNudgeState();
-  actor_task_nudge_state.text = ActorTaskNudgeState::Text::kNeedsAttention;
-  actor_task_nudge_state.task_list_size = 1;
-  actor_nudge_controller->OnStateUpdate(actor_task_nudge_state);
-
-  ASSERT_TRUE(RunUntil([&]() {
-    return tab_strip_action_container()
-        ->animation_session_for_testing()
-        ->expansion_animation()
-        ->IsShowing();
-  }));
-
-  EXPECT_TRUE(RunUntil([&]() { return GlicActorTaskIcon()->GetVisible(); }));
-  EXPECT_TRUE(GlicActorButtonContainer()->GetVisible());
-  EXPECT_TRUE(GlicActorTaskIcon()->GetIsShowingNudge());
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
-            l10n_util::GetPluralStringFUTF16(
-                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 1));
-
-  ResetAnimation(1);
-
-  actor_task_nudge_state.task_list_size = 2;
-  actor_nudge_controller->OnStateUpdate(actor_task_nudge_state);
-
-  EXPECT_TRUE(RunUntil([&]() { return GlicActorTaskIcon()->GetVisible(); }));
-  EXPECT_TRUE(GlicActorTaskIcon()->GetIsShowingNudge());
-  EXPECT_EQ(GlicActorTaskIcon()->GetText(),
-            l10n_util::GetPluralStringFUTF16(
-                IDS_ACTOR_TASK_NUDGE_CHECK_TASK_LABEL, 2));
+  base::UserActionTester user_action_tester;
+  OnButtonClicked(GlicActorTaskIcon());
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "Actor.Ui.TaskNudge.NeedsAttention.Click"));
 }
 #endif  // BUILDFLAG(ENABLE_GLIC)

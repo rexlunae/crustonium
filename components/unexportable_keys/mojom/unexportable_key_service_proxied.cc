@@ -25,14 +25,6 @@
 
 namespace unexportable_keys {
 namespace {
-ServiceErrorOr<void> AdaptErrorOrVoid(
-    const std::optional<ServiceError> result) {
-  if (result.has_value()) {
-    return base::unexpected(*result);
-  } else {
-    return base::ok();
-  }
-}
 
 ServiceErrorOr<size_t> AdaptSizeType(ServiceErrorOr<uint64_t> result) {
   return result.transform(
@@ -136,22 +128,6 @@ void UnexportableKeyServiceProxied::OnKeyLoaded(
   std::move(original_callback).Run(key_id);
 }
 
-void UnexportableKeyServiceProxied::CopyKeyFromOtherService(
-    const UnexportableKeyService& other_service,
-    UnexportableKeyId key_id_from_other_service,
-    BackgroundTaskPriority priority,
-    base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback) {
-  ServiceErrorOr<std::vector<uint8_t>> wrapped_key =
-      other_service.GetWrappedKey(key_id_from_other_service);
-  if (!wrapped_key.has_value()) {
-    std::move(callback).Run(base::unexpected(wrapped_key.error()));
-    return;
-  }
-
-  // TODO(crbug.com/455538141): - Implement key copy in the task manager.
-  FromWrappedSigningKeySlowlyAsync(*wrapped_key, priority, std::move(callback));
-}
-
 void UnexportableKeyServiceProxied::SignSlowlyAsync(
     const UnexportableKeyId key_id,
     base::span<const uint8_t> data,
@@ -206,19 +182,22 @@ ServiceErrorOr<base::Time> UnexportableKeyServiceProxied::GetCreationTime(
   return it->second.creation_time;
 }
 
-void UnexportableKeyServiceProxied::DeleteKeySlowlyAsync(
-    UnexportableKeyId key_id,
+void UnexportableKeyServiceProxied::DeleteKeysSlowlyAsync(
+    base::span<const UnexportableKeyId> key_ids,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(ServiceErrorOr<void>)> callback) {
-  if (!key_cache_.contains(key_id)) {
+    base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) {
+  auto to_delete = base::ToVector(key_ids);
+  std::erase_if(to_delete, [&](UnexportableKeyId key_id) {
+    return key_cache_.erase(key_id) == 0;
+  });
+
+  if (to_delete.empty()) {
     std::move(callback).Run(base::unexpected(ServiceError::kKeyNotFound));
     return;
   }
-  key_cache_.erase(key_id);
 
-  remote_->DeleteKey(
-      key_id, priority,
-      base::BindOnce(&AdaptErrorOrVoid).Then(std::move(callback)));
+  remote_->DeleteKeys(to_delete, priority,
+                      base::BindOnce(&AdaptSizeType).Then(std::move(callback)));
 }
 
 void UnexportableKeyServiceProxied::DeleteAllKeysSlowlyAsync(

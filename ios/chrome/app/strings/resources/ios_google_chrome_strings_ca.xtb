@@ -86,6 +86,9 @@ Prova d'esperar uns quants minuts abans de tancar la sessió. Si tanques la sess
 <translation id="2767464022270041271">No hi ha cap contrasenya desada. El gestor de contrasenyes de Google pot comprovar les teves contrasenyes quan les deses.</translation>
 <translation id="2788811701191021538">Obre la pàgina de configuració de les formes de pagament a Chrome.</translation>
 <translation id="2876628302275096482">Més informació sobre <ph name="BEGIN_LINK" />com Chrome manté la privadesa de les teves dades<ph name="END_LINK" /></translation>
+<translation id="288992067439702510">Has arribat al límit de <ph name="LIMIT" /> adreces d'interès de Google Chrome, de manera que algunes encara no s'han desat al teu Compte de Google.
+
+No es poden desar adreces d'interès noves al teu compte fins que no en suprimeixis algunes. Si tanques la sessió ara, se suprimiran les adreces d'interès no desades.</translation>
 <translation id="2922914028977213693">Toca aquí per treure el màxim profit de Chrome a l'iPad.</translation>
 <translation id="292371311537977079">Configuració de Chrome</translation>
 <translation id="2923827943290349720">Bloqueja les pestanyes d'incògnit després de tancar Chrome</translation>
@@ -304,11 +307,11 @@ Per veure més opcions de configuració que utilitzin dades per millorar la teva
 <translation id="7787205077729386167">Obre la configuració de Chrome a iOS, toca Aplicació de navegador predeterminada i selecciona Chrome.</translation>
 <translation id="778855399387580014">Inicia una cerca en una pestanya nova de Chrome.</translation>
 <translation id="7792140019572081272">Chrome protegeix les teves dades sensibles amb Face ID.</translation>
+<translation id="7825648984449922731">Edita la imatge amb Gemini a Chrome</translation>
 <translation id="7855730255114109580">Google Chrome està actualitzat</translation>
 <translation id="787226752901403048">Inicia la sessió a Chrome per compartir grups de pestanyes, unir-t'hi i col·laborar en idees</translation>
 <translation id="7897703007638178753">Mostra les pestanyes recents de Chrome</translation>
 <translation id="7948283758957877064">Novetats de Chrome</translation>
-<translation id="7996707498590516621">Crea una imatge amb Gemini a Chrome</translation>
 <translation id="8000174216052461231">Consell de Chrome: obtén la seguretat més efectiva de Chrome</translation>
 <translation id="8006014511203279255">Utilitza Chrome cada vegada que toquis enllaços en missatges o en altres aplicacions.</translation>
 <translation id="8014670471808569312">Chrome t'oferirà desar la contrasenya.</translation>

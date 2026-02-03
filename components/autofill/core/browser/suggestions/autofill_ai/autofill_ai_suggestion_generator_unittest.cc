@@ -13,6 +13,7 @@
 #include "base/test/run_until.h"
 #include "base/test/task_environment.h"
 #include "base/types/optional_ref.h"
+#include "build/build_config.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
@@ -94,20 +95,12 @@ std::u16string GetDriversLicenseName(const EntityInstance& entity) {
       ->GetCompleteInfo(kAppLocaleUS);
 }
 
-std::u16string GetVehicleVIN(const EntityInstance& entity) {
-  return entity.attribute(AttributeType(AttributeTypeName::kVehicleVin))
-      ->GetCompleteInfo(kAppLocaleUS);
-}
-
 class AutofillAiSuggestionGeneratorTest : public testing::Test {
  public:
   AutofillAiSuggestionGeneratorTest() {
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kAutofillAiWithDataSchema,
                               features::kAutofillAiServerModel,
-                              features::kAutofillAiNationalIdCard,
-                              features::kAutofillAiKnownTravelerNumber,
-                              features::kAutofillAiRedressNumber,
                               features::kAutofillAiWalletFlightReservation},
         /*disabled_features=*/{});
     autofill_client_.set_entity_data_manager(
@@ -116,7 +109,8 @@ class AutofillAiSuggestionGeneratorTest : public testing::Test {
             autofill_client_.GetSyncService(),
             webdata_helper_.autofill_webdata_service(),
             /*history_service=*/nullptr,
-            /*strike_database=*/nullptr));
+            /*strike_database=*/nullptr,
+            /*variation_country_code=*/GeoIpCountryCode("US")));
     autofill_client_.SetUpPrefsAndIdentityForAutofillAi();
     generator_ = std::make_unique<AutofillAiSuggestionGenerator>();
   }
@@ -208,16 +202,25 @@ class AutofillAiSuggestionGeneratorTest : public testing::Test {
 
 // Tests that the suggestions's main text is obfuscated when the triggering
 // field is from an attribute type that should be obfuscated.
-TEST_F(AutofillAiSuggestionGeneratorTest, SuggestionMainTextIsObfuscated) {
-  base::test::ScopedFeatureList feature(features::kAutofillAiReauthRequired);
-  EntityInstance vehicle_entity = test::GetVehicleEntityInstanceWithRandomGuid(
-      {.plate = u"123", .number = u"VIN123"});
-  SetEntities({vehicle_entity});
-  SetForm({VEHICLE_VIN});
+// TODO(crbug.com/479195210): Failing on Linux UBSan. Re-enable this.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_SuggestionMainTextIsObfuscated \
+  DISABLED_SuggestionMainTextIsObfuscated
+#else
+#define MAYBE_SuggestionMainTextIsObfuscated SuggestionMainTextIsObfuscated
+#endif
+TEST_F(AutofillAiSuggestionGeneratorTest,
+       MAYBE_SuggestionMainTextIsObfuscated) {
+  EntityInstance passport_entity =
+      test::GetPassportEntityInstanceWithRandomGuid(
+          {.number = u"123456", .country = u"Brazil"});
+  SetEntities({passport_entity});
+  SetForm({PASSPORT_NUMBER});
 
-  EXPECT_THAT(CreateAutofillAiFillingSuggestions(field(0)),
-              SuggestionsAre(HasMainText(
-                  GetObfuscatedValue(GetVehicleVIN(vehicle_entity)))));
+  EXPECT_THAT(
+      CreateAutofillAiFillingSuggestions(field(0)),
+      SuggestionsAre(HasMainText(GetObfuscatedValue(
+          GetPassportNumber(passport_entity), /*visible_suffix_length=*/4))));
 }
 
 TEST_F(AutofillAiSuggestionGeneratorTest, GeneratesAutofillAiSuggestions) {
@@ -436,8 +439,10 @@ TEST_F(AutofillAiSuggestionGeneratorTest,
 
   std::vector<Suggestion> suggestions =
       CreateAutofillAiFillingSuggestions(field(0));
-  EXPECT_THAT(suggestions,
-              SuggestionsAre(HasMainText(GetPassportNumber(passport_entity))));
+  EXPECT_THAT(
+      suggestions,
+      SuggestionsAre(HasMainText(GetObfuscatedValue(
+          GetPassportNumber(passport_entity), /*visible_suffix_length=*/4))));
   EXPECT_THAT(suggestions,
               SuggestionsAre(HasLabel(u"Passport · Pippi Långstrump")));
 

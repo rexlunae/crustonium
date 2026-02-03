@@ -5,7 +5,8 @@
 #import "ios/chrome/browser/app_bar/ui/app_bar_view_controller.h"
 
 #import "ios/chrome/browser/app_bar/ui/app_bar_mutator.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
+#import "ios/chrome/browser/intents/model/intents_donation_helper.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/ui/buildflags.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
@@ -130,7 +131,7 @@ UIImage* CustomAppBarSymbol(NSString* symbol_name) {
   UIButton* button = [self buttonWithTitle:title image:image];
 
   [button addTarget:self
-                action:@selector(didTapOpenNewTabButton)
+                action:@selector(didTapOpenNewTabButton:)
       forControlEvents:UIControlEventTouchUpInside];
   return button;
 }
@@ -149,6 +150,9 @@ UIImage* CustomAppBarSymbol(NSString* symbol_name) {
   };
   button.configuration = configuration;
 
+  [button addTarget:self
+                action:@selector(tabGridButtonTouchDown)
+      forControlEvents:UIControlEventTouchDown];
   [button addTarget:self
                 action:@selector(didTapTabGridButton)
       forControlEvents:UIControlEventTouchUpInside];
@@ -215,17 +219,23 @@ UIImage* CustomAppBarSymbol(NSString* symbol_name) {
 
 // Called when the Assistant button is tapped.
 - (void)didTapAssistantButton {
-  [self.applicationHandler showAssistant];
+  [self.sceneHandler showAssistant];
 }
 
 // Called when the New Tab button is tapped.
-- (void)didTapOpenNewTabButton {
-  [self.mutator createNewTab];
+- (void)didTapOpenNewTabButton:(UIView*)sender {
+  [self.mutator createNewTabFromView:sender];
+}
+
+// Called when the Tab Grid button has a touch down.
+- (void)tabGridButtonTouchDown {
+  [IntentDonationHelper donateIntent:IntentType::kOpenTabGrid];
+  [self.sceneHandler prepareTabSwitcher];
 }
 
 // Called when the Tab Grid button is tapped.
 - (void)didTapTabGridButton {
-  // TODO(crbug.com/472279443): Implement.
+  [self.sceneHandler displayTabGridInMode:TabGridOpeningMode::kDefault];
 }
 
 @end

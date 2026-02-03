@@ -26,7 +26,6 @@
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/input/native_web_keyboard_event.h"
-#include "components/zoom/zoom_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -105,15 +104,6 @@ void OmniboxPopupWebUIBaseContent::ShowUI() {
   }
   SetWebContents(contents_wrapper_->web_contents());
 
-  // The content height is reset to 1 in OmniboxPopupPresenter::Hide(), so we
-  // need to manually restore it from the cached preferred size of the WebView
-  // if the renderer doesn't trigger a new auto-resize event (which it won't
-  // if the size hasn't changed).
-  const gfx::Size preferred_size = GetPreferredSize();
-  if (!preferred_size.IsEmpty()) {
-    popup_presenter_->OnContentHeightChanged(preferred_size.height());
-  }
-
   is_shown_ = true;
 }
 
@@ -135,9 +125,27 @@ void OmniboxPopupWebUIBaseContent::ResizeDueToAutoResize(
     content::WebContents* source,
     const gfx::Size& new_size) {
   WebView::ResizeDueToAutoResize(source, new_size);
-  if (GetVisible()) {
-    popup_presenter_->OnContentHeightChanged(new_size.height());
-  }
+  // Debounce the resize event by 2 frame's time (assuming 60 Hz) to avoid
+  // flickering issues when the renderer sends a transient initial size.
+  // The issue is manifested as the popup being clipped at the top.
+  // This happens when:
+  // 1. Widget::Show() is called, then
+  // 2. SetBounds() is called with a smaller height.
+  // 3. a new frame is not generated timely after resize.
+  // As a result, the widget displays an old image that has an taller height,
+  // hence clipped.
+  //
+  // This debouncer suppresses the resize in step #2. The resize comes
+  // from the state when the WebUI document briefly contains empty suggestion
+  // result.
+  //
+  // TODO(crbug.com/474369306): there is a race condition between widget show
+  // and WebUI document update. The widget is shown too early. Remove the
+  // debouncer after making the JS initiate the widget show.
+  debounce_resize_timer_.Start(
+      FROM_HERE, base::Seconds(2) / 60,
+      base::BindOnce(&OmniboxPopupPresenterBase::OnContentHeightChanged,
+                     base::Unretained(popup_presenter_), new_size.height()));
 }
 
 bool OmniboxPopupWebUIBaseContent::HandleKeyboardEvent(
@@ -173,28 +181,20 @@ void OmniboxPopupWebUIBaseContent::LoadContent() {
   SetWebContents(contents_wrapper_->web_contents());
   extensions::SetViewType(contents_wrapper_->web_contents(),
                           extensions::mojom::ViewType::kComponent);
-  webui::SetBrowserWindowInterface(contents_wrapper_->web_contents(),
-                                   location_bar_view_->browser());
-
-  tab_selection_listener_ = std::make_unique<OmniboxPopupTabSelectionListener>(
-      weak_factory_.GetWeakPtr(),
-      location_bar_view_->browser()->tab_strip_model());
+  // LocationBarView can be instantiated in windows that do not have a
+  // Browser object (i.e Captive Portal). In that case, features depending on
+  // the browser are not supported and should be skipped.
+  if (Browser* browser = location_bar_view_->browser()) {
+    webui::SetBrowserWindowInterface(contents_wrapper_->web_contents(),
+                                     browser);
+    tab_selection_listener_ =
+        std::make_unique<OmniboxPopupTabSelectionListener>(
+            weak_factory_.GetWeakPtr(), browser->tab_strip_model());
+  }
   // Make the OmniboxController available to the OmniboxPopupUI.
   OmniboxPopupWebContentsHelper::CreateForWebContents(GetWebContents());
   OmniboxPopupWebContentsHelper::FromWebContents(GetWebContents())
       ->set_omnibox_controller(controller_);
-
-  // Manually set zoom level, since any zooming is undesirable in the omnibox.
-  auto* zoom_controller =
-      zoom::ZoomController::FromWebContents(GetWebContents());
-  if (!zoom_controller) {
-    // Create ZoomController manually, if not already exists, because it is
-    // not automatically created when the WebUI has not been opened in a tab.
-    zoom_controller =
-        zoom::ZoomController::CreateForWebContents(GetWebContents());
-  }
-  zoom_controller->SetZoomMode(zoom::ZoomController::ZOOM_MODE_ISOLATED);
-  zoom_controller->SetZoomLevel(0);
 
   OnViewBoundsChanged(location_bar_view_);
 }

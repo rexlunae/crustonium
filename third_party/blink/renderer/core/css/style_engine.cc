@@ -68,6 +68,7 @@
 #include "third_party/blink/renderer/core/css/resolver/style_resolver_stats.h"
 #include "third_party/blink/renderer/core/css/resolver/style_rule_usage_tracker.h"
 #include "third_party/blink/renderer/core/css/resolver/viewport_style_resolver.h"
+#include "third_party/blink/renderer/core/css/scroll_target_group_scope.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/css/style_containment_scope.h"
 #include "third_party/blink/renderer/core/css/style_environment_variables.h"
@@ -83,6 +84,7 @@
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
+#include "third_party/blink/renderer/core/dom/node-inl.h"
 #include "third_party/blink/renderer/core/dom/nth_index_cache.h"
 #include "third_party/blink/renderer/core/dom/processing_instruction.h"
 #include "third_party/blink/renderer/core/dom/scriptable_document_parser.h"
@@ -94,6 +96,7 @@
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/html/forms/html_field_set_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
@@ -906,13 +909,15 @@ void StyleEngine::UpdateCounters(const Element& element,
   if (layout_object) {
     context.EnterObject(*layout_object);
     if (auto* ng_list_item = DynamicTo<LayoutListItem>(layout_object)) {
-      if (!ng_list_item->Ordinal().UseExplicitValue()) {
+      if (RuntimeEnabledFeatures::CSSListCounterAccountingEnabled() ||
+          !ng_list_item->Ordinal().UseExplicitValue()) {
         ng_list_item->Ordinal().MarkDirty();
         ng_list_item->OrdinalValueChanged();
       }
     } else if (auto* inline_list_item =
                    DynamicTo<LayoutInlineListItem>(layout_object)) {
-      if (!inline_list_item->Ordinal().UseExplicitValue()) {
+      if (RuntimeEnabledFeatures::CSSListCounterAccountingEnabled() ||
+          !inline_list_item->Ordinal().UseExplicitValue()) {
         inline_list_item->Ordinal().MarkDirty();
         inline_list_item->OrdinalValueChanged();
       }
@@ -979,6 +984,14 @@ StyleContainmentScopeTree& StyleEngine::EnsureStyleContainmentScopeTree() {
         MakeGarbageCollected<StyleContainmentScopeTree>();
   }
   return *style_containment_scope_tree_;
+}
+
+ScrollTargetGroupScopeTree& StyleEngine::EnsureScrollTargetGroupScopeTree() {
+  if (!scroll_target_group_scope_tree_) {
+    scroll_target_group_scope_tree_ =
+        MakeGarbageCollected<ScrollTargetGroupScopeTree>();
+  }
+  return *scroll_target_group_scope_tree_;
 }
 
 void StyleEngine::SetRuleUsageTracker(StyleRuleUsageTracker* tracker) {
@@ -3343,7 +3356,10 @@ void StyleEngine::NodeWillBeRemoved(Node& node) {
         }
       }
       if (!style->ScrollTargetGroupNone()) {
-        GetDocument().SetNeedsScrollTargetGroupRelationsUpdate();
+        if (ScrollTargetGroupScopeTree* tree =
+                GetScrollTargetGroupScopeTree()) {
+          tree->RemoveScopeForElement(*element);
+        }
       }
     }
     pending_invalidations_.RescheduleSiblingInvalidationsAsDescendants(
@@ -3741,9 +3757,11 @@ void StyleEngine::PostInterleavedRecalcUpdate(
   if (StyleContainmentScopeTree* tree = GetStyleContainmentScopeTree()) {
     tree->UpdateItems();
   }
+  // Update scroll-target-group scopes.
+  if (ScrollTargetGroupScopeTree* tree = GetScrollTargetGroupScopeTree()) {
+    tree->UpdateItems();
+  }
   GetDocument().InvalidatePendingSVGResources();
-  GetDocument().UpdateScrollTargetGroupRelations();
-  GetDocument().UpdateScrollTargetGroupToScrollableAreasMap();
 }
 
 void StyleEngine::UpdateStyleAndLayoutTreeForSizeContainer(
@@ -3754,7 +3772,8 @@ void StyleEngine::UpdateStyleAndLayoutTreeForSizeContainer(
   DCHECK(!container.NeedsStyleRecalc());
   DCHECK(!in_container_query_style_recalc_);
 
-  base::AutoReset<bool> cq_recalc(&in_container_query_style_recalc_, true);
+  std::optional<base::AutoReset<bool>> cq_recalc(
+      std::in_place, &in_container_query_style_recalc_, true);
 
   DCHECK(container.GetLayoutObject()) << "Containers must have a LayoutObject";
   const ComputedStyle& style = container.GetLayoutObject()->StyleRef();
@@ -3841,6 +3860,7 @@ void StyleEngine::UpdateStyleAndLayoutTreeForSizeContainer(
     GetStyleResolver().PropagateStyleToViewport();
   }
 
+  cq_recalc.reset();
   PostInterleavedRecalcUpdate(container);
 }
 
@@ -3886,7 +3906,8 @@ bool StyleEngine::UpdateStyleAndLayoutTreeForOutOfFlow(
   const CSSPropertyValueSet* try_tactics_set = try_value_flips_.FlipSet(
       try_tactics, abs_container_writing_direction.GetWritingMode());
 
-  base::AutoReset<bool> pt_recalc(&in_position_try_style_recalc_, true);
+  std::optional<base::AutoReset<bool>> pt_recalc(
+      std::in_place, &in_position_try_style_recalc_, true);
 
   NthIndexCache nth_index_cache(GetDocument());
   UpdateViewportSize();
@@ -3926,6 +3947,7 @@ bool StyleEngine::UpdateStyleAndLayoutTreeForOutOfFlow(
     RebuildLayoutTree(&element);
   }
 
+  pt_recalc.reset();
   PostInterleavedRecalcUpdate(element);
   return true;
 }
@@ -3956,8 +3978,10 @@ void StyleEngine::RecalcStyle(StyleRecalcChange change,
 
   for (ContainerNode* ancestor = root_element.GetStyleRecalcParent(); ancestor;
        ancestor = ancestor->GetStyleRecalcParent()) {
-    if (auto* ancestor_element = DynamicTo<Element>(ancestor)) {
-      ancestor_element->RecalcStyleForTraversalRootAncestor();
+    if (!InInterleavedStyleRecalc()) {
+      if (auto* ancestor_element = DynamicTo<Element>(ancestor)) {
+        ancestor_element->RecalcStyleForTraversalRootAncestor();
+      }
     }
     ancestor->ClearChildNeedsStyleRecalc();
   }
@@ -4110,9 +4134,11 @@ void StyleEngine::UpdateStyleAndLayoutTree() {
     if (StyleContainmentScopeTree* tree = GetStyleContainmentScopeTree()) {
       tree->UpdateItems();
     }
+    // Update scroll-target-group scopes.
+    if (ScrollTargetGroupScopeTree* tree = GetScrollTargetGroupScopeTree()) {
+      tree->UpdateItems();
+    }
     UpdateCounters();
-    GetDocument().UpdateScrollTargetGroupRelations();
-    GetDocument().UpdateScrollTargetGroupToScrollableAreasMap();
   } else {
     style_recalc_root_.Clear();
   }
@@ -4722,6 +4748,7 @@ void StyleEngine::Trace(Visitor* visitor) const {
   visitor->Trace(style_image_cache_);
   visitor->Trace(fill_or_clip_path_uri_value_cache_);
   visitor->Trace(style_containment_scope_tree_);
+  visitor->Trace(scroll_target_group_scope_tree_);
   visitor->Trace(try_value_flips_);
   visitor->Trace(anchored_element_dirty_set_);
   visitor->Trace(user_rule_set_groups_);

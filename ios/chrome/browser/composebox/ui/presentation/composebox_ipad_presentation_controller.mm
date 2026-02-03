@@ -4,20 +4,26 @@
 
 #import "ios/chrome/browser/composebox/ui/presentation/composebox_ipad_presentation_controller.h"
 
+#import "base/check.h"
+#import "ios/chrome/browser/composebox/ui/composebox_ui_constants.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 
 namespace {
 
-// The corner radius for the composebox.
-const CGFloat kComposeboxCornerRadius = 16.0f;
+// The additional horizontal margin to ensure the composebox covers the top
+// omnibox.
+const CGFloat kComposeboxOmniboxLayoutGuideHorizontalMargin = 10.0f;
 
 }  // namespace
 
 @implementation ComposeboxiPadPresentationController {
   // The dimming view, used to dismiss the composebox when tapped.
   UIView* _dimmingView;
+  // The layout guide used to anchor the composebox.
+  UILayoutGuide* _layoutGuide;
 }
 
 - (instancetype)initWithPresentedViewController:(UIViewController*)presented
@@ -36,9 +42,14 @@ const CGFloat kComposeboxCornerRadius = 16.0f;
   }
   return self;
 }
+
 #pragma mark - UIPresentationController
 
 - (void)presentationTransitionWillBegin {
+  CHECK(self.layoutGuideCenter);
+  _layoutGuide = [self.layoutGuideCenter makeLayoutGuideNamed:kTopOmniboxGuide];
+  [self.containerView addLayoutGuide:_layoutGuide];
+
   UIView* dimmingView = _dimmingView;
   dimmingView.frame = self.containerView.bounds;
   [self.containerView insertSubview:dimmingView atIndex:0];
@@ -75,22 +86,29 @@ const CGFloat kComposeboxCornerRadius = 16.0f;
     [dimmingView removeFromSuperview];
   }
 }
+
 - (CGRect)frameOfPresentedViewInContainerView {
   UIView* containerView = self.containerView;
   if (!containerView) {
     return CGRectZero;
   }
 
-  LayoutGuideCenter* layoutGuideCenter = self.layoutGuideCenter;
-  UIView* topOmnibox =
-      [layoutGuideCenter referencedViewUnderName:kTopOmniboxGuide];
-  CGRect omniboxFrame = [topOmnibox convertRect:topOmnibox.bounds toView:nil];
+  CGRect omniboxFrame =
+      [_layoutGuide.owningView convertRect:_layoutGuide.layoutFrame
+                                    toView:containerView];
+  CGFloat top = CGRectGetMinY(omniboxFrame) - kInputPlateMargin;
+  CGFloat width = omniboxFrame.size.width;
+  CGFloat x = omniboxFrame.origin.x;
+  if (IsRegularXRegularSizeClass(self.traitCollection)) {
+    x -= kComposeboxOmniboxLayoutGuideHorizontalMargin;
+    width += kComposeboxOmniboxLayoutGuideHorizontalMargin * 2;
+  }
 
-  // TODO(crbug.com/469368394): Use real values.
-  CGFloat top = CGRectGetMinY(omniboxFrame) - 4.0;
-  CGFloat width = containerView.bounds.size.width * 0.75;
-  CGFloat x = (containerView.bounds.size.width - width) / 2.0;
-  CGFloat height = (containerView.bounds.size.height - top) * 0.75;
+  CGFloat preferredHeight =
+      self.presentedViewController.preferredContentSize.height;
+  CGFloat maxHeight = (containerView.bounds.size.height - top) * 0.75;
+  CGFloat height =
+      preferredHeight > 0 ? MIN(preferredHeight, maxHeight) : kOmniboxMinHeight;
 
   return CGRectMake(x, top, width, height);
 }
@@ -99,14 +117,27 @@ const CGFloat kComposeboxCornerRadius = 16.0f;
   [super containerViewWillLayoutSubviews];
   _dimmingView.frame = self.containerView.bounds;
   self.presentedView.frame = [self frameOfPresentedViewInContainerView];
-  self.presentedView.layer.cornerRadius = kComposeboxCornerRadius;
+  self.presentedView.layer.cornerRadius =
+      kInputPlateCornerRadius + kInputPlateMargin;
+  self.presentedView.clipsToBounds = YES;
+}
+
+#pragma mark - UIContentContainer
+
+- (void)preferredContentSizeDidChangeForChildContentContainer:
+    (id<UIContentContainer>)container {
+  [super preferredContentSizeDidChangeForChildContentContainer:container];
+  if (container == self.presentedViewController) {
+    [self.containerView setNeedsLayout];
+    [self.containerView layoutIfNeeded];
+  }
 }
 
 #pragma mark - Private
 
 // Called when the scrim is tapped.
 - (void)dimmingViewTapped:(UITapGestureRecognizer*)sender {
-  [self.browserCoordinatorHandler hideComposeboxImmediately:NO];
+  [self.browserCoordinatorHandler hideComposebox];
 }
 
 @end

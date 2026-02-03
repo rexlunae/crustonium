@@ -199,12 +199,14 @@ struct AccountInfo : public CoreAccountInfo {
   // Returns `kUnknown` the value is unknown.
   signin::Tribool CanApplyAccountLevelEnterprisePolicies() const;
 
+#if !BUILDFLAG(IS_IOS)
   bool IsEduAccount() const;
 
   // Returns true if the account email can be used in display fields.
   // If `capabilities.can_have_email_address_displayed()` is unknown at the time
   // this function is called, the email address will be considered displayable.
   bool CanHaveEmailAddressDisplayed() const;
+#endif
 
   // The following struct members are going to be moved to the private section
   // soon, do not use them directly.
@@ -300,7 +302,7 @@ class AccountInfo::Builder {
  private:
   FRIEND_TEST_ALL_PREFIXES(AccountInfoTest, CreateWithPossiblyEmptyGaiaId);
   friend std::optional<AccountInfo> signin::DeserializeAccountInfo(
-      const base::Value::Dict& dict);
+      const base::DictValue& dict);
   // Default constructor is only available to support ongoing migrations.
   // TODO(crbug.com/40268200): remove this after the migration is done.
   Builder();

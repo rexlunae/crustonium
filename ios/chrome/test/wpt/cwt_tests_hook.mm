@@ -59,9 +59,11 @@ bool NeverPurgeDiscardedSessionsData() {
   return false;
 }
 
-bool LoadMinimalAppUI() {
+bool ShouldLoadMinimalAppUI() {
   return false;
 }
+
+void LoadMinimalAppUI(UIWindow* window) {}
 
 std::unique_ptr<ProfileOAuth2TokenService> GetOverriddenTokenService(
     PrefService* user_prefs,
@@ -153,6 +155,16 @@ std::optional<base::TimeDelta> GetOverrideInfobarDuration() {
 
 UIImage* GetPHPickerViewControllerImage() {
   return nil;
+}
+
+std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
+    ProfileIOS* profile) {
+  return nullptr;
+}
+
+std::unique_ptr<contextual_search::ContextualSearchService>
+CreateContextualSearchService(ProfileIOS* profile) {
+  return nullptr;
 }
 
 }  // namespace tests_hook

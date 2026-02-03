@@ -381,9 +381,7 @@ const char kTestPageText[] = "pony";
   // Make sure the Translate manual trigger button disabled.
   [ChromeEarlGreyUI openToolsMenu];
   id<GREYMatcher> toolsMenuMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[EarlGrey selectElementWithMatcher:ToolsMenuTranslateButton()]
          usingSearchAction:grey_scrollInDirection(kGREYDirectionDown,
                                                   /*amount=*/200)
@@ -814,7 +812,7 @@ const char kTestPageText[] = "pony";
   [SigninEarlGrey signinWithFakeIdentity:fakeIdentity];
 
   // Set restrictions.
-  base::Value::List restrictions;
+  base::ListValue restrictions;
   restrictions.Append("restricted");
   SetPolicy(base::Value(std::move(restrictions)),
             policy::key::kRestrictAccountsToPatterns);

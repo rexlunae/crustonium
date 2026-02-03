@@ -71,19 +71,6 @@ CanvasRenderingContext::CanvasRenderingContext(
   CHECK(host_);
 }
 
-base::ByteSize CanvasRenderingContext::AllocatedBufferSize() const {
-  if (!Host() || isContextLost()) {
-    return base::ByteSize(0);
-  }
-  const gfx::Size& size = DrawingBufferSize();
-  if (size.IsEmpty()) {
-    return base::ByteSize(0);
-  }
-  int buffer_count = AllocatedBufferCountPerPixel();
-  return buffer_count *
-         base::ByteSize(GetSharedImageFormat().EstimatedSizeInBytes(size));
-}
-
 void CanvasRenderingContext::Dispose() {
   RenderTaskEnded();
 
@@ -107,7 +94,7 @@ CanvasRenderingContext::GetEnclosingContextForDrawElement(
     ExceptionState& exception_state) {
   auto build_error = [&func_name](const char* format) {
     StringBuilder builder;
-    builder.AppendFormat(format, func_name.Utf8().c_str());
+    UNSAFE_TODO(builder.AppendFormat(format, func_name.Utf8().c_str()));
     return builder.ToString();
   };
 
@@ -158,7 +145,7 @@ bool CanvasRenderingContext::IsDrawElementImageEligible(
 
   auto build_error = [&func_name](const char* format) {
     StringBuilder builder;
-    builder.AppendFormat(format, func_name.Utf8().c_str());
+    UNSAFE_TODO(builder.AppendFormat(format, func_name.Utf8().c_str()));
     return builder.ToString();
   };
 
@@ -232,9 +219,9 @@ std::optional<cc::PaintRecord> CanvasRenderingContext::GetElementPaintRecord(
                                           /*disable_expansion*/ true);
 
   PaintLayerPainter paint_layer_painter = PaintLayerPainter(*layer);
-  paint_layer_painter.Paint(
-      builder.Context(),
-      PaintFlag::kPrivacyPreserving | PaintFlag::kOmitCompositingInfo);
+  paint_layer_painter.Paint(builder.Context(),
+                                PaintFlag::kPrivacyPreserving |
+                                PaintFlag::kOmitCompositingInfo);
 
   // Use the drawn element's local property tree state to start drawing, but
   // then modify this to include effects and clips between the drawn element

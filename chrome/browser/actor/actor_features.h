@@ -15,6 +15,8 @@ namespace actor {
 
 BASE_DECLARE_FEATURE(kGlicActionAllowlist);
 
+BASE_DECLARE_FEATURE(kActorEnableAndroid);
+
 BASE_DECLARE_FEATURE_PARAM(std::string, kAllowlist);
 BASE_DECLARE_FEATURE_PARAM(std::string, kAllowlistExact);
 BASE_DECLARE_FEATURE_PARAM(bool, kAllowlistOnly);
@@ -75,6 +77,11 @@ BASE_DECLARE_FEATURE(kGlicNavigateToolUseOpaqueInitiator);
 BASE_DECLARE_FEATURE(kGlicNavigateWithoutUserGesture);
 
 BASE_DECLARE_FEATURE(kGlicPerformActionsReturnsBeforeStateChange);
+
+BASE_DECLARE_FEATURE(kGlicDeferActUntilUninterrupted);
+
+// Kill switch for adding tabs to an ActorTask earlier during action handling.
+BASE_DECLARE_FEATURE(kGlicEarlyAddTaskTabs);
 
 // Enables a full page screenshot to be taken rather than only the viewport.
 extern const base::FeatureParam<bool> kFullPageScreenshot;

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/holding_space/holding_space_downloads_delegate.h"
 
+#include <algorithm>
 #include <optional>
 #include <set>
 
@@ -17,7 +18,6 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "base/byte_count.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/profiles/profile.h"
@@ -514,7 +514,8 @@ void HoldingSpaceDownloadsDelegate::OnHoldingSpaceItemsRemoved(
   // download, that in-progress download can be destroyed. The download will
   // continue, but it will no longer be associated with a holding space item.
   std::erase_if(in_progress_downloads_, [&](const auto& in_progress_download) {
-    return base::Contains(items, in_progress_download->GetHoldingSpaceItem());
+    return std::ranges::contains(items,
+                                 in_progress_download->GetHoldingSpaceItem());
   });
 }
 
@@ -634,7 +635,7 @@ void HoldingSpaceDownloadsDelegate::OnDownloadFailed(
     // NOTE: Removing `item` from the `model()` will result in the
     // `in_progress_download` being erased.
     model()->RemoveItem(item->id());
-    DCHECK(!base::Contains(in_progress_downloads_, in_progress_download));
+    DCHECK(!in_progress_downloads_.contains(in_progress_download));
     return;
   }
   EraseDownload(in_progress_download);

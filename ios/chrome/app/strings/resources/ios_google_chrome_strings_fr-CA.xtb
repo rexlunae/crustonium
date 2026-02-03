@@ -86,6 +86,9 @@ Essayez d'attendre quelques minutes avant de vous déconnecter. Si vous vous dé
 <translation id="2767464022270041271">Aucun mot de passe enregistré. Le gestionnaire de mots de passe de Google peut vérifier vos mots de passe lorsque vous les enregistrez.</translation>
 <translation id="2788811701191021538">Ouvre la page de paramètres des modes de paiement dans Chrome.</translation>
 <translation id="2876628302275096482">En savoir plus sur la <ph name="BEGIN_LINK" />manière dont Chrome préserve la confidentialité de vos données<ph name="END_LINK" /></translation>
+<translation id="288992067439702510">Vous avez atteint la limite de <ph name="LIMIT" /> favoris de Google Chrome. Certains de vos favoris n'ont donc pas encore été enregistrés dans votre compte Google.
+
+Vous ne pourrez pas enregistrer de nouveaux favoris dans votre compte tant que vous n'en aurez pas supprimé certains. Si vous vous déconnectez maintenant, les favoris non enregistrés seront supprimés.</translation>
 <translation id="2922914028977213693">Touchez ici pour tirer le meilleur parti de Chrome sur votre iPad.</translation>
 <translation id="292371311537977079">Paramètres de Chrome</translation>
 <translation id="2923827943290349720">Verrouiller les onglets de navigation privée lorsque vous fermez Chrome</translation>
@@ -304,11 +307,11 @@ Afin d'accéder à plus de paramètres utilisant des données pour améliorer vo
 <translation id="7787205077729386167">Ouvrez les paramètres Chrome dans iOS, puis touchez « Appli de navigation par défaut » et sélectionnez Chrome.</translation>
 <translation id="778855399387580014">Lancez une recherche dans un nouvel onglet Chrome.</translation>
 <translation id="7792140019572081272">Chrome protège vos données confidentielles avec Face ID.</translation>
+<translation id="7825648984449922731">Modifiez une image avec Gemini dans Chrome</translation>
 <translation id="7855730255114109580">Google Chrome est à jour</translation>
 <translation id="787226752901403048">Connectez-vous à Chrome pour partager et rejoindre des groupes d'onglets et travailler ensemble sur des idées</translation>
 <translation id="7897703007638178753">Voir les onglets récents de Chrome</translation>
 <translation id="7948283758957877064">Quoi de neuf dans Chrome</translation>
-<translation id="7996707498590516621">Créez une image avec Gemini dans Chrome</translation>
 <translation id="8000174216052461231">Astuce Chrome : Bénéficiez de la sécurité la plus robuste de Chrome</translation>
 <translation id="8006014511203279255">Utilisez Chrome chaque fois que vous touchez des liens dans les messages ou dans d'autres applications.</translation>
 <translation id="8014670471808569312">Chrome vous proposera d'enregistrer votre mot de passe.</translation>

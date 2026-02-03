@@ -135,7 +135,8 @@ class ScopedBoostablePriorityImpl : public v8::ScopedBoostablePriority {
 
   bool BoostPriority() override {
     return scoped_boostable_priority_.BoostPriority(
-        base::PlatformThread::GetCurrentThreadType());
+        std::min(base::PlatformThread::GetCurrentThreadType(),
+                 base::ThreadType::kInteractive));
   }
 
   void Reset() override { scoped_boostable_priority_.Reset(); }
@@ -351,12 +352,6 @@ v8::TracingController* V8Platform::GetTracingController() {
 }
 
 v8::Platform::StackTracePrinter V8Platform::GetStackTracePrinter() {
-#if BUILDFLAG(IS_WIN)
-  // Sandboxed processes in release builds cannot symbolize stacks.
-  if (!base::debug::InProcessStackDumpingEnabled()) {
-    return nullptr;
-  }
-#endif
   return PrintStackTrace;
 }
 

@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/to_vector.h"
@@ -69,6 +68,7 @@
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/platform/web_runtime_features_base.h"
 #include "third_party/blink/public/web/web_autofill_state.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_form_control_element.h"
@@ -215,7 +215,7 @@ bool ShowPredictions(const WebDocument& document,
         "\nvisible: ",
         base::ToString(field_data.is_visible()),
         "\nfocusable: ",
-        base::ToString(field_data.IsFocusable()),
+        base::ToString(field_data.is_focusable()),
         "\nfield rank: ",
         base::NumberToString(field.rank),
         "\nfield rank in signature group: ",
@@ -1039,8 +1039,9 @@ void AutofillAgent::UserGestureObserved() {
   password_autofill_agent_->UserGestureObserved();
 }
 
-void AutofillAgent::RequestRefill(const FillId& fill_id,
+void AutofillAgent::RequestRefill(const base::UnguessableToken& fill_id_token,
                                   base::OnceCallback<void(bool)> callback) {
+  FillId fill_id(fill_id_token);
   pending_refills_.Add(fill_id, std::move(callback));
   if (auto* autofill_driver = unsafe_autofill_driver()) {
     autofill_driver->RequestRefill(fill_id);
@@ -1080,6 +1081,12 @@ void AutofillAgent::ApplyFieldsAction(
                                      action_persistence, field_data_manager());
   } else {
     was_last_action_fill_ = true;
+
+    if (blink::WebRuntimeFeaturesBase::IsAutofillEventEnabled() &&
+        action_type == mojom::FormActionType::kFill) {
+      form_util::DispatchAutofillEvent(document, fields, fill_id,
+                                       supports_refill);
+    }
 
     std::vector<FieldRendererId> filled_element_ids = base::ToVector(
         form_util::ApplyFieldsAction(document, fields, action_type,
@@ -1208,6 +1215,32 @@ void AutofillAgent::ClearPreviewedForm() {
   previewed_elements_ = {};
 }
 
+void AutofillAgent::FindPotentialSiwgButtons(
+    base::OnceCallback<void(std::vector<mojom::SiwgButtonDataPtr>)> callback) {
+  std::vector<mojom::SiwgButtonDataPtr> results;
+  WebDocument document = GetDocument();
+  if (document.IsNull()) {
+    std::move(callback).Run(std::move(results));
+    return;
+  }
+
+  for (const WebElement& element :
+       document.QuerySelectorAll(WebString::FromUTF8(
+           R"(button, a, [role="button"], div#g_id_onload, div.g-signin2)"))) {
+    auto button_data = mojom::SiwgButtonData::New();
+    button_data->dom_node_id = element.GetDomNodeId();
+    button_data->text = element.TextContent().Utf16();
+    button_data->id_attribute = element.GetAttribute("id").Utf16();
+    button_data->class_attribute = element.GetAttribute("class").Utf16();
+    button_data->aria_label = element.GetAttribute("aria-label").Utf16();
+    button_data->href_attribute = element.GetAttribute("href").Utf16();
+    button_data->role = element.GetAttribute("role").Utf16();
+    button_data->tag_name = element.TagName().Utf16();
+    results.emplace_back(std::move(button_data));
+  }
+  std::move(callback).Run(std::move(results));
+}
+
 void AutofillAgent::TriggerSuggestions(
     FieldRendererId field_id,
     AutofillSuggestionTriggerSource trigger_source) {
@@ -1296,11 +1329,9 @@ void AutofillAgent::ApplyFieldAction(
         if (form_control) {
           if (WebFormElement form_element =
                   form_control.GetOwningFormForAutofill()) {
-            form_tracker_->UpdateLastInteractedElement(
-                form_util::GetFormRendererId(form_element));
+            form_tracker_->UpdateLastInteractedElement(form_element);
           } else {
-            form_tracker_->UpdateLastInteractedElement(
-                form_util::GetFieldRendererId(form_control));
+            form_tracker_->UpdateLastInteractedElement(form_control);
           }
         }
         break;
@@ -1934,11 +1965,7 @@ void AutofillAgent::SelectFieldOptionsChanged(
   }
 
   FieldRendererId element_id = form_util::GetFieldRendererId(element);
-  base::OneShotTimer& timer =
-      base::FeatureList::IsEnabled(
-          features::kAutofillSplitTimersForSelectOptionChanges)
-          ? select_option_change_batch_timer_[element_id]
-          : select_option_change_batch_timer_[FieldRendererId()];
+  base::OneShotTimer& timer = select_option_change_batch_timer_[element_id];
 
   if (timer.IsRunning()) {
     timer.Stop();

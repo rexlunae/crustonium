@@ -8,7 +8,6 @@
 #import <vector>
 
 #import "base/apple/foundation_util.h"
-#import "base/containers/contains.h"
 #import "base/feature_list.h"
 #import "base/ios/block_types.h"
 #import "base/ios/ios_util.h"
@@ -22,6 +21,7 @@
 #import "components/commerce/core/shopping_service.h"
 #import "components/feed/core/v2/public/ios/pref_names.h"
 #import "components/image_fetcher/core/image_data_fetcher.h"
+#import "components/keyed_service/core/service_access_type.h"
 #import "components/ntp_tiles/most_visited_sites.h"
 #import "components/ntp_tiles/pref_names.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
@@ -99,6 +99,7 @@
 #import "ios/chrome/browser/favicon/model/ios_chrome_large_icon_service_factory.h"
 #import "ios/chrome/browser/favicon/model/large_icon_cache.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
+#import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_delegate.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_entrypoint.h"
 #import "ios/chrome/browser/menu/ui_bundled/browser_action_factory.h"
@@ -142,16 +143,17 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/credential_provider_promo_commands.h"
 #import "ios/chrome/browser/shared/public/commands/docking_promo_commands.h"
+#import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_lens_input_selection_command.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/price_tracked_items_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/search_image_with_lens_command.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
@@ -287,21 +289,15 @@ using segmentation_platform::TipIdentifier;
 
   self.authService = AuthenticationServiceFactory::GetForProfile(profile);
 
-  // Conditionally register for provisional Safety Check notifications if the
-  // feature is enabled.
-  //
   // TODO(crbug.com/366182129): Move Safety Check provisional notification
   // enrollment to `SafetyCheckNotificationClient` once
   // `ProvisionalPushNotificationService` circular dependencies are fixed.
-  if (IsSafetyCheckNotificationsEnabled() &&
-      ProvisionalSafetyCheckNotificationsEnabled()) {
     if (ProvisionalPushNotificationService* service =
             ProvisionalPushNotificationServiceFactory::GetForProfile(profile)) {
       service->EnrollUserToProvisionalNotifications(
           ProvisionalPushNotificationService::ClientIdState::kDisabled,
           {PushNotificationClientId::kSafetyCheck});
     }
-  }
 
   favicon::LargeIconService* largeIconService =
       IOSChromeLargeIconServiceFactory::GetForProfile(profile);
@@ -330,15 +326,25 @@ using segmentation_platform::TipIdentifier;
   ChromeAccountManagerService* accountManagerService =
       ChromeAccountManagerServiceFactory::GetForProfile(profile);
 
+  history::HistoryService* historyService =
+      ios::HistoryServiceFactory::GetForProfile(
+          profile, ServiceAccessType::EXPLICIT_ACCESS);
+
+  feature_engagement::Tracker* engagementTracker =
+      feature_engagement::TrackerFactory::GetForProfile(profile);
+
   NSMutableArray* moduleMediators = [NSMutableArray array];
 
   _mostVisitedTilesMediator = [[MostVisitedTilesMediator alloc]
       initWithMostVisitedSite:std::move(mostVisitedFactory)
+               historyService:historyService
                   prefService:prefs
              largeIconService:largeIconService
                largeIconCache:cache
        URLLoadingBrowserAgent:UrlLoadingBrowserAgent::FromBrowser(self.browser)
-        accountManagerService:accountManagerService];
+        accountManagerService:accountManagerService
+            engagementTracker:engagementTracker
+            layoutGuideCenter:LayoutGuideCenterForBrowser(self.browser)];
   _mostVisitedTilesMediator.contentSuggestionsDelegate = self.delegate;
   _mostVisitedTilesMediator.contentSuggestionsMetricsRecorder =
       self.contentSuggestionsMetricsRecorder;
@@ -347,6 +353,8 @@ using segmentation_platform::TipIdentifier;
              scenario:kMenuScenarioHistogramMostVisitedEntry];
   _mostVisitedTilesMediator.snackbarHandler =
       static_cast<id<SnackbarCommands>>(self.browser->GetCommandDispatcher());
+  _mostVisitedTilesMediator.helpHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), HelpCommands);
   _mostVisitedTilesMediator.NTPActionsDelegate = self.NTPActionsDelegate;
   [moduleMediators addObject:_mostVisitedTilesMediator];
   self.contentSuggestionsMediator.mostVisitedTilesMediator =
@@ -361,7 +369,7 @@ using segmentation_platform::TipIdentifier;
       self.contentSuggestionsMetricsRecorder;
   _shortcutsMediator.NTPActionsDelegate = self.NTPActionsDelegate;
   _shortcutsMediator.dispatcher = static_cast<
-      id<ApplicationCommands, BrowserCoordinatorCommands, WhatsNewCommands>>(
+      id<SceneCommands, BrowserCoordinatorCommands, WhatsNewCommands>>(
       self.browser->GetCommandDispatcher());
   [moduleMediators addObject:_shortcutsMediator];
   self.contentSuggestionsMediator.shortcutsMediator = _shortcutsMediator;
@@ -387,7 +395,7 @@ using segmentation_platform::TipIdentifier;
   _tabResumptionMediator.contentSuggestionsMetricsRecorder =
       self.contentSuggestionsMetricsRecorder;
   _tabResumptionMediator.dispatcher = static_cast<
-      id<ApplicationCommands, PriceTrackedItemsCommands, SnackbarCommands>>(
+      id<SceneCommands, PriceTrackedItemsCommands, SnackbarCommands>>(
       self.browser->GetCommandDispatcher());
 
   [moduleMediators addObject:_tabResumptionMediator];
@@ -409,7 +417,7 @@ using segmentation_platform::TipIdentifier;
                   faviconLoader:IOSChromeFaviconLoaderFactory::GetForProfile(
                                     profile)];
     _priceTrackingPromoMediator.dispatcher =
-        static_cast<id<ApplicationCommands, SnackbarCommands>>(
+        static_cast<id<SceneCommands, SnackbarCommands>>(
             self.browser->GetCommandDispatcher());
     _priceTrackingPromoMediator.actionDelegate = self;
     _priceTrackingPromoMediator.NTPActionsDelegate = self.NTPActionsDelegate;
@@ -463,7 +471,7 @@ using segmentation_platform::TipIdentifier;
   BOOL areTipsCardsEnabled =
       prefs->GetBoolean(ntp_tiles::prefs::kTipsHomeModuleEnabled);
 
-  if (IsTipsMagicStackEnabled() && areTipsCardsEnabled) {
+  if (areTipsCardsEnabled) {
     _tipsMediator = [[TipsMagicStackMediator alloc]
         initWithIdentifier:TipIdentifier::kUnknown
         profilePrefService:prefs
@@ -620,7 +628,7 @@ using segmentation_platform::TipIdentifier;
   [_priceTrackingPromoMediator fetchLatestSubscription];
 }
 
-#pragma mark - ContentSuggestionsCommands
+#pragma mark - ContentSuggestionsCommands and Helpers
 
 - (void)showSetUpListSeeMoreMenuExpanded:(BOOL)expanded {
   [_setUpListShowMoreViewController.presentingViewController
@@ -657,23 +665,32 @@ using segmentation_platform::TipIdentifier;
 }
 
 - (void)showPinnedSiteCreator {
-  // TODO(crbug.com/469998604): Configure the view controller to be used for
-  // site creation.
-  PinnedSiteFormViewController* viewController =
-      [[PinnedSiteFormViewController alloc] init];
-  viewController.mutator = _mostVisitedTilesMediator;
-  [self.contentSuggestionsViewController presentViewController:viewController
-                                                      animated:YES
-                                                    completion:nil];
+  [self presentViewControllerWithPinnedSiteAction:PinnedSiteAction::kCreate
+                                          forItem:nil];
 }
 
 - (void)showPinnedSiteEditorForItem:(MostVisitedItem*)item {
-  // TODO(crbug.com/469998604): Configure the view controller to be used for
-  // editing.
+  [self presentViewControllerWithPinnedSiteAction:PinnedSiteAction::kModify
+                                          forItem:item];
+}
+
+// Presents the form to pin a site to the most visited tile in a
+// navigation controller. If the form is used for site editing, provide original
+// `item` for placeholding purpose.
+- (void)presentViewControllerWithPinnedSiteAction:(PinnedSiteAction)action
+                                          forItem:(MostVisitedItem*)item {
+  if (action == PinnedSiteAction::kModify) {
+    CHECK(item);
+  }
   PinnedSiteFormViewController* viewController =
-      [[PinnedSiteFormViewController alloc] init];
+      [[PinnedSiteFormViewController alloc] initWithAction:action forItem:item];
   viewController.mutator = _mostVisitedTilesMediator;
-  [self.contentSuggestionsViewController presentViewController:viewController
+  UINavigationController* navController = [[UINavigationController alloc]
+      initWithRootViewController:viewController];
+  // TODO(crbug.com/473728173): The modal presentation style is set as a
+  // placeholder only. Configure detent height.
+  navController.modalPresentationStyle = UIModalPresentationFormSheet;
+  [self.contentSuggestionsViewController presentViewController:navController
                                                       animated:YES
                                                     completion:nil];
 }
@@ -686,7 +703,6 @@ using segmentation_platform::TipIdentifier;
 }
 
 - (void)didSelectTip:(segmentation_platform::TipIdentifier)tip {
-  CHECK(IsTipsMagicStackEnabled());
   CHECK(_tipsMediator);
 
   __weak __typeof(self) weakSelf = self;
@@ -725,6 +741,8 @@ using segmentation_platform::TipIdentifier;
 }
 
 - (void)didTapDefaultBrowserPromo {
+  [_magicStackRankingModel logMagicStackEngagementForType:
+                               ContentSuggestionsModuleType::kDefaultBrowser];
   DefaultBrowserMagicStackIosVariationType variation =
       GetDefaultBrowserMagicStackIosVariation();
 
@@ -744,7 +762,6 @@ using segmentation_platform::TipIdentifier;
 }
 
 - (void)openTipDestination:(segmentation_platform::TipIdentifier)tip {
-  CHECK(IsTipsMagicStackEnabled());
   CHECK(_tipsMediator);
 
   // Log the Tips (Magic Stack) Module that the user tapped on.
@@ -760,8 +777,6 @@ using segmentation_platform::TipIdentifier;
                                       : LensEntrypoint::NewTabPage;
 
       if (tip == TipIdentifier::kLensShop &&
-          TipsLensShopExperimentTypeEnabled() ==
-              TipsLensShopExperimentType::kWithProductImage &&
           _tipsMediator.state.productImageData.length > 0) {
         UIImage* productImage =
             [UIImage imageWithData:_tipsMediator.state.productImageData];
@@ -798,16 +813,9 @@ using segmentation_platform::TipIdentifier;
           showOmniboxPositionChoice];
       break;
     case TipIdentifier::kEnhancedSafeBrowsing: {
-      if (TipsSafeBrowsingExperimentTypeEnabled() ==
-          TipsSafeBrowsingExperimentType::kShowSafeBrowsingSettingsPage) {
-        [HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                            SettingsCommands) showSafeBrowsingSettings];
-      } else {
         [HandlerForProtocol(self.browser->GetCommandDispatcher(),
                             BrowserCoordinatorCommands)
             showEnhancedSafeBrowsingPromo];
-      }
-
       break;
     }
     case TipIdentifier::kSavePasswords:
@@ -1149,8 +1157,8 @@ using segmentation_platform::TipIdentifier;
   IOSChromeSafetyCheckManager* safetyCheckManager =
       IOSChromeSafetyCheckManagerFactory::GetForProfile(browser->GetProfile());
 
-  id<ApplicationCommands> applicationHandler =
-      HandlerForProtocol(browser->GetCommandDispatcher(), ApplicationCommands);
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
   id<SettingsCommands> settingsHandler =
       HandlerForProtocol(browser->GetCommandDispatcher(), SettingsCommands);
 
@@ -1158,7 +1166,7 @@ using segmentation_platform::TipIdentifier;
     case SafetyCheckItemType::kUpdateChrome: {
       const GURL& chrome_upgrade_url =
           safetyCheckManager->GetChromeAppUpgradeUrl();
-      HandleSafetyCheckUpdateChromeTap(chrome_upgrade_url, applicationHandler);
+      HandleSafetyCheckUpdateChromeTap(chrome_upgrade_url, sceneHandler);
       break;
     }
     case SafetyCheckItemType::kPassword: {
@@ -1171,7 +1179,7 @@ using segmentation_platform::TipIdentifier;
       HandleSafetyCheckPasswordTap(
           insecure_credentials, insecure_password_counts,
           password_manager::PasswordCheckReferrer::kSafetyCheckMagicStack,
-          applicationHandler, settingsHandler);
+          sceneHandler, settingsHandler);
 
       break;
     }
@@ -1252,6 +1260,14 @@ using segmentation_platform::TipIdentifier;
       break;
     case SetUpListItemType::kAllSet:
       NOTREACHED();
+    case SetUpListItemType::kSafariImport:
+      [self.delegate openSafariDataImport];
+      break;
+    case SetUpListItemType::kBackgroundCustomization:
+      [self.delegate openMainCustomizationMenu];
+      [HandlerForProtocol(self.browser->GetCommandDispatcher(), HelpCommands)
+          presentInProductHelpWithType:InProductHelpType::
+                                           kHomeBackgroundCustomization];
   }
 }
 

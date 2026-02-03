@@ -51,7 +51,7 @@ const UPDATE_PRIORITIES = ['BACKGROUND', 'FOREGROUND'] as const;
  */
 export type UpdatePriority = (typeof UPDATE_PRIORITIES)[number];
 
-const SCOPES = ['USER', 'SYSTEM'] as const;
+export const SCOPES = ['USER', 'SYSTEM'] as const;
 /**
  * The scope of an updater process.
  */
@@ -85,6 +85,7 @@ type EndEvent = BaseEvent&{bound: 'END'};
 /**
  * Represents a pair of START and END events of the same type.
  */
+// clang-format off
 interface EventPair<Event,
                     Start extends StartEvent&{eventType: Event},
                     End extends EndEvent&{eventType: Event}> {
@@ -101,6 +102,7 @@ interface EventPair<Event,
    */
   endEvent: End;
 }
+// clang-format on
 
 /**
  * Represents an app registered with the updater.
@@ -150,6 +152,14 @@ export type CommonUpdateOutcome = (typeof COMMON_UPDATE_OUTCOMES)[number];
  */
 export function localizeUpdateOutcome(outcome: CommonUpdateOutcome) {
   return loadTimeData.getString(`updateOutcome${outcome}`);
+}
+
+/**
+ * Returns the localized title of a scope.
+ */
+export function localizeScope(scope: Scope): string {
+  return loadTimeData.getString(
+      scope === 'SYSTEM' ? 'scopeSystem' : 'scopeUser');
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,6 +1308,40 @@ export class UpdaterProcessMap {
     eventsWithDates.sort((a, b) => b.date.getTime() - a.date.getTime());
     const sortedEventsWithDates = eventsWithDates.map((item) => item.event);
     return {sortedEventsWithDates, unsortedEventsWithoutDates};
+  }
+
+  /**
+   * Determines the policy set which was effective for `event` by locating its
+   * most recent LOAD_POLICY event.
+   */
+  effectivePolicySet(
+      event: HistoryEvent|MergedHistoryEvent,
+      events: Array<HistoryEvent|MergedHistoryEvent>): PolicySet|undefined {
+    const process = this.getUpdaterProcessForEvent(event);
+    if (process === undefined) {
+      return undefined;
+    }
+
+    const eventTime = isMergedHistoryEvent(event) ?
+        event.startEvent.deviceUptime :
+        event.deviceUptime;
+    const loadPolicyEvents = events.filter(
+        (e): e is MergedLoadPolicyEvent => isMergedHistoryEvent(e) &&
+            e.eventType === 'LOAD_POLICY' &&
+            e.endEvent.policySet !== undefined &&
+            e.startEvent.pid === process.startEvent.pid &&
+            e.startEvent.processToken === process.startEvent.processToken &&
+            e.startEvent.deviceUptime <= eventTime);
+    if (loadPolicyEvents.length === 0) {
+      return undefined;
+    }
+    return loadPolicyEvents
+        .reduce(
+            (prev, current) =>
+                prev.endEvent.deviceUptime > current.endEvent.deviceUptime ?
+                prev :
+                current)
+        .endEvent.policySet;
   }
 
   /**

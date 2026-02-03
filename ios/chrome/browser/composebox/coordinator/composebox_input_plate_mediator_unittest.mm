@@ -24,6 +24,7 @@
 #import "components/version_info/channel.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_mode_holder.h"
 #import "ios/chrome/browser/composebox/public/composebox_input_plate_controls.h"
+#import "ios/chrome/browser/composebox/public/composebox_model_option.h"
 #import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/composebox/ui/composebox_input_plate_consumer.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_availability.h"
@@ -62,6 +63,10 @@
 }
 - (void)setImageGenerationEnabled:(BOOL)enabled {
 }
+- (void)setCanvasEnabled:(BOOL)enabled {
+}
+- (void)allowModelPicker:(BOOL)allowed {
+}
 - (void)setCompact:(BOOL)compact {
 }
 - (void)setCurrentTabFavicon:(UIImage*)favicon {
@@ -87,6 +92,12 @@
 - (void)hideGalleryActions:(BOOL)hidden {
 }
 - (void)disableGalleryActions:(BOOL)disabled {
+}
+- (void)hideCanvasActions:(BOOL)hidden {
+}
+- (void)setRemainingAttachmentCapacity:(NSUInteger)capacity {
+}
+- (void)setModelOption:(ComposeboxModelOption)modelOption {
 }
 - (void)updateVisibleControls:(ComposeboxInputPlateControls)visibleControls {
   _visibleControls = visibleControls;
@@ -141,7 +152,8 @@ class ComposeboxInputPlateMediatorTest : public PlatformTest {
                            testing::Return(base::CallbackListSubscription())));
     auto session_handle = service_->CreateSession(
         std::move(config_params),
-        contextual_search::ContextualSearchSource::kUnknown);
+        contextual_search::ContextualSearchSource::kUnknown,
+        /*invocation_source=*/std::nullopt);
     // Check the search content sharing settings to notify the session handle
     // that the client is properly checking the pref value.
     session_handle->CheckSearchContentSharingSettings(&pref_service_);

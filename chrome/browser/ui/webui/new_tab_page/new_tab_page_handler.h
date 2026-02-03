@@ -136,9 +136,9 @@ class NewTabPageHandler
   void OnDismissModule(const std::string& module_id) override;
   void OnRestoreModule(const std::string& module_id) override;
   void SetModulesVisible(bool visible) override;
-  void SetModuleDisabled(const std::string& module_id, bool disabled) override;
   void SetModulesDisabled(const std::vector<std::string>& module_ids,
-                          bool disabled) override;
+                          bool disabled,
+                          bool is_user_action) override;
   void UpdateDisabledModules() override;
   void UpdateFooterVisibility() override;
   void OnModulesLoadedWithData(
@@ -291,7 +291,7 @@ class NewTabPageHandler
                           new_tab_footer::NewTabFooterControllerObserver>
       footer_controller_observation_{this};
   std::optional<base::TimeTicks> promo_load_start_time_;
-  base::Value::Dict interaction_module_id_trigger_dict_;
+  base::DictValue interaction_module_id_trigger_dict_;
   // Notifies this when the browser window context changes.
   base::CallbackListSubscription browser_window_changed_subscription_;
   // Triggered when the searchbox's contextual menu entrypoint is displayed.

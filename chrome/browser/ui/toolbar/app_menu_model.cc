@@ -404,7 +404,8 @@ std::u16string GetOpenPWALabel(const Browser* browser) {
   return l10n_util::GetStringFUTF16(
       IDS_OPEN_IN_APP_WINDOW,
       ui::EscapeMenuLabelAmpersands(gfx::TruncateString(
-          short_name, GetLayoutConstant(APP_MENU_MAXIMUM_CHARACTER_LENGTH),
+          short_name,
+          GetLayoutConstant(LayoutConstant::kAppMenuMaximumCharacterLength),
           gfx::CHARACTER_BREAK)));
 }
 
@@ -479,7 +480,7 @@ ProfileSubMenuModel::ProfileSubMenuModel(
       app_menu_model_delegate_(delegate),
       next_other_profile_menu_id_(AppMenuModel::kMinOtherProfileCommandId) {
   const int avatar_icon_size =
-      GetLayoutConstant(APP_MENU_PROFILE_ROW_AVATAR_ICON_SIZE);
+      GetLayoutConstant(LayoutConstant::kAppMenuProfileRowAvatarIconSize);
   avatar_image_model_ = ui::ImageModel::FromVectorIcon(
       kAccountCircleChromeRefreshIcon, ui::kColorMenuIcon, avatar_icon_size);
   if (profile->IsIncognitoProfile()) {
@@ -541,7 +542,7 @@ ProfileSubMenuModel::ProfileSubMenuModel(
           menu_id,
           ui::EscapeMenuLabelAmpersands(gfx::TruncateString(
               display_name,
-              GetLayoutConstant(APP_MENU_MAXIMUM_CHARACTER_LENGTH),
+              GetLayoutConstant(LayoutConstant::kAppMenuMaximumCharacterLength),
               gfx::CHARACTER_BREAK)),
           ui::ImageModel::FromImage(profiles::GetSizedAvatarIcon(
               profile_entry->GetAvatarIcon(
@@ -677,10 +678,11 @@ bool ProfileSubMenuModel::BuildSyncSection() {
           icon = &vector_icons::kErrorOutlineIcon;
           break;
         case syncer::SyncService::UserActionableError::kBookmarksLimitExceeded:
-          // TODO(crbug.com/452968646): Adjust this with providing the concrete
-          // help center article link.
-          break;
+          // For this specific error (as opposed to all others), there is no
+          // error UI in the menu.
+          return true;
       }
+      CHECK_NE(command_id, 0);
       AddItemWithStringIdAndVectorIcon(this, command_id, button_string_id,
                                        *icon);
       return true;
@@ -1976,20 +1978,9 @@ void AppMenuModel::Build() {
   if (!browser_->profile()->IsGuestSession()) {
     sub_menus_.push_back(
         std::make_unique<PasswordsAndAutofillSubMenuModel>(this));
-    bool use_your_saved_info_branding =
-        base::FeatureList::IsEnabled(
-            autofill::features::kYourSavedInfoSettingsPage) ||
-        base::FeatureList::IsEnabled(
-            autofill::features::kYourSavedInfoBrandingInSettings);
-    int string_id = use_your_saved_info_branding
-                        ? IDS_SETTINGS_YOUR_SAVED_INFO
-                        : IDS_PASSWORDS_AND_AUTOFILL_MENU;
-    const gfx::VectorIcon& vector_icon =
-        use_your_saved_info_branding ? vector_icons::kPersonTextIcon
-                                     : vector_icons::kPasswordManagerIcon;
     AddSubMenuWithStringIdAndVectorIcon(this, IDC_PASSWORDS_AND_AUTOFILL_MENU,
-                                        string_id, sub_menus_.back().get(),
-                                        vector_icon);
+                                        IDS_PASSWORDS_AND_AUTOFILL_MENU, sub_menus_.back().get(),
+                                        vector_icons::kPasswordManagerIcon);
     SetElementIdentifierAt(
         GetIndexOfCommandId(IDC_PASSWORDS_AND_AUTOFILL_MENU).value(),
         kPasswordAndAutofillMenuItem);

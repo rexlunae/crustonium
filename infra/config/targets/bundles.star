@@ -553,20 +553,6 @@ targets.bundle(
     },
 )
 
-# Android desktop tests that run on a Linux host.
-targets.bundle(
-    name = "android_desktop_junit_tests",
-    targets = [
-        "chrome_junit_tests",
-    ],
-    mixins = [
-        "has_native_resultdb_integration",
-        "junit-swarming-emulator",
-        "linux-jammy",
-        "x86-64",
-    ],
-)
-
 targets.bundle(
     name = "android_emulator_specific_chrome_public_tests",
     targets = [
@@ -1886,6 +1872,13 @@ targets.bundle(
                 "10-x86-emulator",
                 "16-x64-emulator",
             ],
+            mixins = [
+                targets.mixin(
+                    swarming = targets.swarming(
+                        shards = 10,
+                    ),
+                ),
+            ],
         ),
         "components_junit_tests": targets.per_test_modification(
             remove_mixins = [
@@ -2142,16 +2135,6 @@ targets.bundle(
         "non_android_and_cast_and_chromeos_chromium_gtests",
         "non_android_chromium_gtests_no_nacl",
         "vr_platform_specific_chromium_gtests",
-    ],
-)
-
-# Use this for targets for which we only need the bare minimum coverage on
-# Linux.
-targets.bundle(
-    name = "chromium_linux_gtests_once",
-    targets = [
-        "trees_in_viz_blink_platform_unittests",
-        "trees_in_viz_cc_unittests",
     ],
 )
 
@@ -2561,7 +2544,6 @@ targets.bundle(
         "cronet_smoketests_missing_native_library_instrumentation_apk",
         "cronet_smoketests_platform_only_instrumentation_apk",
         "cronet_test_instrumentation_apk",
-        "cronet_tests_android",
         "cronet_unittests_android",
         "net_unittests",
     ],
@@ -2582,7 +2564,6 @@ targets.bundle(
         "cronet_smoketests_missing_native_library_instrumentation_apk",
         "cronet_smoketests_platform_only_instrumentation_apk",
         "cronet_test_instrumentation_apk",
-        "cronet_tests_android",
         "cronet_unittests_android",
         "net_unittests",
     ],
@@ -2665,6 +2646,18 @@ targets.bundle(
         "gpu_dawn_common_isolated_scripts",
         "gpu_dawn_webgpu_blink_web_tests",
         "gpu_dawn_webgpu_blink_web_tests_force_swiftshader",
+    ],
+)
+
+# This compiles tests which are run on Dawn standalone builders, which allows
+# us to keep compile coverage of all tests in gpu_dawn_integration_gtests_passthrough
+# and gpu_dawn_isolated_scripts even if we use gpu_common_gtests_passthrough
+# and gpu_dawn_telemetry_tests for testing.
+targets.bundle(
+    name = "dawn_standalone_tests_compile_only",
+    additional_compile_targets = [
+        "dawn_end2end_tests",
+        "dawn_perf_tests",
     ],
 )
 
@@ -2880,6 +2873,7 @@ targets.bundle(
     name = "fieldtrial_browser_tests_mac",
     targets = [
         "accessibility_unittests_no_field_trial",
+        "browser_tests_no_field_trial",
         "components_browsertests_no_field_trial",
         "content_browsertests_no_field_trial",
         "interactive_ui_tests_no_field_trial",
@@ -2888,6 +2882,12 @@ targets.bundle(
     per_test_modifications = {
         "accessibility_unittests_no_field_trial": targets.mixin(
             ci_only = True,
+        ),
+        "browser_tests_no_field_trial": targets.mixin(
+            ci_only = True,
+            swarming = targets.swarming(
+                shards = 10,
+            ),
         ),
         "components_browsertests_no_field_trial": targets.mixin(
             ci_only = True,
@@ -4880,7 +4880,14 @@ targets.bundle(
     name = "gtests_once",
     targets = [
         "layer_list_mode_cc_unittests",
+        "trees_in_viz_blink_platform_unittests",
+        "trees_in_viz_cc_unittests",
     ],
+    per_test_modifications = {
+        "trees_in_viz_blink_platform_unittests": [
+            "skia_gold_test",
+        ],
+    },
 )
 
 targets.bundle(
@@ -4957,6 +4964,16 @@ targets.bundle(
                 "SIM_IPHONE_15_PRO_MAX_18_5",
             ],
         ),
+        targets.bundle(
+            targets = "ios_swift_interop_xcuitests",
+            mixins = [
+                "xcodebuild_sim_runner",
+            ],
+            variants = [
+                "SIM_IPAD_PRO_7TH_GEN_18_5",
+                "SIM_IPHONE_15_18_5",
+            ],
+        ),
     ],
 )
 
@@ -5013,6 +5030,16 @@ targets.bundle(
                 "SIM_IPHONE_SE_3RD_GEN_18_5",
             ],
         ),
+        targets.bundle(
+            targets = "ios_swift_interop_xcuitests",
+            mixins = [
+                "xcodebuild_sim_runner",
+            ],
+            variants = [
+                "SIM_IPAD_PRO_7TH_GEN_18_5",
+                "SIM_IPHONE_15_18_5",
+            ],
+        ),
     ],
 )
 
@@ -5066,6 +5093,16 @@ targets.bundle(
                 "SIM_IPHONE_SE_3RD_GEN_26_2",
             ],
         ),
+        targets.bundle(
+            targets = "ios_swift_interop_xcuitests",
+            mixins = [
+                "xcodebuild_sim_runner",
+            ],
+            variants = [
+                "SIM_IPAD_AIR_6TH_GEN_26_2",
+                "SIM_IPHONE_16_26_2",
+            ],
+        ),
     ],
 )
 
@@ -5105,6 +5142,16 @@ targets.bundle(
                 "SIM_IPAD_AIR_6TH_GEN_26_2",
                 "SIM_IPHONE_16_26_2",
                 "SIM_IPHONE_SE_3RD_GEN_26_2",
+            ],
+        ),
+        targets.bundle(
+            targets = "ios_swift_interop_xcuitests",
+            mixins = [
+                "xcodebuild_sim_runner",
+            ],
+            variants = [
+                "SIM_IPAD_AIR_6TH_GEN_26_2",
+                "SIM_IPHONE_16_26_2",
             ],
         ),
     ],
@@ -5743,6 +5790,13 @@ targets.bundle(
     ],
 )
 
+targets.bundle(
+    name = "ios_swift_interop_xcuitests",
+    targets = [
+        "ios_swift_interop_xcuitests_module",
+    ],
+)
+
 # This is essentially ios_eg2_cq_tests but runs on more shards,
 # because VM has slightly worse performance than bare metal.
 # TODO(crbug.com/427497507): remove once we have launced more VMs.
@@ -6039,7 +6093,6 @@ targets.bundle(
         "components_unittests",
         "content_unittests",
         "crashpad_tests",
-        "cronet_unittests",
         "device_unittests",
         "net_unittests",
         # TODO(crbug.com/40274401): Enable this.
@@ -6253,8 +6306,6 @@ targets.bundle(
 targets.bundle(
     name = "non_android_and_cast_and_chromeos_chromium_gtests",
     targets = [
-        "cronet_tests",
-        "cronet_unittests",
         "headless_browsertests",
         "headless_unittests",
     ],
@@ -6286,7 +6337,7 @@ targets.bundle(
     per_test_modifications = {
         "browser_tests": targets.mixin(
             swarming = targets.swarming(
-                shards = 10,
+                shards = 15,
             ),
         ),
         "interactive_ui_tests": targets.mixin(

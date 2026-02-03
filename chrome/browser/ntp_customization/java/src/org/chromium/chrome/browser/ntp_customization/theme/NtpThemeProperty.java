@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.ntp_customization.theme;
 
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.util.Pair;
 import android.view.View;
@@ -57,11 +58,28 @@ public class NtpThemeProperty {
 
     // The top margin in pixels applied to the layout to avoid overlapping with the status bar and
     // the tool bar.
-    public static final PropertyModel.WritableIntPropertyKey TOP_INSETS =
+    public static final PropertyModel.WritableIntPropertyKey TOP_GUIDELINE_BEGIN =
             new PropertyModel.WritableIntPropertyKey();
 
-    // The bottom margin in pixels applied to the layout to avoid overlapping with navigation bars.
-    public static final PropertyModel.WritableIntPropertyKey BOTTOM_MARGIN =
+    // The bottom inset in pixels to ensure interactive buttons clear the system navigation
+    // bar.
+    public static final PropertyModel.WritableIntPropertyKey BOTTOM_INSETS =
+            new PropertyModel.WritableIntPropertyKey();
+
+    // The left, right, and bottom insets to be applied as view padding.
+    public static final PropertyModel.WritableObjectPropertyKey<Rect> SIDE_AND_BOTTOM_INSETS =
+            new PropertyModel.WritableObjectPropertyKey<>();
+
+    // The width of the search box in pixels.
+    public static final PropertyModel.WritableIntPropertyKey SEARCH_BOX_WIDTH =
+            new PropertyModel.WritableIntPropertyKey();
+
+    // The height of the search box in pixels.
+    public static final PropertyModel.WritableIntPropertyKey SEARCH_BOX_HEIGHT =
+            new PropertyModel.WritableIntPropertyKey();
+
+    // The top margin of the search box in pixels.
+    public static final PropertyModel.WritableIntPropertyKey SEARCH_BOX_TOP_MARGIN =
             new PropertyModel.WritableIntPropertyKey();
 
     public static final PropertyKey[] THEME_KEYS =
@@ -77,10 +95,14 @@ public class NtpThemeProperty {
                 BITMAP_FOR_PREVIEW,
                 PREVIEW_SAVE_CLICK_LISTENER,
                 PREVIEW_CANCEL_CLICK_LISTENER,
-                BOTTOM_MARGIN,
                 LOGO_BITMAP,
                 LOGO_VISIBILITY,
                 LOGO_PARAMS,
-                TOP_INSETS
+                TOP_GUIDELINE_BEGIN,
+                BOTTOM_INSETS,
+                SIDE_AND_BOTTOM_INSETS,
+                SEARCH_BOX_WIDTH,
+                SEARCH_BOX_HEIGHT,
+                SEARCH_BOX_TOP_MARGIN
             };
 }

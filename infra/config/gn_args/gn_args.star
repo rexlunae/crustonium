@@ -838,6 +838,13 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "disable_be_deferred_context_menu",
+    args = {
+        "use_be_deferred_context_menu": False,
+    },
+)
+
+gn_args.config(
     name = "ios_simulator",
     args = {"target_environment": "simulator"},
     configs = ["ios"],
@@ -1215,6 +1222,13 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "sanitizer_coverage_skip_stdlib_and_absl",
+    args = {
+        "sanitizer_coverage_skip_stdlib_and_absl": True,
+    },
+)
+
+gn_args.config(
     name = "shared",
     args = {
         "is_component_build": True,
@@ -1557,4 +1571,9 @@ gn_args.config(
     args = {
         "high_end_fuzzer_targets": True,
     },
+)
+
+gn_args.config(
+    name = "enable_swift_cxx_interop",
+    args = {"enable_swift_cxx_interop": True},
 )

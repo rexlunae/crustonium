@@ -449,8 +449,6 @@ class TabStripModel {
   // Cause a tab to display a UI indication to the user that it needs their
   // attention.
   void SetTabNeedsAttentionAt(int index, bool attention);
-  void SetTabGroupNeedsAttention(const tab_groups::TabGroupId& group,
-                                 bool attention);
 
   // Close all tabs at once. Code can use closing_all() above to defer
   // operations that might otherwise by invoked by the flurry of detach/select
@@ -568,8 +566,11 @@ class TabStripModel {
 
   // Sets the selection to match that of |source|.
   void SetSelectionFromModel(ui::ListSelectionModel source);
+  void SetSelectionFromModel(const tabs::TabStripModelSelectionState& source);
 
-  ui::ListSelectionModel selection_model() const;
+  const tabs::TabStripModelSelectionState& selection_model() const {
+    return selection_model_;
+  }
 
   // Features that want to show tabstrip-modal UI are mutually exclusive.
   // Before showing a modal UI first check `CanShowModalUI`. Then call
@@ -780,6 +781,8 @@ class TabStripModel {
     CommandGlicStopShare,
     CommandGlicShare,
     CommandGlicCreateNewChat,
+    CommandGlicSwitchToRecentConversation,
+    CommandGlicUnshare,
 #endif
     CommandLast
   };

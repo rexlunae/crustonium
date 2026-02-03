@@ -46,22 +46,16 @@ class UnexportableKeyServiceProxied : public UnexportableKeyService {
       BackgroundTaskPriority priority,
       base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback)
       override;
-  void CopyKeyFromOtherService(
-      const UnexportableKeyService& other_service,
-      UnexportableKeyId key_id_from_other_service,
-      BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback)
-      override;
   void SignSlowlyAsync(
       const UnexportableKeyId key_id,
       base::span<const uint8_t> data,
       BackgroundTaskPriority priority,
       base::OnceCallback<void(ServiceErrorOr<std::vector<uint8_t>>)> callback)
       override;
-  void DeleteKeySlowlyAsync(
-      UnexportableKeyId key_id,
+  void DeleteKeysSlowlyAsync(
+      base::span<const UnexportableKeyId> key_ids,
       BackgroundTaskPriority priority,
-      base::OnceCallback<void(ServiceErrorOr<void>)> callback) override;
+      base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) override;
   void DeleteAllKeysSlowlyAsync(
       BackgroundTaskPriority priority,
       base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) override;

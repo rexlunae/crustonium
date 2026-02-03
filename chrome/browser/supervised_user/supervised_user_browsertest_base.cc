@@ -7,37 +7,37 @@
 #include <memory>
 #include <utility>
 
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/supervised_user/android/supervised_user_service_platform_delegate.h"
 #include "chrome/browser/supervised_user/child_accounts/child_account_service_factory.h"
 #include "chrome/browser/supervised_user/child_accounts/list_family_members_service_factory.h"
-#include "chrome/browser/supervised_user/supervised_user_content_filters_service_factory.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/test/base/android/android_browser_test.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/safe_search_api/url_checker_client.h"
 #include "components/supervised_user/core/browser/child_account_service.h"
+#include "components/supervised_user/core/browser/device_parental_controls.h"
+#include "components/supervised_user/core/browser/family_link_url_filter.h"
 #include "components/supervised_user/core/browser/kids_chrome_management_url_checker_client.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_test_environment.h"
-#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
+#include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
+#include "components/supervised_user/test_support/supervised_user_url_filter_test_utils.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "base/check_deref.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/global_features.h"
 #include "components/supervised_user/core/browser/android/android_parental_controls.h"
-#include "components/supervised_user/core/browser/android/content_filters_observer_bridge.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace supervised_user {
@@ -66,25 +66,21 @@ std::unique_ptr<KeyedService> BuildSupervisedUserService(
     content::BrowserContext* context) {
   Profile* profile = Profile::FromBrowserContext(context);
   ProfileKey* profile_key = profile->GetProfileKey();
+  FamilyLinkSettingsService& settings_service = CHECK_DEREF(
+      FamilyLinkSettingsServiceFactory::GetInstance()->GetForKey(profile_key));
 
   return std::make_unique<SupervisedUserService>(
       IdentityManagerFactory::GetForProfile(profile),
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess(),
-      *profile->GetPrefs(),
-      *SupervisedUserSettingsServiceFactory::GetForKey(profile_key),
-      SupervisedUserContentFiltersServiceFactory::GetForKey(profile_key),
+      *profile->GetPrefs(), settings_service,
       SyncServiceFactory::GetForProfile(profile),
-      std::make_unique<SupervisedUserURLFilter>(
-          *profile->GetPrefs(), std::make_unique<FakeURLFilterDelegate>(),
+      std::make_unique<FamilyLinkUrlFilter>(
+          settings_service, *profile->GetPrefs(),
+          std::make_unique<FakeURLFilterDelegate>(),
           std::make_unique<WrappedUrlCheckerClient>(mock_url_checker_client)),
-      std::make_unique<SupervisedUserServicePlatformDelegate>(*profile)
-#if BUILDFLAG(IS_ANDROID)
-          ,
-      CHECK_DEREF(
-          g_browser_process->GetFeatures()->GetAndroidParentalControls())
-#endif  // BUILDFLAG(IS_ANDROID)
-  );
+      std::make_unique<SupervisedUserServicePlatformDelegate>(*profile),
+      g_browser_process->device_parental_controls());
 }
 }  // namespace
 
@@ -108,9 +104,9 @@ void SupervisedUserBrowserTestBase::SetUpBrowserContextKeyedServices(
   }
 
 #if BUILDFLAG(IS_ANDROID)
-  GetAndroidParentalControls()->SetBrowserContentFiltersEnabledForTesting(
+  GetDeviceParentalControls().SetBrowserContentFiltersEnabledForTesting(
       initial_state_.android_parental_controls.browser_filter);
-  GetAndroidParentalControls()->SetSearchContentFiltersEnabledForTesting(
+  GetDeviceParentalControls().SetSearchContentFiltersEnabledForTesting(
       initial_state_.android_parental_controls.search_filter);
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -135,6 +131,10 @@ SupervisedUserService* SupervisedUserBrowserTestBase::GetSupervisedUserService()
     const {
   return SupervisedUserServiceFactory::GetForProfile(GetProfile());
 }
+SupervisedUserUrlFilteringService*
+SupervisedUserBrowserTestBase::GetSupervisedUserUrlFilteringService() const {
+  return SupervisedUserUrlFilteringServiceFactory::GetForProfile(GetProfile());
+}
 
 MockUrlCheckerClient& SupervisedUserBrowserTestBase::GetMockUrlCheckerClient() {
   return mock_url_checker_client_;
@@ -148,9 +148,15 @@ base::WeakPtr<MockUrlCheckerClient> MockUrlCheckerClient::GetWeakPtr() {
 }
 
 #if BUILDFLAG(IS_ANDROID)
-AndroidParentalControls*
-SupervisedUserBrowserTestBase::GetAndroidParentalControls() {
-  return g_browser_process->GetFeatures()->GetAndroidParentalControls();
+AndroidParentalControls&
+SupervisedUserBrowserTestBase::GetDeviceParentalControls() {
+  return static_cast<AndroidParentalControls&>(
+      g_browser_process->device_parental_controls());
+}
+#else
+DeviceParentalControls&
+SupervisedUserBrowserTestBase::GetDeviceParentalControls() {
+  return g_browser_process->device_parental_controls();
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 

@@ -29,6 +29,8 @@
 
 #include "third_party/blink/renderer/core/css/selector_checker.h"
 
+#include <algorithm>
+
 #include "base/auto_reset.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/check_pseudo_has_argument_context.h"
@@ -45,6 +47,7 @@
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
+#include "third_party/blink/renderer/core/dom/node-inl.h"
 #include "third_party/blink/renderer/core/dom/nth_index_cache.h"
 #include "third_party/blink/renderer/core/dom/popover_data.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
@@ -64,6 +67,7 @@
 #include "third_party/blink/renderer/core/html/forms/html_button_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_field_set_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
@@ -328,7 +332,7 @@ static bool MatchesLangPseudoClass(
 
 // The associated host, if we are matching in the context of a shadow tree.
 //
-// https://drafts.csswg.org/css-scoping-1/#in-the-context-of-a-shadow-tree
+// https://drafts.csswg.org/css-shadow-1/#in-the-context-of-a-shadow-tree
 static Element* ShadowHost(
     const SelectorChecker::SelectorCheckingContext& context) {
   if (auto* shadow_root = DynamicTo<ShadowRoot>(context.tree_scope)) {
@@ -340,7 +344,7 @@ static Element* ShadowHost(
 // Returns true if we're matching in the context of a shadow tree [1],
 // and currently pointing at the host associated with that shadow tree.
 //
-// [1] https://drafts.csswg.org/css-scoping-1/#in-the-context-of-a-shadow-tree
+// [1] https://drafts.csswg.org/css-shadow-1/#in-the-context-of-a-shadow-tree
 bool IsAtShadowHost(const SelectorChecker::SelectorCheckingContext& context) {
   return ShadowHost(context) == context.element;
 }
@@ -356,7 +360,7 @@ bool IsAtShadowHost(const SelectorChecker::SelectorCheckingContext& context) {
 // not escape the tree, since we have UA rules that rely on this behavior.
 // TODO(crbug.com/396459461): Find a better solution for styling UA shadows.
 //
-// [1] https://drafts.csswg.org/css-scoping-1/#in-the-context-of-a-shadow-tree
+// [1] https://drafts.csswg.org/css-shadow-1/#in-the-context-of-a-shadow-tree
 
 static Element* ParentElement(
     const SelectorChecker::SelectorCheckingContext& context) {
@@ -814,6 +818,8 @@ SelectorChecker::FeaturelessMatch SelectorChecker::MatchShadowHost(
     case CSSSelector::kPseudoTargetCurrent:
     case CSSSelector::kPseudoTargetBefore:
     case CSSSelector::kPseudoTargetAfter:
+    case CSSSelector::kPseudoToolFormActive:
+    case CSSSelector::kPseudoToolSubmitActive:
     case CSSSelector::kPseudoViewTransition:
     case CSSSelector::kPseudoViewTransitionGroup:
     case CSSSelector::kPseudoViewTransitionGroupChildren:
@@ -824,6 +830,7 @@ SelectorChecker::FeaturelessMatch SelectorChecker::MatchShadowHost(
     case CSSSelector::kPseudoScrollMarkerGroup:
     case CSSSelector::kPseudoScrollButton:
     case CSSSelector::kPseudoOverscrollAreaParent:
+    case CSSSelector::kPseudoSelectHasSlottedButton:
       // These pseudos are not allowed to match featureless elements. When
       // adding new pseudos here, they would typically be allowed if they are
       // logical pseudos which take selector arguments.
@@ -1431,7 +1438,7 @@ ALWAYS_INLINE bool SelectorChecker::CheckOne(
   // :not().) Having a separate code path for matching featureless elements
   // (MatchShadowHost) ensures the featureless matching is done correctly.
   //
-  // [1] https://drafts.csswg.org/css-scoping/#host-element-in-tree
+  // [1] https://drafts.csswg.org/css-shadow/#host-element-in-tree
   // [2] https://github.com/w3c/csswg-drafts/issues/9025
   // [3] https://drafts.csswg.org/selectors-4/#data-model
   if (ShadowHost(context) == element &&
@@ -2424,6 +2431,11 @@ bool SelectorChecker::CheckPseudoClass(const SelectorCheckingContext& context,
       }
       return selector.MatchNth(NthIndexCache::NthLastOfTypeIndex(element));
     }
+    case CSSSelector::kPseudoSelectHasSlottedButton:
+      if (auto* select = DynamicTo<HTMLSelectElement>(element)) {
+        return select->SlottedButton();
+      }
+      return false;
     case CSSSelector::kPseudoSelectorFragmentAnchor:
       return MatchesSelectorFragmentAnchorPseudoClass(element);
     case CSSSelector::kPseudoTarget:
@@ -2452,6 +2464,17 @@ bool SelectorChecker::CheckPseudoClass(const SelectorCheckingContext& context,
     case CSSSelector::kPseudoAutofillPreviewed:
     case CSSSelector::kPseudoAutofillSelected:
       return CheckPseudoAutofill(selector.GetPseudoType(), element);
+    case CSSSelector::kPseudoToolFormActive:
+      if (auto* form_element = DynamicTo<HTMLFormElement>(element)) {
+        return form_element->MatchesToolFormActivePseudoClass();
+      }
+      return false;
+    case CSSSelector::kPseudoToolSubmitActive:
+      if (auto* form_control_element =
+              DynamicTo<HTMLFormControlElement>(element)) {
+        return form_control_element->MatchesToolSubmitActivePseudoClass();
+      }
+      return false;
     case CSSSelector::kPseudoAnyLink:
     case CSSSelector::kPseudoWebkitAnyLink:
       return element.IsLink();
@@ -3286,8 +3309,8 @@ bool SelectorChecker::CheckPseudoElement(const SelectorCheckingContext& context,
       // contained in the pseudo-element's classes (pseudo_ident_list).
       return std::ranges::all_of(base::span(selector.IdentList()).subspan(1ul),
                                  [&](const AtomicString& class_from_selector) {
-                                   return base::Contains(pseudo_ident_list,
-                                                         class_from_selector);
+                                   return std::ranges::contains(
+                                       pseudo_ident_list, class_from_selector);
                                  });
     }
     case CSSSelector::kPseudoScrollbarButton:
@@ -3429,7 +3452,7 @@ bool SelectorChecker::CheckPseudoHost(const SelectorCheckingContext& context,
   // following MatchSelector call, since we are no longer matching in *its*
   // shadow-tree-context.
   //
-  // [1] https://drafts.csswg.org/css-scoping-1/#host-selector
+  // [1] https://drafts.csswg.org/css-shadow-1/#host-selector
   sub_context.tree_scope = &context.element->GetTreeScope();
   sub_context.scope = &sub_context.tree_scope->RootNode();
 
@@ -3628,7 +3651,7 @@ bool SelectorChecker::MatchesActiveViewTransitionPseudoClass(
 }
 
 bool SelectorChecker::MatchesOverscrollTarget(const Element& element) {
-  if (!RuntimeEnabledFeatures::CSSOverscrollGesturesEnabled()) {
+  if (!RuntimeEnabledFeatures::OverscrollGesturesEnabled()) {
     return false;
   }
 

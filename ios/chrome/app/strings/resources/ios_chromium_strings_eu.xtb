@@ -41,6 +41,9 @@
 <translation id="1707458603865303524">Erabili Chromium mezuetako edo beste aplikazioetako estekak sakatzen dituzunean.</translation>
 <translation id="1722370509450468186">Pasahitza kontuan gordeko da (<ph name="EMAIL" />).</translation>
 <translation id="1747088204252710672">Zuretzat sortutako jario pertsonalizatua</translation>
+<translation id="1761196287436320018">Chromium-ek onartzen dituen laster-marken mugara iritsi zara (<ph name="LIMIT" />). Beraz, laster-marka batzuk ez dira gorde Google-ko kontuan oraindik.
+
+Laster-marka batzuk ezabatu arte, ezingo da beste laster-markarik gorde kontuan. Orain saioa amaitzen baduzu, gorde gabeko laster-markak ezabatuko dira.</translation>
 <translation id="1811860791247653035">Pertsonalizazioa eta beste eginbide batzuk eskuratzeko, sartu Chromium hauen barruan: <ph name="FEATURE_NAME_1" /> eta <ph name="FEATURE_NAME_2" /></translation>
 <translation id="1838412507805038478">Webgunearen ziurtagiria <ph name="ISSUER" /> hornitzaileak jaulki duela egiaztatu du Chromium-ek.</translation>
 <translation id="1839447949248872139">Ireki estekak Chromium-en modu lehenetsian</translation>
@@ -129,6 +132,7 @@ Kontua aldatu aurretik, itxaron minutu batzuk. Kontua orain aldatzen baduzu, dat
 <translation id="3728124580182886854">Lotu Chromium eta Google-ren beste zerbitzuak pertsonalizaziorako eta bestelako helburu batzuetarako</translation>
 <translation id="377649297473651452">Chromium-en betetze automatikoaren ikuspegi zabaldua</translation>
 <translation id="3780779443901618967">Webgune arriskutsuen berri ematen dizu, Google-k ezagutzen ez zituenak barne, webguneetan babes estandarrak baino datu gehiago aztertuz. Chromium-en abisuak saltatzea aukera dezakezu.</translation>
+<translation id="3793136096560888222">Editatu irudia Chromium-eko Gemini-rekin</translation>
 <translation id="3805899903892079518">Chromium-ek ez du argazki eta bideoetarako sarbiderik. Gaitu sarbidea iOS sistemako Settings &gt; Privacy &gt; Photos atalean.</translation>
 <translation id="3816686541346279443">Chromium-ek pasahitza gordetzea nahi duzun galdetuko dizu.</translation>
 <translation id="3827545470516145620">Babes estandarra darabilzu gailu honetan</translation>
@@ -296,7 +300,6 @@ Zure pasaesaldia dakitenek soilik irakur ditzakete zure datu enkriptatuak. Googl
 <translation id="7554983317097061001">Chromium-i buruzko aholkua: eraman Chromium zintara</translation>
 <translation id="7576863740961052505">Kudeatu Chromium-en ezarpenak</translation>
 <translation id="7674213385180944843">Ireki Ezarpenak &gt; Pribatutasuna &gt; Kamera &gt; Chromium, eta aktibatu kamera.</translation>
-<translation id="7685160423563372998">Sortu irudi bat Chromium-eko Gemini-rekin</translation>
 <translation id="7733418656985455268">Chromium-erako aholkua: bilatu Lens bidez</translation>
 <translation id="7747820849741499258">Bilatu Chromium-en</translation>
 <translation id="7753923083404296545">Ireki da Chromium-en ezkutuko moduan</translation>

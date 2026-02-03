@@ -39,6 +39,7 @@
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_test_utils.h"
 #include "chrome/browser/preloading/preview/preview_test_util.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
@@ -490,6 +491,8 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
   content::RenderFrameHost* RenderFrameHost() const {
     return web_contents()->GetPrimaryMainFrame();
   }
+  test::ScopedPrewarmFeatureList scoped_prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
@@ -2863,6 +2866,10 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
   embedded_test_server()->ServeFilesFromSourceDirectory("content/test/data");
   ASSERT_TRUE(embedded_test_server()->Start());
 
+  // Make sure that the initial implicit navigation is ended by navigating to an
+  // untracked URL.
+  NavigateToUntrackedUrl();
+
   {
     // Initial browser initiated navigation.
     base::HistogramTester histogram_tester;
@@ -2887,6 +2894,25 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
         internal::kHistogramInputCoverageWithoutUserGestureBrowserInitiated, 0);
     histogram_tester.ExpectTotalCount(
         internal::kHistogramInputCoverageWithoutUserGestureRendererInitiated,
+        0);
+    histogram_tester.ExpectTotalCount("Navigation.Timeline.Total.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.MainFrameOnly.Duration",
+        1);
+    EXPECT_GT(
+        histogram_tester.GetTotalSum("Navigation.Timeline.Total.Duration"), 0);
+    // InteractionTo* metrics are not recorded when there is no user input.
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.InteractionToActualNavigationStart.Duration", 0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.InteractionToNavigationFinished."
+        "MainFrameOnly.Duration",
+        0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.InteractionToNavigationFinished."
+        "ExcludingBeforeUnload.MainFrameOnly.Duration",
         0);
   }
 
@@ -2926,6 +2952,14 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
         internal::kHistogramInputCoverageWithoutUserGestureBrowserInitiated, 0);
     histogram_tester.ExpectTotalCount(
         internal::kHistogramInputCoverageWithoutUserGestureRendererInitiated,
+        1);
+    histogram_tester.ExpectTotalCount("Navigation.Timeline.Total.Duration", 1);
+    EXPECT_GT(
+        histogram_tester.GetTotalSum("Navigation.Timeline.Total.Duration"), 0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.MainFrameOnly.Duration",
         1);
     // InteractionTo* metrics are not recorded when there is no user input.
     histogram_tester.ExpectTotalCount(
@@ -2984,20 +3018,45 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
     histogram_tester.ExpectTotalCount(
         internal::kHistogramInputCoverageWithoutUserGestureRendererInitiated,
         0);
+    histogram_tester.ExpectTotalCount("Navigation.Timeline.Total.Duration", 1);
+    int64_t total_duration =
+        histogram_tester.GetTotalSum("Navigation.Timeline.Total.Duration");
+    EXPECT_GT(total_duration, 0);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.Duration", 1);
+    histogram_tester.ExpectTotalCount(
+        "Navigation.Timeline.TotalExcludingBeforeUnload.MainFrameOnly.Duration",
+        1);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToActualNavigationStart.Duration", 1);
+    EXPECT_GT(
+        histogram_tester.GetTotalSum(
+            "Navigation.Timeline.InteractionToActualNavigationStart.Duration"),
+        0);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToActualNavigationStart."
         "MainFrameOnly.Duration",
         1);
+    EXPECT_GT(histogram_tester.GetTotalSum(
+                  "Navigation.Timeline.InteractionToActualNavigationStart."
+                  "MainFrameOnly.Duration"),
+              0);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToNavigationFinished."
         "MainFrameOnly.Duration",
         1);
+    EXPECT_GT(histogram_tester.GetTotalSum(
+                  "Navigation.Timeline.InteractionToNavigationFinished."
+                  "MainFrameOnly.Duration"),
+              total_duration);
     histogram_tester.ExpectTotalCount(
         "Navigation.Timeline.InteractionToNavigationFinished."
         "ExcludingBeforeUnload.MainFrameOnly.Duration",
         1);
+    EXPECT_GT(histogram_tester.GetTotalSum(
+                  "Navigation.Timeline.InteractionToNavigationFinished."
+                  "ExcludingBeforeUnload.MainFrameOnly.Duration"),
+              total_duration);
   }
 }
 
@@ -4574,7 +4633,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPageLoadMetricsBrowserTest,
 
   // Load a page in the prerender.
   GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper_.AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   EXPECT_FALSE(host_observer.was_activated());

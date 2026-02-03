@@ -39,13 +39,18 @@ enum class SharedImageAccessStream {
   kDawnBuffer,
   kMemory,
   kVaapi,
-  kWebNNTensor
+  kWebNNTensor,
+  kVulkan
 };
+
+GPU_GLES2_EXPORT std::ostream& operator<<(
+    std::ostream& os,
+    SharedImageAccessStream access_stream);
 
 // Used to represent what access streams a backing can be used for.
 using AccessStreamSet = base::EnumSet<SharedImageAccessStream,
                                       SharedImageAccessStream::kSkia,
-                                      SharedImageAccessStream::kWebNNTensor>;
+                                      SharedImageAccessStream::kVulkan>;
 
 // A CompoundImageBacking is a specialized container that manages one or more
 // underlying SharedImageBacking instances of different types. It serves as a
@@ -153,6 +158,19 @@ class GPU_GLES2_EXPORT CompoundImageBacking
       std::string debug_label,
       gfx::BufferUsage buffer_usage);
 
+  // Wraps a backing in a CompoundImageBacking. This is used to enable
+  // CompoundImageBacking as the default, where it serves as the sole backing.
+  // To achieve this, SharedImageFactory creates the standard backing and then
+  // wraps it using this method.
+  // TODO(crbug.com/448962784): Once CompoundImageBacking is fully enabled by
+  // default, it will be directly creating underlying backing itself and
+  // SharedImageFactory will be refactored to move most of backing creation
+  // logic inside CompoundImageBacking.
+  static std::unique_ptr<SharedImageBacking> WrapExternalBacking(
+      SharedImageFactory* shared_image_factory,
+      scoped_refptr<SharedImageCopyManager> copy_manager,
+      std::unique_ptr<SharedImageBacking> backing);
+
   ~CompoundImageBacking() override;
 
   // Called by wrapped representations before access. This will update
@@ -168,6 +186,7 @@ class GPU_GLES2_EXPORT CompoundImageBacking
                        RepresentationAccessMode mode);
 
   // SharedImageBacking implementation.
+  void OnContextLost() override;
   SharedImageBackingType GetType() const override;
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
   bool CopyToGpuMemoryBuffer() override;
@@ -242,6 +261,19 @@ class GPU_GLES2_EXPORT CompoundImageBacking
   std::unique_ptr<MemoryImageRepresentation> ProduceMemory(
       SharedImageManager* manager,
       MemoryTypeTracker* tracker) override;
+  std::unique_ptr<VideoImageRepresentation> ProduceVideo(
+      SharedImageManager* manager,
+      MemoryTypeTracker* tracker,
+      VideoDevice device) override;
+
+#if BUILDFLAG(ENABLE_VULKAN)
+  std::unique_ptr<VulkanImageRepresentation> ProduceVulkan(
+      SharedImageManager* manager,
+      MemoryTypeTracker* tracker,
+      gpu::VulkanDeviceQueue* vulkan_device_queue,
+      gpu::VulkanImplementation& vulkan_impl,
+      bool needs_detiling) override;
+#endif
 
  private:
   friend class CompoundImageBackingTest;
@@ -321,6 +353,12 @@ class GPU_GLES2_EXPORT CompoundImageBacking
       base::WeakPtr<SharedImageBackingFactory> gpu_backing_factory,
       scoped_refptr<SharedImageCopyManager> copy_manager,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
+
+  CompoundImageBacking(bool is_thread_safe,
+                       std::optional<gfx::BufferUsage> buffer_usage,
+                       std::unique_ptr<SharedImageBacking> backing,
+                       scoped_refptr<SharedImageCopyManager> copy_manager,
+                       base::WeakPtr<SharedImageFactory> shared_image_factory);
 
   base::trace_event::MemoryAllocatorDump* OnMemoryDump(
       const std::string& dump_name,

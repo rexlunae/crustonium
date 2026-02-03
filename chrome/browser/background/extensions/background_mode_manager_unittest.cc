@@ -120,7 +120,9 @@ class TestStatusIcon : public StatusIcon {
 class TestStartupLaunchManager : public StartupLaunchManager {
  public:
   explicit TestStartupLaunchManager(BrowserProcess* browser_process)
-      : StartupLaunchManager(browser_process) {}
+      : StartupLaunchManager(browser_process) {
+    CommitLaunchOnStartupState();
+  }
 
   MOCK_METHOD1(UpdateLaunchOnStartup,
                void(std::optional<StartupLaunchMode> startup_mode));
@@ -219,6 +221,12 @@ class BackgroundModeManagerTest : public testing::Test {
         std::vector<
             raw_ptr<policy::ConfigurationPolicyProvider, VectorExperimental>>{
             &policy_provider_});
+
+#if BUILDFLAG(IS_WIN)
+    // Explicitly disable foreground launches.
+    g_browser_process->local_state()->SetBoolean(
+        prefs::kForegroundLaunchOnLogin, false);
+#endif  // BUILDFLAG(IS_WIN)
 
     startup_launch_manager_override_ =
         GlobalFeatures::GetUserDataFactoryForTesting().AddOverrideForTesting(

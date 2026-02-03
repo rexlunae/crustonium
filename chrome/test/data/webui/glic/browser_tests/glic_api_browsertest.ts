@@ -1,8 +1,8 @@
 // Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-import {CaptureRegionErrorReason, HostCapability, MetricUserInputReactionType, PanelStateKind, ResponseStopCause, ScrollToErrorReason, WebClientMode} from '/glic/glic_api/glic_api.js';
-import type {CaptureRegionResult, FocusedTabData, GetPinCandidatesOptions, GlicBrowserHost, OpenPanelInfo, PageMetadata, PanelOpeningData, ScrollToError, TabData, UserProfileInfo, ZeroStateSuggestionsV2} from '/glic/glic_api/glic_api.js';
+import {CaptureRegionErrorReason, HostCapability, MetricUserInputReactionType, PanelStateKind, Platform, ResponseStopCause, ScrollToErrorReason, WebClientMode} from '/glic/glic_api/glic_api.js';
+import type {CancelActionsResult, CaptureRegionResult, FocusedTabData, GetPinCandidatesOptions, GlicBrowserHost, OpenPanelInfo, PageMetadata, PanelOpeningData, ScrollToError, TabData, UserConfirmationDialogRequest, UserProfileInfo, ZeroStateSuggestionsV2} from '/glic/glic_api/glic_api.js';
 
 import {ApiTestError, ApiTestFixtureBase, assertDefined, assertEquals, assertFalse, assertNotEquals, assertRejects, assertTrue, assertUndefined, checkDefined, mapObservable, observeSequence, readStream, runUntil, sleep, testMain, waitFor, WebClient} from './browser_test_base.js';
 import type {SequencedSubscriber} from './browser_test_base.js';
@@ -40,6 +40,13 @@ class ApiTests extends ApiTestFixtureBase {
   async testHibernateAllAggressiveOnMemoryPressure() {}
 
   async testHibernateOnMemoryUsage() {}
+
+  async testCancelActions() {
+    assertDefined(this.host.cancelActions);
+    const taskId: number = this.testParams;
+    const result: CancelActionsResult = await this.host.cancelActions(taskId);
+    await this.advanceToNextStep(result);
+  }
 
   async testDoNothing() {}
 
@@ -105,6 +112,44 @@ class ApiTests extends ApiTestFixtureBase {
 
     await this.advanceToNextStep();
     this.host.setAudioDucking(false);
+  }
+
+  async testDialogResponseCallOrder() {
+    assertDefined(this.host.uninterruptActorTask);
+    assertDefined(this.host.createTask);
+    assertDefined(this.host.interruptActorTask);
+    assertDefined(this.host.selectUserConfirmationDialogRequestHandler);
+
+    // Create a task and subscribe to user confirmation dialog requests.
+    const task_id = await this.host.createTask();
+    const dialogRequestPromise =
+        new Promise<UserConfirmationDialogRequest>((resolve) => {
+          assertDefined(this.host.selectUserConfirmationDialogRequestHandler);
+          this.host.selectUserConfirmationDialogRequestHandler().subscribe(
+              (request: UserConfirmationDialogRequest) => {
+                resolve(request);
+              });
+        });
+
+    // Wait for the C++ side to request a dialog.
+    await this.advanceToNextStep();
+    const request: UserConfirmationDialogRequest = await dialogRequestPromise;
+
+    // Respond to the dialog request and then uninterrupt the actor task. The
+    // C++ side will check that the dialog response and uninterrupt happen in
+    // the called order.
+    assertDefined(request);
+    request.onDialogClosed({response: {permissionGranted: false}});
+
+    // TODO(b/477060111): This test fails without this. Because onDialogClosed
+    // resolves a promise, it doesn't actually postMessage the response until a
+    // yield to the event loop. It should probably return a promise which can be
+    // awaited. This await yields allowing the queued task that does the
+    // postMessage to schedule so that the response message is sent before
+    // uninterruptActorTask.
+    await new Promise((resolve) => void setTimeout(resolve, 0));
+
+    this.host.uninterruptActorTask(task_id);
   }
 
   async testPopupOpens() {
@@ -927,25 +972,33 @@ class ApiTests extends ApiTestFixtureBase {
 
   async testGetUserProfileInfo() {
     assertDefined(this.host.getUserProfileInfo);
+    assertDefined(this.host.getPlatform);
     const profileInfo = await this.host.getUserProfileInfo();
+    const platform = await this.host.getPlatform();
 
     assertEquals('Glic Testing', profileInfo.displayName);
     assertEquals('glic-test@example.com', profileInfo.email);
     assertEquals('Glic', profileInfo.givenName);
     assertEquals(false, profileInfo.isManaged!);
-    assertTrue((profileInfo.localProfileName?.length ?? 0) > 0);
-    // Can be 'Your Chrome' or 'Your Chromium'.
-    assertEquals('Your C', profileInfo.localProfileName?.substring(0, 6));
+    if (platform !== Platform.CHROME_OS) {
+      assertTrue((profileInfo.localProfileName?.length ?? 0) > 0);
+      // Can be 'Your Chrome' or 'Your Chromium'.
+      assertEquals('Your C', profileInfo.localProfileName?.substring(0, 6));
+    }
   }
 
   async testGetUserProfileInfoDoesNotDeferWhenInactive() {
     assertDefined(this.host.getUserProfileInfo);
     assertDefined(this.host.closePanel);
+    assertDefined(this.host.getPlatform);
     await this.closePanelAndWaitUntilInactive();
     const profileInfo: UserProfileInfo = await this.host.getUserProfileInfo();
+    const platform = await this.host.getPlatform();
     assertEquals('glic-test@example.com', profileInfo.email);
-    // Can be 'Your Chrome' or 'Your Chromium'.
-    assertEquals('Your C', profileInfo.localProfileName?.substring(0, 6));
+    if (platform !== Platform.CHROME_OS) {
+      // Can be 'Your Chrome' or 'Your Chromium'.
+      assertEquals('Your C', profileInfo.localProfileName?.substring(0, 6));
+    }
   }
 
   async testRefreshSignInCookies() {
@@ -956,13 +1009,17 @@ class ApiTests extends ApiTestFixtureBase {
 
   async testSignInPauseState() {
     assertDefined(this.host.getUserProfileInfo);
+    assertDefined(this.host.getPlatform);
     const profileInfo = await this.host.getUserProfileInfo();
+    const platform = await this.host.getPlatform();
 
     assertEquals('Glic Testing', profileInfo.displayName);
     assertEquals('glic-test@example.com', profileInfo.email);
     assertEquals('Glic', profileInfo.givenName);
     assertEquals(false, profileInfo.isManaged!);
-    assertTrue((profileInfo.localProfileName?.length ?? 0) > 0);
+    if (platform !== Platform.CHROME_OS) {
+      assertTrue((profileInfo.localProfileName?.length ?? 0) > 0);
+    }
   }
 
   async testSetContextAccessIndicator() {
@@ -1107,20 +1164,6 @@ class ApiTests extends ApiTestFixtureBase {
     assertDefined(this.host.setSyntheticExperimentState);
     this.host.setSyntheticExperimentState('TestTrial', 'Group1');
     this.host.setSyntheticExperimentState('TestTrial', 'Group2');
-  }
-
-  async testSetWindowDraggableAreas() {
-    const draggableAreas = [{x: 10, y: 20, width: 30, height: 40}];
-    assertDefined(this.host.setWindowDraggableAreas);
-    await this.host.setWindowDraggableAreas(
-        draggableAreas,
-    );
-    await this.advanceToNextStep(draggableAreas);
-  }
-
-  async testSetWindowDraggableAreasDefault() {
-    assertDefined(this.host.setWindowDraggableAreas);
-    await this.host.setWindowDraggableAreas([]);
   }
 
   async testSetMinimumWidgetSize() {
@@ -1635,7 +1678,7 @@ class ApiTests extends ApiTestFixtureBase {
 
   // Helper for `testFetchInactiveTabScreenshot` and
   // `testFetchInactiveTabScreenshotWhileMinimized`.
-  async fetchInactiveTabScreenshot() {
+  async fetchInactiveTabScreenshot(expectNoFocus: boolean = false) {
     assertDefined(this.host.getFocusedTabStateV2);
     assertDefined(this.host.getContextFromTab);
     assertDefined(this.host.pinTabs);
@@ -1650,7 +1693,8 @@ class ApiTests extends ApiTestFixtureBase {
     // Select the other tab.
     await this.advanceToNextStep();
     focus = await focusSequence.waitFor(
-        (f) => !!f.hasFocus && f.hasFocus.tabData.tabId !== tabId);
+        (f) => (!!f.hasFocus && f.hasFocus.tabData.tabId !== tabId) ||
+            (expectNoFocus && !!f.hasNoFocus));
 
     // Get context and verify we have a screenshot.
     const context = await this.host.getContextFromTab(tabId, {
@@ -1674,7 +1718,8 @@ class ApiTests extends ApiTestFixtureBase {
     // Tests fetching the screenshot of a tab while the browser is minimized.
     // Ideally this would work, but it currently times out and provides no
     // screenshot on some platforms.
-    const context = await this.fetchInactiveTabScreenshot();
+    const context = await this.fetchInactiveTabScreenshot(
+        /*expectNoFocus=*/ true);
     assertFalse(checkDefined(context.tabData.isObservable));
 
     if (shouldGetScreenshot) {
@@ -2516,6 +2561,11 @@ class ApiTests extends ApiTestFixtureBase {
     }
   }
 
+  async testPanelWillOpenHasPromptSuggestion() {
+    const openData = await observeSequence(this.client.panelOpenData).next();
+    assertEquals('Prompt Suggestion', openData.promptSuggestion);
+  }
+
   async testGetTabById() {
     assertDefined(this.host.getTabById);
 
@@ -2663,6 +2713,33 @@ class ApiTestWithoutOpen extends ApiTestFixtureBase {
       withErrorMessage: 'GetContextFromTab not allowed while backgrounded',
     });
   }
+
+  async testGetSkillSuccess() {
+    assertDefined(this.host.getSkillPreviews);
+    assertDefined(this.host.getSkill);
+    const skillPreviewsSequence = observeSequence(this.host.getSkillPreviews());
+    const skills = await skillPreviewsSequence.waitFor(s => s.length === 2);
+    const targetSkill = skills.find(s => s.name === 'test_skill_1');
+    assertDefined(targetSkill);
+    const actualSkill = await this.host.getSkill(targetSkill.id);
+    assertDefined(actualSkill);
+    assertEquals(actualSkill.preview.id, targetSkill.id);
+    assertEquals(actualSkill.preview.name, 'test_skill_1');
+    assertEquals(actualSkill.preview.icon, 'test_icon_1');
+    assertEquals(actualSkill.prompt, 'test_prompt_1');
+  }
+
+  async testGetSkillPreviewsSuccess() {
+    assertDefined(this.host.getSkillPreviews);
+    const skillPreviewsSequence = observeSequence(this.host.getSkillPreviews());
+    const skills = await skillPreviewsSequence.waitFor(s => s.length === 2);
+    const skill1 = skills.find(s => s.name === 'test_skill_1');
+    assertDefined(skill1);
+    assertEquals('test_icon_1', skill1.icon);
+    const skill2 = skills.find(s => s.name === 'test_skill_2');
+    assertDefined(skill2);
+    assertEquals('test_icon_2', skill2.icon);
+  }
 }
 
 type InitFailureType = 'error'|'timeout'|'none'|'reloadAfterInitialize'|
@@ -2805,6 +2882,9 @@ class DaisyChainApiTests extends ApiTestFixtureBase {
 
   // Helper to handle the daisy chain actions.
   async handleDaisyChainStep(action: string) {
+    await this.client.waitForInitialize();
+    await this.client.waitForFirstOpen();
+
     if (action === 'createTab') {
       await this.clickLinkInGlicUi();
     } else if (action === 'inputSubmitted') {
@@ -2819,6 +2899,10 @@ class DaisyChainApiTests extends ApiTestFixtureBase {
   }
 
   async testDaisyChainRecursiveAndInput() {
+    await this.handleDaisyChainStep(this.testParams);
+  }
+
+  async testNewTabMetrics() {
     await this.handleDaisyChainStep(this.testParams);
   }
 }

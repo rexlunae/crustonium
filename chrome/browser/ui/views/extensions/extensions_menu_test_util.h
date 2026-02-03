@@ -14,7 +14,7 @@
 
 class Browser;
 class ExtensionsMenuView;
-class ExtensionsToolbarContainer;
+class ExtensionsToolbarDesktop;
 
 // An implementation of ExtensionActionTestHelper that works with the
 // ExtensionsMenu.
@@ -59,7 +59,7 @@ class ExtensionsMenuTestUtil : public ExtensionActionTestHelper,
   base::AutoReset<bool> scoped_allow_extensions_menu_instances_;
 
   const raw_ptr<Browser, DanglingUntriaged> browser_;
-  raw_ptr<ExtensionsToolbarContainer, DanglingUntriaged> extensions_container_ =
+  raw_ptr<ExtensionsToolbarDesktop, DanglingUntriaged> extensions_toolbar_ =
       nullptr;
 
   // The actual pointer to an ExtensionsMenuView, non-null if alive.

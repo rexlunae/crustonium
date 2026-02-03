@@ -7,12 +7,13 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AppElement} from './app.js';
 
 export function getHtml(this: AppElement) {
+  const immersiveClass = this.isImmersiveEnabled_ ? 'immersive' : '';
   // clang-format off
   return html`<!--_html_template_start_-->
 <immersive-mode-header id="immersiveHeader"
     ?hidden="${!this.isImmersiveMode()}">
 </immersive-mode-header>
-<div id="appFlexParent">
+<div id="appFlexParent" class="${immersiveClass}">
   <div id="toolbar-container">
     <read-anything-toolbar
         .presentationState="${this.presentationState_}"
@@ -47,7 +48,9 @@ export function getHtml(this: AppElement) {
         @toolbar-overflow="${this.onToolbarOverflow_}"
         @language-menu-open="${this.onLanguageMenuOpen_}"
         @language-menu-close="${this.onLanguageMenuClose_}"
-        @line-focus-change="${this.onLineFocusChange_}"
+        @line-focus-style-change="${this.onLineFocusStyleChange_}"
+        @line-focus-movement-change="${this.onLineFocusMovementChange_}"
+        @close-all-menus="${this.onAllMenusClose_}"
         id="toolbar">
     </read-anything-toolbar>
   </div>

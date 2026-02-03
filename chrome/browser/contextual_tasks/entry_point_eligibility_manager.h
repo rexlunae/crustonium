@@ -35,10 +35,27 @@ class EntryPointEligibilityManager : public signin::IdentityManager::Observer {
   // signin::IdentityManager::Observer:
   void OnPrimaryAccountChanged(
       const signin::PrimaryAccountChangeEvent& event_details) override;
+  void OnRefreshTokenUpdatedForAccount(
+      const CoreAccountInfo& account_info) override;
+  void OnRefreshTokenRemovedForAccount(
+      const CoreAccountId& account_id) override;
+  void OnErrorStateOfRefreshTokenUpdatedForAccount(
+      const CoreAccountInfo& account_info,
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
+  void OnAccountsInCookieUpdated(
+      const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
+      const GoogleServiceAuthError& error) override;
+  void OnAccountsCookieDeletedByUserAction() override;
 
   // Returns true if the entry points are eligible to be shown. Returns false
   // otherwise.
   bool AreEntryPointsEligible();
+
+  // Returns true if the entry points are eligible to be shown for the given
+  // profile. Returns false otherwise.
+  static bool IsEligible(Profile* profile);
 
   // Runs callback when the entry point eligibility changes
   using EntryPointEligibilityChangeCallbackList =

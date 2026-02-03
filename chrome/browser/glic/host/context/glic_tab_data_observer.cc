@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/glic/common/future_browser_features.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_features.h"
@@ -47,7 +48,7 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
   void Subscribe(::mojo::PendingRemote<mojom::TabDataHandler> receiver) {
     mojo::Remote<mojom::TabDataHandler> new_remote;
     new_remote.Bind(std::move(receiver));
-    new_remote->OnTabDataChanged(CreateTabData(tab_->GetContents()));
+    new_remote->OnTabDataChanged(CreateTabData(tab_));
     tab_data_receivers_.Add(std::move(new_remote));
   }
 
@@ -62,12 +63,17 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
 
   void UpdateWindowObservations() {
     BrowserWindowInterface* browser_window = tab_->GetBrowserWindowInterface();
-    window_did_become_active_subscription_ =
-        browser_window->RegisterDidBecomeActive(base::BindRepeating(
-            &TabObserver::HandleWindowActivatedChange, base::Unretained(this)));
-    window_did_become_inactive_subscription_ =
-        browser_window->RegisterDidBecomeInactive(base::BindRepeating(
-            &TabObserver::HandleWindowActivatedChange, base::Unretained(this)));
+    if (!browser_window) {
+      return;
+    }
+    window_did_become_active_subscription_ = RegisterDidBecomeActive(
+        browser_window,
+        base::BindRepeating(&TabObserver::HandleWindowActivatedChange,
+                            base::Unretained(this)));
+    window_did_become_inactive_subscription_ = RegisterDidBecomeInactive(
+        browser_window,
+        base::BindRepeating(&TabObserver::HandleWindowActivatedChange,
+                            base::Unretained(this)));
   }
 
   // Callback for TabInterface activated changes.
@@ -83,14 +89,14 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
   // Runs asynchronously after HandleTabActivatedChange, once the changes
   // actually take effect.
   void NotifyTabInfoChangeAfterTabActivatedChange() {
-    SendTabData(TabDataChange{{TabDataChangeCause::kVisibility},
-                              CreateTabData(web_contents())});
+    SendTabData(
+        TabDataChange{{TabDataChangeCause::kVisibility}, CreateTabData(tab_)});
   }
 
   // Callback for BrowserWindowInterface activated changes.
   void HandleWindowActivatedChange(BrowserWindowInterface* browser_window) {
-    SendTabData(TabDataChange{{TabDataChangeCause::kVisibility},
-                              CreateTabData(web_contents())});
+    SendTabData(
+        TabDataChange{{TabDataChangeCause::kVisibility}, CreateTabData(tab_)});
   }
 
   void OnDidInsert(tabs::TabInterface* tab) { UpdateWindowObservations(); }

@@ -11,11 +11,16 @@
 #include "base/functional/callback.h"
 #include "base/supports_user_data.h"
 #include "build/build_config.h"
+#include "chrome/browser/glic/public/glic_close_options.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace tabs {
 class TabInterface;
 }  // namespace tabs
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 #if !BUILDFLAG(IS_ANDROID)
 namespace views {
@@ -55,7 +60,8 @@ class GlicSidePanelCoordinator {
   void Show() { Show(false); }
 
   // Close the Glic side panel.
-  virtual void Close() = 0;
+  virtual void Close(const CloseOptions& options) = 0;
+  void Close() { Close({}); }
 
   // Returns true if the Glic side panel is currently the active entry.
   virtual bool IsShowing() const = 0;
@@ -69,6 +75,9 @@ class GlicSidePanelCoordinator {
 #if !BUILDFLAG(IS_ANDROID)
   // Sets the content view for the Glic side panel.
   virtual void SetContentsView(std::unique_ptr<views::View> contents_view) = 0;
+#else
+  // Sets the web contents for the Glic side panel.
+  virtual void SetWebContents(content::WebContents* web_contents) = 0;
 #endif
 
   // Returns preferred side panel width. Not guaranteed to be used if user

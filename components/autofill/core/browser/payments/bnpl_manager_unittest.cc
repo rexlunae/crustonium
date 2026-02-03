@@ -178,14 +178,15 @@ class MockBnplUiDelegate : public BnplUiDelegate {
   MockBnplUiDelegate() = default;
   ~MockBnplUiDelegate() override = default;
 
-  MOCK_METHOD(void,
-              ShowSelectBnplIssuerUi,
-              (std::vector<BnplIssuerContext> bnpl_issuer_context,
-               std::string app_locale,
-               base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
-               base::OnceClosure cancel_callback,
-               bool has_seen_ai_terms),
-              (override));
+  MOCK_METHOD(
+      void,
+      ShowSelectBnplIssuerUi,
+      (std::vector<BnplIssuerContext> bnpl_issuer_context,
+       std::string app_locale,
+       base::RepeatingCallback<void(BnplIssuer)> selected_issuer_callback,
+       base::OnceClosure cancel_callback,
+       bool has_seen_ai_terms),
+      (override));
   MOCK_METHOD(void,
               UpdateBnplIssuerDialogUi,
               (std::vector<BnplIssuerContext> bnpl_issuer_context),
@@ -228,7 +229,7 @@ class BnplManagerTest : public Test,
 
   const int64_t kBillingCustomerNumber = 1234;
   const std::string kRiskData = "RISK_DATA";
-  const std::string kInstrumentId = "INSTRUMENT_ID";
+  const std::string kInstrumentId = "123456";
   const std::string kContextToken = "CONTEXT_TOKEN";
   const GURL kRedirectUrl = GURL("REDIRECT_URL");
   const GURL kPopupUrl = GURL("https://test.url/sometestpath/");
@@ -546,7 +547,9 @@ TEST_F(BnplManagerTest,
                                               .GetPaymentsDataManager()),
                                       autofill::ConvertToBnplIssuerIdString(
                                           issuer.issuer_id()),
-                                      /*instrument_id=*/12345,
+                                      base::NumberToString(
+                                          issuer.payment_instrument()
+                                              ->instrument_id()),
                                       test_context_token, /*risk_data=*/_,
                                       /*type=*/kAcceptTos),
                                   /*callback=*/_));
@@ -589,11 +592,13 @@ TEST_F(BnplManagerTest,
                                               .GetPaymentsDataManager()),
                                       autofill::ConvertToBnplIssuerIdString(
                                           issuer.issuer_id()),
-                                      issuer.payment_instrument()
-                                          ->instrument_id(),
+                                      base::NumberToString(
+                                          issuer.payment_instrument()
+                                              ->instrument_id()),
                                       test_context_token,
                                       /*risk_data=*/_, /*type=*/kAcceptTos),
                                   /*callback=*/_));
+
   test_api(*bnpl_manager_).OnTosDialogAccepted();
 
   EXPECT_FALSE(ongoing_flow_state->risk_data.empty());
@@ -609,10 +614,9 @@ TEST_F(BnplManagerTest, FetchVcnDetails_CallsGetBnplPaymentInstrument) {
   // source.
   BnplIssuer issuer = test::GetTestLinkedBnplIssuer();
   test_api(*bnpl_manager_)
-      .PopulateManagerWithUserAndBnplIssuerDetails(
-          kBillingCustomerNumber,
-          base::NumberToString(issuer.payment_instrument()->instrument_id()),
-          kRiskData, kContextToken, kRedirectUrl, issuer);
+      .PopulateManagerWithUserAndBnplIssuerDetails(kBillingCustomerNumber,
+                                                   kRiskData, kContextToken,
+                                                   kRedirectUrl, issuer);
   base::MockCallback<BnplManager::OnBnplVcnFetchedCallback>
       on_bnpl_vcn_fetched_callback;
   test_api(*bnpl_manager_)
@@ -677,10 +681,9 @@ TEST_F(BnplManagerTest, FetchVcnDetails_RpcError) {
   // source.
   BnplIssuer issuer = test::GetTestLinkedBnplIssuer();
   test_api(*bnpl_manager_)
-      .PopulateManagerWithUserAndBnplIssuerDetails(
-          kBillingCustomerNumber,
-          base::NumberToString(issuer.payment_instrument()->instrument_id()),
-          kRiskData, kContextToken, kRedirectUrl, issuer);
+      .PopulateManagerWithUserAndBnplIssuerDetails(kBillingCustomerNumber,
+                                                   kRiskData, kContextToken,
+                                                   kRedirectUrl, issuer);
   base::MockCallback<BnplManager::OnBnplVcnFetchedCallback>
       on_bnpl_vcn_fetched_callback;
   test_api(*bnpl_manager_)
@@ -733,9 +736,8 @@ TEST_F(
   OnIssuerSelected(linked_issuer);
 
   EXPECT_EQ(ongoing_flow_state->issuer, linked_issuer);
-  EXPECT_EQ(ongoing_flow_state->instrument_id,
-            base::NumberToString(
-                linked_issuer.payment_instrument()->instrument_id()));
+  EXPECT_EQ(ongoing_flow_state->issuer->payment_instrument()->instrument_id(),
+            linked_issuer.payment_instrument()->instrument_id());
   EXPECT_FALSE(ongoing_flow_state->risk_data.empty());
 }
 
@@ -768,9 +770,8 @@ TEST_F(
   OnIssuerSelected(linked_issuer);
 
   EXPECT_EQ(ongoing_flow_state->issuer, linked_issuer);
-  EXPECT_EQ(ongoing_flow_state->instrument_id,
-            base::NumberToString(
-                linked_issuer.payment_instrument()->instrument_id()));
+  EXPECT_EQ(ongoing_flow_state->issuer->payment_instrument()->instrument_id(),
+            linked_issuer.payment_instrument()->instrument_id());
   EXPECT_EQ(ongoing_flow_state->risk_data, kRiskData);
 
   // Since risk data was cached, it was directly used, thus loading risk data
@@ -967,8 +968,8 @@ TEST_F(BnplManagerTest, FetchVcnDetails_ShowProgressUi) {
   bnpl_manager_->OnDidAcceptBnplSuggestion(1'000'000, base::DoNothing());
   test_api(*bnpl_manager_)
       .PopulateManagerWithUserAndBnplIssuerDetails(
-          kBillingCustomerNumber, kInstrumentId, kRiskData, kContextToken,
-          kRedirectUrl, test::GetTestLinkedBnplIssuer());
+          kBillingCustomerNumber, kRiskData, kContextToken, kRedirectUrl,
+          test::GetTestLinkedBnplIssuer());
 
   EXPECT_CALL(GetBnplUiDelegate(),
               ShowProgressUi(
@@ -983,8 +984,8 @@ TEST_F(BnplManagerTest, FetchVcnDetails_Reset) {
   bnpl_manager_->OnDidAcceptBnplSuggestion(1'000'000, base::DoNothing());
   test_api(*bnpl_manager_)
       .PopulateManagerWithUserAndBnplIssuerDetails(
-          kBillingCustomerNumber, kInstrumentId, kRiskData, kContextToken,
-          kRedirectUrl, test::GetTestLinkedBnplIssuer());
+          kBillingCustomerNumber, kRiskData, kContextToken, kRedirectUrl,
+          test::GetTestLinkedBnplIssuer());
 
   EXPECT_NE(test_api(*bnpl_manager_).GetOngoingFlowState(), nullptr);
 
@@ -1078,10 +1079,8 @@ TEST_F(BnplManagerTest,
 
   auto* ongoing_flow_state = test_api(*bnpl_manager_).GetOngoingFlowState();
   EXPECT_EQ(ongoing_flow_state->issuer, externally_linked_issuer);
-  EXPECT_EQ(
-      ongoing_flow_state->instrument_id,
-      base::NumberToString(
-          externally_linked_issuer.payment_instrument()->instrument_id()));
+  EXPECT_EQ(ongoing_flow_state->issuer->payment_instrument()->instrument_id(),
+            externally_linked_issuer.payment_instrument()->instrument_id());
 }
 
 // Tests that `OnDidGetLegalMessageFromServer` shows an error when there is a
@@ -1163,7 +1162,8 @@ TEST_F(BnplManagerTest, GetDetailsForUpdateBnplPaymentInstrument_Success) {
                   /*request_details=*/
                   FieldsAre(kAppLocale, kBillingCustomerNumber,
                             /*client_behavior_signals=*/IsEmpty(),
-                            issuer.payment_instrument()->instrument_id(),
+                            base::NumberToString(
+                                issuer.payment_instrument()->instrument_id()),
                             /*type=*/kGetDetailsForAcceptTos,
                             /*issuer_id=*/kBnplKlarnaIssuerId),
                   /*callback=*/_));
@@ -1186,8 +1186,9 @@ TEST_F(BnplManagerTest, UpdateBnplPaymentInstrument_Success) {
       UpdateBnplPaymentInstrument(
           FieldsAre(kAppLocale, kBillingCustomerNumber,
                     autofill::ConvertToBnplIssuerIdString(issuer.issuer_id()),
-                    issuer.payment_instrument()->instrument_id(), kContextToken,
-                    kRiskData, /*type=*/kAcceptTos),
+                    base::NumberToString(
+                        issuer.payment_instrument()->instrument_id()),
+                    kContextToken, kRiskData, /*type=*/kAcceptTos),
           /*callback=*/_));
 
   test_api(*bnpl_manager_).UpdateBnplPaymentInstrument();
@@ -1704,7 +1705,10 @@ TEST_F(BnplManagerTest, CreateBnplPaymentInstrument_Success) {
 
   test_api(*bnpl_manager_).CreateBnplPaymentInstrument();
 
-  EXPECT_EQ(ongoing_flow_state->instrument_id, kInstrumentId);
+  EXPECT_EQ(
+      base::NumberToString(
+          ongoing_flow_state->issuer->payment_instrument()->instrument_id()),
+      kInstrumentId);
 }
 
 // Tests that when CreateBnplPaymentInstrument fails with an error the error
@@ -1748,23 +1752,25 @@ TEST_F(BnplManagerTest, UpdateBnplPaymentInstrument_Failure) {
   ongoing_flow_state->app_locale = kAppLocale;
   ongoing_flow_state->billing_customer_number = kBillingCustomerNumber;
   ongoing_flow_state->context_token = kContextToken;
-  ongoing_flow_state->issuer = test::GetTestLinkedBnplIssuer(
+  ongoing_flow_state->risk_data = kRiskData;
+
+  BnplIssuer issuer = test::GetTestLinkedBnplIssuer(
       IssuerId::kBnplKlarna,
       DenseSet<PaymentInstrument::ActionRequired>{
           PaymentInstrument::ActionRequired::kAcceptTos});
-  ongoing_flow_state->risk_data = kRiskData;
+  ongoing_flow_state->issuer = issuer;
 
-  EXPECT_CALL(
-      *payments_network_interface_,
-      UpdateBnplPaymentInstrument(
-          FieldsAre(
-              kAppLocale, kBillingCustomerNumber,
-              autofill::ConvertToBnplIssuerIdString(
-                  ongoing_flow_state->issuer->issuer_id()),
-              ongoing_flow_state->issuer->payment_instrument()->instrument_id(),
-              kContextToken, kRiskData,
-              /*type=*/kAcceptTos),
-          _))
+  EXPECT_CALL(*payments_network_interface_,
+              UpdateBnplPaymentInstrument(
+                  FieldsAre(kAppLocale, kBillingCustomerNumber,
+                            autofill::ConvertToBnplIssuerIdString(
+                                ongoing_flow_state->issuer->issuer_id()),
+                            base::NumberToString(
+                                ongoing_flow_state->issuer->payment_instrument()
+                                    ->instrument_id()),
+                            kContextToken, kRiskData,
+                            /*type=*/kAcceptTos),
+                  _))
       .WillOnce(base::test::RunOnceCallback<1>(
           PaymentsAutofillClient::PaymentsRpcResult::kPermanentFailure));
 
@@ -2138,10 +2144,10 @@ TEST_F(
       /*final_checkout_amount=*/std::nullopt,
       /*on_bnpl_vcn_fetched_callback=*/base::DoNothing());
 
-  EXPECT_TRUE(autofill_client()
-                  .GetPersonalDataManager()
-                  .payments_data_manager()
-                  .IsAutofillAmountExtractionAiTermsSeenPrefEnabled());
+  EXPECT_FALSE(autofill_client()
+                   .GetPersonalDataManager()
+                   .payments_data_manager()
+                   .IsAutofillAmountExtractionAiTermsSeenPrefEnabled());
   EXPECT_FALSE(test_api(*bnpl_manager_).HasSeenAmountExtractionAiTerms());
 }
 
@@ -2413,7 +2419,8 @@ TEST_F(
               /*client_behavior_signals=*/
               ElementsAre(
                   ClientBehaviorConstants::kShowAccountEmailInLegalMessage),
-              issuer.payment_instrument()->instrument_id(),
+              base::NumberToString(
+                  issuer.payment_instrument()->instrument_id()),
               /*type=*/kGetDetailsForAcceptTos,
               /*issuer_id=*/kBnplKlarnaIssuerId),
           /*callback=*/_));
@@ -2423,7 +2430,8 @@ TEST_F(
                   /*request_details=*/
                   FieldsAre(kAppLocale, kBillingCustomerNumber,
                             /*client_behavior_signals=*/IsEmpty(),
-                            issuer.payment_instrument()->instrument_id(),
+                            base::NumberToString(
+                                issuer.payment_instrument()->instrument_id()),
                             /*type=*/kGetDetailsForAcceptTos,
                             /*issuer_id=*/kBnplKlarnaIssuerId),
                   /*callback=*/_));
@@ -2749,11 +2757,9 @@ TEST_F(BnplManagerTest, OnPurchaseAmountExtracted_IssuerSelectedCallback) {
   const BnplIssuer linked_issuer = test::GetTestLinkedBnplIssuer();
   // This initializes `ongoing_flow_state_`.
   test_api(*bnpl_manager_)
-      .PopulateManagerWithUserAndBnplIssuerDetails(
-          kBillingCustomerNumber,
-          base::NumberToString(
-              linked_issuer.payment_instrument()->instrument_id()),
-          kRiskData, kContextToken, kRedirectUrl, linked_issuer);
+      .PopulateManagerWithUserAndBnplIssuerDetails(kBillingCustomerNumber,
+                                                   kRiskData, kContextToken,
+                                                   kRedirectUrl, linked_issuer);
   EXPECT_CALL(payments_autofill_client(), OnPurchaseAmountExtracted)
       .WillOnce([&](auto, auto, auto, auto,
                     base::OnceCallback<void(autofill::BnplIssuer)>
@@ -2774,11 +2780,9 @@ TEST_F(BnplManagerTest, OnPurchaseAmountExtracted_CancelCallback) {
   const BnplIssuer linked_issuer = test::GetTestLinkedBnplIssuer();
   // This initializes `ongoing_flow_state_`.
   test_api(*bnpl_manager_)
-      .PopulateManagerWithUserAndBnplIssuerDetails(
-          kBillingCustomerNumber,
-          base::NumberToString(
-              linked_issuer.payment_instrument()->instrument_id()),
-          kRiskData, kContextToken, kRedirectUrl, linked_issuer);
+      .PopulateManagerWithUserAndBnplIssuerDetails(kBillingCustomerNumber,
+                                                   kRiskData, kContextToken,
+                                                   kRedirectUrl, linked_issuer);
   EXPECT_CALL(payments_autofill_client(), OnPurchaseAmountExtracted)
       .WillOnce(
           [&](auto, auto, auto, auto, auto, base::OnceClosure cancel_callback) {

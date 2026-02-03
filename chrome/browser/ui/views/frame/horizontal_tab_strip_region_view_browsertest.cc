@@ -179,8 +179,9 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewTest,
 // enabled.
 IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewTest, DISABLED_NewTabButtonInkDrop) {
   constexpr int kTabStripRegionViewWidth = 500;
-  tab_strip_region_view()->SetBounds(0, 0, kTabStripRegionViewWidth,
-                                     GetLayoutConstant(TAB_STRIP_HEIGHT));
+  tab_strip_region_view()->SetBounds(
+      0, 0, kTabStripRegionViewWidth,
+      GetLayoutConstant(LayoutConstant::kTabStripHeight));
 
   // Add a few tabs and simulate the new tab button's ink drop animation. This
   // should not cause any crashes since the ink drop layer size as well as the
@@ -290,4 +291,35 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewTest,
   EXPECT_LT(tab_strip()->width(), tab_strip_region_view()->width());
   EXPECT_FALSE(
       tab_strip()->tab_at(tab_strip()->GetModelCount() - 1)->GetVisible());
+}
+
+class HorizontalTabStripRegionViewWithTabstripTabSearchTest
+    : public HorizontalTabStripRegionViewTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {}, {features::kLaunchedTabSearchToolbarButton,
+             features::kTabstripComboButton});
+    HorizontalTabStripRegionViewTest::SetUpCommandLine(command_line);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewWithTabstripTabSearchTest,
+                       TabSearchPositionLoggedOnConstruction) {
+  using TabSearchPositionEnum =
+      HorizontalTabStripRegionView::TabSearchPositionEnum;
+  const bool tab_search_trailing_tabstrip =
+      tabs::GetTabSearchPosition(browser()->profile()) ==
+      tabs::TabSearchPosition::kTrailingHorizontalTabstrip;
+  TabSearchPositionEnum expected_enum_val =
+      tab_search_trailing_tabstrip ? TabSearchPositionEnum::kTrailing
+                                   : TabSearchPositionEnum::kLeading;
+
+  base::HistogramTester histogram_tester;
+  tab_strip_region_view()->LogTabSearchPositionForTesting();  // IN-TEST
+  histogram_tester.ExpectUniqueSample("Tabs.TabSearch.PositionInTabstrip2",
+                                      expected_enum_val, 1);
 }

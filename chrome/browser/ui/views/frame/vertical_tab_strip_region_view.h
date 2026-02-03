@@ -5,8 +5,11 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
 
+#include <optional>
+
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/tabs/tab_renderer_data.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_controller.h"
@@ -17,7 +20,7 @@
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/controls/resize_area_delegate.h"
 
-class BrowserWindowInterface;
+class BrowserView;
 class RootTabCollectionNode;
 class VerticalUnpinnedTabContainerView;
 class VerticalPinnedTabContainerView;
@@ -33,6 +36,7 @@ namespace views {
 class ResizeArea;
 class Separator;
 class View;
+class FlexLayout;
 }  // namespace views
 
 // Container for the vertical tabstrip and the other views sharing space with
@@ -40,13 +44,13 @@ class View;
 class VerticalTabStripRegionView final : public TabStripRegionView,
                                          public views::ResizeAreaDelegate,
                                          public gfx::AnimationDelegate {
-  METADATA_HEADER(VerticalTabStripRegionView, views::AccessiblePaneView)
+  METADATA_HEADER(VerticalTabStripRegionView, TabStripRegionView)
 
  public:
   static constexpr int kResizeAreaWidth = 6;
   // TODO(crbug.com/465833741): Replace constant with derived value based on
   // caption buttons.
-  static constexpr int kUncollapsedMinWidth = 128;
+  static constexpr int kUncollapsedMinWidth = 126;
   // TODO(crbug.com/465832180): Replace constant based width final max width for
   // view.
   static constexpr int kUncollapsedMaxWidth = 400;
@@ -58,7 +62,7 @@ class VerticalTabStripRegionView final : public TabStripRegionView,
   explicit VerticalTabStripRegionView(
       tabs::VerticalTabStripStateController* state_controller,
       actions::ActionItem* root_action_item,
-      BrowserWindowInterface* browser);
+      BrowserView* browser_view);
   VerticalTabStripRegionView(const VerticalTabStripRegionView&) = delete;
   VerticalTabStripRegionView& operator=(const VerticalTabStripRegionView&) =
       delete;
@@ -91,12 +95,21 @@ class VerticalTabStripRegionView final : public TabStripRegionView,
     return tab_strip_controller_.get();
   }
 
+  // Gets the percentage of the current collapse or un-collapse animation, or
+  // null if none.
+  std::optional<double> GetCollapseAnimationPercent() const;
+
   // views::View:
   void AddedToWidget() override;
   void Layout(PassKey) override;
   views::View* GetDefaultFocusableChild() override;
+  gfx::Size GetMinimumSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
   // TabStripRegionView
+  void InitializeTabStrip() override;
+  void ResetTabStrip() override;
   bool IsTabStripEditable() const override;
   void DisableTabStripEditingForTesting() const override;
   bool IsTabStripCloseable() const override;
@@ -104,11 +117,21 @@ class VerticalTabStripRegionView final : public TabStripRegionView,
   void StopAnimating() override;
   void UpdateLoadingAnimations(const base::TimeDelta& elapsed_time) override;
   std::optional<int> GetFocusedTabIndex() const override;
+  const TabRendererData& GetTabRendererData(int tab_index) override;
   views::View* GetTabAnchorViewAt(int tab_index) override;
   views::View* GetTabGroupAnchorView(
       const tab_groups::TabGroupId& group) override;
+  void OnTabGroupFocusChanged(
+      std::optional<tab_groups::TabGroupId> new_focused_group_id,
+      std::optional<tab_groups::TabGroupId> old_focused_group_id) override;
   TabDragContext* GetDragContext() override;
+  std::optional<BrowserRootView::DropIndex> GetDropIndex(
+      const ui::DropTargetEvent& event) override;
+  BrowserRootView::DropTarget* GetDropTarget(
+      gfx::Point loc_in_local_coords) override;
+  views::View* GetViewForDrop() override;
   void SetTabStripObserver(TabStripObserver* observer) override;
+  views::View* GetTabStripView() override;
 
   // views::ResizeAreaDelegate:
   void OnResize(int resize_amount, bool done_resizing) override;
@@ -117,8 +140,6 @@ class VerticalTabStripRegionView final : public TabStripRegionView,
   void AnimationProgressed(const gfx::Animation* animation) override;
 
   bool IsPositionInWindowCaption(const gfx::Point& point);
-
-  void CreateTabStripController(BrowserView* browser_view);
 
   // These methods provide the toolbar height and exclusion width, before the
   // layout of this view, for use in calculating positioning of child views. If
@@ -132,15 +153,18 @@ class VerticalTabStripRegionView final : public TabStripRegionView,
 
  private:
   views::View* SetTabStripView(std::unique_ptr<views::View> view);
+  void ClearTabStripView(views::View* view);
 
   void OnCollapsedStateChanged(
       tabs::VerticalTabStripStateController* state_controller);
   void UpdateCollapseState(tabs::VerticalTabStripState new_state);
   void ResizeToWidth(int width);
 
-  void UpdateBackgroundColors();
+  void UpdateColors();
 
   bool IsFrameActive() const;
+
+  raw_ptr<BrowserView> browser_view_;
 
   // When false simulates a non-editable tabstrip. For testing only.
   bool tab_strip_editable_for_testing_ = true;
@@ -151,10 +175,11 @@ class VerticalTabStripRegionView final : public TabStripRegionView,
   raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
   raw_ptr<views::View> gemini_button_ = nullptr;
   raw_ptr<views::ResizeArea> resize_area_ = nullptr;
+  raw_ptr<views::FlexLayout> flex_layout_ = nullptr;
 
   // The drag handler is a view (required for capturing mouse inputs during
   // a drag loop) owned by the tab strip's View.
-  raw_ptr<TabDragContext> drag_handler_ = nullptr;
+  raw_ptr<VerticalTabDragHandler> drag_handler_ = nullptr;
 
   std::unique_ptr<VerticalTabStripController> tab_strip_controller_;
   std::unique_ptr<RootTabCollectionNode> root_node_;

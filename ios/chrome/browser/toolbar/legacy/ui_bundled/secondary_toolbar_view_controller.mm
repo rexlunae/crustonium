@@ -12,16 +12,16 @@
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view_controller+subclassing.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/omnibox_position_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_height_delegate.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_utils.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_keyboard_state_provider.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/secondary_toolbar_view.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/toolbar_progress_bar.h"
+#import "ios/chrome/browser/toolbar/ui/toolbar_height_delegate.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 
 @interface SecondaryToolbarViewController ()
@@ -180,12 +180,16 @@
       !shouldConstraintToKeyboard && self.locationIndicatorActive;
 
   // Whether to show the secondary toolbar as a location indicator when keyboard
-  // is active for web content. Bottom omnibox exclusive.
+  // is active for web content or the Find navigator is visible. Bottom omnibox
+  // exclusive.
   BOOL keyboardActiveForWebContent =
       [self.keyboardStateProvider keyboardIsActiveForWebContent];
-  BOOL showLocationIndicator = shouldConstraintToKeyboard &&
-                               keyboardActiveForWebContent &&
-                               !hideLocationIndicator;
+  BOOL findNavigatorVisible =
+      [self.keyboardStateProvider isFindNavigatorVisibleForWebContent];
+  BOOL showLocationIndicator =
+      shouldConstraintToKeyboard &&
+      (keyboardActiveForWebContent || findNavigatorVisible) &&
+      !hideLocationIndicator;
 
   // Whether the toolbar containing the omnibox should follow the keyboard.
   BOOL followSteadyStateEnabled =
@@ -225,6 +229,13 @@
     } else {
       visibleKeyboardHeight =
           [self keyboardHeightInWindowFromNotification:notification];
+      // If the Find navigator is visible and the toolbar is constrained to the
+      // keyboard, then add room for the collapsed toolbar to be visible above
+      // the keyboard.
+      if (findNavigatorVisible) {
+        visibleKeyboardHeight += ToolbarCollapsedHeight(
+            self.traitCollection.preferredContentSizeCategory);
+      }
     }
   }
 

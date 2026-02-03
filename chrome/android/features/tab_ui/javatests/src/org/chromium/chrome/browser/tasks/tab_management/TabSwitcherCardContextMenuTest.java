@@ -8,8 +8,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 
-import static org.chromium.base.test.transit.TransitAsserts.assertFinalDestination;
-
 import androidx.test.filters.MediumTest;
 
 import org.junit.Before;
@@ -83,11 +81,6 @@ public class TabSwitcherCardContextMenuTest {
                 .showContextMenu()
                 .clickAddTabToNewGroup()
                 .pressDone();
-
-        // TODO(crbug.com/468013785): Remove when BlankCTATabInitialStateRule can reset state from
-        // the Tab Switcher.
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
@@ -120,17 +113,12 @@ public class TabSwitcherCardContextMenuTest {
         assertNotNull(firstTab.getTabGroupId());
         assertNotNull(secondTab.getTabGroupId());
         assertNotEquals(firstTab.getTabGroupId(), secondTab.getTabGroupId());
-
-        // TODO(crbug.com/468013785): Remove when BlankCTATabInitialStateRule can reset state from
-        // the Tab Switcher.
-        ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
     @MediumTest
     public void testTabCardMenuInTabSwitcher_shareIsAbsentForNtp() {
-        RegularNewTabPageStation ntp = mFirstPage.openRegularTabSwitcher().openNewTab();
+        RegularNewTabPageStation ntp = mFirstPage.openNewTabFast();
         Tab secondTab = ntp.loadedTabElement.value();
         @TabId int secondTabId = secondTab.getId();
 
@@ -140,37 +128,26 @@ public class TabSwitcherCardContextMenuTest {
                 tabSwitcher.expectTabCard(secondTabId, secondTab.getTitle()).showContextMenu();
         contextMenu.share.checkAbsent();
         contextMenu.pressBackTo().exitFacility();
-
-        // TODO(crbug.com/468013785): Remove when BlankCTATabInitialStateRule can reset state from
-        // the Tab Switcher.
-        ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
     @MediumTest
     @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testTabCardMenuInTabSwitcher_pinAndUnpinTab() {
-        WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
-        Tab firstTab = firstPage.loadedTabElement.value();
+        Tab firstTab = mFirstPage.loadedTabElement.value();
         int firstTabId = firstTab.getId();
 
-        RegularTabSwitcherStation tabSwitcher = firstPage.openRegularTabSwitcher();
+        RegularTabSwitcherStation tabSwitcher = mFirstPage.openRegularTabSwitcher();
 
         tabSwitcher.expectTabCard(firstTabId, firstTab.getTitle()).showContextMenu().pinTab();
         tabSwitcher.expectTabCard(firstTabId, firstTab.getTitle()).showContextMenu().unpinTab();
-
-        // TODO(crbug.com/468013785): Remove when BlankCTATabInitialStateRule can reset state from
-        // the Tab Switcher.
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
     @MediumTest
     @DisableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testTabCardMenuInTabSwitcher_pinnedTabsDisabled() {
-        RegularNewTabPageStation ntp = mFirstPage.openRegularTabSwitcher().openNewTab();
+        RegularNewTabPageStation ntp = mFirstPage.openNewTabFast();
         Tab secondTab = ntp.loadedTabElement.value();
         @TabId int secondTabId = secondTab.getId();
 
@@ -181,21 +158,16 @@ public class TabSwitcherCardContextMenuTest {
         contextMenu.pinTab.checkAbsent();
         contextMenu.unpinTab.checkAbsent();
         contextMenu.pressBackTo().exitFacility();
-
-        // TODO(crbug.com/468013785): Remove when BlankCTATabInitialStateRule can reset state from
-        // the Tab Switcher.
-        ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
     @MediumTest
     public void testTabCardMenuInTabSwitcher_selectTabs() {
-        WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
-        Tab firstTab = firstPage.loadedTabElement.value();
+        Tab firstTab = mFirstPage.loadedTabElement.value();
         @TabId int firstTabId = firstTab.getId();
 
-        RegularTabSwitcherStation tabSwitcher = firstPage.openNewTabFast().openRegularTabSwitcher();
+        RegularTabSwitcherStation tabSwitcher =
+                mFirstPage.openNewTabFast().openRegularTabSwitcher();
 
         TabSwitcherListEditorFacility<TabSwitcherStation> editor =
                 tabSwitcher
@@ -208,22 +180,17 @@ public class TabSwitcherCardContextMenuTest {
         assertEquals(firstTabId, selectedTabIds.get(0).intValue());
 
         editor.openAppMenuWithEditor().groupTabs().pressDone();
-
-        assertFinalDestination(tabSwitcher.openNewTab());
     }
 
     @Test
     @MediumTest
     public void testTabCardMenuInTabSwitcher_closeTab() {
-        WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
-        Tab firstTab = firstPage.loadedTabElement.value();
+        Tab firstTab = mFirstPage.loadedTabElement.value();
         @TabId int firstTabId = firstTab.getId();
 
-        RegularTabSwitcherStation tabSwitcher = firstPage.openNewTabFast().openRegularTabSwitcher();
+        RegularTabSwitcherStation tabSwitcher =
+                mFirstPage.openNewTabFast().openRegularTabSwitcher();
 
         tabSwitcher.expectTabCard(firstTabId, firstTab.getTitle()).showContextMenu().closeTab();
-
-        RegularNewTabPageStation ntp = tabSwitcher.openAppMenu().openNewTab();
-        assertFinalDestination(ntp);
     }
 }

@@ -58,7 +58,12 @@ BASE_FEATURE(kAutofillEnableBuyNowPayLater,
 // When enabled, additional steps are required to autofill buy now pay later
 // (BNPL) issuers that are externally linked.
 BASE_FEATURE(kAutofillEnableBuyNowPayLaterForExternallyLinked,
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#else
              base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 // When enabled, buy now pay later (BNPL) for Klarna in Autofill will be
 // offered.
@@ -82,7 +87,13 @@ BASE_FEATURE(kAutofillEnableBuyNowPayLaterSyncing,
 // When enabled, the second line string in a BNPL suggestion is updated to
 // include the issuer names for better brand recognition.
 BASE_FEATURE(kAutofillEnableBuyNowPayLaterUpdatedSuggestionSecondLineString,
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#else
              base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 
 // When enabled, card benefits offered by American Express will be shown in
 // Payments Autofill UI.
@@ -188,6 +199,12 @@ BASE_FEATURE(kAutofillEnableNewFopDisplayAndroid,
 BASE_FEATURE(kAutofillEnableOffersInClankKeyboardAccessory,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// When enabled, Chrome will use the Pay Now Pay Later tabs UI for payments
+// autofill when buy now pay later options are available for the merchant
+// webpage.
+BASE_FEATURE(kAutofillEnablePayNowPayLaterTabs,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 #if BUILDFLAG(IS_CHROMEOS)
 // When enabled, in use-cases where we would not have triggered any interactive
 // authentication to autofill payment methods, we will trigger a device
@@ -237,13 +254,6 @@ BASE_FEATURE(kAutofillEnableVirtualCardJavaPaymentsDataManager,
 // Payments, and Google Pay will instead reference Google Wallet.
 BASE_FEATURE(kAutofillEnableWalletBranding, base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if BUILDFLAG(IS_IOS)
-// When enabled, save card bottomsheet will be shown to save the card locally
-// when the user has not previously rejected the offer to save the card.
-BASE_FEATURE(kAutofillLocalSaveCardBottomSheet,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#endif
-
 // When enabled, Payments Autofill Buy Now Pay Later (BNPL) will use each
 // corresponding issuer's blocklist instead of allowlist to check for website
 // eligibility.
@@ -261,13 +271,6 @@ BASE_FEATURE(kAutofillPrioritizeSaveCardOverMandatoryReauth,
 // TODO(crbug.com/40276036): Clean up after M139 branch (June 23, 2025).
 BASE_FEATURE(kAutofillRetryImageFetchOnFailure,
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-#if BUILDFLAG(IS_IOS)
-// When enabled, save card bottomsheet will be shown to save the card to the
-// server when the user has not previously rejected the offer to save the card,
-// and both a valid expiry date and cardholder name are present.
-BASE_FEATURE(kAutofillSaveCardBottomSheet, base::FEATURE_ENABLED_BY_DEFAULT);
-#endif
 
 // If enabled, we will store autofill server card data in shared storage.
 BASE_FEATURE(kAutofillSharedStorageServerCardData,

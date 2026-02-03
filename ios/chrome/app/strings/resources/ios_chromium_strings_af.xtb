@@ -41,6 +41,9 @@
 <translation id="1707458603865303524">Gebruik Chromium enige tyd wanneer jy op skakels in boodskappe of ander apps tik.</translation>
 <translation id="1722370509450468186">Jou wagwoord sal in jou rekening (<ph name="EMAIL" />) gestoor word.</translation>
 <translation id="1747088204252710672">’n Gepasmaakte stroom wat vir jou gemaak is</translation>
+<translation id="1761196287436320018">Jy het Chromium se limiet van <ph name="LIMIT" /> boekmerke bereik, en daarom is sommige van jou boekmerke nog nie in jou Google-rekening gestoor nie.
+
+Nuwe boekmerke kan nie in jou rekening gestoor word totdat jy sommige boekmerke uitvee nie. As jy nou afmeld, sal ongestoorde boekmerke uitgevee word.</translation>
 <translation id="1811860791247653035">Sluit Chromium by <ph name="FEATURE_NAME_1" /> en <ph name="FEATURE_NAME_2" /> in om personalisering en ander kenmerke te kry</translation>
 <translation id="1838412507805038478">Chromium het geverifieer dat <ph name="ISSUER" /> hierdie webwerf se sertifikaat uitgereik het.</translation>
 <translation id="1839447949248872139">Maak skakels by verstek in Chromium oop</translation>
@@ -129,6 +132,7 @@ Probeer om ’n paar minute te wag voordat jy rekeninge wissel. As jy nou rekeni
 <translation id="3728124580182886854">Koppel Chromium en ander Google-dienste vir personalisering en ander doeleindes</translation>
 <translation id="377649297473651452">Chromium-outovulaansig is uitgevou</translation>
 <translation id="3780779443901618967">Waarsku jou oor gevaarlike werwe – selfs werwe waarvan Google nie voorheen geweet het nie – deur meer data van werwe te ontleed as standaardbeskerming. Jy kan kies om Chromium-waarskuwings oor te slaan.</translation>
+<translation id="3793136096560888222">Wysig prent met Gemini in Chromium</translation>
 <translation id="3805899903892079518">Chromium het nie toegang tot jou foto's of video's nie. Aktiveer toegang in iOS-instellings &gt; Privacy &gt; Photos.</translation>
 <translation id="3816686541346279443">Chromium sal aanbied om jou wagwoord te stoor.</translation>
 <translation id="3827545470516145620">Jy kry tans standaardsekuriteitbeskerming op hierdie toestel</translation>
@@ -296,7 +300,6 @@ Net iemand met jou wagfrase kan jou geënkripteerde data lees. Die wagfrase word
 <translation id="7554983317097061001">Chromium-wenk: Skuif Chromium na die dok toe</translation>
 <translation id="7576863740961052505">Bestuur Chromium-instellings</translation>
 <translation id="7674213385180944843">Maak Instellings &gt; Privaatheid &gt; Kamera &gt; Chromium oop en skakel kamera aan.</translation>
-<translation id="7685160423563372998">Skep prent met Gemini in Chromium</translation>
 <translation id="7733418656985455268">Chromium-wenk: Soek met Lens</translation>
 <translation id="7747820849741499258">Soek in Chromium</translation>
 <translation id="7753923083404296545">Oopgemaak in Chromium Incognito</translation>

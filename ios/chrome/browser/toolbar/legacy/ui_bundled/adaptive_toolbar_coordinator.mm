@@ -15,6 +15,7 @@
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/menu/ui_bundled/browser_action_factory.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
@@ -26,19 +27,20 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
+#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
+#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_coordinator+subclassing.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_mediator.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view_controller.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view_controller_delegate.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_actions_handler.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_visibility_configuration.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
@@ -119,6 +121,7 @@ using tab_groups::VersioningMessageController;
   [super stop];
   [self.mediator disconnect];
   self.mediator = nil;
+  [self.viewController disconnect];
   _fullscreenUIUpdater = nullptr;
   _started = NO;
 }
@@ -200,6 +203,11 @@ using tab_groups::VersioningMessageController;
   // NO-OP
 }
 
+- (void)focusLocationBarForVoiceOver {
+  // This is used in a refactoring where this class is not instantiated.
+  NOTREACHED();
+}
+
 #pragma mark - ToolbarCoordinatee
 
 - (id<PopupMenuUIUpdating>)popupMenuUIUpdater {
@@ -208,7 +216,7 @@ using tab_groups::VersioningMessageController;
 
 #pragma mark - Protected
 
-- (ToolbarButtonFactory*)buttonFactoryWithType:(ToolbarType)type {
+- (LegacyToolbarButtonFactory*)buttonFactoryWithType:(ToolbarType)type {
   BOOL isIncognito = self.isOffTheRecord;
   ToolbarStyle style =
       isIncognito ? ToolbarStyle::kIncognito : ToolbarStyle::kNormal;
@@ -218,13 +226,12 @@ using tab_groups::VersioningMessageController;
 
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
 
-  actionHandler.applicationHandler =
-      HandlerForProtocol(dispatcher, ApplicationCommands);
+  actionHandler.sceneHandler = HandlerForProtocol(dispatcher, SceneCommands);
   actionHandler.activityHandler =
       HandlerForProtocol(dispatcher, ActivityServiceCommands);
   actionHandler.menuHandler = HandlerForProtocol(dispatcher, PopupMenuCommands);
-  actionHandler.omniboxHandler =
-      HandlerForProtocol(dispatcher, OmniboxCommands);
+  actionHandler.browserCoordinatorHandler =
+      HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
 
   actionHandler.incognito = isIncognito;
   actionHandler.navigationAgent =
@@ -234,9 +241,12 @@ using tab_groups::VersioningMessageController;
 
   self.actionHandler = actionHandler;
 
-  ToolbarButtonFactory* buttonFactory =
-      [[ToolbarButtonFactory alloc] initWithStyle:style];
+  LegacyToolbarButtonFactory* buttonFactory =
+      [[LegacyToolbarButtonFactory alloc] initWithStyle:style];
   buttonFactory.actionHandler = actionHandler;
+  if (IsGeminiCopresenceEnabled()) {
+    buttonFactory.geminiHandler = HandlerForProtocol(dispatcher, BWGCommands);
+  }
   buttonFactory.visibilityConfiguration =
       [[ToolbarButtonVisibilityConfiguration alloc] initWithType:type];
 

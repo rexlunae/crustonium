@@ -17,7 +17,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/views/chrome_widget_sublevel.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
-#include "chrome/browser/ui/views/tabs/glic_button.h"
+#include "chrome/browser/ui/views/tabs/glic/glic_button.h"
 #include "chrome/common/chrome_features.h"
 #include "ui/base/base_window.h"
 #include "ui/base/hit_test.h"
@@ -119,7 +119,7 @@ class GlicWidgetDelegate : public views::WidgetDelegate {
       gfx::NativeView child,
       const gfx::Point& location) override {
     if (base::FeatureList::IsEnabled(features::kGlicHandleDraggingNatively)) {
-      return !glic_view()->IsPointWithinDraggableArea(location);
+      return !glic_view()->IsPointWithinDraggableRegion(location);
     }
 
     return true;
@@ -152,7 +152,7 @@ class GlicFrameViewChromeOS : public ash::FrameViewAsh {
     // If point falls into the client area (i.e web-contents), check if it
     // within the draggable regions of web-contents.
     if (component == HTCLIENT &&
-        glic_view()->IsPointWithinDraggableArea(point)) {
+        glic_view()->IsPointWithinDraggableRegion(point)) {
       return HTCAPTION;
     }
 

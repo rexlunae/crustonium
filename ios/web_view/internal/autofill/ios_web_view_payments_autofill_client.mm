@@ -308,7 +308,7 @@ IOSWebViewPaymentsAutofillClient::GetRiskBasedAuthenticator() {
 bool IOSWebViewPaymentsAutofillClient::IsRiskBasedAuthEffectivelyAvailable()
     const {
   return GetPrefService()->GetBoolean(
-      ios_web_view::kCWVAutofillVCNUsageEnabled);
+      ios_web_view::kRiskBasedAuthenticationEnabled);
 }
 
 bool IOSWebViewPaymentsAutofillClient::IsMandatoryReauthEnabled() {
@@ -378,7 +378,13 @@ bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillIban(
   return false;
 }
 
-bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillLoyaltyCard(
+bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillAffiliatedLoyaltyCard(
+    base::WeakPtr<TouchToFillDelegate> delegate,
+    std::vector<LoyaltyCard> loyalty_cards_to_suggest) {
+  return false;
+}
+
+bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillForAllLoyaltyCards(
     base::WeakPtr<TouchToFillDelegate> delegate,
     std::vector<LoyaltyCard> loyalty_cards_to_suggest) {
   return false;

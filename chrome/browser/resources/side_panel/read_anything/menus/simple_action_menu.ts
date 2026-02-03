@@ -52,12 +52,14 @@ export class SimpleActionMenuElement extends SimpleActionMenuElementBase {
       eventName: {type: String},
       label: {type: String},
       nonModal: {type: Boolean},
+      closeOnClick: {type: Boolean},
     };
   }
 
   accessor currentSelectedIndex: number = 0;
   accessor menuItems: Array<MenuStateItem<any>> = [];
   accessor nonModal: boolean = false;
+  accessor closeOnClick: boolean = true;
 
   // Initializing to random value, but this is set by the parent.
   accessor eventName: ToolbarEvent = ToolbarEvent.THEME;
@@ -77,12 +79,15 @@ export class SimpleActionMenuElement extends SimpleActionMenuElementBase {
         Number.parseInt(currentTarget.dataset['index']!);
     const menuItem = this.menuItems[this.currentSelectedIndex];
     assert(menuItem);
-    this.fire(this.eventName, {data: menuItem.data});
-    this.$.lazyMenu.get().close();
+    const eventName = menuItem.eventName || this.eventName;
+    this.fire(eventName, {data: menuItem.data});
+    if (this.closeOnClick) {
+      this.$.lazyMenu.get().close();
+    }
   }
 
-  protected isItemSelected_(index: number): boolean {
-    return index === this.currentSelectedIndex;
+  protected isItemSelected_(index: number, item: MenuStateItem<any>): boolean {
+    return item.selected || index === this.currentSelectedIndex;
   }
 
   protected doesItemHaveIcon_(item: MenuStateItem<any>): boolean {
@@ -95,6 +100,10 @@ export class SimpleActionMenuElement extends SimpleActionMenuElementBase {
 
   protected doesItemHaveHeader_(item: MenuStateItem<any>): boolean {
     return chrome.readingMode.isLineFocusEnabled && !!item.header;
+  }
+
+  protected doesItemHaveHeaderSeparator_(item: MenuStateItem<any>): boolean {
+    return chrome.readingMode.isLineFocusEnabled && !!item.header?.separator;
   }
 }
 

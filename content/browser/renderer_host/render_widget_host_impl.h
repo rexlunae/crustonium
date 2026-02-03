@@ -194,7 +194,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
 
   ~RenderWidgetHostImpl() override;
 
-  void WillSendInputEventToRenderer(const blink::WebInputEvent& event) override;
+  void SimulateUserInteraction(const blink::WebInputEvent& event) override;
 
   // Similar to RenderWidgetHost::FromID, but returning the Impl object.
   static RenderWidgetHostImpl* FromID(int32_t process_id, int32_t routing_id);
@@ -317,6 +317,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
       const gfx::Point& point,
       const ui::mojom::MenuSourceType source_type) override;
   void InsertVisualStateCallback(VisualStateCallback callback) override;
+  void SetHungRendererDelay(const base::TimeDelta& delay) override;
 
   // RenderProcessHostPriorityClient implementation.
   RenderProcessHostPriorityClient::Priority GetPriority() override;
@@ -637,11 +638,13 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   //   (on Windows);
   // * when it receives a "preedit_changed" signal of GtkIMContext (on Linux);
   // * when markedText of NSTextInput is called (on Mac).
-  void ImeSetComposition(const std::u16string& text,
-                         const std::vector<ui::ImeTextSpan>& ime_text_spans,
-                         const gfx::Range& replacement_range,
-                         int selection_start,
-                         int selection_end);
+  void ImeSetComposition(
+      const std::u16string& text,
+      const std::vector<ui::ImeTextSpan>& ime_text_spans,
+      const gfx::Range& replacement_range,
+      int selection_start,
+      int selection_end,
+      blink::mojom::ImeState ime_state = blink::mojom::ImeState::kNone);
 
   // Deletes the ongoing composition if any, inserts the specified text, and
   // moves the cursor.
@@ -1033,6 +1036,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   SyntheticGestureController* SyntheticGestureControllerForTesting() {
     return synthetic_gesture_controller_.get();
   }
+
+  base::TimeDelta GetHungRendererDelayForTesting();
 
  protected:
   // |routing_id| must not be IPC::mojom::kRoutingIdNone.
@@ -1509,6 +1514,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // This value indicates how long to wait for a new compositor frame from a
   // renderer process before clearing any previously displayed content.
   base::TimeDelta new_content_rendering_delay_;
+
+  // This value indicates how long to wait before we consider a renderer hung.
+  base::TimeDelta hung_renderer_delay_;
 
   // When true, the RenderWidget is regularly sending updates regarding
   // composition info. It should only be true when there is a focused editable

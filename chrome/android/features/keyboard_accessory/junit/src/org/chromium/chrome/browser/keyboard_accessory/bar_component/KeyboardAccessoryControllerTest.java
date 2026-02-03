@@ -48,7 +48,8 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
@@ -124,19 +125,19 @@ public class KeyboardAccessoryControllerTest {
     @Mock private Runnable mMockDismissRunnable;
 
     private final KeyboardAccessoryData.Tab mTestTab =
-            new KeyboardAccessoryData.Tab("Passwords", null, null, 0, 0, null);
+            new KeyboardAccessoryData.Tab("Passwords", 0, null, 0, 0, null);
 
     private KeyboardAccessoryCoordinator mCoordinator;
     private PropertyModel mModel;
     private KeyboardAccessoryMediator mMediator;
-    private ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
+    private SettableNonNullObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
 
     @Before
     public void setUp() {
         when(mMockButtonGroup.getTabSwitchingDelegate()).thenReturn(mMockTabSwitchingDelegate);
         FillingProductBridgeJni.setInstanceForTesting(mMockFillingProductBridgeJni);
         PersonalDataManagerFactory.setInstanceForTesting(mMockPersonalDataManager);
-        mEdgeToEdgeControllerSupplier = new ObservableSupplierImpl<>(mEdgeToEdgeController);
+        mEdgeToEdgeControllerSupplier = ObservableSuppliers.createNonNull(mEdgeToEdgeController);
         when(mMockIsLargeFormFactorSupplier.get()).thenReturn(false);
 
         when(mMockFillingProductBridgeJni.getFillingProductFromSuggestionType(
@@ -853,7 +854,10 @@ public class KeyboardAccessoryControllerTest {
         when(mMockIsLargeFormFactorSupplier.get()).thenReturn(true);
         mCoordinator.setStyle(
                 KeyboardAccessoryStyle.createUndockedKeyboardAccessoryStyle(
-                        /* horizontalOffset= */ 1, /* verticalOffset= */ 1, /* maxWidth= */ 1));
+                        /* horizontalOffset= */ 1,
+                        /* verticalOffset= */ 1,
+                        /* maxWidth= */ 1,
+                        KeyboardAccessoryStyle.NotchPosition.TOP));
         // The suggestions should not be grouped because the style was changed to undocked.
         // TODO: crbug.com/431185714 - Mediator should remove the sheet opener when the style is
         // changed to undocked.

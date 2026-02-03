@@ -45,9 +45,9 @@ rust_static_library("bridge_rust_side") {
   cxx_bindings = [ skia_fontations_bridge_root ]
   deps = [
     ":path_bridge",
-    "//third_party/rust/font_types/v0_10:lib",
-    "//third_party/rust/read_fonts/v0_36:lib",
-    "//third_party/rust/skrifa/v0_39:lib",
+    "//third_party/rust/font_types/v0_11:lib",
+    "//third_party/rust/read_fonts/v0_37:lib",
+    "//third_party/rust/skrifa/v0_40:lib",
   ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [
@@ -63,6 +63,9 @@ config("skia_config") {
     "SK_UNTIL_CRBUG_1187654_IS_FIXED",
     "SK_USER_CONFIG_HEADER=\"../../skia/config/SkUserConfig.h\"",
     "SK_WIN_FONTMGR_NO_SIMULATIONS",
+
+    # Staging
+    "SK_ENABLE_LEGACY_SHADERCONTEXT",
 
     # Let Skia and Skia clients know whether to use `libpng`-based or
     # Rust-based PNG decoder and encoder.  This mimics what is done in
@@ -478,7 +481,6 @@ component("skia") {
   all_dependent_configs = [ ":skia_config" ]
 
   deps += [
-    ":rust_bmp_ffi",
     ":rust_common_ffi",
     ":rust_png_ffi",
     ":skcms",
@@ -491,6 +493,7 @@ component("skia") {
   ]
   public_deps = [
     ":buildflags",
+    ":rust_bmp_ffi",
     ":skia_core_and_effects",
     ":skia_core_public_headers",
   ]
@@ -573,8 +576,6 @@ component("skia") {
       deps += [ ":skia_ganesh_metal" ]
     }
     deps += [ "//gpu/config:workaround_list" ]
-  } else {
-    sources += skia_no_slug_srcs
   }
 
   if (skia_support_pdf) {
@@ -707,7 +708,10 @@ rust_static_library("rust_bmp_ffi") {
 }
 
 source_set("rust_bmp_ffi_cpp") {
-  visibility = [ ":*" ]
+  visibility = [
+    ":*",
+    "//third_party/blink/renderer/platform/image-decoders:*",
+  ]
   public = skia_codec_rust_bmp_public
   sources = skia_codec_rust_bmp
   public_deps = [
@@ -1141,6 +1145,7 @@ test("skia_unittests") {
     "ext/image_operations_unittest.cc",
     "ext/platform_canvas_unittest.cc",
     "ext/recursive_gaussian_convolution_unittest.cc",
+    "ext/rgba_to_yuva_unittest.cc",
     "ext/skcolorspace_primaries_unittest.cc",
     "ext/skcolorspace_trfn_unittest.cc",
     "ext/skia_memory_dump_provider_unittest.cc",

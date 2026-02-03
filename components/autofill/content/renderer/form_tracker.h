@@ -14,7 +14,6 @@
 #include "base/sequence_checker.h"
 #include "base/types/strong_alias.h"
 #include "components/autofill/content/renderer/timing.h"
-#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "content/public/renderer/render_frame_observer.h"
@@ -122,7 +121,8 @@ class FormTracker : public content::RenderFrameObserver,
   // A form_id means that the user last interacted with a FormElement.
   // A field_id means that the user last interacted with a formless control.
   void UpdateLastInteractedElement(
-      std::variant<FormRendererId, FieldRendererId> element_id);
+      std::variant<blink::WebFormElement, blink::WebFormControlElement>
+          element);
   void ResetLastInteractedElements();
 
   // Set whether a user gesture is required to accept text changes. If

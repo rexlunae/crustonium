@@ -9,11 +9,11 @@
 
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_view.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/tab_groups/ui/tab_group_indicator_view.h"
+#import "ios/chrome/browser/toolbar/tab_group/ui/tab_group_indicator_view.h"
 
 @class BannerPromoView;
 @class TabGroupIndicatorView;
-@class ToolbarButtonFactory;
+@class LegacyToolbarButtonFactory;
 enum class ToolbarCancelButtonStyle;
 
 // View for the primary toolbar. In an adaptive toolbar paradigm, this is the
@@ -24,7 +24,7 @@ enum class ToolbarCancelButtonStyle;
 
 // Initialize this View with the button `factory`. To finish the initialization
 // of the view, a call to `setUp` is needed.
-- (instancetype)initWithButtonFactory:(ToolbarButtonFactory*)factory
+- (instancetype)initWithButtonFactory:(LegacyToolbarButtonFactory*)factory
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;

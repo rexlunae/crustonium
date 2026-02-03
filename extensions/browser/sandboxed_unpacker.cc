@@ -496,7 +496,7 @@ void SandboxedUnpacker::ReadManifestDone(
     ReportUnpackExtensionFailed(result.error());
     return;
   }
-  const base::Value::Dict* dict = result->GetIfDict();
+  const base::DictValue* dict = result->GetIfDict();
   if (!dict) {
     ReportUnpackExtensionFailed(manifest_errors::kInvalidManifest);
     return;
@@ -511,12 +511,9 @@ void SandboxedUnpacker::ReadManifestDone(
     return;
   }
 
-  std::string error_msg;
   std::vector<InstallWarning> warnings;
-  // TODO(crbug.com/41317803): Continue removing std::string errors and
-  // replacing with std::u16string.
-  if (!file_util::ValidateExtension(extension.get(), &error_msg, &warnings)) {
-    ReportUnpackExtensionFailed(base::UTF8ToUTF16(error_msg));
+  if (!file_util::ValidateExtension(extension.get(), &error, &warnings)) {
+    ReportUnpackExtensionFailed(error);
     return;
   }
   extension->AddInstallWarnings(std::move(warnings));
@@ -524,11 +521,10 @@ void SandboxedUnpacker::ReadManifestDone(
   UnpackExtensionSucceeded(std::move(result).value().TakeDict());
 }
 
-void SandboxedUnpacker::UnpackExtensionSucceeded(base::Value::Dict manifest) {
+void SandboxedUnpacker::UnpackExtensionSucceeded(base::DictValue manifest) {
   DCHECK(unpacker_io_task_runner_->RunsTasksInCurrentSequence());
 
-  std::optional<base::Value::Dict> final_manifest(
-      RewriteManifestFile(manifest));
+  std::optional<base::DictValue> final_manifest(RewriteManifestFile(manifest));
   if (!final_manifest) {
     return;
   }
@@ -981,7 +977,7 @@ void SandboxedUnpacker::ReportSuccess() {
   // Client takes ownership of temporary directory, manifest, and extension.
   client_->OnUnpackSuccess(
       temp_dir_.Take(), extension_root_,
-      std::make_unique<base::Value::Dict>(std::move(manifest_.value())),
+      std::make_unique<base::DictValue>(std::move(manifest_.value())),
       extension_.get(), install_icon_, std::move(ruleset_install_prefs_));
 
   // Interestingly, the C++ standard doesn't guarantee that a moved-from vector
@@ -993,15 +989,15 @@ void SandboxedUnpacker::ReportSuccess() {
   Cleanup();
 }
 
-std::optional<base::Value::Dict> SandboxedUnpacker::RewriteManifestFile(
-    const base::Value::Dict& manifest) {
+std::optional<base::DictValue> SandboxedUnpacker::RewriteManifestFile(
+    const base::DictValue& manifest) {
   constexpr int64_t kMaxFingerprintSize = 1024;
 
   // Add the public key extracted earlier to the parsed manifest and overwrite
   // the original manifest. We do this to ensure the manifest doesn't contain an
   // exploitable bug that could be used to compromise the browser.
   DCHECK(!public_key_.empty());
-  base::Value::Dict final_manifest = manifest.Clone();
+  base::DictValue final_manifest = manifest.Clone();
   final_manifest.Set(manifest_keys::kPublicKey, public_key_);
 
   {

@@ -3,6 +3,7 @@
 <translationbundle lang="tr">
 <translation id="1006017844123154345">İnternet'te aç</translation>
 <translation id="1036348656032585052">Kapat</translation>
+<translation id="1046742265332833834">Mavi tema</translation>
 <translation id="1070329623210597193">Bu sitenin görüntüleyebileceği veya düzenleyebileceği dosyalar</translation>
 <translation id="1073417869336441572">Üçüncü taraf çerezlerine neden izin verdiğinizi bize bildirerek Chrome'u iyileştirmemize yardımcı olun. <ph name="BEGIN_LINK" />Geri bildirim gönderin<ph name="END_LINK" /></translation>
 <translation id="1074758928858737435">Sitelerin masaüstü sürümünü görüntülemeyi talep edebilirsiniz</translation>
@@ -12,6 +13,7 @@
 <translation id="1178581264944972037">Duraklat</translation>
 <translation id="1181037720776840403">Kaldır</translation>
 <translation id="1192844206376121885">Bu işlem, <ph name="ORIGIN" /> tarafından depolanan tüm verileri ve çerezleri siler.</translation>
+<translation id="1199963004393929848">Yeşil tema</translation>
 <translation id="1201402288615127009">İleri</translation>
 <translation id="1240190568154816272">Chrome ipuçları</translation>
 <translation id="1242008676835033345"><ph name="WEBSITE_URL" /> adresinde yerleşik</translation>
@@ -64,6 +66,7 @@
 <translation id="1717996979683942279">Bu özellik açıkken siteler tüm ekranlarınızda pencereleri yönetme izni isteyebilir. Kapalıyken siteler tüm ekranlarınızda pencereleri yönetemez.</translation>
 <translation id="1738912554587725807">Yeni sekme sayfası görünümü tema koleksiyonları alt sayfası</translation>
 <translation id="1743802530341753419">Sitelerin bir cihaza bağlanmasına izin verilmeden önce sor (önerilir)</translation>
+<translation id="1766455884659449403">Chrome ipuçları bildirimlerini alın</translation>
 <translation id="1777815584158991902">Keşfet feed'i alt sayfası</translation>
 <translation id="1779089405699405702">Görsel kod çözücüsü</translation>
 <translation id="1785415724048343560">En iyi deneyim için önerilir</translation>
@@ -188,11 +191,9 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="2903493209154104877">Adresler</translation>
 <translation id="2910701580606108292">Sitelerin korumalı içeriği oynatmasına izin verilmeden önce size sorulur</translation>
 <translation id="2918484639460781603">Ayarlara git</translation>
-<translation id="293060180538644702">Chrome İpuçları bildirimlerini alın</translation>
 <translation id="2932883381142163287">Kötüye kullanım bildir</translation>
 <translation id="2939338015096024043">Bu düğme açıkken siteler kameranızın konumunu izlemek ve çevreniz hakkında bilgi edinmek isteyebilir. Düğme kapalıyken siteler kameranızın konumunu izleyemez veya çevreniz hakkında bilgi edinemez.</translation>
 <translation id="2968755619301702150">Sertifika görüntüleyici</translation>
-<translation id="2979365474350987274">Üçüncü taraf çerezleri sınırlı</translation>
 <translation id="2990583317361835189">Sitelerin hareket sensörlerini kullanmasına izin verme</translation>
 <translation id="3004438526346162184">Siteler, tüm ekranlarınızda pencereleri yönetmek için bu özelliği kullanabilir</translation>
 <translation id="3008272652534848354">İzinleri sıfırla</translation>
@@ -216,11 +217,11 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="3167868116600277716">Keşfet feed'i</translation>
 <translation id="3198916472715691905"><ph name="STORAGE_AMOUNT" /> depolanmış veri</translation>
 <translation id="3199078925536734975">Şu anda izin veriliyor • Yaklaşık</translation>
+<translation id="3208584281581115441">Şimdi kontrol et</translation>
 <translation id="321187648315454507"><ph name="APP_NAME" /> uygulamasının size bildirim gönderebilmesi için <ph name="BEGIN_LINK" />Android Ayarları<ph name="END_LINK" />'nda da bildirimleri açın.</translation>
 <translation id="3223425961342298674">Konuma izin verilmiyor</translation>
 <translation id="3227137524299004712">Mikrofon</translation>
 <translation id="3232293466644486101">Tarama verilerini sil…</translation>
-<translation id="3241320538788585298">Loopback ağı</translation>
 <translation id="3242646949159196181">Bu düğme açıkken siteler ses çalabilir. Düğme kapalıyken siteler ses çalamaz.</translation>
 <translation id="3273479183583863618">Sekmelerdeki fiyat düşüşleri</translation>
 <translation id="3277252321222022663">Sitelerin sensörlere erişmesine izin ver (önerilen)</translation>
@@ -266,6 +267,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="3721953990244350188">Kapat ve sonraki mevcut işlemi göster</translation>
 <translation id="3744111561329211289">Arka plan senkronizasyonu</translation>
 <translation id="3746834924069123416">Diğer son sekmeleri göster</translation>
+<translation id="3753618528540214374">Zümrüt yeşili tema</translation>
 <translation id="3763247130972274048">10 sn. atlamak için videoda sola veya sağa iki kez dokunun</translation>
 <translation id="3776508619697147021">Siteler birden fazla dosyayı otomatik olarak indirmek isteyebilir</translation>
 <translation id="3779154269823594982">Şifreleri değiştir</translation>
@@ -275,6 +277,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="381841723434055211">Telefon numaraları</translation>
 <translation id="3823453485268218808">Mono yazı tipi</translation>
 <translation id="3826050100957962900">Üçüncü taraf oturum açma</translation>
+<translation id="3831065134033923230">Kayıtlı şifrelerinizi kontrol edin</translation>
 <translation id="3835233591525155343">Cihaz kullanımınız</translation>
 <translation id="3843916486309149084">Chrome bugün çerezleri tekrar engelleyecek</translation>
 <translation id="385051799172605136">Geri</translation>
@@ -403,6 +406,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="5246825184569358663">Bu işlem, çerezler de dahil olmak üzere yerel verilerin tamamını temizler, ayrıca <ph name="DOMAIN" /> ve altındaki tüm sitelerin izinlerini sıfırlar</translation>
 <translation id="5264323282659631142">"<ph name="CHIP_LABEL" />" çipini kaldır</translation>
 <translation id="528192093759286357">Tam ekrandan çıkmak için yukarıdan sürükleyin ve geri düğmesine dokunun.</translation>
+<translation id="5286194356314741248">Taranıyor</translation>
 <translation id="5300589172476337783">Göster</translation>
 <translation id="5301954838959518834">Tamam, anladım</translation>
 <translation id="5317780077021120954">Kaydet</translation>
@@ -413,6 +417,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(+ 1 tane daha)}other{(+ # tane daha)}}</translation>
 <translation id="5403592356182871684">Adlar</translation>
 <translation id="5407203562970638234">Güvenliğinizi artırın</translation>
+<translation id="5436307623797390637">Cihazdaki uygulamalar</translation>
 <translation id="5438097262470833822">Bu tercih, <ph name="WEBSITE" /> izinlerini sıfırlar</translation>
 <translation id="5459413148890178711">Bu düğme açıkken siteler konumunuzu görmek isteyebilir. Düğme kapalıyken siteler konumunuzu göremez.</translation>
 <translation id="5489227211564503167">Geçen süre: <ph name="ELAPSED_TIME" />/<ph name="TOTAL_TIME" /></translation>
@@ -475,6 +480,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="5998071268779572583">Keşfet feed'ini açın</translation>
 <translation id="6012967556075291653">Sabitlenmiş kısayol</translation>
 <translation id="6015775454662021376">Bu sitenin cihazınıza erişimini kontrol edin</translation>
+<translation id="6022659036123304283">Chrome'u kendinize uyarlayın</translation>
 <translation id="6040143037577758943">Kapat</translation>
 <translation id="6042308850641462728">Daha fazla</translation>
 <translation id="6064125863973209585">Tamamlanan indirme işlemleri</translation>
@@ -492,13 +498,13 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="6196640612572343990">Üçüncü taraf çerezlerini engelle</translation>
 <translation id="6205314730813004066">Reklam gizliliği</translation>
 <translation id="6207207788774442484">Verileri sil ve izinleri sıfırla</translation>
+<translation id="6218508144653756827">Fuşya tema</translation>
 <translation id="6231752747840485235">"<ph name="APP_NAME" />" uygulaması kaldırılsın mı?</translation>
 <translation id="6234351944623978659">Tarayıcı uygulaması &gt; Chrome'a dokunun</translation>
 <translation id="6260830281887654268">Yeni sekme sayfası görünümü, tema koleksiyonları alt sayfası ekranın yarısına kadar açıldı</translation>
 <translation id="6262191102408817757">Son sekmenize dayalı olarak</translation>
 <translation id="6262279340360821358"><ph name="PERMISSION_1" /> ve <ph name="PERMISSION_2" /> engellendi</translation>
 <translation id="6270391203985052864">Siteler bildirim gönderme izni isteyebilir</translation>
-<translation id="6278428485366576908">Tema</translation>
 <translation id="6295158916970320988">Tüm siteler</translation>
 <translation id="6320088164292336938">Titreşim</translation>
 <translation id="6367753977865761591">Belirli bir sitede üçüncü taraf oturum açmayı engelleyin.</translation>
@@ -525,6 +531,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="659938948789980540">{COUNT,plural, =1{<ph name="RWS_MEMBERS_COUNT" /> <ph name="RWS_OWNER" /> sitesi için çerezlere izin veriliyor}other{<ph name="RWS_MEMBERS_COUNT" /> <ph name="RWS_OWNER" /> sitesi için çerezlere izin veriliyor}}</translation>
 <translation id="6608650720463149374"><ph name="GIGABYTES" /> GB</translation>
 <translation id="6612358246767739896">Korunan içerik</translation>
+<translation id="6619015782482868078">Turkuaz tema</translation>
 <translation id="662080504995468778">Kal</translation>
 <translation id="6630443592285535486">Onaltılık değeri buraya yazın</translation>
 <translation id="6635327442719709864">Bu düğme açıkken siteler seri bağlantı noktalarını kullanmak için izin isteyebilir. Düğme kapalıyken siteler seri bağlantı noktalarını kullanamaz.</translation>
@@ -553,6 +560,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="6945221475159498467">Seç</translation>
 <translation id="6950072572526089586">Ziyaret ettiğiniz bir site, yaptığınız işlemlerle ilgili bilgileri kaydedebilir. Bu bilgileri, beklendiği gibi çalışmak, örneğin bir sitede oturumunuzu açık tutmak veya alışveriş sepetinizdeki öğeleri kaydetmek için kullanabilir. Genellikle siteler bu bilgileri geçici olarak cihazınıza kaydeder.</translation>
 <translation id="6965382102122355670">Tamam</translation>
+<translation id="6980507581230208647">Gül rengi tema</translation>
 <translation id="6980861169612950611">Site verileri silinsin mi? <ph name="SITE_NAME" /></translation>
 <translation id="6981982820502123353">Erişilebilirlik</translation>
 <translation id="6991142177939282156">İzin veriliyor • Yaklaşık konum kullanılıyor</translation>
@@ -581,6 +589,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="7250468141469952378"><ph name="ITEM_COUNT" /> öğe seçildi</translation>
 <translation id="7260727271532453612"><ph name="PERMISSION_1" /> ve <ph name="PERMISSION_2" /> için izin verildi</translation>
 <translation id="7276071417425470385">Bu düğme açıkken siteler sanal gerçeklik cihazlarını kullanmak isteyebilir. Düğme kapalıyken siteler sanal gerçeklik cihazlarını kullanamaz.</translation>
+<translation id="7282197670900591579">Limon sarısı tema</translation>
 <translation id="728412880473384942">Siteler daha hızlı ancak daha az güvenli olur</translation>
 <translation id="7366415735885268578">Site ekle</translation>
 <translation id="7368695150573390554">Tüm çevrimdışı veriler silinecek</translation>
@@ -619,6 +628,7 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="7688240020069572972">Chrome ipuçları kartını gizle</translation>
 <translation id="7719367874908701697">Sayfa yakınlaştırma</translation>
 <translation id="775043444390799886">İzni iptal et</translation>
+<translation id="7758789811447313947">Mor tema</translation>
 <translation id="7759147511335618829">MIDI cihaz kontrolü ve yeniden programlama</translation>
 <translation id="7781829728241885113">Dün</translation>
 <translation id="7791543448312431591">Ekle</translation>
@@ -631,13 +641,13 @@ Gelişmiş Koruma, şu Chrome ayarlarını kontrol eder:
 <translation id="7835852323729233924">Medya oynatma/çalma</translation>
 <translation id="783819812427904514">Videonun sesini aç</translation>
 <translation id="7846076177841592234">Seçimi iptal et</translation>
-<translation id="7881140103901777395">Chrome, çoğu sitenin, üçüncü taraf çerezlerini kullanmasını sınırlandırır. Ancak temel hizmetleri sağlamadaki rolünden dolayı bu sitede üçüncü taraf çerezlerine izin verilir.\n\n<ph name="BEGIN_LINK" />Üçüncü taraf çerezlerine erişimi yönetmek<ph name="END_LINK" /> için ayarlara gidin.</translation>
 <translation id="7882806643839505685">Belirli bir site için sese izin verin.</translation>
 <translation id="7891547341794213004">Bu sekmeyle devam et kartını gizle</translation>
 <translation id="789722939441020330">Sitelerin birden fazla dosyayı otomatik olarak indirmesine izin verme</translation>
 <translation id="7940722705963108451">Bana hatırlat</translation>
 <translation id="7948081750384205628"><ph name="SETTING_TITLE" /> hakkında daha fazla bilgi</translation>
 <translation id="7952708427581814389">Siteler panonuzdaki metin ve görselleri görmek isteyebilir</translation>
+<translation id="798299424881500862">Turuncu tema</translation>
 <translation id="7986741934819883144">Kişi seçin</translation>
 <translation id="7990211076305263060">Bu düğme açıkken siteler mikrofonunuzu kullanmak isteyebilir. Düğme kapalıyken siteler mikrofonunuzu kullanamaz.</translation>
 <translation id="8007176423574883786">Bu cihaz için kapatıldı</translation>

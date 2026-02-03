@@ -484,9 +484,9 @@ TEST_F(FieldLogUkmMetricTest, AutofillFieldInfoMetricsFieldType) {
 
   auto form_structure = std::make_unique<FormStructure>(form);
   FormStructure* form_structure_ptr = form_structure.get();
-  const RegexPredictions regex_predictions =
-      DetermineRegexTypes(GeoIpCountryCode(""), LanguageCode(""),
-                          form_structure->ToFormData(), nullptr);
+  const RegexPredictions regex_predictions = DetermineRegexTypes(
+      GeoIpCountryCode(""), LanguageCode(""), form_structure->ToFormData(),
+      nullptr, /*ignore_small_forms=*/true);
   regex_predictions.ApplyTo(form_structure->fields());
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
@@ -513,7 +513,8 @@ TEST_F(FieldLogUkmMetricTest, AutofillFieldInfoMetricsFieldType) {
   std::string response_string = SerializeAndEncode(response);
   test_api(autofill_manager())
       .OnLoadedServerPredictions(
-          response_string, test::GetEncodedSignatures(*form_structure_ptr));
+          response_string, test::GetEncodedSignatures(*form_structure_ptr),
+          {form});
 
   task_environment_.FastForwardBy(base::Milliseconds(37000));
   base::HistogramTester histogram_tester;

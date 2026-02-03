@@ -4,6 +4,7 @@
 
 #include "chrome/browser/apps/link_capturing/chromeos_reimpl_navigation_capturing_throttle.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -288,7 +289,7 @@ bool ShouldThrottleCaptureNavigation(
     bool is_link_click,
     bool is_for_projector_swa,
     content::NavigationHandle* handle,
-    base::Value::Dict* debug_dict) {
+    base::DictValue* debug_dict) {
   content::WebContents* web_contents = handle->GetWebContents();
   CHECK(web_contents);
   CHECK(app_ids_to_launch.preferred);
@@ -502,7 +503,7 @@ ThrottleCheckResult ChromeOsReimplNavigationCapturingThrottle::HandleRequest() {
   }
 
   bool is_for_prerender = handle->IsInPrerenderedMainFrame();
-  base::Value::Dict* debug_data = &debug_data_;
+  base::DictValue* debug_data = &debug_data_;
   if (is_for_prerender) {
     debug_data = debug_data_.EnsureDict("prerender");
   }
@@ -535,8 +536,8 @@ ThrottleCheckResult ChromeOsReimplNavigationCapturingThrottle::HandleRequest() {
     return content::NavigationThrottle::PROCEED;
   }
 
-  const bool is_for_projector_swa =
-      base::Contains(app_candidates, ash::kChromeUIUntrustedProjectorSwaAppId);
+  const bool is_for_projector_swa = std::ranges::contains(
+      app_candidates, ash::kChromeUIUntrustedProjectorSwaAppId);
 
   // Note: This is an unfortunate way to detect a link click. If there is a
   // better way to know all of navigation's original disposition, frame, etc,

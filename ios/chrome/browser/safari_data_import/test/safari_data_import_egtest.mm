@@ -55,7 +55,6 @@ NSString* const kInvalidPasswordUsername = @"Superman";
 /// the Safari import feature by default. No other behavior is overridden.
 - (AppLaunchConfiguration)appConfigurationNoOverrideBehavior {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_enabled.push_back(kImportPasswordsFromSafari);
   config.relaunch_policy = ForceRelaunchByCleanShutdown;
   return config;
 }
@@ -115,6 +114,7 @@ NSString* const kInvalidPasswordUsername = @"Superman";
     /// Show the First Run UI at startup.
     firstRunConfig.additional_args.push_back("-FirstRunForceEnabled");
     firstRunConfig.additional_args.push_back("true");
+    firstRunConfig.features_disabled.push_back(kBestOfAppFRE);
     firstRunConfig.relaunch_policy = ForceRelaunchByCleanShutdown;
     [[AppLaunchManager sharedManager]
         ensureAppLaunchedWithConfiguration:firstRunConfig];
@@ -264,11 +264,16 @@ NSString* const kInvalidPasswordUsername = @"Superman";
             StaticTextWithAccessibilityLabelId(
                 IDS_IOS_SAFARI_IMPORT_INVALID_PASSWORD_REASON_MISSING_URL)]
         assertWithMatcher:grey_sufficientlyVisible()];
-    [[EarlGrey
-        selectElementWithMatcher:
-            grey_buttonTitle(l10n_util::GetNSString(
-                IDS_IOS_SAFARI_IMPORT_INVALID_PASSWORD_LIST_BUTTON_CLOSE))]
-        performAction:grey_tap()];
+    if (@available(iOS 26, *)) {
+      [[EarlGrey selectElementWithMatcher:NavigationBarDoneButton()]
+          performAction:grey_tap()];
+    } else {
+      [[EarlGrey
+          selectElementWithMatcher:
+              grey_buttonTitle(l10n_util::GetNSString(
+                  IDS_IOS_SAFARI_IMPORT_INVALID_PASSWORD_LIST_BUTTON_CLOSE))]
+          performAction:grey_tap()];
+    }
     /// Dismiss the workflow. Verify that NTP logo is interactable, which means
     /// that the entry point is dismissed.
     CompletesImportWorkflow();
@@ -354,8 +359,15 @@ NSString* const kInvalidPasswordUsername = @"Superman";
         assertWithMatcher:grey_sufficientlyVisible()];
     ExpectPasswordConflictCellAtIndexSelected(0, YES);
     ExpectPasswordConflictCellAtIndexSelected(1, NO);
-    [[EarlGrey selectElementWithMatcher:NavigationBarDoneButton()]
-        performAction:grey_tap()];
+    if (@available(iOS 26, *)) {
+      [[EarlGrey selectElementWithMatcher:NavigationBarDoneButton()]
+          performAction:grey_tap()];
+    } else {
+      [[EarlGrey
+          selectElementWithMatcher:grey_buttonTitle(
+                                       l10n_util::GetNSString(IDS_CONTINUE))]
+          performAction:grey_tap()];
+    }
     /// Dismiss the workflow after import completes. Verify that NTP logo is
     /// interactable, which means that the entry point is dismissed.
     [ChromeEarlGrey waitForUIElementToAppearWithMatcher:

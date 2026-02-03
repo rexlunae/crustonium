@@ -106,10 +106,8 @@ bool ShouldOnlyShowVerbatimMatches(const AutocompleteInput& input) {
       input.lens_overlay_suggest_inputs().has_value() &&
       !base::FeatureList::IsEnabled(omnibox::kComposeboxAttachmentsTypedState);
   const bool is_image_gen_mode =
-      input.aim_tool_mode() ==
-          omnibox::ChromeAimToolsAndModels::TOOL_MODE_IMAGE_GEN_UPLOAD ||
-      input.aim_tool_mode() ==
-          omnibox::ChromeAimToolsAndModels::TOOL_MODE_IMAGE_GEN;
+      input.aim_tool_mode() == omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD ||
+      input.aim_tool_mode() == omnibox::ToolMode::TOOL_MODE_IMAGE_GEN;
 
   // When contextual typed state suggestions are disabled for composebox, or
   // when in image generation mode, do not query suggest and only show
@@ -446,7 +444,7 @@ void SearchProvider::OnURLLoadComplete(
   // clear if the suggest server will send back sensible results to the
   // request we're constructing here for on-focus inputs.
   if (!input_.IsZeroSuggest() && request_succeeded) {
-    std::optional<base::Value::List> data =
+    std::optional<base::ListValue> data =
         SearchSuggestionParser::DeserializeJsonData(
             SearchSuggestionParser::ExtractJsonData(source,
                                                     std::move(response_body)));
@@ -1012,6 +1010,12 @@ void SearchProvider::ConvertResultsToAutocompleteMatches() {
     if (match_with_answer) {
       verbatim.SetAnswerType(match_with_answer->answer_type);
       verbatim.SetRichAnswerTemplate(*match_with_answer->answer_template);
+    }
+    if (omnibox::IsComposebox(input_.current_page_classification())) {
+      omnibox::SuggestTemplateInfo suggest_template;
+      suggest_template.set_type_icon(
+          omnibox::SuggestTemplateInfo_IconType_SEARCH_LOOP_WITH_SPARKLE);
+      verbatim.SetSuggestTemplateInfo(suggest_template);
     }
     AddMatchToMap(verbatim, GetInput(verbatim.from_keyword()),
                   GetTemplateURL(verbatim.from_keyword()),

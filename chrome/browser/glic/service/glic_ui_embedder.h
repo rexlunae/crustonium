@@ -11,6 +11,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/glic/host/glic.mojom-forward.h"
 #include "chrome/browser/glic/host/host.h"
+#include "chrome/browser/glic/public/glic_close_options.h"
 #include "chrome/browser/glic/service/glic_ui_types.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -59,10 +60,12 @@ class GlicUiEmbedder {
   virtual void Show(const ShowOptions& options) = 0;
 
   // Returns true if the embedder is currently showing.
+  // Note: For side panels, "showing" can mean it's currently visible, or it
+  // will be automatically shown when its tab is activated.
   virtual bool IsShowing() const = 0;
 
   // Close the glic UI (keeps webclient alive for now)
-  virtual void Close() = 0;
+  virtual void Close(const CloseOptions& options) = 0;
 
   // Focus embedder's webcontents.
   virtual void Focus() = 0;

@@ -41,6 +41,7 @@
 <translation id="1707458603865303524">Use o Chromium sempre que abrir links em mensagens e outros apps.</translation>
 <translation id="1722370509450468186">A senha será salva na sua conta (<ph name="EMAIL" />).</translation>
 <translation id="1747088204252710672">Um feed personalizado para você</translation>
+<translation id="1761196287436320018">Você atingiu o limite de <ph name="LIMIT" /> favoritos no Chromium. Exclua alguns dos favoritos na sua Conta do Google para poder salvar novos. Se você sair agora, os favoritos que não foram salvos serão excluídos.</translation>
 <translation id="1811860791247653035">Para acessar a personalização e outros recursos, inclua o Chromium na <ph name="FEATURE_NAME_1" /> e nos <ph name="FEATURE_NAME_2" /></translation>
 <translation id="1838412507805038478">O Chromium verificou que <ph name="ISSUER" /> emitiu o certificado deste website.</translation>
 <translation id="1839447949248872139">Abrir links no Chromium por padrão</translation>
@@ -129,6 +130,7 @@ Aguarde alguns minutos antes de trocar de conta. Se você mudar de conta agora, 
 <translation id="3728124580182886854">Vincule o Chromium e outros Serviços do Google para personalização e outras finalidades</translation>
 <translation id="377649297473651452">Visualização aberta do preenchimento automático do Chromium</translation>
 <translation id="3780779443901618967">Avisa você sobre sites perigosos, mesmo aqueles que o Google não conhecia, analisando mais dados de sites do que a proteção padrão. Você pode ignorar os avisos do Chromium.</translation>
+<translation id="3793136096560888222">Edite imagens com o Gemini no Chromium</translation>
 <translation id="3805899903892079518">O Chromium não têm acesso às suas fotos ou seus vídeos. Permita o acesso em "Configurações do iOS" &gt; "Privacidade" &gt; "Fotos".</translation>
 <translation id="3816686541346279443">O Chromium vai oferecer a opção de salvar sua senha.</translation>
 <translation id="3827545470516145620">Você está usando a proteção padrão neste dispositivo</translation>
@@ -296,7 +298,6 @@ Só uma pessoa com sua senha longa pode ler seus dados criptografados. Essa senh
 <translation id="7554983317097061001">Dica do Chromium: mova o Chromium para o Dock</translation>
 <translation id="7576863740961052505">Gerenciar configurações do Chromium</translation>
 <translation id="7674213385180944843">Abra Ajustes &gt; Privacidade &gt; Câmera &gt; Chromium e ative a câmera.</translation>
-<translation id="7685160423563372998">Crie uma imagem com o Gemini no Chromium</translation>
 <translation id="7733418656985455268">Dica do Chromium: pesquise com o Lens</translation>
 <translation id="7747820849741499258">Pesquisar no Chromium</translation>
 <translation id="7753923083404296545">Aberto na navegação anônima do Chromium</translation>

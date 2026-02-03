@@ -22,8 +22,6 @@ BASE_FEATURE(kEnableNTPViewHierarchyRepair,
 
 BASE_FEATURE(kOverrideFeedSettings, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kWebFeedFeedbackReroute, base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kFeedSwipeInProductHelp, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUseFeedEligibilityService, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -34,12 +32,6 @@ BASE_FEATURE(kMostVisitedTilesCustomizationIOS,
 BASE_FEATURE(kConsistentLogoDoodleHeight, base::FEATURE_DISABLED_BY_DEFAULT);
 
 #pragma mark - Feature parameters
-
-const char kDiscoverFeedSRSReconstructedTemplatesEnabled[] =
-    "DiscoverFeedSRSReconstructedTemplatesEnabled";
-
-const char kDiscoverFeedSRSPreloadTemplatesEnabled[] =
-    "DiscoverFeedSRSPreloadTemplatesEnabled";
 
 // Feature parameters for `kOverrideFeedSettings`.
 const char kFeedSettingRefreshThresholdInSeconds[] =
@@ -75,10 +67,6 @@ bool IsContentSuggestionsForSupervisedUserEnabled(PrefService* pref_service) {
       prefs::kNTPContentSuggestionsForSupervisedUserEnabled);
 }
 
-bool IsWebFeedFeedbackRerouteEnabled() {
-  return base::FeatureList::IsEnabled(kWebFeedFeedbackReroute);
-}
-
 FeedSwipeIPHVariation GetFeedSwipeIPHVariation() {
   if (base::FeatureList::IsEnabled(kFeedSwipeInProductHelp)) {
     return static_cast<FeedSwipeIPHVariation>(
@@ -111,7 +99,8 @@ NTPMIAEntrypointVariation GetNTPMIAEntrypointVariation() {
     return NTPMIAEntrypointVariation::kAIMInQuickAction;
   } else {
     // Disabled on iPad.
-    if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+    if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET &&
+        !base::FeatureList::IsEnabled(kAIMNTPEntrypointTablet)) {
       return NTPMIAEntrypointVariation::kDisabled;
     }
     // Default value.

@@ -65,9 +65,10 @@ void KeyDistributionComponent::KeyDistributionComponent::
 }
 
 KeyDistributionComponentBuilder::KeyDistributionComponentBuilder(
-    const base::Version& component_version)
+    const base::Version& component_version,
+    bool is_preloaded)
     : component_(/*version=*/component_version,
-                 /*is_preloaded=*/false,
+                 /*is_preloaded=*/is_preloaded,
                  /*data=*/IwaKeyDistribution{}) {}
 
 KeyDistributionComponentBuilder::~KeyDistributionComponentBuilder() = default;
@@ -236,7 +237,7 @@ InstallIwaKeyDistributionComponent(const base::Version& version,
   // existing component on disk.
   CHECK(base::WriteFile(
       install_dir.Append(FILE_PATH_LITERAL("manifest.json")),
-      *base::WriteJson(base::Value::Dict()
+      *base::WriteJson(base::DictValue()
                            .Set("manifest_version", 1)
                            .Set("name", Installer::kManifestName)
                            .Set("version", version.GetString()))));

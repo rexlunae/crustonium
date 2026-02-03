@@ -8,6 +8,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/password_manager/core/browser/ui/affiliated_group.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/credential_exchange/public/metrics.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_constants.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_favicon_provider.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller_presentation_delegate.h"
@@ -88,6 +89,9 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 #pragma mark - Actions
 
 - (void)didTapDone {
+  LogCredentialExportScreenAction(
+      CredentialExportScreenAction::kContinuePressed);
+
   NSArray<NSIndexPath*>* selectedIndexPaths =
       self.tableView.indexPathsForSelectedRows;
   NSMutableArray<CredentialGroupIdentifier*>* selectedItems =
@@ -107,14 +111,39 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
   NSUInteger totalCount = _affiliatedGroups.size();
 
   if (selectedCount == totalCount) {
+    LogCredentialExportScreenAction(
+        CredentialExportScreenAction::kDeselectAllPressed);
     [self deselectAllItems];
   } else {
+    LogCredentialExportScreenAction(
+        CredentialExportScreenAction::kSelectAllPressed);
     [self selectAllItems];
   }
 }
 
 - (void)didTapExportCSV {
-  // TODO(crbug.com/40284755): Implement export selected passwords to csv.
+  LogCredentialExportScreenAction(
+      CredentialExportScreenAction::kDownloadToCSVPressed);
+
+  std::vector<password_manager::CredentialUIEntry> credentialsToExport;
+
+  for (NSIndexPath* path in self.tableView.indexPathsForSelectedRows) {
+    CredentialGroupIdentifier* item =
+        [_dataSource itemIdentifierForIndexPath:path];
+
+    const password_manager::AffiliatedGroup& group = item.affiliatedGroup;
+
+    base::span<const password_manager::CredentialUIEntry> credentialEntries =
+        group.GetCredentials();
+
+    for (const password_manager::CredentialUIEntry& entry : credentialEntries) {
+      if (entry.passkey_credential_id.empty()) {
+        credentialsToExport.push_back(entry);
+      }
+    }
+  }
+
+  [self.delegate exportCredentialsToCSV:std::move(credentialsToExport)];
 }
 
 #pragma mark - CredentialExportConsumer

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
 #include "base/metrics/user_metrics.h"
@@ -45,6 +46,26 @@ namespace {
 using PermissionsManager = extensions::PermissionsManager;
 using SitePermissionsHelper = extensions::SitePermissionsHelper;
 
+// Returns whether host access requests can be visible in the menu.
+bool CanShowHostAccessRequests(
+    ExtensionsMenuViewModel::OptionalSection optional_section) {
+  // Requests are only visible in the 'host access requests' section.
+  return optional_section ==
+         ExtensionsMenuViewModel::OptionalSection::kHostAccessRequests;
+}
+
+// Returns the host access request info for `extension_id`.
+ExtensionsMenuViewModel::HostAccessRequest GetHostAccessRequest(
+    ExtensionsMenuViewModel& menu_model,
+    const extensions::ExtensionId& extension_id) {
+  const int icon_size = ChromeLayoutProvider::Get()->GetDistanceMetric(
+      DISTANCE_EXTENSIONS_MENU_EXTENSION_ICON_SIZE);
+  ExtensionsMenuViewModel::HostAccessRequest request =
+      menu_model.GetHostAccessRequest(extension_id,
+                                      gfx::Size(icon_size, icon_size));
+  return request;
+}
+
 // Returns the main page, if it is the correct type.
 ExtensionsMenuMainPageView* GetMainPage(views::View* page) {
   return views::AsViewClass<ExtensionsMenuMainPageView>(page);
@@ -60,10 +81,12 @@ ExtensionsMenuSitePermissionsPageView* GetSitePermissionsPage(
 
 ExtensionsMenuDelegateDesktop::ExtensionsMenuDelegateDesktop(
     Browser* browser,
-    ExtensionsContainerViews* extensions_container,
+    ExtensionsContainer* extensions_container,
+    ExtensionsContainerViews* extensions_container_views,
     views::View* bubble_contents)
     : browser_(browser),
-      extensions_container_(extensions_container),
+      extensions_container_(CHECK_DEREF(extensions_container)),
+      extensions_container_views_(extensions_container_views),
       bubble_contents_(bubble_contents),
       menu_model_(std::make_unique<ExtensionsMenuViewModel>(browser_,
                                                             /*delegate=*/this)),
@@ -78,18 +101,36 @@ ExtensionsMenuDelegateDesktop::CreateActionViewModel(
     const extensions::ExtensionId& extension_id) {
   return ExtensionActionViewModel::Create(
       extension_id, browser_,
-      std::make_unique<ExtensionActionDelegateDesktop>(browser_,
-                                                       extensions_container_));
+      std::make_unique<ExtensionActionDelegateDesktop>(
+          browser_, &extensions_container_.get(), extensions_container_views_));
 }
 
-void ExtensionsMenuDelegateDesktop::OnActiveWebContentsChanged(
-    content::WebContents* web_contents) {
-  UpdatePage(web_contents);
+void ExtensionsMenuDelegateDesktop::OnActiveWebContentsChanged() {
+  DCHECK(current_page_);
+
+  // Update main page if it is open.
+  auto* main_page = GetMainPage(current_page_.view());
+  if (main_page) {
+    UpdateMainPage(main_page);
+    return;
+  }
+
+  auto* site_permissions_page = GetSitePermissionsPage(current_page_.view());
+  CHECK(site_permissions_page);
+  if (menu_model_->CanShowSitePermissionsPage(
+          site_permissions_page->extension_id())) {
+    // Update site permissions page if it is open and the extension can have
+    // one.
+    UpdateSitePermissionsPage(site_permissions_page);
+  } else {
+    // Otherwise navigate back to the main page.
+    OpenMainPage();
+  }
 }
 
-void ExtensionsMenuDelegateDesktop::OnHostAccessRequestAddedOrUpdated(
+void ExtensionsMenuDelegateDesktop::OnHostAccessRequestAdded(
     const extensions::ExtensionId& extension_id,
-    content::WebContents* web_contents) {
+    int index) {
   CHECK(current_page_);
 
   // Site access requests only affect the main page.
@@ -98,16 +139,46 @@ void ExtensionsMenuDelegateDesktop::OnHostAccessRequestAddedOrUpdated(
     return;
   }
 
-  // TODO(crbug.com/330588494): Add to correct index based on alphabetic
-  // order.
-  int index = 0;
-  AddOrUpdateExtensionRequestingAccess(main_page, extension_id, index,
-                                       web_contents);
-  main_page->MaybeShowRequestsSection();
+  // Requests are only visible in the 'host access requests' section.
+  ExtensionsMenuViewModel::OptionalSection optional_section =
+      menu_model_->GetOptionalSection();
+  if (!CanShowHostAccessRequests(optional_section)) {
+    return;
+  }
+
+  ExtensionsMenuViewModel::HostAccessRequest request =
+      GetHostAccessRequest(*menu_model_, extension_id);
+  main_page->AddExtensionRequestingAccess(request, index);
+  main_page->SetOptionalSectionVisibility(optional_section);
+}
+
+void ExtensionsMenuDelegateDesktop::OnHostAccessRequestUpdated(
+    const extensions::ExtensionId& extension_id,
+    int index) {
+  CHECK(current_page_);
+
+  // Site access requests only affect the main page.
+  ExtensionsMenuMainPageView* main_page = GetMainPage(current_page_.view());
+  if (!main_page) {
+    return;
+  }
+
+  // Requests are only visible in the 'host access requests' section.
+  ExtensionsMenuViewModel::OptionalSection optional_section =
+      menu_model_->GetOptionalSection();
+  if (!CanShowHostAccessRequests(optional_section)) {
+    return;
+  }
+
+  ExtensionsMenuViewModel::HostAccessRequest request =
+      GetHostAccessRequest(*menu_model_, extension_id);
+  main_page->UpdateExtensionRequestingAccess(request, index);
+  main_page->SetOptionalSectionVisibility(optional_section);
 }
 
 void ExtensionsMenuDelegateDesktop::OnHostAccessRequestRemoved(
-    const extensions::ExtensionId& extension_id) {
+    const extensions::ExtensionId& extension_id,
+    int index) {
   CHECK(current_page_);
 
   // Site access requests only affect the main page.
@@ -116,8 +187,15 @@ void ExtensionsMenuDelegateDesktop::OnHostAccessRequestRemoved(
     return;
   }
 
-  main_page->RemoveExtensionRequestingAccess(extension_id);
-  main_page->MaybeShowRequestsSection();
+  // Requests are only visible in the 'host access requests' section.
+  ExtensionsMenuViewModel::OptionalSection optional_section =
+      menu_model_->GetOptionalSection();
+  if (!CanShowHostAccessRequests(optional_section)) {
+    return;
+  }
+
+  main_page->RemoveExtensionRequestingAccess(extension_id, index);
+  main_page->SetOptionalSectionVisibility(optional_section);
 }
 
 void ExtensionsMenuDelegateDesktop::OnHostAccessRequestsCleared() {
@@ -127,22 +205,14 @@ void ExtensionsMenuDelegateDesktop::OnHostAccessRequestsCleared() {
     return;
   }
 
-  main_page->ClearExtensionsRequestingAccess();
-  main_page->MaybeShowRequestsSection();
-}
-
-void ExtensionsMenuDelegateDesktop::OnHostAccessRequestDismissedByUser(
-    const extensions::ExtensionId& extension_id) {
-  CHECK(current_page_);
-
-  // Site access requests only affect the main page.
-  ExtensionsMenuMainPageView* main_page = GetMainPage(current_page_.view());
-  if (!main_page) {
+  ExtensionsMenuViewModel::OptionalSection optional_section =
+      menu_model_->GetOptionalSection();
+  if (!CanShowHostAccessRequests(optional_section)) {
     return;
   }
 
-  main_page->RemoveExtensionRequestingAccess(extension_id);
-  main_page->MaybeShowRequestsSection();
+  main_page->ClearExtensionsRequestingAccess();
+  main_page->SetOptionalSectionVisibility(optional_section);
 }
 
 void ExtensionsMenuDelegateDesktop::OnShowHostAccessRequestsInToolbarChanged(
@@ -175,7 +245,7 @@ void ExtensionsMenuDelegateDesktop::OnActionAdded(
     return;
   }
 
-  InsertMenuItemMainPage(main_page, action_model, index);
+  InsertMenuEntry(main_page, action_model, index);
 }
 
 void ExtensionsMenuDelegateDesktop::OnActionRemoved(
@@ -193,14 +263,39 @@ void ExtensionsMenuDelegateDesktop::OnActionRemoved(
     return;
   }
 
-  // Remove the menu item for the extension when main page is opened.
+  // Remove the menu entry for the extension when main page is opened.
   auto* main_page = GetMainPage(current_page_.view());
   CHECK(main_page);
-  main_page->RemoveMenuItem(index);
+  main_page->RemoveMenuEntry(index);
 }
 
-void ExtensionsMenuDelegateDesktop::OnActionUpdated() {
-  UpdatePage(GetActiveWebContents());
+void ExtensionsMenuDelegateDesktop::OnActionUpdated(
+    const ToolbarActionsModel::ActionId& action_id) {
+  CHECK(current_page_);
+
+  // Update the main page if it is open since an action update can affect the
+  // whole main page, and not just its menu entry.
+  auto* main_page = GetMainPage(current_page_.view());
+  if (main_page) {
+    UpdateMainPage(main_page);
+    return;
+  }
+
+  // Do nothing when the site permissions page is opened for a different
+  // extension.
+  auto* site_permissions_page = GetSitePermissionsPage(current_page_.view());
+  CHECK(site_permissions_page);
+  if (site_permissions_page->extension_id() != action_id) {
+    return;
+  }
+
+  // Update the site permissions page if it can be shown for the updated action,
+  // otherwise go back to the main page.
+  if (menu_model_->CanShowSitePermissionsPage(action_id)) {
+    UpdateSitePermissionsPage(site_permissions_page);
+  } else {
+    OpenMainPage();
+  }
 }
 
 void ExtensionsMenuDelegateDesktop::OnActionsInitialized() {
@@ -243,7 +338,8 @@ void ExtensionsMenuDelegateDesktop::OnUserPermissionsSettingsChanged() {
     // "customize by extension". Thus, when site settings changed, we have to
     // return to main page.
     DCHECK_NE(PermissionsManager::Get(browser_->profile())
-                  ->GetUserSiteSetting(GetActiveWebContents()
+                  ->GetUserSiteSetting(browser_->tab_strip_model()
+                                           ->GetActiveWebContents()
                                            ->GetPrimaryMainFrame()
                                            ->GetLastCommittedOrigin()),
               PermissionsManager::UserSiteSetting::kCustomizeByExtension);
@@ -253,7 +349,7 @@ void ExtensionsMenuDelegateDesktop::OnUserPermissionsSettingsChanged() {
 
   ExtensionsMenuMainPageView* main_page = GetMainPage(current_page_.view());
   CHECK(main_page);
-  UpdateMainPage(main_page, GetActiveWebContents());
+  UpdateMainPage(main_page);
 
   // TODO(crbug.com/40879945): Update the "highlighted section" based on the
   // `site_setting` and whether a page refresh is needed.
@@ -264,7 +360,7 @@ void ExtensionsMenuDelegateDesktop::OnUserPermissionsSettingsChanged() {
 
 void ExtensionsMenuDelegateDesktop::OpenMainPage() {
   auto main_page = std::make_unique<ExtensionsMenuMainPageView>(browser_, this);
-  UpdateMainPage(main_page.get(), GetActiveWebContents());
+  UpdateMainPage(main_page.get());
   PopulateMainPage(main_page.get());
 
   SwitchToPage(std::move(main_page));
@@ -277,8 +373,7 @@ void ExtensionsMenuDelegateDesktop::OpenSitePermissionsPage(
   auto site_permissions_page =
       std::make_unique<ExtensionsMenuSitePermissionsPageView>(
           browser_, extension_id, this);
-  UpdateSitePermissionsPage(site_permissions_page.get(),
-                            GetActiveWebContents());
+  UpdateSitePermissionsPage(site_permissions_page.get());
 
   SwitchToPage(std::move(site_permissions_page));
 
@@ -335,38 +430,8 @@ void ExtensionsMenuDelegateDesktop::OnShowRequestsTogglePressed(
   menu_model_->ShowHostAccessRequestsInToolbar(extension_id, is_on);
 }
 
-void ExtensionsMenuDelegateDesktop::UpdatePage(
-    content::WebContents* web_contents) {
-  DCHECK(current_page_);
-
-  if (!web_contents) {
-    return;
-  }
-
-  auto* site_permissions_page = GetSitePermissionsPage(current_page_.view());
-  if (site_permissions_page) {
-    // Update site permissions page if the extension can have one.
-    if (menu_model_->CanShowSitePermissionsPage(
-            site_permissions_page->extension_id())) {
-      UpdateSitePermissionsPage(site_permissions_page, web_contents);
-      return;
-    }
-
-    // Otherwise navigate back to the main page.
-    OpenMainPage();
-    return;
-  }
-
-  ExtensionsMenuMainPageView* main_page = GetMainPage(current_page_.view());
-  DCHECK(main_page);
-  UpdateMainPage(main_page, web_contents);
-}
-
 void ExtensionsMenuDelegateDesktop::UpdateMainPage(
-    ExtensionsMenuMainPageView* main_page,
-    content::WebContents* web_contents) {
-  CHECK(web_contents);
-
+    ExtensionsMenuMainPageView* main_page) {
   // Update site settings.
   ExtensionsMenuViewModel::SiteSettingsState site_settings_state =
       menu_model_->GetSiteSettingsState();
@@ -375,35 +440,23 @@ void ExtensionsMenuDelegateDesktop::UpdateMainPage(
   // Update the optional section.
   ExtensionsMenuViewModel::OptionalSection optional_section =
       menu_model_->GetOptionalSection();
-  switch (optional_section) {
-    case ExtensionsMenuViewModel::OptionalSection::kReloadPage:
-      main_page->ShowReloadSection();
-      break;
-    case ExtensionsMenuViewModel::OptionalSection::kHostAccessRequests: {
-      int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
-      auto* permissions_manager = PermissionsManager::Get(browser_->profile());
-      int index = 0;
+  if (optional_section ==
+      ExtensionsMenuViewModel::OptionalSection::kHostAccessRequests) {
+    // Clear any existing requests first to ensure a clean state.
+    // Note: There are few times when we will be re-populating the requests
+    // unnecessarily. This is okay because it should be uncommon, as it requires
+    // various extensions to add a host access request for a specific site and
+    // the user to have withheld site access for such extensions.
+    main_page->ClearExtensionsRequestingAccess();
 
-      const std::vector<std::unique_ptr<ExtensionActionViewModel>>&
-          action_models = menu_model_->action_models();
-      for (const auto& action_model : action_models) {
-        auto extension_id = action_model->GetId();
-        if (permissions_manager->HasActiveHostAccessRequest(tab_id,
-                                                            extension_id)) {
-          AddOrUpdateExtensionRequestingAccess(main_page, extension_id, index,
-                                               web_contents);
-          ++index;
-        } else {
-          // Otherwise remove its entry, if existent.
-          main_page->RemoveExtensionRequestingAccess(extension_id);
-        }
-      }
-      main_page->MaybeShowRequestsSection();
-      break;
+    const auto& requests = menu_model_->host_access_requests();
+    for (size_t i = 0; i < requests.size(); ++i) {
+      ExtensionsMenuViewModel::HostAccessRequest request =
+          GetHostAccessRequest(*menu_model_, requests[i]);
+      main_page->AddExtensionRequestingAccess(request, i);
     }
-    case ExtensionsMenuViewModel::OptionalSection::kNone:
-      break;
   }
+  main_page->SetOptionalSectionVisibility(optional_section);
 
   // Update menu entries.
   // TODO(crbug.com/40879945): Reorder the extensions after updating them, since
@@ -418,10 +471,7 @@ void ExtensionsMenuDelegateDesktop::UpdateMainPage(
 }
 
 void ExtensionsMenuDelegateDesktop::UpdateSitePermissionsPage(
-    ExtensionsMenuSitePermissionsPageView* site_permissions_page,
-    content::WebContents* web_contents) {
-  CHECK(web_contents);
-
+    ExtensionsMenuSitePermissionsPageView* site_permissions_page) {
   extensions::ExtensionId extension_id = site_permissions_page->extension_id();
   const int icon_size = ChromeLayoutProvider::Get()->GetDistanceMetric(
       DISTANCE_EXTENSIONS_MENU_EXTENSION_ICON_SIZE);
@@ -458,37 +508,15 @@ void ExtensionsMenuDelegateDesktop::PopulateMainPage(
   const std::vector<std::unique_ptr<ExtensionActionViewModel>>& action_models =
       menu_model_->action_models();
   for (size_t i = 0; i < action_models.size(); ++i) {
-    InsertMenuItemMainPage(main_page, action_models[i].get(), i);
+    InsertMenuEntry(main_page, action_models[i].get(), i);
   }
 }
 
-void ExtensionsMenuDelegateDesktop::InsertMenuItemMainPage(
+void ExtensionsMenuDelegateDesktop::InsertMenuEntry(
     ExtensionsMenuMainPageView* main_page,
     ExtensionActionViewModel* action_model,
     int index) {
   ExtensionsMenuViewModel::MenuEntryState menu_item =
       menu_model_->GetMenuEntryState(action_model->GetId());
   main_page->CreateAndInsertMenuEntry(action_model, menu_item, index);
-}
-
-void ExtensionsMenuDelegateDesktop::AddOrUpdateExtensionRequestingAccess(
-    ExtensionsMenuMainPageView* main_page,
-    const extensions::ExtensionId& extension_id,
-    int index,
-    content::WebContents* web_contents) {
-  ToolbarActionViewModel* view_model =
-      extensions_container_->GetActionForId(extension_id);
-  std::u16string name = view_model->GetActionName();
-  const int icon_size = ChromeLayoutProvider::Get()->GetDistanceMetric(
-      DISTANCE_EXTENSIONS_MENU_EXTENSION_ICON_SIZE);
-  ui::ImageModel icon =
-      view_model->GetIcon(web_contents, gfx::Size(icon_size, icon_size));
-
-  main_page->AddOrUpdateExtensionRequestingAccess(extension_id, name, icon,
-                                                  index);
-}
-
-content::WebContents* ExtensionsMenuDelegateDesktop::GetActiveWebContents()
-    const {
-  return browser_->tab_strip_model()->GetActiveWebContents();
 }

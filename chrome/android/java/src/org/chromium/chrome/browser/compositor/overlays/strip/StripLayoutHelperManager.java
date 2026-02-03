@@ -14,6 +14,7 @@ import android.animation.AnimatorListenerAdapter;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.os.Handler;
@@ -32,8 +33,8 @@ import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.Callback;
 import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.EnsuresNonNullIf;
@@ -105,7 +106,6 @@ import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateMa
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager.AppHeaderObserver;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
-import org.chromium.components.browser_ui.widget.scrim.ScrimProperties;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.base.PageTransition;
@@ -270,13 +270,13 @@ public class StripLayoutHelperManager
     private @MonotonicNonNull TabModelObserver mTabModelObserver; // Set on native initialization.
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final String mDefaultTitle;
-    private final ObservableSupplier<LayerTitleCache> mLayerTitleCacheSupplier;
+    private final MonotonicObservableSupplier<LayerTitleCache> mLayerTitleCacheSupplier;
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
     private final Callback<Integer> mStripVisibilityStateObserver;
     private final SettableNonNullObservableSupplier<@StripVisibilityState Integer>
             mStripVisibilityStateSupplier =
                     ObservableSuppliers.createNonNull(StripVisibilityState.VISIBLE);
-    private final @Nullable ObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
+    private final @Nullable MonotonicObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
 
     // Drag-Drop
     private @Nullable TabStripDragHandler mTabStripDragHandler;
@@ -464,14 +464,14 @@ public class StripLayoutHelperManager
             LayoutManagerHost managerHost,
             LayoutUpdateHost updateHost,
             LayoutRenderHost renderHost,
-            ObservableSupplier<LayerTitleCache> layerTitleCacheSupplier,
-            ObservableSupplier<TabModelStartupInfo> tabModelStartupInfoSupplier,
+            MonotonicObservableSupplier<LayerTitleCache> layerTitleCacheSupplier,
+            MonotonicObservableSupplier<TabModelStartupInfo> tabModelStartupInfoSupplier,
             ActivityLifecycleDispatcher lifecycleDispatcher,
             MultiInstanceManager multiInstanceManager,
             DragAndDropDelegate dragDropDelegate,
             View toolbarContainerView,
             ViewStub tabHoverCardViewStub,
-            ObservableSupplier<TabContentManager> tabContentManagerSupplier,
+            MonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier,
             BrowserControlsStateProvider browserControlsStateProvider,
             WindowAndroid windowAndroid,
             // TODO(crbug.com/40939440): Avoid passing the ToolbarManager instance. Potentially
@@ -482,7 +482,7 @@ public class StripLayoutHelperManager
             DataSharingTabManager dataSharingTabManager,
             BottomSheetController bottomSheetController,
             Supplier<ShareDelegate> shareDelegateSupplier,
-            @Nullable ObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
+            @Nullable MonotonicObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
             BackPressManager backPressManager) {
         mContext = context;
         Resources res = context.getResources();
@@ -908,8 +908,7 @@ public class StripLayoutHelperManager
             return topControlsOffset - getHeight();
         }
 
-        if (ChromeFeatureList.sBrowserControlsInViz.isEnabled()
-                && !mBrowserControlsStateProvider.isVisibilityForced()) {
+        if (!mBrowserControlsStateProvider.isVisibilityForced()) {
             // With bciv, as long as if the visibility isn't forced by the browser, and if the
             // tabstrip isn't hidden, the composited layers should positioned at their fully visible
             // positions.
@@ -1115,7 +1114,7 @@ public class StripLayoutHelperManager
             mStatusBarColorController.setTabStripHiddenOnTablet(true);
         }
         mStatusBarColorController.setTabStripColorOverlay(
-                ScrimProperties.INVALID_COLOR, mStripTransitionScrimOpacity);
+                Color.TRANSPARENT, mStripTransitionScrimOpacity);
     }
 
     @Override
@@ -1181,7 +1180,7 @@ public class StripLayoutHelperManager
     @Override
     public void updateOffsetTagsInfo(@Nullable BrowserControlsOffsetTagsInfo offsetTagsInfo) {
         // LINT.IfChange(updateOffsetTagsInfo)
-        if (ChromeFeatureList.sBrowserControlsInViz.isEnabled() && offsetTagsInfo != null) {
+        if (offsetTagsInfo != null) {
             // Use the content OffsetTag here, because the tab strip and content are part of
             // the same subtree and move together with the same offset. We need to release the
             // content offset tag from the static layout first before adding it to the tab strip.
@@ -1554,15 +1553,7 @@ public class StripLayoutHelperManager
                         boolean onStartup = type == TabLaunchType.FROM_RESTORE;
                         getStripLayoutHelper(tab.isIncognitoBranded())
                                 .tabCreated(
-                                        time(),
-                                        tab.getId(),
-                                        // mTabModelSelector should be non-null because it is set to
-                                        // non-null `modelSelector` parameter in enclosing function
-                                        // `setTabModelSelector`
-                                        mTabModelSelector.getCurrentTabId(),
-                                        markedForSelection,
-                                        false,
-                                        onStartup);
+                                        time(), tab.getId(), markedForSelection, false, onStartup);
                     }
                 };
 

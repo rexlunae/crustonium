@@ -17,6 +17,8 @@
 #import "ios/chrome/browser/badges/ui_bundled/badge_tappable_item.h"
 #import "ios/chrome/browser/badges/ui_bundled/badge_type.h"
 #import "ios/chrome/browser/badges/ui_bundled/badge_type_util.h"
+#import "ios/chrome/browser/contextual_panel/model/contextual_panel_item_type.h"
+#import "ios/chrome/browser/contextual_panel/model/contextual_panel_tab_helper.h"
 #import "ios/chrome/browser/infobars/model/badge_state.h"
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper.h"
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper_delegate.h"
@@ -77,8 +79,7 @@ bool IsInfobarTypeSupportedInReaderMode(InfobarType infobarType,
     case InfobarType::kInfobarTypeCollaborationGroup:
     case InfobarType::kInfobarTypeCollaborationOutOfDate:
     case InfobarType::kInfobarTypeSaveCvc:
-      return IsProactiveSuggestionsFrameworkEnabled() ||
-             IsReaderModeBadgeSupportEnabled();
+      return IsProactiveSuggestionsFrameworkEnabled();
   }
 }
 
@@ -301,6 +302,15 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
         // Fallback to original behavior when framework is disabled.
         badgeType = self.permissionsBadgeType;
       }
+    }
+
+    // Add badge at the front of the list if it is the Reader mode badge.
+    if (badgeType == kBadgeTypeReaderMode) {
+      BadgeTappableItem* readerModeItem =
+          [[BadgeTappableItem alloc] initWithBadgeType:kBadgeTypeReaderMode];
+      readerModeItem.badgeState = infobarTypeBadgeStatePair.second;
+      [badges insertObject:readerModeItem atIndex:0];
+      continue;
     }
 
     BadgeTappableItem* item =

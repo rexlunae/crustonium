@@ -65,7 +65,7 @@ sessions::LiveTab* AndroidLiveTabContext::GetLiveTabAt(int index) const {
     return nullptr;
   }
 
-  return sessions::ContentLiveTab::GetForWebContents(
+  return sessions::ContentLiveTab::GetOrCreateForWebContents(
       tab_android->web_contents());
 }
 
@@ -75,7 +75,7 @@ sessions::LiveTab* AndroidLiveTabContext::GetActiveLiveTab() const {
     return nullptr;
   }
 
-  return sessions::ContentLiveTab::GetForWebContents(web_contents);
+  return sessions::ContentLiveTab::GetOrCreateForWebContents(web_contents);
 }
 
 std::map<std::string, std::string> AndroidLiveTabContext::GetExtraDataForTab(
@@ -107,6 +107,12 @@ AndroidLiveTabContext::GetVisualDataForGroup(
 const std::optional<base::Uuid>
 AndroidLiveTabContext::GetSavedTabGroupIdForGroup(
     const tab_groups::TabGroupId& group) const {
+  // Implemented in AndroidLiveTabContextCloseWrapper.
+  return std::nullopt;
+}
+
+const std::optional<tab_groups::TabGroupId>
+AndroidLiveTabContext::GetGroupIdForSavedGroup(const base::Uuid& saved) const {
   // Implemented in AndroidLiveTabContextCloseWrapper.
   return std::nullopt;
 }
@@ -180,13 +186,13 @@ sessions::LiveTab* AndroidLiveTabContext::AddRestoredTab(
       original_session_type == sessions::tab_restore::TAB
           ? TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND
           : TabModel::TabLaunchType::FROM_RECENT_TABS;
-  tab_model_->CreateTab(nullptr, web_contents.release(), tab.tabstrip_index,
+  tab_model_->CreateTab(nullptr, std::move(web_contents), tab.tabstrip_index,
                         type, tab.pinned);
   // Don't load the tab yet. This prevents a renderer from starting which keeps
   // the tab restore lightweight as the tab is opened in the background only.
   // The tab will be in a "renderer was lost" state. This is recovered from when
   // the tab is made active.
-  return sessions::ContentLiveTab::GetForWebContents(raw_web_contents);
+  return sessions::ContentLiveTab::GetOrCreateForWebContents(raw_web_contents);
 }
 
 sessions::LiveTab* AndroidLiveTabContext::ReplaceRestoredTab(
@@ -201,7 +207,7 @@ sessions::LiveTab* AndroidLiveTabContext::ReplaceRestoredTab(
   web_contents = SessionRestore::RestoreForeignSessionTab(
       web_contents, session_tab, WindowOpenDisposition::CURRENT_TAB);
   web_contents->GetController().LoadIfNecessary();
-  return sessions::ContentLiveTab::GetForWebContents(web_contents);
+  return sessions::ContentLiveTab::GetOrCreateForWebContents(web_contents);
 }
 
 // Currently does nothing.
@@ -212,7 +218,7 @@ void AndroidLiveTabContext::CloseTab() {
 // static.
 sessions::LiveTabContext* AndroidLiveTabContext::FindContextForWebContents(
     const content::WebContents* contents) {
-  TabAndroid* tab_android = TabAndroid::FromWebContents(contents);
+  const TabAndroid* tab_android = TabAndroid::FromWebContents(contents);
   if (!tab_android) {
     return nullptr;
   }
@@ -227,7 +233,8 @@ sessions::LiveTabContext* AndroidLiveTabContext::FindContextForWebContents(
 sessions::LiveTabContext* AndroidLiveTabContext::FindContextWithID(
     SessionID desired_id) {
   // Find the model with desired id.
-  TabModel* tab_model = TabModelList::FindTabModelWithWindowSessionId(desired_id);
+  TabModel* tab_model =
+      TabModelList::FindTabModelWithWindowSessionId(desired_id);
 
   // If we can't find the correct model, fall back to first non-incognito model.
   if (!tab_model || tab_model->IsOffTheRecord()) {

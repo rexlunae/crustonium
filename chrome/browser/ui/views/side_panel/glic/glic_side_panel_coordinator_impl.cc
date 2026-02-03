@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/side_panel/glic/glic_side_panel_coordinator_impl.h"
 
+#include "base/debug/stack_trace.h"
 #include "base/functional/callback.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -91,6 +92,7 @@ void GlicSidePanelCoordinatorImpl::Show(bool suppress_animations) {
       // side panel when it becomes the active tab. eg. This flow can be
       // encountered when a background tab is bound via daisy chaining.
       side_panel_registry_->SetActiveEntry(entry_.get());
+      SetState(State::kBackgrounded);
     }
     return;
   }
@@ -101,13 +103,15 @@ void GlicSidePanelCoordinatorImpl::Show(bool suppress_animations) {
                                       suppress_animations);
 }
 
-void GlicSidePanelCoordinatorImpl::Close() {
+void GlicSidePanelCoordinatorImpl::Close(const CloseOptions& options) {
   auto* window_side_panel_coordinator = GetWindowSidePanelCoordinator();
   if (!window_side_panel_coordinator || !entry_) {
     return;
   }
-  if (IsShowing()) {
-    window_side_panel_coordinator->Close(entry_->type());
+  if (state_ == State::kShown) {
+    window_side_panel_coordinator->Close(
+        entry_->type(), SidePanelEntryHideReason::kSidePanelClosed,
+        options.suppress_animations);
     return;
   }
   if (state_ == State::kBackgrounded) {

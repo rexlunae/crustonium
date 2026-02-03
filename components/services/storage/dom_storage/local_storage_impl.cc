@@ -15,9 +15,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/byte_size.h"
-#include "base/containers/contains.h"
 #include "base/debug/dump_without_crashing.h"
-#include "base/feature_list.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -36,8 +34,6 @@
 #include "components/services/storage/dom_storage/async_dom_storage_database.h"
 #include "components/services/storage/dom_storage/dom_storage_constants.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
-#include "components/services/storage/dom_storage/leveldb/dom_storage_batch_operation_leveldb.h"
-#include "components/services/storage/dom_storage/leveldb/local_storage_database.pb.h"
 #include "components/services/storage/dom_storage/leveldb/local_storage_leveldb.h"
 #include "components/services/storage/dom_storage/storage_area_impl.h"
 #include "components/services/storage/public/cpp/constants.h"
@@ -49,10 +45,6 @@
 #include "url/gurl.h"
 
 namespace storage {
-
-// For a description of the local storage LevelDB schema, see comments in
-// `leveldb/local_storage_leveldb.h`.
-
 namespace {
 
 // After this many consecutive commit errors we'll throw away the entire
@@ -199,12 +191,11 @@ class LocalStorageImpl::StorageAreaHolder final
 };
 
 LocalStorageImpl::LocalStorageImpl(
-    const base::FilePath& storage_root,
+    const base::FilePath& storage_partition_directory,
     DestructLocalStorageCallback destruct_callback,
     mojo::PendingReceiver<mojom::LocalStorageControl> receiver)
     : destruct_callback_(std::move(destruct_callback)),
-      directory_(storage_root.empty() ? storage_root
-                                      : storage_root.Append(kLocalStoragePath)),
+      storage_partition_directory_(storage_partition_directory),
       memory_dump_id_(base::StringPrintf("LocalStorage/0x%" PRIXPTR,
                                          reinterpret_cast<uintptr_t>(this))) {
   base::trace_event::MemoryDumpManager::GetInstance()
@@ -311,6 +302,11 @@ void LocalStorageImpl::FlushStorageKeyForTesting(
   if (it == areas_.end())
     return;
   it->second->storage_area()->ScheduleImmediateCommit();
+}
+
+base::FilePath LocalStorageImpl::GetDatabasePath() const {
+  return DomStorageDatabase::GetPath(StorageType::kLocalStorage,
+                                     storage_partition_directory_);
 }
 
 void LocalStorageImpl::ShutDown() {
@@ -430,11 +426,8 @@ bool LocalStorageImpl::OnMemoryDump(
   return true;
 }
 
-base::FilePath LocalStorageImpl::GetStoragePath() const {
-  if (directory_.empty()) {
-    return directory_;
-  }
-  return directory_.DirName();
+const base::FilePath& LocalStorageImpl::GetStoragePartitionDirectory() const {
+  return storage_partition_directory_;
 }
 
 void LocalStorageImpl::SetDatabaseOpenCallbackForTesting(
@@ -483,12 +476,12 @@ void LocalStorageImpl::PurgeAllStorageAreas() {
 void LocalStorageImpl::InitiateConnection(bool in_memory_only) {
   DCHECK_EQ(connection_state_, CONNECTION_IN_PROGRESS);
 
-  if (!directory_.empty() && directory_.IsAbsolute() && !in_memory_only) {
+  if (!storage_partition_directory_.empty() &&
+      storage_partition_directory_.IsAbsolute() && !in_memory_only) {
     // We were given a subdirectory to write to, so use a disk-backed database.
     in_memory_ = false;
     database_ = AsyncDomStorageDatabase::Open(
-        StorageType::kLocalStorage, directory_, kLocalStorageLeveldbName,
-        memory_dump_id_,
+        StorageType::kLocalStorage, GetDatabasePath(), memory_dump_id_,
         base::BindOnce(&LocalStorageImpl::OnDatabaseOpened,
                        weak_ptr_factory_.GetWeakPtr()));
     return;
@@ -498,7 +491,7 @@ void LocalStorageImpl::InitiateConnection(bool in_memory_only) {
   in_memory_ = true;
   database_ = AsyncDomStorageDatabase::Open(
       StorageType::kLocalStorage,
-      /*directory=*/base::FilePath(), "local-storage", memory_dump_id_,
+      /*database_path=*/base::FilePath(), memory_dump_id_,
       base::BindOnce(&LocalStorageImpl::OnDatabaseOpened,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -570,9 +563,7 @@ void LocalStorageImpl::DeleteAndRecreateDatabase() {
   // Destroy database, and try again.
   if (!in_memory_) {
     DomStorageDatabaseFactory::Destroy(
-        directory_, kLocalStorageLeveldbName,
-        AsyncDomStorageDatabase::GetTaskRunnerForDb(directory_,
-                                                    kLocalStorageLeveldbName),
+        GetDatabasePath(),
         base::BindOnce(&LocalStorageImpl::OnDBDestroyed,
                        weak_ptr_factory_.GetWeakPtr(), recreate_in_memory));
   } else {
@@ -606,7 +597,7 @@ LocalStorageImpl::StorageAreaHolder* LocalStorageImpl::GetOrCreateStorageArea(
 
 void LocalStorageImpl::RetrieveStorageUsage(GetUsageCallback callback) {
   if (!database_) {
-    // If for whatever reason no leveldb database is available, no storage is
+    // If for whatever reason no database is available, no storage is
     // used, so return an array only containing the current areas.
     std::vector<mojom::StorageUsageInfoPtr> result;
     base::Time now = base::Time::Now();

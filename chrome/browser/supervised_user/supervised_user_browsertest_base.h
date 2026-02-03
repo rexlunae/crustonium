@@ -8,6 +8,7 @@
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "components/supervised_user/core/browser/device_parental_controls.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/test/base/android/android_browser_test.h"
@@ -18,6 +19,7 @@
 
 #include "components/safe_search_api/url_checker_client.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
+#include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -87,6 +89,8 @@ class SupervisedUserBrowserTestBase :
       content::BrowserContext* context) override;
 
   SupervisedUserService* GetSupervisedUserService() const;
+  SupervisedUserUrlFilteringService* GetSupervisedUserUrlFilteringService()
+      const;
   // Returns a pointer to the mock url checker client (transitively)owned by the
   // supervised user service.
   MockUrlCheckerClient& GetMockUrlCheckerClient();
@@ -96,7 +100,9 @@ class SupervisedUserBrowserTestBase :
   void SetInitialSupervisedUserState(InitialSupervisedUserState initial_state);
 
 #if BUILDFLAG(IS_ANDROID)
-  AndroidParentalControls* GetAndroidParentalControls();
+  AndroidParentalControls& GetDeviceParentalControls();
+#else
+  DeviceParentalControls& GetDeviceParentalControls();
 #endif  // BUILDFLAG(IS_ANDROID)
 
  private:

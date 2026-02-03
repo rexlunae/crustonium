@@ -15,6 +15,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/devtools/features.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/glic/widget/local_hotkey_manager.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_queue_manager.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service.h"
@@ -50,7 +51,7 @@
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
-#include "chrome/browser/ui/views/tabs/glic_button.h"
+#include "chrome/browser/ui/views/tabs/glic/glic_button.h"
 #include "chrome/browser/ui/views/tabs/tab_icon.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
 #include "chrome/browser/ui/views/user_education/autofill_help_bubble_factory.h"
@@ -89,7 +90,6 @@
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/lens/lens_features.h"
-#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/pdf/browser/pdf_document_helper.h"
 #include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
 #include "components/plus_addresses/core/common/features.h"
@@ -734,6 +734,40 @@ void MaybeRegisterChromeFeaturePromos(
           .SetMetadata(
               142, "dewittj@chromium.org",
               "Attempts to trigger when the user is on a supported page.")));
+
+  // kGlicTrustFirstOnboarding shortcut toast IPH:
+  registry.RegisterFeature(std::move(
+      FeaturePromoSpecification::CreateForToastPromo(
+          feature_engagement::
+              kIPHGlicTrustFirstOnboardingShortcutToastPromoFeature,
+          kGlicButtonElementId, IDS_GLIC_SHORTCUT_IPH_TEXT_TEMPLATE,
+          IDS_GLIC_SHORTCUT_IPH_SCREENREADER,
+          FeaturePromoSpecification::AcceleratorInfo(
+              glic::LocalHotkeyManager::GetConfigurableAccelerator(
+                  glic::LocalHotkeyManager::Hotkey::kFocusToggle)))
+          .SetAdditionalConditions(std::move(
+              AdditionalConditions().AddAdditionalCondition(AdditionalCondition{
+                  feature_engagement::events::kGlicOnboardingCompleted,
+                  AdditionalConditions::Constraint::kAtLeast, 1})))
+          .SetBubbleArrow(HelpBubbleArrow::kTopRight)
+          .SetMetadata(144, "zalmashni@google.com",
+                       "Triggered after the Glic side panel is closed or the "
+                       "user navigates to a new tab.")));
+
+  // kGlicTrustFirstOnboarding shortcut snooze IPH:
+  registry.RegisterFeature(std::move(
+      FeaturePromoSpecification::CreateForSnoozePromo(
+          feature_engagement::
+              kIPHGlicTrustFirstOnboardingShortcutSnoozePromoFeature,
+          kGlicButtonElementId, IDS_GLIC_SHORTCUT_IPH_TEXT_TEMPLATE)
+          .SetAdditionalConditions(std::move(
+              AdditionalConditions().AddAdditionalCondition(AdditionalCondition{
+                  feature_engagement::events::kGlicOnboardingCompleted,
+                  AdditionalConditions::Constraint::kAtLeast, 1})))
+          .SetBubbleArrow(HelpBubbleArrow::kTopRight)
+          .SetMetadata(144, "zalmashni@google.com",
+                       "Triggered after the Glic side panel is closed or the "
+                       "user navigates to a new tab.")));
 #endif  // BUILDFLAG(ENABLE_GLIC)
 
   // kIPHGMCCastStartStopFeature:
@@ -1590,12 +1624,11 @@ void MaybeRegisterChromeFeaturePromos(
     registry.RegisterFeature(
         std::move(FeaturePromoSpecification::CreateForCustomUi(
                       feature_engagement::kIPHiOSLensPromoDesktopFeature,
-                      kSidePanelElementId,
+                      kToolbarAppMenuButtonElementId,
                       user_education::CreateCustomHelpBubbleViewFactoryCallback(
                           base::BindRepeating(
                               &IOSPromoBubbleView::Create,
                               desktop_to_mobile_promos::PromoType::kLens)))
-                      .SetBubbleArrow(HelpBubbleArrow::kLeftCenter)
                       .SetMetadata(144, "scottyoder@google.com",
                                    "Triggered when Lens Overlay is used.")));
   }
@@ -1994,12 +2027,6 @@ void MaybeRegisterChromeNewBadges(user_education::NewBadgeRegistry& registry) {
       user_education::Metadata(128, "jkeitel@google.com",
                                "Shown in the autofill popup for suggestions to "
                                "create a new plus address.")));
-
-  registry.RegisterFeature(user_education::NewBadgeSpecification(
-      password_manager::features::kPasswordManualFallbackAvailable,
-      user_education::Metadata(
-          128, "brunobraga@google.com",
-          "For passwords manual fallback; shown in the context menu.")));
 
   registry.RegisterFeature(user_education::NewBadgeSpecification(
       features::kTabstripDeclutter,

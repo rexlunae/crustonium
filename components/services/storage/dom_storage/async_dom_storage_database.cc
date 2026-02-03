@@ -5,46 +5,24 @@
 #include "components/services/storage/dom_storage/async_dom_storage_database.h"
 
 #include "base/debug/alias.h"
-#include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/task/thread_pool.h"
-#include "components/services/storage/dom_storage/leveldb/dom_storage_batch_operation_leveldb.h"
-#include "third_party/leveldatabase/env_chromium.h"
 
 namespace storage {
 
 // static
-scoped_refptr<base::SequencedTaskRunner>
-AsyncDomStorageDatabase::GetTaskRunnerForDb(const base::FilePath& directory,
-                                            const std::string& dbname) {
-  CHECK(!directory.empty());
-  return base::ThreadPool::CreateSequencedTaskRunnerForResource(
-      {base::MayBlock(), base::WithBaseSyncPrimitives(),
-       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-      directory.AppendASCII(dbname));
-}
-
-// static
 std::unique_ptr<AsyncDomStorageDatabase> AsyncDomStorageDatabase::Open(
     StorageType storage_type,
-    const base::FilePath& directory,
-    const std::string& dbname,
+    const base::FilePath& database_path,
     const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
         memory_dump_id,
     StatusCallback callback) {
   std::unique_ptr<AsyncDomStorageDatabase> db(new AsyncDomStorageDatabase);
   DomStorageDatabaseFactory::Open(
-      storage_type, directory, dbname, memory_dump_id,
-      // For the in-memory case, blocking shutdown is only important to avoid
-      // leaking the SequenceBound on shutdown (and triggering ASAN failures).
-      directory.empty() ? base::ThreadPool::CreateSequencedTaskRunner(
-                              {base::WithBaseSyncPrimitives(),
-                               base::TaskShutdownBehavior::BLOCK_SHUTDOWN})
-                        : GetTaskRunnerForDb(directory, dbname),
+      storage_type, database_path, memory_dump_id,
       base::BindOnce(&AsyncDomStorageDatabase::OnDatabaseOpened,
                      db->weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   return db;
@@ -154,58 +132,6 @@ void AsyncDomStorageDatabase::RewriteDB(StatusCallback callback) {
   RunDatabaseTask(
       base::BindOnce([](DomStorageDatabase& db) { return db.RewriteDB(); }),
       std::move(callback));
-}
-
-void AsyncDomStorageDatabase::RunBatchDatabaseTasks(
-    RunBatchTasksContext context,
-    std::vector<BatchDatabaseTask> tasks,
-    base::OnceCallback<void(DbStatus)> callback) {
-  RunDatabaseTask(base::BindOnce(
-                      [](RunBatchTasksContext context,
-                         std::vector<BatchDatabaseTask> tasks,
-                         DomStorageDatabaseLevelDB& db) -> DbStatus {
-                        std::unique_ptr<DomStorageBatchOperationLevelDB> batch =
-                            db.CreateBatchOperation();
-                        // TODO(crbug.com/40245293): Remove this after debugging
-                        // is complete.
-                        base::debug::Alias(&context);
-                        size_t batch_task_count = tasks.size();
-                        size_t iteration_count = 0;
-                        size_t current_batch_size =
-                            batch->ApproximateSizeForMetrics();
-                        base::debug::Alias(&batch_task_count);
-                        base::debug::Alias(&iteration_count);
-                        base::debug::Alias(&current_batch_size);
-                        for (auto& task : tasks) {
-                          iteration_count++;
-                          std::move(task).Run(*batch, db);
-                          size_t growth = batch->ApproximateSizeForMetrics() -
-                                          current_batch_size;
-                          base::UmaHistogramCustomCounts(
-                              "Storage.DomStorage."
-                              "BatchTaskGrowthSizeBytes2",
-                              growth, 1, 100 * 1024 * 1024, 50);
-                          const size_t kTargetBatchSizesMB[] = {20, 100, 500};
-                          for (size_t batch_size_mb : kTargetBatchSizesMB) {
-                            size_t target_batch_size =
-                                batch_size_mb * 1024 * 1024;
-                            if (current_batch_size < target_batch_size &&
-                                batch->ApproximateSizeForMetrics() >=
-                                    target_batch_size) {
-                              base::UmaHistogramCounts10000(
-                                  base::StringPrintf("Storage.DomStorage."
-                                                     "IterationsToReach%zuMB2",
-                                                     batch_size_mb),
-                                  iteration_count);
-                            }
-                          }
-                          current_batch_size =
-                              batch->ApproximateSizeForMetrics();
-                        }
-                        return batch->Commit();
-                      },
-                      context, std::move(tasks)),
-                  std::move(callback));
 }
 
 void AsyncDomStorageDatabase::AddCommitter(Committer* source) {

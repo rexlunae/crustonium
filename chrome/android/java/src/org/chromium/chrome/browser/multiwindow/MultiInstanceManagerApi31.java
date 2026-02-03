@@ -27,6 +27,7 @@ import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ActivityState;
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
 import org.chromium.base.Callback;
@@ -39,25 +40,22 @@ import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.IntentHandler;
+import org.chromium.chrome.browser.RecentlyClosedEntriesManagerTrackerFactory;
 import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTabGroupTask;
 import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTabsTask;
 import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
-import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.InstanceStateObserver;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceState.MultiInstanceStateObserver;
 import org.chromium.chrome.browser.multiwindow.UiUtils.NameWindowDialogSource;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
@@ -71,6 +69,7 @@ import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabGroupMetadata;
@@ -115,10 +114,11 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
     /* package */ static final long SIX_MONTHS_MS = TimeUnit.DAYS.toMillis(6 * 30);
     private static final String EMPTY_DATA = "";
     private static @Nullable MultiInstanceState sState;
+    private static final Object sAllocIdLock = new Object();
 
     @VisibleForTesting protected final int mMaxInstances;
 
-    private final ObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
 
     // Instance ID for the activity associated with this manager.
     private int mInstanceId = INVALID_WINDOW_ID;
@@ -150,10 +150,10 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
 
     MultiInstanceManagerApi31(
             Activity activity,
-            ObservableSupplier<TabModelOrchestrator> tabModelOrchestratorSupplier,
+            MonotonicObservableSupplier<TabModelOrchestrator> tabModelOrchestratorSupplier,
             MultiWindowModeStateDispatcher multiWindowModeStateDispatcher,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
             MenuOrKeyboardActionController menuOrKeyboardActionController,
             Supplier<DesktopWindowStateManager> desktopWindowStateManagerSupplier) {
         super(
@@ -230,9 +230,9 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
     }
 
     @Override
-    public void closeInstance(int instanceId) {
+    public void closeInstances(List<Integer> instanceIds) {
         RecordUserAction.record("MobileMenuWindowManagerCloseInstance");
-        closeWindows(Collections.singletonList(instanceId), CloseWindowAppSource.WINDOW_MANAGER);
+        closeWindows(instanceIds, CloseWindowAppSource.WINDOW_MANAGER);
     }
 
     @Override
@@ -242,8 +242,8 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
 
     @Override
     public void openNewWindow(boolean isIncognito) {
-        openNewWindow(
-                "Android.WindowManager.NewWindow2", isIncognito, NewWindowAppSource.WINDOW_MANAGER);
+        RecordUserAction.record("Android.WindowManager.NewWindow");
+        openNewWindow(isIncognito, NewWindowAppSource.WINDOW_MANAGER);
     }
 
     @Override
@@ -280,9 +280,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
                     closeChromeWindowIfEmpty(mInstanceId);
                 },
                 instanceType,
-                UiUtils.isInstanceSwitcherV2Enabled()
-                        ? R.string.menu_move_tab_to_other_window
-                        : R.string.menu_move_to_other_window);
+                R.string.menu_move_tab_to_other_window);
     }
 
     /**
@@ -325,8 +323,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
                             <= MultiWindowUtils.getInstanceCountWithFallback(
                                     PersistedInstanceType.ACTIVE)) {
                 assumeNonNull(mActiveTab);
-                showInstanceCreationLimitMessage(
-                        MessageDispatcherProvider.from(mActiveTab.getWindowAndroid()));
+                showInstanceCreationLimitMessage();
                 return;
             }
 
@@ -393,9 +390,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
                     closeChromeWindowIfEmpty(mInstanceId);
                 },
                 instanceType,
-                UiUtils.isInstanceSwitcherV2Enabled()
-                        ? R.string.menu_move_group_to_other_window
-                        : R.string.menu_move_to_other_window);
+                R.string.menu_move_group_to_other_window);
     }
 
     @Override
@@ -644,24 +639,21 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
     }
 
     @Override
-    protected void openNewWindow(
-            String umaAction, boolean incognito, @NewWindowAppSource int source) {
+    protected void openNewWindow(boolean incognito, @NewWindowAppSource int source) {
         Intent intent = createNewWindowIntent(incognito);
         assert intent != null : "The Intent to open a new window must not be null";
 
         onMultiInstanceModeStarted();
         mActivity.startActivity(intent);
-        Log.i(TAG_MULTI_INSTANCE, "Opening new window from action: " + umaAction);
         RecordHistogram.recordEnumeratedHistogram(
                 MultiInstanceManager.NEW_WINDOW_APP_SOURCE_HISTOGRAM,
                 source,
                 NewWindowAppSource.NUM_ENTRIES);
-        RecordUserAction.record(umaAction);
     }
 
     @Override
     public List<InstanceInfo> getInstanceInfo(@PersistedInstanceType int persistedInstanceType) {
-        removeInvalidInstanceData(/* cleanupApplicationStatus= */ false);
+        removeInvalidInstanceData();
         List<InstanceInfo> result = new ArrayList<>();
         SparseBooleanArray visibleTasks = MultiWindowUtils.getVisibleTasks();
         int currentItemPos = -1;
@@ -745,10 +737,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
 
     @Override
     public int getCurrentInstanceId() {
-        List<InstanceInfo> allInstances = getInstanceInfo(PersistedInstanceType.ANY);
-        if (allInstances == null || allInstances.isEmpty()) return INVALID_WINDOW_ID;
-        // Current instance is at top of list.
-        return allInstances.get(0).instanceId;
+        return mInstanceId;
     }
 
     @VisibleForTesting
@@ -761,34 +750,64 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
     @Override
     public AllocatedIdInfo allocInstanceId(
             int windowId, int taskId, boolean preferNew, boolean isIncognitoIntent) {
-        removeInvalidInstanceData(/* cleanupApplicationStatus= */ true);
+        synchronized (sAllocIdLock) {
+            return allocInstanceIdInternal(windowId, taskId, preferNew, isIncognitoIntent);
+        }
+    }
+
+    private AllocatedIdInfo allocInstanceIdInternal(
+            int preferredInstanceId, int taskId, boolean preferNew, boolean isIncognitoIntent) {
+        removeInvalidInstanceData();
         // Finish excess running activities / tasks after an instance limit downgrade.
         finishExcessRunningActivities();
 
-        int instanceId = getInstanceByTask(taskId);
+        int instanceIdForTask = getInstanceByTask(taskId);
         @SupportedProfileType int profileType;
 
         // Explicitly specified window ID should be preferred. This comes from user selecting
         // a certain instance on UI when no task is present for it.
         // When out of range, ignore the ID and apply the normal allocation logic below.
-        // TODO(crbug.com/444681038): Block allocation if an activity for this windowId is currently
-        //  finishing. This prevents a race condition where the same ID is assigned to a new
-        //  activity before the previous one is fully destroyed.
-        if (windowId >= 0 && instanceId == INVALID_WINDOW_ID) {
-            Log.i(TAG_MULTI_INSTANCE, "Existing Instance - selected Id allocated: " + windowId);
-            profileType = getProfileType(windowId, isIncognitoIntent);
+        // TODO(crbug.com/444681038): Block allocation if an activity for this preferredInstanceId
+        // is currently finishing. This prevents a race condition where the same ID is assigned to a
+        // new activity before the previous one is fully destroyed.
+        if (preferredInstanceId >= 0 && instanceIdForTask == INVALID_WINDOW_ID) {
+            // If we are at instance limit, immediately block allocation of a valid id for the
+            // current activity so that it subsequently finishes. This is useful when multiple
+            // windows race to be restored near the limit (for eg. as a result of keyboard presses
+            // in quick succession). This is valid when only active instances contribute to the
+            // instance limit, which is the case when Robust Window Management is enabled. Otherwise
+            // we cannot return an invalid id, because we want to allocate a valid id for an
+            // inactive instance that is being restored, when limit includes both instance types.
+            int instanceCount =
+                    MultiWindowUtils.getInstanceCountWithFallback(PersistedInstanceType.ACTIVE);
+            if (instanceCount == mMaxInstances && UiUtils.isRobustWindowManagementEnabled()) {
+                profileType = getProfileType(instanceIdForTask, isIncognitoIntent);
+                return new AllocatedIdInfo(
+                        instanceIdForTask, InstanceAllocationType.INVALID_INSTANCE, profileType);
+            }
+
+            Log.i(
+                    TAG_MULTI_INSTANCE,
+                    "Existing Instance - selected Id allocated: " + preferredInstanceId);
+            profileType = getProfileType(preferredInstanceId, isIncognitoIntent);
             return new AllocatedIdInfo(
-                    windowId, InstanceAllocationType.EXISTING_INSTANCE_UNMAPPED_TASK, profileType);
+                    preferredInstanceId,
+                    InstanceAllocationType.EXISTING_INSTANCE_UNMAPPED_TASK,
+                    profileType);
         }
 
         // First, see if we have instance-task ID mapping. If we do, use the instance id. This
         // takes care of a task that had its activity destroyed and comes back to create a
         // new one. We pair them again.
-        if (instanceId != INVALID_WINDOW_ID) {
-            Log.i(TAG_MULTI_INSTANCE, "Existing Instance - mapped Id allocated: " + instanceId);
-            profileType = getProfileType(instanceId, isIncognitoIntent);
+        if (instanceIdForTask != INVALID_WINDOW_ID) {
+            Log.i(
+                    TAG_MULTI_INSTANCE,
+                    "Existing Instance - mapped Id allocated: " + instanceIdForTask);
+            profileType = getProfileType(instanceIdForTask, isIncognitoIntent);
             return new AllocatedIdInfo(
-                    instanceId, InstanceAllocationType.EXISTING_INSTANCE_MAPPED_TASK, profileType);
+                    instanceIdForTask,
+                    InstanceAllocationType.EXISTING_INSTANCE_MAPPED_TASK,
+                    profileType);
         }
 
         // If asked to always create a fresh new instance, not from persistent state, do it here.
@@ -981,6 +1000,8 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
         mInstanceId = instanceId;
         MultiInstancePersistentStore.writeTaskId(instanceId, taskId);
         MultiInstancePersistentStore.writeProfileType(instanceId, profileType);
+        MultiInstancePersistentStore.writeMarkedForDeletion(
+                instanceId, /* markedForDeletion= */ false);
         installTabModelObserver();
         recordInstanceCountHistogram();
         recordActivityCountHistogram();
@@ -1106,16 +1127,6 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
                 : "To filter both ACTIVE and INACTIVE instance types, use"
                         + " PersistedInstanceType.ANY.";
         for (Integer id : allIds) {
-            Activity activity = getActivityById(id);
-            // Since activity destruction is asynchronous and lacks a reliable completion callback.
-            // we will preemptively clean up the TaskId and update lastAccessedTime to ensure
-            // surfaces like the Recent Tabs page receive an accurate list of inactive instances in
-            // real time.
-            if (activity != null && activity.isFinishing()) {
-                MultiInstancePersistentStore.writeLastAccessedTime(id);
-                MultiInstancePersistentStore.removeTaskId(id);
-            }
-
             int persistedTaskId = MultiInstancePersistentStore.readTaskId(id);
 
             // Exclude ids not satisfying requirements.
@@ -1134,7 +1145,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
         return getPersistedInstanceIds(PersistedInstanceType.ANY);
     }
 
-    private void removeInvalidInstanceData(boolean cleanupApplicationStatus) {
+    private void removeInvalidInstanceData() {
         // Update persisted task state based on current AppTasks.
         Set<Integer> appTaskIds = getAllAppTaskIds(mActivity);
         Map<String, Integer> taskMap = MultiInstancePersistentStore.readTaskMap();
@@ -1143,19 +1154,6 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
             if (!appTaskIds.contains(entry.getValue())) {
                 tasksRemoved.add(entry.getKey() + " - " + entry.getValue());
                 ChromeSharedPreferences.getInstance().removeKey(entry.getKey());
-                if (ChromeFeatureList.sMultiInstanceApplicationStatusCleanup.isEnabled()
-                        && cleanupApplicationStatus) {
-                    boolean foundTasks = ApplicationStatus.cleanupInvalidTask(entry.getValue());
-                    if (foundTasks) {
-                        if (BuildConfig.ENABLE_ASSERTS) {
-                            String logMessage =
-                                    "This is not a crash. Found tracked ApplicationStatus for Task "
-                                            + " that no longer exists in #getAppTasks().";
-                            ChromePureJavaExceptionReporter.reportJavaException(
-                                    new Throwable(logMessage));
-                        }
-                    }
-                }
             }
         }
 
@@ -1315,10 +1313,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
         // Launch the intent in the existing activity and bring the task to foreground if it is
         // alive.
         ((ChromeTabbedActivity) activity).onNewIntent(intent);
-        var activityManager = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
-        if (activityManager != null) {
-            activityManager.moveTaskToFront(taskId, 0);
-        }
+        ApiCompatibilityUtils.moveTaskToFront(activity, taskId, 0);
         return true;
     }
 
@@ -1380,6 +1375,16 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
         MultiInstancePersistentStore.writeMarkedForDeletion(
                 instanceId, /* markedForDeletion= */ false);
         mActivity.startActivity(intent);
+
+        // If a new activity was started, it implies that an inactive instance was restored.
+        if (UiUtils.isRecentlyClosedTabsAndWindowsEnabled()) {
+            RecentlyClosedEntriesManagerTrackerFactory.getInstance().onInstanceRestored(instanceId);
+        }
+
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.MultiWindowMode.InactiveInstanceRestore.AppSource",
+                source,
+                NewWindowAppSource.NUM_ENTRIES);
     }
 
     @Override
@@ -1395,16 +1400,13 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
                     // complete and we don't get back-from-the-dead tabs.
                     selector.commitAllTabClosures();
 
-                    // Close all tabs as the window is closing. This ensures the tabs are added to
-                    // the recent tabs page.
-                    //
-                    // TODO(crbug.com/40826734): This only works for windows with live activities.
-                    // It is non-trivial to add recent tab entries without an active {@link Tab}
-                    // instance.
+                    // Close all tabs as the window is closing. Avoid saving closure to the
+                    // TabRestoreService as this closure is intended to be permanent.
                     TabClosureParams params =
                             TabClosureParams.closeAllTabs()
                                     .uponExit(true)
                                     .hideTabGroups(true)
+                                    .saveToTabRestoreService(false)
                                     .build();
                     selector.getModel(true)
                             .getTabRemover()
@@ -1432,10 +1434,42 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
                 // startup of that instance.
                 cleanupSyncedTabGroupsIfLastInstance();
             }
+
+            notifyInstanceClosed(instanceId, shouldPermanentlyDelete);
         }
-        for (InstanceStateObserver instanceStateObserver : mInstanceStateObservers) {
-            instanceStateObserver.onInstanceClosed();
-        }
+    }
+
+    /**
+     * Notifies the Recent Tabs UI of an instance closure. This method is expected to be called upon
+     * initial reception of a user, system or app initiated signal to close an instance.
+     *
+     * @param instanceId The id of the instance that was closed.
+     * @param isPermanentDeletion Whether the instance is permanently deleted.
+     */
+    private void notifyInstanceClosed(int instanceId, boolean isPermanentDeletion) {
+        if (!UiUtils.isRecentlyClosedTabsAndWindowsEnabled()) return;
+
+        // Note that instance state (for e.g. taskId) may not be updated if a live activity for the
+        // closed instance was finished, because activity destruction is asynchronous.
+        // We will create an InstanceInfo synchronously with adequate information about the closed
+        // instance, without relying on completion of an asynchronous activity destruction that may
+        // be initiated during this time.
+        InstanceInfo instanceInfo =
+                new InstanceInfo(
+                        instanceId,
+                        /* taskId= */ INVALID_TASK_ID,
+                        InstanceInfo.Type.OTHER,
+                        assumeNonNull(MultiInstancePersistentStore.readActiveTabUrl(instanceId)),
+                        assumeNonNull(MultiInstancePersistentStore.readActiveTabTitle(instanceId)),
+                        MultiInstancePersistentStore.readCustomTitle(instanceId),
+                        MultiInstancePersistentStore.readNormalTabCount(instanceId),
+                        MultiInstancePersistentStore.readIncognitoTabCount(instanceId),
+                        MultiInstancePersistentStore.readIncognitoSelected(instanceId),
+                        MultiInstancePersistentStore.readLastAccessedTime(instanceId),
+                        !isPermanentDeletion);
+
+        RecentlyClosedEntriesManagerTrackerFactory.getInstance()
+                .onInstanceClosed(instanceInfo, isPermanentDeletion);
     }
 
     /**
@@ -1456,8 +1490,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
 
     @VisibleForTesting
     void bringTaskForeground(int taskId) {
-        ActivityManager am = (ActivityManager) mActivity.getSystemService(Context.ACTIVITY_SERVICE);
-        am.moveTaskToFront(taskId, 0);
+        ApiCompatibilityUtils.moveTaskToFront(mActivity, taskId, 0);
     }
 
     @VisibleForTesting
@@ -1538,10 +1571,25 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
         // A point of activity destruction should be recorded as last access of the instance for a
         // more accurate ordering of inactive instances displayed on surfaces like the instance
         // switcher dialog and Recent Tabs.
-        removeInvalidInstanceData(/* cleanupApplicationStatus= */ false);
+        removeInvalidInstanceData();
 
-        // TODO:(crbug.com/469786540) Consider removeTaskId here.
         MultiInstancePersistentStore.writeLastAccessedTime(mInstanceId);
+
+        // Activity#isFinishing() is true in case of explicit user intent, for eg. task swipe up
+        // from Android Recents or app trigger, for eg. programmatically invoking #finish() on the
+        // activity. When the activity gets destroyed by the system in the background while keeping
+        // its task alive, we don't want such closure to be reflected on Recent Tabs because an
+        // instance with a live task is still considered active. Therefore, we will notify Recent
+        // Tabs of activity destruction only if the activity is finishing, with the caveat that a
+        // subsequent task kill will also not be reflected as an instance closure until the Recent
+        // Tabs page is reopened.
+        if (UiUtils.isRecentlyClosedTabsAndWindowsEnabled()) {
+            if (mActivity.isFinishing()) {
+                // Notify Recent Tabs page that the instance is closing.
+                int normalTabCount = MultiInstancePersistentStore.readNormalTabCount(mInstanceId);
+                notifyInstanceClosed(mInstanceId, /* isPermanentDeletion= */ normalTabCount == 0);
+            }
+        }
 
         if (mInstanceId != INVALID_WINDOW_ID) {
             ApplicationStatus.unregisterActivityStateListener(this);
@@ -1572,7 +1620,9 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
     @Override
     public void onTopResumedActivityChanged(boolean isTopResumedActivity) {
         super.onTopResumedActivityChanged(isTopResumedActivity);
-        MultiInstancePersistentStore.writeLastAccessedTime(mInstanceId);
+        if (isTopResumedActivity) {
+            MultiInstancePersistentStore.writeLastAccessedTime(mInstanceId);
+        }
     }
 
     @Override
@@ -1593,11 +1643,12 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
         if (newState != ActivityState.RESUMED && newState != ActivityState.STOPPED) return;
 
         int windowingMode =
-                AppHeaderUtils.getWindowingMode(
+                MultiWindowMetricsUtils.getWindowingMode(
                         mActivity,
                         AppHeaderUtils.isAppInDesktopWindow(
                                 mDesktopWindowStateManagerSupplier.get()));
-        AppHeaderUtils.recordWindowingMode(windowingMode, newState == ActivityState.RESUMED);
+        MultiWindowMetricsUtils.recordWindowingMode(
+                windowingMode, newState == ActivityState.RESUMED);
 
         SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
         // Check the max instance count in a day for every state update if needed.
@@ -1730,8 +1781,7 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
             // Just try to launch a Chrome window to inform user that maximum number of instances
             // limit is exceeded. This will pop up a toast message and the tab will not be removed
             // from the exiting window.
-            openNewWindow(
-                    "Android.MultiInstance.InstanceLimitReached", /* incognito= */ false, source);
+            openNewWindow(/* incognito= */ false, source);
         }
     }
 
@@ -1869,15 +1919,21 @@ class MultiInstanceManagerApi31 extends MultiInstanceManagerImpl
     }
 
     @Override
-    public boolean showInstanceRestorationMessage(@Nullable MessageDispatcher messageDispatcher) {
+    public boolean showInstanceRestorationMessage() {
         return MultiWindowUtils.maybeShowInstanceRestorationMessage(
-                messageDispatcher, mActivity, this::showInstanceSwitcherDialog);
+                getMessageDispatcher(), mActivity, this::showInstanceSwitcherDialog);
     }
 
     @Override
-    public void showInstanceCreationLimitMessage(@Nullable MessageDispatcher messageDispatcher) {
+    public void showInstanceCreationLimitMessage() {
         MultiWindowUtils.showInstanceCreationLimitMessage(
-                messageDispatcher, mActivity, this::showInstanceSwitcherDialog);
+                getMessageDispatcher(), mActivity, this::showInstanceSwitcherDialog);
+    }
+
+    @VisibleForTesting
+    @Nullable MessageDispatcher getMessageDispatcher() {
+        if (mActiveTab == null) return null;
+        return MessageDispatcherProvider.from(mActiveTab.getWindowAndroid());
     }
 
     @Override

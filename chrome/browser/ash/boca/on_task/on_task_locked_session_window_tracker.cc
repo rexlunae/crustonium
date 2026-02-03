@@ -17,10 +17,10 @@
 #include "ash/webui/boca_ui/url_constants.h"
 #include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/screen_pinning_controller.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
+#include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/boca/on_task/on_task_pod_controller_impl.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
@@ -121,7 +121,9 @@ void LockedSessionWindowTracker::MaybeCloseBrowser(
     // Same instance as the one being tracked. Skip close.
     return;
   }
-  if (!browser_ && browser->GetBrowser().IsLockedForOnTask()) {
+  if (!browser_ &&
+      ash::boca::OnTaskLockedController::From(&browser->GetBrowser())
+          ->is_locked_for_on_task()) {
     // New instance that has been prepared for OnTask but is not being tracked
     // yet. Skip close because it is a managed instance.
     return;

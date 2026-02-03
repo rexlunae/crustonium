@@ -23,19 +23,18 @@ class SigninUIError {
  public:
   // An error type.
   // Different types of UI might be shown for different error types.
-  enum class Type {
-    kOk,
-    kUsernameNotAllowedByPatternFromPrefs,
-    kWrongReauthAccount,
-    kAccountAlreadyUsedByAnotherProfile,
-    kProfileWasUsedByAnotherAccount,
-    kFromGoogleServiceAuthError,
-    kFromCredentialProviderUiExitCode,
-    kProfileIsBlocked,
-    kNoProfile,
-    kSigninDisallowed,
-    kSigninCookiesDisallowed,
-    kNoIdentityManager
+  enum class Type : int {
+    kOk = 0,
+    kUsernameNotAllowedByPatternFromPrefs = 1,
+    kWrongReauthAccount = 2,
+    kAccountAlreadyUsedByAnotherProfile = 2,
+    kProfileWasUsedByAnotherAccount = 3,
+    kFromGoogleServiceAuthError = 4,
+    kFromCredentialProviderUiExitCode = 5,
+    kNoProfile = 6,
+    kSigninDisallowed = 7,
+    kSigninCookiesDisallowed = 8,
+    kNoIdentityManager = 9,
   };
 
   // Following static functions construct a `SigninUIError` with a corresponding
@@ -59,7 +58,6 @@ class SigninUIError {
       const std::string& email,
       credential_provider::UiExitCodes exit_code);
 #endif
-  static SigninUIError ProfileIsBlocked();
   static SigninUIError NoProfile(const std::string& email);
   static SigninUIError SigninDisallowed(const std::string& email);
   static SigninUIError SigninCookiesDisallowed(const std::string& email);

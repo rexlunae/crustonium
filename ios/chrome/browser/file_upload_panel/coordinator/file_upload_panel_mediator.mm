@@ -265,6 +265,14 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
   return self.event.allow_multiple_files;
 }
 
+- (BOOL)isPresentingFilePicker {
+  return _chooseFileController->IsPresentingFilePicker();
+}
+
+- (void)setIsPresentingFilePicker:(BOOL)isPresentingFilePicker {
+  _chooseFileController->SetIsPresentingFilePicker(isPresentingFilePicker);
+}
+
 #pragma mark - Public
 
 - (void)adjustCaptureTypeToAvailableDevices {
@@ -331,10 +339,13 @@ std::optional<base::FilePath> WriteImageToTemporaryLocationForTab(
 }
 
 - (void)disconnect {
-  // If the controller still exists when the UI is being disconnect, cancel the
-  // selection.
-  [self cancelFileSelection];
+  // Disconnecting `_fileUploadPanelHandler` first so that cancelling the file
+  // selection will not trigger another dismissal of the file upload panel.
+  _fileUploadPanelHandler = nil;
   _pickerResultLoader.reset();
+  // If the controller still exists when the UI is being disconnect, cancel the
+  // selection. This should be done last.
+  [self cancelFileSelection];
 }
 
 #pragma mark - ChooseFileControllerObserving

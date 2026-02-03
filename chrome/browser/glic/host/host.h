@@ -36,6 +36,8 @@ class GlicPageHandler;
 class GlicWindowController;
 class WebUIContentsContainer;
 class GlicInstanceMetrics;
+class GlicInstanceMetricsBackwardsCompatibility;
+class EmptyInstanceDelegate;
 
 // The host owns the WebUI that contains the main glic UI and the web client.
 // TODO(crbug.com/409332639): Better encapsulate details here.
@@ -52,9 +54,7 @@ class Host : public GlicSharingManagerProvider {
     virtual void Resize(const gfx::Size& size,
                         base::TimeDelta duration,
                         base::OnceClosure callback) = 0;
-    // Sets the areas of the view from which it should be draggable.
-    virtual void SetDraggableAreas(
-        const std::vector<gfx::Rect>& draggable_areas) = 0;
+
     // Allows the user to manually resize the widget by dragging. If the widget
     // hasn't been created yet, apply this setting when it is created. No effect
     // if the widget doesn't exist or the feature flag is disabled.
@@ -64,12 +64,13 @@ class Host : public GlicSharingManagerProvider {
     virtual void Attach() = 0;
     virtual void Detach() = 0;
     virtual void ClosePanel() = 0;
+    virtual void OnReload() = 0;
     // Sets the minimum widget size that the widget will allow the user to
-    // resize
-    // to.
+    // resize to.
     virtual void SetMinimumWidgetSize(const gfx::Size& size) = 0;
     virtual void CaptureScreenshot(
         glic::mojom::WebClientHandler::CaptureScreenshotCallback callback) = 0;
+
     // Returns true if the glic widget is visible.
     virtual bool IsShowing() const = 0;
 
@@ -98,6 +99,9 @@ class Host : public GlicSharingManagerProvider {
     virtual void PerformActions(
         const std::vector<uint8_t>& actions_proto,
         mojom::WebClientHandler::PerformActionsCallback callback) = 0;
+    virtual void CancelActions(
+        actor::TaskId task_id,
+        mojom::WebClientHandler::CancelActionsCallback callback) = 0;
     virtual void StopActorTask(actor::TaskId task_id,
                                mojom::ActorTaskStopReason stop_reason) = 0;
     virtual void PauseActorTask(actor::TaskId task_id,
@@ -138,6 +142,8 @@ class Host : public GlicSharingManagerProvider {
 
     virtual void OnInteractionModeChange(mojom::WebClientMode new_mode) = 0;
     virtual GlicInstanceMetrics* instance_metrics() = 0;
+    virtual GlicInstanceMetricsBackwardsCompatibility&
+    instance_metrics_backwards_compatibility() = 0;
 
     virtual bool IsActive() = 0;
   };
@@ -230,6 +236,11 @@ class Host : public GlicSharingManagerProvider {
 
   GlicInstanceMetrics* instance_metrics() {
     return instance_delegate().instance_metrics();
+  }
+
+  GlicInstanceMetricsBackwardsCompatibility&
+  instance_metrics_backwards_compatibility() {
+    return instance_delegate().instance_metrics_backwards_compatibility();
   }
 
   WebUIContentsContainer* contents_container() { return contents_.get(); }
@@ -383,6 +394,10 @@ class Host : public GlicSharingManagerProvider {
   // frame.
   bool IsWebContentPresentAndMatches(content::RenderFrameHost* rfh);
 
+  void NotifyActorTaskListRowClicked(int32_t task_id);
+
+  void NotifySkillToInvokeChanged(mojom::SkillPtr skill);
+
  private:
   friend class HostManager;
 
@@ -465,12 +480,11 @@ class EmptyEmbedderDelegate : public Host::EmbedderDelegate {
   void Resize(const gfx::Size& size,
               base::TimeDelta duration,
               base::OnceClosure callback) override;
-  void SetDraggableAreas(
-      const std::vector<gfx::Rect>& draggable_areas) override {}
   void EnableDragResize(bool enabled) override {}
   void Attach() override {}
   void Detach() override {}
   void ClosePanel() override {}
+  void OnReload() override {}
   void SetMinimumWidgetSize(const gfx::Size& size) override {}
   void CaptureScreenshot(
       glic::mojom::WebClientHandler::CaptureScreenshotCallback callback)
@@ -523,6 +537,7 @@ class HostManager {
   raw_ptr<Profile> profile_;
   base::WeakPtr<GlicWindowController> window_controller_;
   std::unique_ptr<EmptyEmbedderDelegate> empty_embedder_delegate_;
+  std::unique_ptr<EmptyInstanceDelegate> instance_delegate_stub_;
   // Hosts for any unclaimed page handlers, which is approximately limited to
   // chrome://glic in tabs. These are only important for developers, and do not
   // need to be fully functional.

@@ -113,7 +113,6 @@ public class ChromeDialog extends ComponentDialog {
             ViewStub stub = findViewById(R.id.original_layout);
             stub.setLayoutResource(layoutResID);
             stub.inflate();
-            // TODO(crbug.com/402226908): Add margins when for dialog when not in fullscreen
         } else if (mShouldPadForWindowInsets && mIsFullScreen) {
             super.setContentView(
                     ensureEdgeToEdgeLayoutCoordinator()
@@ -224,8 +223,12 @@ public class ChromeDialog extends ComponentDialog {
     }
 
     public void destroy() {
+        if (isShowing()) {
+            dismiss();
+        }
         if (mInsetObserver != null && mWindowInsetsConsumer != null) {
             mInsetObserver.removeInsetsConsumer(mWindowInsetsConsumer);
+            mWindowInsetsConsumer = null;
         }
     }
 }

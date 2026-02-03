@@ -133,11 +133,6 @@ void GlicSidePanelUi::Resize(const gfx::Size& size,
   std::move(callback).Run();
 }
 
-void GlicSidePanelUi::SetDraggableAreas(
-    const std::vector<gfx::Rect>& draggable_areas) {
-  NOTIMPLEMENTED();
-}
-
 void GlicSidePanelUi::EnableDragResize(bool enabled) {
   NOTIMPLEMENTED();
 }
@@ -163,7 +158,8 @@ bool GlicSidePanelUi::IsShowing() const {
   if (!glic_side_panel_coordinator) {
     return false;
   }
-  return glic_side_panel_coordinator->IsShowing();
+  return glic_side_panel_coordinator->state() !=
+         GlicSidePanelCoordinator::State::kClosed;
 }
 
 void GlicSidePanelUi::Focus() {
@@ -237,7 +233,7 @@ void GlicSidePanelUi::Show(const ShowOptions& options) {
   glic_side_panel_coordinator->Show(suppress_animations);
 }
 
-void GlicSidePanelUi::Close() {
+void GlicSidePanelUi::Close(const CloseOptions& options) {
   if (screenshot_capturer_) {
     screenshot_capturer_->CloseScreenPicker();
   }
@@ -246,11 +242,17 @@ void GlicSidePanelUi::Close() {
     return;
   }
   // NOTE: `this` will be destroyed after this call.
-  glic_side_panel_coordinator->Close();
+  glic_side_panel_coordinator->Close(options);
 }
 
 void GlicSidePanelUi::ClosePanel() {
-  Close();
+  Close(CloseOptions());
+}
+
+void GlicSidePanelUi::OnReload() {
+  if (glic_view_) {
+    glic_view_->SetWebContents(delegate_->host().webui_contents());
+  }
 }
 
 std::unique_ptr<GlicUiEmbedder> GlicSidePanelUi::CreateInactiveEmbedder()

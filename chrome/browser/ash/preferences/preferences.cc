@@ -89,7 +89,6 @@
 #include "ui/base/ime/ash/extension_ime_util.h"
 #include "ui/base/ime/ash/ime_keyboard.h"
 #include "ui/base/ime/ash/input_method_manager.h"
-#include "ui/events/ash/mojom/extended_fkeys_modifier.mojom-shared.h"
 #include "ui/events/ash/mojom/extended_fkeys_modifier.mojom.h"
 #include "ui/events/ash/mojom/modifier_key.mojom.h"
 #include "ui/events/ash/pref_names.h"
@@ -169,9 +168,9 @@ void Preferences::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(::prefs::kLocalUserFilesMigrationDestination,
                                "read_only");
   registry->RegisterListPref(prefs::kDnsOverHttpsExcludedDomains,
-                             base::Value::List());
+                             base::ListValue());
   registry->RegisterListPref(prefs::kDnsOverHttpsIncludedDomains,
-                             base::Value::List());
+                             base::ListValue());
 
   RegisterLocalStatePrefs(registry);
 }
@@ -1333,7 +1332,7 @@ void Preferences::ApplyPreferences(ApplyReason reason,
       reason != REASON_PREF_CHANGED) {
     if (prefs_->IsManagedPreference(::prefs::kParentAccessCodeConfig) &&
         user_->IsChild()) {
-      const base::Value::Dict& value =
+      const base::DictValue& value =
           prefs_->GetDict(::prefs::kParentAccessCodeConfig);
       parent_access::ParentAccessService::Get().UpdateConfigForUser(
           user_->GetAccountId(), value.Clone());

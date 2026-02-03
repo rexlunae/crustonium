@@ -109,14 +109,10 @@ BASE_DECLARE_FEATURE(kDevToolsGdpProfiles);
 extern const base::FeatureParam<bool> kDevToolsGdpProfilesBadgesEnabled;
 extern const base::FeatureParam<bool> kDevToolsGdpProfilesStarterBadgeEnabled;
 
-BASE_DECLARE_FEATURE(kDevToolsLiveEdit);
-
 BASE_DECLARE_FEATURE(kDevToolsIndividualRequestThrottling);
 
 BASE_DECLARE_FEATURE(kDevToolsAiPromptApi);
 extern const base::FeatureParam<bool> kDevToolsAiPromptApiAllowWithoutGpu;
-
-BASE_DECLARE_FEATURE(kDevToolsStartingStyleDebugging);
 
 BASE_DECLARE_FEATURE(kDevToolsEnableDurableMessages);
 
@@ -125,6 +121,16 @@ BASE_DECLARE_FEATURE(kDevToolsAcceptDebuggingConnections);
 BASE_DECLARE_FEATURE(kDevToolsShowPolicyDialog);
 
 BASE_DECLARE_FEATURE(kDevToolsAiAssistanceContextSelectionAgent);
+
+BASE_DECLARE_FEATURE(kDevToolsConsoleInsightsTeasers);
+extern const base::FeatureParam<bool>
+    kDevToolsConsoleInsightsTeasersAllowWithoutGpu;
+
+BASE_DECLARE_FEATURE(kDevToolsAiAssistanceV2);
+
+BASE_DECLARE_FEATURE(kDevToolsProtocolMonitor);
+
+BASE_DECLARE_FEATURE(kDevToolsGeminiRebranding);
 
 }  // namespace features
 

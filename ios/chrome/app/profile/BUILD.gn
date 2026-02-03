@@ -257,10 +257,12 @@ source_set("session_metrics_profile_agent") {
   deps = [
     ":profile",
     "//base",
+    "//components/activity_reporter",
     "//ios/chrome/browser/metrics/model",
     "//ios/chrome/browser/metrics/model:tab_usage_recorder_service",
     "//ios/chrome/browser/metrics/model:tab_usage_recorder_service_factory",
     "//ios/chrome/browser/shared/coordinator/scene:scene_state_header",
+    "//ios/chrome/browser/shared/model/application_context",
   ]
 }
 
@@ -361,6 +363,7 @@ source_set("synced_set_up_profile_agent") {
   deps = [
     "//base",
     "//components/sync_preferences/cross_device_pref_tracker:timestamped_pref_value",
+    "//components/sync_preferences/synced_set_up:utils",
     "//ios/chrome/app/application_delegate:app_state",
     "//ios/chrome/app/application_delegate:startup_information",
     "//ios/chrome/browser/shared/coordinator/scene:scene_activation_level",
@@ -369,6 +372,7 @@ source_set("synced_set_up_profile_agent") {
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/shared/public/features",
+    "//ios/chrome/browser/sync/model:device_info_sync_service_factory",
     "//ios/chrome/browser/sync/model/prefs/cross_device_pref_tracker:cross_device_pref_tracker_factory",
     "//ios/chrome/browser/sync/model/prefs/cross_device_pref_tracker:observer_bridge",
     "//ios/chrome/browser/synced_set_up/public",

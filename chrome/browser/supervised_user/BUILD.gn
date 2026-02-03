@@ -41,6 +41,7 @@ static_library("test_support") {
     "//components/signin/public/identity_manager",
     "//components/signin/public/identity_manager:test_support",
     "//components/supervised_user/core/browser",
+    "//components/supervised_user/core/browser:device_parental_controls",
     "//components/supervised_user/core/browser:test_support",
     "//components/supervised_user/core/common",
     "//components/supervised_user/test_support",
@@ -49,8 +50,8 @@ static_library("test_support") {
   ]
   if (is_android) {
     sources += [
+      "android/family_link_settings_test_bridge.cc",
       "android/supervised_user_service_test_bridge.cc",
-      "android/supervised_user_settings_test_bridge.cc",
     ]
     deps += [
       ":test_support_jni_headers",
@@ -122,6 +123,7 @@ if (is_android) {
       "//components/browser_ui/widget/android:java",
       "//components/signin/public/android:java",
       "//components/url_formatter/android:url_formatter_java",
+      "//google_apis/gaia/android:java",
       "//third_party/androidx:androidx_annotation_annotation_java",
       "//third_party/androidx:androidx_appcompat_appcompat_java",
       "//third_party/jni_zero:jni_zero_java",
@@ -222,8 +224,8 @@ if (is_android) {
   generate_jni("test_support_jni_headers") {
     testonly = true
     sources = [
+      "android/java/src/org/chromium/chrome/browser/supervised_user/FamilyLinkSettingsTestBridge.java",
       "android/java/src/org/chromium/chrome/browser/supervised_user/SupervisedUserServiceTestBridge.java",
-      "android/java/src/org/chromium/chrome/browser/supervised_user/SupervisedUserSettingsTestBridge.java",
     ]
   }
 
@@ -231,8 +233,8 @@ if (is_android) {
     testonly = true
     srcjar_deps = [ ":test_support_jni_headers" ]
     sources = [
+      "android/java/src/org/chromium/chrome/browser/supervised_user/FamilyLinkSettingsTestBridge.java",
       "android/java/src/org/chromium/chrome/browser/supervised_user/SupervisedUserServiceTestBridge.java",
-      "android/java/src/org/chromium/chrome/browser/supervised_user/SupervisedUserSettingsTestBridge.java",
     ]
     deps = [
       ":test_support_jni_headers",
@@ -262,6 +264,7 @@ if (is_android) {
       ":test_support_java",
       "//base:base_java",
       "//base:base_java_test_support",
+      "//base/test:public_transit_java",
       "//chrome/android:chrome_java",
       "//chrome/browser/flags:java",
       "//chrome/browser/profiles/android:java",
@@ -271,6 +274,7 @@ if (is_android) {
       "//chrome/browser/supervised_user:supervised_user_metrics_java",
       "//chrome/browser/supervised_user:website_parent_approval_java",
       "//chrome/browser/tab:java",
+      "//chrome/browser/tabmodel:java",
       "//chrome/browser/ui/android/appmenu:java",
       "//chrome/browser/ui/android/appmenu/test:test_support_java",
       "//chrome/browser/ui/android/multiwindow:java",

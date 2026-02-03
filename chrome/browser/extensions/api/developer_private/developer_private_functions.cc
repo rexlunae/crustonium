@@ -38,7 +38,6 @@
 #include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
 #include "chrome/browser/extensions/sync/account_extension_tracker.h"
 #include "chrome/browser/extensions/sync/extension_sync_util.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/extensions/webstore_reinstaller.h"
 #include "chrome/browser/profiles/profile.h"
@@ -67,6 +66,7 @@
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/ui_util.h"
+#include "extensions/browser/unpacked_installer.h"
 #include "extensions/browser/user_script_manager.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest_constants.h"
@@ -84,7 +84,6 @@
 #include "extensions/browser/extension_function.h"
 #else  // BUILDFLAG(IS_ANDROID)
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/lazy_instance.h"
@@ -246,8 +245,8 @@ void AddSiteToSiteGroups(
   if (inserted) {
     it->second.etld_plus_one = etld_plus_one;
     it->second.sites.push_back(CreateSiteInfo(site, site_set));
-  } else if (!base::Contains(it->second.sites, site,
-                             &developer::SiteInfo::site)) {
+  } else if (!std::ranges::contains(it->second.sites, site,
+                                    &developer::SiteInfo::site)) {
     it->second.sites.push_back(CreateSiteInfo(site, site_set));
   }
 }
@@ -2199,15 +2198,12 @@ DeveloperPrivateUploadExtensionToAccountFunction::Run() {
     return RespondNow(Error(kCouldNotFindWebContentsError));
   }
 
-// TODO(crbug.com/424013333): Enable on desktop android.
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
-  if (!browser) {
-    return RespondNow(Error(kCouldNotFindWebContentsError));
-  }
+  gfx::NativeWindow parent_window =
+      web_contents ? web_contents->GetTopLevelNativeWindow()
+                   : gfx::NativeWindow();
 
   ShowUploadExtensionToAccountDialog(
-      browser, *extension,
+      profile_, parent_window, *extension,
       base::BindOnce(
           &DeveloperPrivateUploadExtensionToAccountFunction::OnDialogAccepted,
           this),
@@ -2215,10 +2211,6 @@ DeveloperPrivateUploadExtensionToAccountFunction::Run() {
           &DeveloperPrivateUploadExtensionToAccountFunction::OnDialogCancelled,
           this));
   return RespondLater();
-#else
-  OnDialogAccepted();
-  return AlreadyResponded();
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 }
 
 base::expected<const Extension*, std::string>

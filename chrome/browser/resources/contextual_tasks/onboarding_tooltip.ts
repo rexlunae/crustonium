@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import '//resources/cr_elements/cr_button/cr_button.js';
 import '//resources/cr_elements/icons.html.js';
 import '//resources/cr_elements/cr_tooltip/cr_tooltip.js';
 
@@ -44,6 +44,8 @@ export class ContextualTasksOnboardingTooltipElement extends CrLitElement {
   protected onboardingLink_: string = loadTimeData.getString('onboardingLink');
   protected onboardingLinkUrl_: string =
       loadTimeData.getString('onboardingLinkUrl');
+  protected onboardingAcceptButton_: string =
+      loadTimeData.getString('onboardingAcceptButton');
 
   private get tooltip_(): CrTooltipElement {
     return this.shadowRoot.querySelector('cr-tooltip')!;
@@ -60,6 +62,7 @@ export class ContextualTasksOnboardingTooltipElement extends CrLitElement {
   show() {
     if (this.tooltip_) {
       this.tooltip_.show();
+      this.updatePosition();
     }
   }
 

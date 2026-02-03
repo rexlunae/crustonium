@@ -19,9 +19,10 @@ import {ContentController, ContentType} from '../content/content_controller.js';
 import type {ContentListener, ContentState} from '../content/content_controller.js';
 import {LineFocusController, type LineFocusListener} from '../content/line_focus_controller.js';
 import {NodeStore} from '../content/node_store.js';
-import {LineFocusType, type SettingsPrefs} from '../content/read_anything_types.js';
+import {DEFAULT_SETTINGS, type LineFocusMovement, type LineFocusStyle, LineFocusType, type SettingsPrefs} from '../content/read_anything_types.js';
 import {SelectionController} from '../content/selection_controller.js';
 import type {LanguageToastElement} from '../read_aloud/language_toast.js';
+import type {Segment} from '../read_aloud/read_aloud_types.js';
 import {SpeechController} from '../read_aloud/speech_controller.js';
 import type {SpeechListener} from '../read_aloud/speech_controller.js';
 import {TextSegmenter} from '../read_aloud/text_segmenter.js';
@@ -29,7 +30,7 @@ import {VoiceLanguageController} from '../read_aloud/voice_language_controller.j
 import type {VoiceLanguageListener} from '../read_aloud/voice_language_controller.js';
 import {VoiceNotificationManager} from '../read_aloud/voice_notification_manager.js';
 import {getWordCount, minOverflowLengthToScroll} from '../shared/common.js';
-import {isForwardArrow, isVerticalArrow} from '../shared/keyboard_util.js';
+import {isForwardArrow, isLineFocusShortcut, isVerticalArrow} from '../shared/keyboard_util.js';
 import {ReadAnythingLogger, TimeFrom} from '../shared/read_anything_logger.js';
 
 import {getCss} from './app.css.js';
@@ -93,6 +94,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
 
   private isReadAloudEnabled_: boolean;
   protected isDocsLoadMoreButtonVisible_: boolean = false;
+  protected isImmersiveEnabled_: boolean = false;
 
   // If the speech engine is considered "loaded." If it is, we should display
   // the play / pause buttons normally. Otherwise, we should disable the
@@ -134,15 +136,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
       SelectionController.getInstance();
   private lineFocusController_: LineFocusController =
       LineFocusController.getInstance();
-  protected accessor settingsPrefs_: SettingsPrefs = {
-    letterSpacing: 0,
-    lineSpacing: 0,
-    theme: 0,
-    speechRate: 0,
-    font: '',
-    highlightGranularity: 0,
-    lineFocus: 0,
-  };
+  protected accessor settingsPrefs_: SettingsPrefs = DEFAULT_SETTINGS;
 
   protected accessor isSpeechActive_: boolean = false;
   protected accessor isAudioCurrentlyPlaying_: boolean = false;
@@ -165,6 +159,10 @@ export class AppElement extends AppElementBase implements SpeechListener,
     TextSegmenter.getInstance().updateLanguage(
         chrome.readingMode.baseLanguageForSpeech);
     this.contentState_ = this.contentController_.getState();
+    if (chrome.readingMode.isReadabilityEnabled) {
+      this.contentController_.configureTrustedTypes();
+    }
+    this.isImmersiveEnabled_ = chrome.readingMode.isImmersiveEnabled;
   }
 
   override disconnectedCallback() {
@@ -196,6 +194,9 @@ export class AppElement extends AppElementBase implements SpeechListener,
       this.$.containerParent.addEventListener('mousemove', mouseEvent => {
         this.lineFocusController_.onMouseMove(mouseEvent.clientY);
       });
+      this.$.toolbar.addEventListener('mousemove', mouseEvent => {
+        this.lineFocusController_.onMouseMoveInToolbar(mouseEvent.clientY);
+      });
       this.lineFocusController_.addListener(this);
     }
     this.contentController_.addListener(this);
@@ -218,6 +219,8 @@ export class AppElement extends AppElementBase implements SpeechListener,
       font: chrome.readingMode.fontName,
       highlightGranularity: chrome.readingMode.highlightGranularity,
       lineFocus: chrome.readingMode.lineFocus,
+      linksEnabled: chrome.readingMode.linksEnabled,
+      imagesEnabled: chrome.readingMode.imagesEnabled,
     };
 
     document.onselectionchange = () => {
@@ -247,7 +250,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
     document.onkeydown = this.onKeyDown_.bind(this);
 
     /////////////////////////////////////////////////////////////////////
-    // Called by ReadAnythingUntrustedPageHandler via callback router. //
+    // Called by ReadAnythingAppController via callback router. //
     /////////////////////////////////////////////////////////////////////
     chrome.readingMode.updateContent = () => {
       this.updateContent();
@@ -317,6 +320,10 @@ export class AppElement extends AppElementBase implements SpeechListener,
           // which content to display based on the presentation state.
           this.presentationState_ = presentationState;
         };
+
+    chrome.readingMode.onPinStateReceived = (pinState: boolean) => {
+      this.$.immersiveHeader.isReadAnythingPinned = pinState;
+    };
   }
 
   private onWindowResize_() {
@@ -361,14 +368,13 @@ export class AppElement extends AppElementBase implements SpeechListener,
     if (newRoot) {
       this.$.container.appendChild(newRoot);
     }
+    const wordCountContainer =
+        chrome.readingMode.isReadabilityEnabled ? this.$.container : newRoot;
     if (!this.willDrawAgainSoon_) {
-      const wordCount = (newRoot && newRoot.textContent) ?
-          getWordCount(newRoot.textContent) :
+      const wordCount = (wordCountContainer && wordCountContainer.textContent) ?
+          getWordCount(wordCountContainer.textContent) :
           0;
       chrome.readingMode.onDistilled(wordCount);
-      requestAnimationFrame(() => {
-        this.onTextLocationsChange_();
-      });
     }
   }
 
@@ -457,10 +463,22 @@ export class AppElement extends AppElementBase implements SpeechListener,
     this.$.containerScroller.scrollTop = 0;
   }
 
+  onContentChange(): void {
+    requestAnimationFrame(() => {
+      this.onTextLocationsChange_();
+    });
+  }
+
   onPlayingFromSelection(): void {
     // Clear the selection so we don't keep trying to play from the same
     // selection every time they press play.
     this.getSelection()?.removeAllRanges();
+  }
+
+  onWordBoundary(segments: Segment[]): void {
+    if (chrome.readingMode.isLineFocusEnabled) {
+      this.lineFocusController_.onWordBoundary(segments);
+    }
   }
 
   onIsSpeechActiveChange(): void {
@@ -529,7 +547,6 @@ export class AppElement extends AppElementBase implements SpeechListener,
       this.voiceLanguageController_.restoreFromPrefs();
     }
     this.settingsPrefs_ = {
-      ...this.settingsPrefs_,
       letterSpacing: chrome.readingMode.letterSpacing,
       lineSpacing: chrome.readingMode.lineSpacing,
       theme: chrome.readingMode.colorTheme,
@@ -537,10 +554,15 @@ export class AppElement extends AppElementBase implements SpeechListener,
       font: chrome.readingMode.fontName,
       highlightGranularity: chrome.readingMode.highlightGranularity,
       lineFocus: chrome.readingMode.lineFocus,
+      linksEnabled: chrome.readingMode.linksEnabled,
+      imagesEnabled: chrome.readingMode.imagesEnabled,
     };
     this.styleUpdater_.setAllTextStyles();
     if (chrome.readingMode.isLineFocusEnabled) {
-      this.setLineFocus_(this.settingsPrefs_.lineFocus);
+      this.lineFocusController_.restoreFromPrefs(
+          this.settingsPrefs_.lineFocus, this.$.container,
+          this.$.containerParent.clientHeight);
+      this.setLineFocus_();
     }
     // TODO: crbug.com/40927698 - Remove this call. Using this.settingsPrefs_
     // should replace this direct call to the toolbar.
@@ -592,14 +614,49 @@ export class AppElement extends AppElementBase implements SpeechListener,
     this.styleUpdater_.setHighlight();
   }
 
-  protected onLineFocusChange_(event: CustomEvent<{data: number}>) {
-    this.setLineFocus_(event.detail.data);
+  protected onAllMenusClose_() {
+    if (chrome.readingMode.isLineFocusEnabled) {
+      this.lineFocusController_.onAllMenusClose();
+    }
   }
 
-  private setLineFocus_(lineFocus: number) {
+  protected onLineFocusStyleChange_(
+      event: CustomEvent<{data: LineFocusStyle}>) {
     if (chrome.readingMode.isLineFocusEnabled) {
-      this.lineFocusController_.onLineFocusChange(
-          lineFocus, this.$.container, this.$.containerParent.clientHeight);
+      this.lineFocusController_.onStyleChange(
+          event.detail.data, this.$.container,
+          this.$.containerParent.clientHeight);
+      this.setLineFocus_();
+    }
+  }
+
+  protected onLineFocusMovementChange_(
+      event: CustomEvent<{data: LineFocusMovement}>) {
+    if (chrome.readingMode.isLineFocusEnabled) {
+      this.lineFocusController_.onMovementChange(
+          event.detail.data, this.$.container,
+          this.$.containerParent.clientHeight);
+      this.setLineFocus_();
+      if (!this.lineFocusController_.isEnabled()) {
+        return;
+      }
+
+      const padding = Math.floor(this.$.containerParent.clientHeight / 2);
+      if (this.lineFocusController_.isStatic()) {
+        // Add padding so the top and bottom lines of the page can still be
+        // focused even though line focus stays in the middle.
+        this.styleUpdater_.setPaddingForLineFocus(padding);
+        this.$.containerScroller.scrollBy({top: padding, behavior: 'instant'});
+      } else {
+        // Reset the padding and maintain the current scroll position.
+        this.styleUpdater_.setPaddingForLineFocus(0);
+        this.$.containerScroller.scrollBy({top: -padding, behavior: 'instant'});
+      }
+    }
+  }
+
+  private setLineFocus_() {
+    if (chrome.readingMode.isLineFocusEnabled) {
       this.styleUpdater_.setLineFocusStyle(
           this.lineFocusController_.getCurrentLineFocusType());
     }
@@ -607,6 +664,12 @@ export class AppElement extends AppElementBase implements SpeechListener,
 
   private onTextLocationsChange_() {
     if (chrome.readingMode.isLineFocusEnabled) {
+      if (this.lineFocusController_.isEnabled()) {
+        const padding = this.lineFocusController_.isStatic() ?
+            Math.floor(this.$.containerParent.clientHeight / 2) :
+            0;
+        this.styleUpdater_.setPaddingForLineFocus(padding);
+      }
       this.lineFocusController_.onTextLocationsChange(
           this.$.container, this.$.containerParent.clientHeight);
     }
@@ -640,6 +703,12 @@ export class AppElement extends AppElementBase implements SpeechListener,
       e.stopPropagation();
       e.preventDefault();
       this.lineFocusController_.snapToNextLine(isForwardArrow(e.key));
+    } else if (
+        chrome.readingMode.isLineFocusEnabled && isLineFocusShortcut(e)) {
+      this.lineFocusController_.toggle(
+          this.$.container, this.$.containerParent.offsetHeight);
+      this.styleUpdater_.setLineFocusStyle(
+          this.lineFocusController_.getCurrentLineFocusType());
     }
   }
 }

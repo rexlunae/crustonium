@@ -5,9 +5,11 @@
 #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
 
 #include <algorithm>
+#include <optional>
 #include <variant>
 
 #include "base/callback_list.h"
+#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/notimplemented.h"
 #include "chrome/browser/ui/browser_actions.h"
@@ -21,8 +23,11 @@
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_service_feature.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/custom_corners_background.h"
+#include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/tabs/vertical/root_tab_collection_node.h"
 #include "chrome/browser/ui/views/tabs/vertical/tab_collection_node.h"
+#include "chrome/browser/ui/views/tabs/vertical/vertical_pinned_tab_container_view.h"
 #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_drag_handler.h"
 #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
 #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_controller.h"
@@ -35,6 +40,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/resize_area.h"
@@ -48,29 +54,29 @@
 #include "ui/views/view_utils.h"
 
 namespace {
-constexpr gfx::Insets kRegionInteriorMargins = gfx::Insets::VH(8, 0);
-
 constexpr int kRegionVerticalPadding = 5;
 }  // namespace
 
 VerticalTabStripRegionView::VerticalTabStripRegionView(
     tabs::VerticalTabStripStateController* state_controller,
     actions::ActionItem* root_action_item,
-    BrowserWindowInterface* browser)
-    : tab_strip_model_(browser->GetTabStripModel()),
+    BrowserView* browser_view)
+    : browser_view_(browser_view),
+      tab_strip_model_(browser_view->browser()->GetTabStripModel()),
       state_controller_(state_controller),
       resize_animation_(this) {
-  SetLayoutManager(std::make_unique<views::FlexLayout>())
-      ->SetOrientation(views::LayoutOrientation::kVertical)
-      .SetInteriorMargin(kRegionInteriorMargins)
+  // For z-ordering purposes this needs to be on a layer.
+  SetPaintToLayer();
+  // Because corners may be transparent, this must be set to false.
+  layer()->SetFillsBoundsOpaquely(false);
+
+  flex_layout_ = SetLayoutManager(std::make_unique<views::FlexLayout>());
+  flex_layout_->SetOrientation(views::LayoutOrientation::kVertical)
       .SetCollapseMargins(true)
-      .SetDefault(views::kMarginsKey,
-                  gfx::Insets::VH(
-                      kRegionVerticalPadding,
-                      GetLayoutConstant(VERTICAL_TAB_STRIP_HORIZONTAL_PADDING)))
       .SetDefault(
           views::kFlexBehaviorKey,
-          views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+          views::FlexSpecification(views::LayoutOrientation::kVertical,
+                                   views::MinimumFlexSizeRule::kPreferred,
                                    views::MaximumFlexSizeRule::kPreferred));
 
   // Create child views.
@@ -82,7 +88,7 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
 
   bottom_button_container_ =
       AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
-          state_controller_, root_action_item, browser));
+          state_controller_, root_action_item, browser_view->browser()));
 
   gemini_button_ = AddChildView(std::make_unique<views::View>());
 
@@ -95,13 +101,9 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
   resize_animation_.Reset(!state_controller_->IsCollapsed());
 
   target_collapse_state_ = state_controller_->GetState();
-  SetPreferredSize(gfx::Size(target_collapse_state_.collapsed
-                                 ? kCollapsedWidth
-                                 : target_collapse_state_.uncollapsed_width,
-                             0));
   OnCollapsedStateChanged(state_controller_);
   collapsed_state_changed_subscription_ =
-      state_controller_->RegisterOnStateChanged(base::BindRepeating(
+      state_controller_->RegisterOnCollapseChanged(base::BindRepeating(
           &VerticalTabStripRegionView::OnCollapsedStateChanged,
           base::Unretained(this)));
 
@@ -109,26 +111,38 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kTabList);
 
-  root_node_ = std::make_unique<RootTabCollectionNode>(
-      browser->GetTabStripModel(),
-      base::BindRepeating(&VerticalTabStripRegionView::SetTabStripView,
-                          base::Unretained(this)));
+  SetBackground(std::make_unique<CustomCornersBackground>(
+      *this, *browser_view,
+      /*primary_color=*/CustomCornersBackground::FrameColor(),
+      /*corner_color=*/CustomCornersBackground::TopContainerTheme()));
 
-  UpdateBackgroundColors();
+  UpdateColors();
 }
 
 VerticalTabStripRegionView::~VerticalTabStripRegionView() {
-  root_node_->SetController(nullptr);
+  if (root_node_) {
+    root_node_->SetController(nullptr);
+  }
+
   tab_strip_controller_.reset();
-  auto handler = RemoveChildViewT(drag_handler_);
-  drag_handler_ = nullptr;
+
+  if (drag_handler_) {
+    auto handler = RemoveChildViewT(drag_handler_->GetDragContext());
+    drag_handler_ = nullptr;
+  }
+}
+
+std::optional<double> VerticalTabStripRegionView::GetCollapseAnimationPercent()
+    const {
+  return resize_animation_.is_animating()
+             ? std::make_optional(resize_animation_.GetCurrentValue())
+             : std::nullopt;
 }
 
 void VerticalTabStripRegionView::AddedToWidget() {
   paint_as_active_subscription_ =
       GetWidget()->RegisterPaintAsActiveChangedCallback(base::BindRepeating(
-          &VerticalTabStripRegionView::UpdateBackgroundColors,
-          base::Unretained(this)));
+          &VerticalTabStripRegionView::UpdateColors, base::Unretained(this)));
 }
 
 void VerticalTabStripRegionView::Layout(PassKey) {
@@ -142,6 +156,83 @@ void VerticalTabStripRegionView::Layout(PassKey) {
 
 views::View* VerticalTabStripRegionView::GetDefaultFocusableChild() {
   return top_button_container_;
+}
+
+void VerticalTabStripRegionView::InitializeTabStrip() {
+  if (root_node_) {
+    return;
+  }
+
+  root_node_ = std::make_unique<RootTabCollectionNode>(
+      tab_strip_model_,
+      base::BindRepeating(&VerticalTabStripRegionView::SetTabStripView,
+                          base::Unretained(this)),
+      base::BindRepeating(&VerticalTabStripRegionView::ClearTabStripView,
+                          base::Unretained(this)));
+
+  std::unique_ptr<TabMenuModelFactory> tab_menu_model_factory;
+  if (browser_view_ && browser_view_->browser()->app_controller()) {
+    tab_menu_model_factory =
+        browser_view_->browser()->app_controller()->GetTabMenuModelFactory();
+  }
+
+  TabStripModel* tab_strip_model = browser_view_->browser()->GetTabStripModel();
+  CHECK(tab_strip_model);
+  auto drag_handler = std::make_unique<VerticalTabDragHandlerImpl>(
+      *tab_strip_model, *root_node_.get());
+  drag_handler_ = drag_handler.get();
+
+  CHECK(!tab_strip_controller_);
+  tab_strip_controller_ = std::make_unique<VerticalTabStripController>(
+      tab_strip_model, browser_view_, *AddChildView(std::move(drag_handler)),
+      std::move(tab_menu_model_factory));
+
+  root_node_->SetController(tab_strip_controller_.get());
+
+  root_node_->Init();
+}
+
+void VerticalTabStripRegionView::ResetTabStrip() {
+  if (!root_node_) {
+    return;
+  }
+
+  root_node_->Reset();
+
+  root_node_->SetController(nullptr);
+  tab_strip_controller_.reset();
+
+  CHECK(drag_handler_);
+  auto* drag_handler = drag_handler_.get();
+  drag_handler_ = nullptr;
+  RemoveChildViewT(drag_handler->GetDragContext());
+
+  root_node_.reset();
+}
+
+gfx::Size VerticalTabStripRegionView::GetMinimumSize() const {
+  auto min_size = TabStripRegionView::GetMinimumSize();
+  min_size.set_width(
+      (state_controller_->IsCollapsed() || resize_animation_.is_animating())
+          ? kCollapsedWidth
+          : kUncollapsedMinWidth);
+  return min_size;
+}
+
+gfx::Size VerticalTabStripRegionView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  auto size = TabStripRegionView::CalculatePreferredSize(available_size);
+  if (resize_animation_.is_animating()) {
+    size.set_width(kCollapsedWidth +
+                   base::ClampRound((target_collapse_state_.uncollapsed_width -
+                                     kCollapsedWidth) *
+                                    resize_animation_.GetCurrentValue()));
+  } else {
+    size.set_width(target_collapse_state_.collapsed
+                       ? kCollapsedWidth
+                       : target_collapse_state_.uncollapsed_width);
+  }
+  return size;
 }
 
 bool VerticalTabStripRegionView::IsTabStripEditable() const {
@@ -211,6 +302,21 @@ std::optional<int> VerticalTabStripRegionView::GetFocusedTabIndex() const {
   return std::nullopt;
 }
 
+const TabRendererData& VerticalTabStripRegionView::GetTabRendererData(
+    int tab_index) {
+  tabs::TabInterface* tab = tab_strip_model_->GetTabAtIndex(tab_index);
+  CHECK(tab);
+
+  const TabCollectionNode* node =
+      root_node_->GetNodeForHandle(tab->GetHandle());
+  CHECK(node);
+
+  VerticalTabView* tab_view = views::AsViewClass<VerticalTabView>(node->view());
+  CHECK(tab_view);
+
+  return tab_view->tab_data();
+}
+
 views::View* VerticalTabStripRegionView::GetTabAnchorViewAt(int tab_index) {
   tabs::TabInterface* tab = tab_strip_model_->GetTabAtIndex(tab_index);
   CHECK(tab) << "No tab found for tab_index: " << tab_index;
@@ -237,12 +343,37 @@ views::View* VerticalTabStripRegionView::GetTabGroupAnchorView(
   return nullptr;
 }
 
-TabDragContext* VerticalTabStripRegionView::GetDragContext() {
-  return drag_handler_.get();
+void VerticalTabStripRegionView::OnTabGroupFocusChanged(
+    std::optional<tab_groups::TabGroupId> new_focused_group_id,
+    std::optional<tab_groups::TabGroupId> old_focused_group_id) {
+  // TODO(crbug.com/479232024): Implement this.
 }
+
+TabDragContext* VerticalTabStripRegionView::GetDragContext() {
+  return drag_handler_->GetDragContext();
+}
+
+std::optional<BrowserRootView::DropIndex>
+VerticalTabStripRegionView::GetDropIndex(const ui::DropTargetEvent& event) {
+  return std::nullopt;
+}
+
+BrowserRootView::DropTarget* VerticalTabStripRegionView::GetDropTarget(
+    gfx::Point loc_in_local_coords) {
+  return nullptr;
+}
+
+views::View* VerticalTabStripRegionView::GetViewForDrop() {
+  return nullptr;
+}
+
 void VerticalTabStripRegionView::SetTabStripObserver(
     TabStripObserver* observer) {
   // Do nothing.
+}
+
+views::View* VerticalTabStripRegionView::GetTabStripView() {
+  return tab_strip_view_;
 }
 
 void VerticalTabStripRegionView::OnResize(int resize_amount,
@@ -288,36 +419,29 @@ void VerticalTabStripRegionView::AnimationProgressed(
 
 bool VerticalTabStripRegionView::IsPositionInWindowCaption(
     const gfx::Point& point) {
-  gfx::Point point_in_target = point;
-  views::View::ConvertPointToTarget(this, top_button_container_,
-                                    &point_in_target);
-  if (top_button_container_->HitTestPoint(point_in_target)) {
-    return top_button_container_->IsPositionInWindowCaption(point_in_target);
-  }
-  return false;
-}
-
-void VerticalTabStripRegionView::CreateTabStripController(
-    BrowserView* browser_view) {
-  std::unique_ptr<TabMenuModelFactory> tab_menu_model_factory;
-  if (browser_view && browser_view->browser()->app_controller()) {
-    tab_menu_model_factory =
-        browser_view->browser()->app_controller()->GetTabMenuModelFactory();
+  // Check the resize area first, it should always take precedence over other
+  // children regardless of order.
+  if (IsHitInView(resize_area_, point)) {
+    return false;
   }
 
-  TabStripModel* tab_strip_model = browser_view->browser()->GetTabStripModel();
-  CHECK(tab_strip_model);
-  auto drag_handler = std::make_unique<VerticalTabDragHandlerImpl>(
-      *tab_strip_model, *root_node_.get());
-  drag_handler_ = drag_handler.get();
-
-  tab_strip_controller_ = std::make_unique<VerticalTabStripController>(
-      tab_strip_model, browser_view, *AddChildView(std::move(drag_handler)),
-      std::move(tab_menu_model_factory));
-
-  if (root_node_) {
-    root_node_->SetController(tab_strip_controller_.get());
+  for (views::View* child : children()) {
+    if (!child->GetVisible()) {
+      continue;
+    }
+    gfx::Point point_in_child = point;
+    views::View::ConvertPointToTarget(this, child, &point_in_child);
+    if (child->HitTestPoint(point_in_child)) {
+      if (child == top_button_container_) {
+        return top_button_container_->IsPositionInWindowCaption(point_in_child);
+      }
+      if (child == tab_strip_view_) {
+        return tab_strip_view_->IsPositionInWindowCaption(point_in_child);
+      }
+      return false;
+    }
   }
+  return true;
 }
 
 void VerticalTabStripRegionView::SetToolbarHeightForLayout(
@@ -346,20 +470,23 @@ views::View* VerticalTabStripRegionView::SetTabStripView(
   CHECK(views::IsViewClass<VerticalTabStripView>(view.get()));
   tab_strip_view_ =
       static_cast<VerticalTabStripView*>(AddChildView(std::move(view)));
-  tab_strip_view_->SetCollapsedState(state_controller_->IsCollapsed());
-  gfx::Insets tab_container_margins = gfx::Insets::TLBR(
-      kRegionVerticalPadding,
-      GetLayoutConstant(VERTICAL_TAB_STRIP_HORIZONTAL_PADDING),
-      kRegionVerticalPadding, 0);
+  OnCollapsedStateChanged(state_controller_);
   tab_strip_view_->SetProperty(
       views::kFlexBehaviorKey,
-      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
+      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
                                views::MaximumFlexSizeRule::kUnbounded));
-  tab_strip_view_->SetProperty(views::kMarginsKey, tab_container_margins);
+  tab_strip_view_->SetProperty(views::kMarginsKey,
+                               gfx::Insets::VH(kRegionVerticalPadding, 0));
   std::optional<size_t> separator_index = GetIndexOf(top_button_separator_);
   CHECK(separator_index.has_value());
   ReorderChildView(tab_strip_view_, separator_index.value() + 1);
   return tab_strip_view_;
+}
+
+void VerticalTabStripRegionView::ClearTabStripView(views::View* view) {
+  CHECK(tab_strip_view_);
+  CHECK(tab_strip_view_ == view);
+  RemoveChildViewT(std::exchange(tab_strip_view_, nullptr));
 }
 
 void VerticalTabStripRegionView::OnCollapsedStateChanged(
@@ -372,6 +499,39 @@ void VerticalTabStripRegionView::OnCollapsedStateChanged(
     // happen due to the collapse button being pressed.
     UpdateCollapseState(state_controller_->GetState());
   }
+
+  const int padding = GetLayoutConstant(
+      state_controller_->IsCollapsed()
+          ? LayoutConstant::kVerticalTabStripCollapsedPadding
+          : LayoutConstant::kVerticalTabStripUncollapsedPadding);
+  // The TopContainer handles the padding distance to the separator so that we
+  // can control how far it is in the various states.
+  top_button_separator_->SetProperty(views::kMarginsKey,
+                                     gfx::Insets::VH(0, padding));
+  if (state_controller->IsCollapsed()) {
+    // If the VT Strip is collapsed, then we need exactly |padding| on the top,
+    // left, and right.
+    top_button_container_->SetProperty(
+        views::kMarginsKey,
+        gfx::Insets::TLBR(padding, padding, kRegionVerticalPadding, padding));
+  } else {
+    // If the VT Strip is not collapsed, then we want to align the heights of
+    // the TopContainer w/ the the height of the toolbar. Both of these
+    // components start at the top of the window. We keep no vertical padding so
+    // that the separator can lay adjacent to it.
+    top_button_container_->SetProperty(views::kMarginsKey,
+                                       gfx::Insets::VH(0, padding));
+  }
+
+  bottom_button_container_->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(kRegionVerticalPadding, padding, 0, padding));
+
+  flex_layout_->SetInteriorMargin(gfx::Insets::TLBR(
+      0, 0,
+      GetLayoutConstant(LayoutConstant::kVerticalTabStripUncollapsedPadding),
+      0));
+
   if (tab_strip_view_) {
     tab_strip_view_->SetCollapsedState(state_controller->IsCollapsed());
   }
@@ -387,6 +547,9 @@ void VerticalTabStripRegionView::UpdateCollapseState(
     } else {
       resize_animation_.Show();
     }
+    state_controller_->SetCollapsed(target_collapse_state_.collapsed);
+    // This may change the minimum size of the top container.
+    InvalidateLayout();
   } else if (!target_collapse_state_.collapsed &&
              !resize_animation_.is_animating()) {
     // If we are still in the expanding animation, resizing to the updated
@@ -405,13 +568,10 @@ void VerticalTabStripRegionView::ResizeToWidth(int width) {
     state_controller_->SetCollapsed(target_collapse_state_.collapsed);
   }
 
-  // BrowserViewLayout uses the preferred size's width. The height is not used.
-  SetPreferredSize(gfx::Size(width, 0));
+  InvalidateLayout();
 }
 
-void VerticalTabStripRegionView::UpdateBackgroundColors() {
-  SetBackground(views::CreateSolidBackground(
-      IsFrameActive() ? ui::kColorFrameActive : ui::kColorFrameInactive));
+void VerticalTabStripRegionView::UpdateColors() {
   top_button_separator_->SetColorId(IsFrameActive()
                                         ? kColorTabDividerFrameActive
                                         : kColorTabDividerFrameInactive);
@@ -423,12 +583,20 @@ bool VerticalTabStripRegionView::IsFrameActive() const {
 
 TabDragTarget* VerticalTabStripRegionView::GetTabDragTarget(
     const gfx::Point& point_in_screen) {
-  VerticalUnpinnedTabContainerView* container = GetUnpinnedTabsContainer();
-  CHECK(container);
-  if (container->GetBoundsInScreen().Contains(point_in_screen)) {
-    return container;
+  if (!drag_handler_) {
+    return nullptr;
   }
-  return nullptr;
+  if (!tab_strip_view_->GetBoundsInScreen().Contains(point_in_screen)) {
+    return nullptr;
+  }
+
+  // Note: if the drag has not attached to this tab strip yet, it doesn't matter
+  // which container is used because the first drag loop iteration just attaches
+  // it.
+  if (drag_handler_->IsDraggingPinnedTabs()) {
+    return &GetPinnedTabsContainer()->GetTabDragTarget(point_in_screen);
+  }
+  return &GetUnpinnedTabsContainer()->GetTabDragTarget(point_in_screen);
 }
 
 BEGIN_METADATA(VerticalTabStripRegionView)

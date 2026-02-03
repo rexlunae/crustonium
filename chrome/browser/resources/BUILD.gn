@@ -39,7 +39,6 @@ group("resources") {
       "autofill_ml_internals:resources",
       "bookmarks:resources",
       "certificate_manager:resources",
-      "commerce/product_specifications:resources",
       "contextual_tasks:resources",
       "data_sharing:resources",
       "downloads:resources",
@@ -63,7 +62,6 @@ group("resources") {
       "privacy_sandbox:resources",
       "privacy_sandbox/internals:resources",
       "profile_internals:resources",
-      "reload_button:resources",
       "search_engine_choice:resources",
       "settings:resources",
       "settings_shared:resources",
@@ -84,6 +82,7 @@ group("resources") {
       "web_app_internals:resources",
       "webui_browser:resources",
       "webui_gallery:resources",
+      "webui_toolbar:resources",
       "whats_new:resources",
       "//components/browser_apis/tab_strip/resources",
     ]
@@ -121,6 +120,10 @@ group("resources") {
     public_deps += [ "discards:resources" ]
   }
 
+  if (is_win || is_mac || is_linux || is_chromeos) {
+    public_deps += [ "skills:resources" ]
+  }
+
   if (is_win || is_mac || is_linux) {
     public_deps += [
       "app_home:resources",
@@ -134,9 +137,13 @@ group("resources") {
 
   if (!is_android && !is_chromeos) {
     public_deps += [
-      "inline_login:resources",
+      "default_browser/default_browser_modal:resources",
       "signin/profile_picker:resources",
     ]
+  }
+
+  if (is_win) {
+    public_deps += [ "inline_login:resources" ]
   }
 
   if (enable_dice_support) {
@@ -222,7 +229,7 @@ if (enable_extensions_core) {
     # build time so we include them as explicit dependencies here
     if (is_chromeos) {
       deps = [
-        "chromeos/accessibility/braille_ime:ts_build",
+        "chromeos/accessibility/braille_ime:build_ts",
         "chromeos/contact_center_insights:generate_ccaas_deps",
         "chromeos/desk_api:generate_desk_api_bundle",
       ]

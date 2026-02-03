@@ -48,9 +48,9 @@
 #import "components/safe_browsing/core/browser/password_protection/stub_password_reuse_detection_manager_client.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #import "components/sync_preferences/testing_pref_service_syncable.h"
+#import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator.h"
 #import "ios/chrome/browser/autofill/model/features.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_controller.h"
-#import "ios/chrome/browser/autofill/ui_bundled/form_input_accessory/form_input_accessory_mediator.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/web/model/chrome_web_client.h"
@@ -1381,15 +1381,12 @@ TEST_F(PasswordControllerTest, SendingToStoreDynamicallyAddedFormsOnFocus) {
   password_manager::PasswordFormDigest expected_form_digest(
       password_manager::PasswordForm::Scheme::kHtml, "https://chromium.test/",
       GURL("https://chromium.test/"));
-  // TODO(crbug.com/40621653): replace WillRepeatedly with WillOnce when the old
-  // parser is gone.
   EXPECT_CALL(*store_, GetLogins(expected_form_digest, _))
-      .WillRepeatedly(
-          [&get_logins_called](
-              const password_manager::PasswordFormDigest&,
-              base::WeakPtr<password_manager::PasswordStoreConsumer>) {
-            get_logins_called = true;
-          });
+      .WillOnce([&get_logins_called](
+                    const password_manager::PasswordFormDigest&,
+                    base::WeakPtr<password_manager::PasswordStoreConsumer>) {
+        get_logins_called = true;
+      });
 
   // Sets a focus on a username field.
   NSString* kSetUsernameInFocusScript =
@@ -1503,10 +1500,8 @@ TEST_F(PasswordControllerTest, CheckAsyncSuggestions) {
   for (bool store_has_credentials : {false, true}) {
     if (store_has_credentials) {
       PasswordForm form(CreatePasswordForm(BaseUrl().c_str(), "user", "pw"));
-      // TODO(crbug.com/40621653): replace WillRepeatedly with WillOnce when the
-      // old parser is gone.
       EXPECT_CALL(*store_, GetLogins)
-          .WillRepeatedly(WithArg<1>(InvokeConsumer(store_.get(), form)));
+          .WillOnce(WithArg<1>(InvokeConsumer(store_.get(), form)));
     } else {
       EXPECT_CALL(*store_, GetLogins)
           .WillRepeatedly(

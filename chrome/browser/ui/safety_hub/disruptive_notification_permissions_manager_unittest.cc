@@ -73,10 +73,16 @@ class SafetyHubNotificationWrapperForTesting
       : display_called_with_(display_called_with),
         update_called_with_(update_called_with) {}
 
-  void DisplayNotification(int num_revoked_permissions) override {
+  void DisplayNotification(int num_revoked_permissions,
+                           std::string& first_affected_domain,
+                           bool any_suspicious_revocations,
+                           bool any_disruptive_revocations) override {
     display_called_with_->push_back(num_revoked_permissions);
   }
-  void UpdateNotification(int num_revoked_permissions) override {
+  void UpdateNotification(int num_revoked_permissions,
+                          std::string& first_affected_domain,
+                          bool any_suspicious_revocations,
+                          bool any_disruptive_revocations) override {
     update_called_with_->push_back(num_revoked_permissions);
   }
 
@@ -121,7 +127,7 @@ class DisruptiveNotificationPermissionsMigrationTest : public ::testing::Test {
 
   void SetupIgnoreContentSettingEntry(const GURL& url,
                                       base::TimeDelta lifetime) {
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set("revoked_status", "ignore");
     dict.Set("site_engagement", 0.0);
     dict.Set("daily_notification_count", 4);
@@ -808,8 +814,8 @@ TEST_F(DisruptiveNotificationPermissionsManagerRevocationTest,
   hcsm()->SetWebsiteSettingDefaultScope(
       GURL(url), GURL(url),
       ContentSettingsType::REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS,
-      base::Value(base::Value::Dict().Set(safety_hub::kRevokedStatusDictKeyStr,
-                                          safety_hub::kIgnoreStr)));
+      base::Value(base::DictValue().Set(safety_hub::kRevokedStatusDictKeyStr,
+                                        safety_hub::kIgnoreStr)));
 
   SetNotificationPermission(url, CONTENT_SETTING_ALLOW);
   SetDailyAverageNotificationCount(url, 4);

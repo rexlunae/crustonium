@@ -36,6 +36,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ObserverList.RewindableIterator;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.Token;
 import org.chromium.base.TraceEvent;
@@ -44,7 +45,6 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.process_launcher.ScopedServiceBindingBatch;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.version_info.VersionInfo;
 import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.Initializer;
@@ -78,7 +78,6 @@ import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.chrome.browser.ui.native_page.NativePage.SmoothTransitionDelegate;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolverFactory;
-import org.chromium.components.autofill.AndroidAutofillFeatures;
 import org.chromium.components.autofill.AutofillManagerWrapper;
 import org.chromium.components.autofill.AutofillProvider;
 import org.chromium.components.autofill.AutofillProviderUMA;
@@ -94,6 +93,7 @@ import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.security_state.SecurityStateModel;
 import org.chromium.components.sensitive_content.SensitiveContentClient;
 import org.chromium.components.sensitive_content.SensitiveContentFeatures;
+import org.chromium.components.tabs.DetachReason;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content_public.browser.ChildProcessImportance;
@@ -120,7 +120,6 @@ import java.lang.annotation.Target;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.util.Objects;
-import java.util.function.Supplier;
 
 /**
  * Implementation of the interface {@link Tab}. Contains and manages a {@link ContentView}. This
@@ -176,7 +175,7 @@ class TabImpl implements Tab {
     private final Profile mProfile;
 
     /** The tab model this tab is currently attached to. */
-    private @Nullable NullableObservableSupplier<Tab> mCurrentTabSupplier;
+    private @Nullable LookAheadObservableSupplier<Tab> mCurrentTabSupplier;
 
     /** Whether or not this tab is a part of multi selection. */
     private @Nullable SelectionStateSupplier mSelectionStateSupplier;
@@ -342,6 +341,29 @@ class TabImpl implements Tab {
 
     private @Nullable Callback<Boolean> mIsDraggingObserver;
 
+    private @Nullable Boolean mWasLastActive;
+
+    private final Callback<@Nullable Tab> mActiveTabObserver =
+            (activeTab) -> {
+                boolean active = activeTab == this;
+
+                if (Objects.equals(mWasLastActive, active)) return;
+
+                mWasLastActive = active;
+
+                if (!active || mNativeTabAndroid == 0) return;
+                TabImplJni.get().sendDidActivateUpdate(mNativeTabAndroid);
+            };
+
+    private final Callback<@Nullable Tab> mActiveTabLookAheadObserver =
+            (activeTab) -> {
+                if (mWasLastActive == null || !mWasLastActive || mNativeTabAndroid == 0) {
+                    return;
+                }
+
+                TabImplJni.get().sendWillDeactivateUpdate(mNativeTabAndroid);
+            };
+
     /**
      * Notified when the content sensitivity changes, and sets the content sensitivity property on
      * the {@link TabState}.
@@ -379,7 +401,6 @@ class TabImpl implements Tab {
     TabImpl(int id, Profile profile, @TabLaunchType int launchType, boolean isArchived) {
         mId = TabIdManager.getInstance().generateValidId(id);
         mProfile = profile;
-        assert mProfile != null;
         mRootId = mId;
         mIsArchived = isArchived;
 
@@ -494,7 +515,7 @@ class TabImpl implements Tab {
             // tab is not held by another tab model. For unclear reasons, removeTab() doesn't
             // always get invoked on the previous tab model before the tab is attached to the new
             // tab model (at least in tests).
-            mCurrentTabSupplier = null;
+            clearCurrentTabSupplier(DetachReason.INSERT_INTO_OTHER_WINDOW);
         }
 
         // Notify the event to observers only when we do the reparenting task, not when we simply
@@ -1630,9 +1651,7 @@ class TabImpl implements Tab {
         }
 
         mWindowAndroid = windowAndroid;
-        if (mAutofillProvider != null
-                && AndroidAutofillFeatures.ANDROID_AUTOFILL_UPDATE_CONTEXT_FOR_WEBCONTENTS
-                        .isEnabled()) {
+        if (mAutofillProvider != null) {
             mAutofillProvider.switchToContext(getActivityContext());
         }
         WebContents webContents = getWebContents();
@@ -1694,8 +1713,7 @@ class TabImpl implements Tab {
      * @return iff the AutofillProvider should provide a ViewStructure when prompted.
      */
     boolean providesAutofillStructure() {
-
-        if (mProfile == null || !mProfile.isNativeInitialized()) {
+        if (!mProfile.isNativeInitialized()) {
             return false;
         }
         @Nullable PrefService prefs = UserPrefs.get(mProfile);
@@ -1762,6 +1780,7 @@ class TabImpl implements Tab {
                     // Wait until the content/ draws the transition.
                     CompositorViewHolder viewHolder =
                             assumeNonNull(getActivity()).getCompositorViewHolderSupplier().get();
+                    assumeNonNull(viewHolder);
                     viewHolder.requestRender(
                             () -> {
                                 var currView = getView();
@@ -2434,9 +2453,9 @@ class TabImpl implements Tab {
                     failedRestoreUrl = mWebContentsState.getFallbackUrlForRestorationFailure();
                 }
             }
-            Supplier<CompositorViewHolder> compositorViewHolderSupplier =
-                    assumeNonNull(getActivity()).getCompositorViewHolderSupplier();
-            View compositorView = compositorViewHolderSupplier.get();
+            View compositorView =
+                    assumeNonNull(getActivity()).getCompositorViewHolderSupplier().get();
+            assumeNonNull(compositorView);
             webContents.setSize(compositorView.getWidth(), compositorView.getHeight());
 
             mWebContentsState.destroy();
@@ -2916,24 +2935,34 @@ class TabImpl implements Tab {
 
     @Override
     public void onAddedToTabModel(
-            NullableObservableSupplier<Tab> currentTabSupplier,
+            LookAheadObservableSupplier<Tab> currentTabSupplier,
             SelectionStateSupplier selectionStateSupplier) {
         // Tabs should not be attached to multiple tab models.
         assert mCurrentTabSupplier == null;
 
         mCurrentTabSupplier = currentTabSupplier;
         mSelectionStateSupplier = selectionStateSupplier;
+
+        mCurrentTabSupplier.addObserver(mActiveTabObserver);
+        mCurrentTabSupplier.addLookAheadObserver(mActiveTabLookAheadObserver);
+
+        if (mNativeTabAndroid != 0) {
+            TabImplJni.get().sendDidInsertUpdate(mNativeTabAndroid);
+        }
     }
 
     @Override
-    public void onRemovedFromTabModel(NullableObservableSupplier<Tab> currentTabSupplier) {
+    public void onRemovedFromTabModel(
+            LookAheadObservableSupplier<Tab> currentTabSupplier, @DetachReason int detachReason) {
         // Usually mCurrentTabSupplier should equal currentTabSupplier when it's removed from the
         // TabModel. However, during reparenting it appears there are situations where the tab is
         // not removed from the original TabModel before being added to the new TabModel. In these
         // cases, mCurrentTabSupplier will be null as a result of the logic in updateAttachment().
         assert mCurrentTabSupplier == null || mCurrentTabSupplier == currentTabSupplier;
-        mCurrentTabSupplier = null;
+
+        clearCurrentTabSupplier(detachReason);
         mSelectionStateSupplier = null;
+        mWasLastActive = null;
     }
 
     @Override
@@ -2965,6 +2994,21 @@ class TabImpl implements Tab {
                 .closeTabs(
                         TabClosureParams.closeTab(tab).allowUndo(false).build(),
                         /* allowDialog= */ false);
+    }
+
+    private void clearCurrentTabSupplier(@DetachReason int detachReason) {
+        if (mCurrentTabSupplier == null) return;
+        if (mNativeTabAndroid != 0) {
+            TabImplJni.get().sendWillDetachUpdate(mNativeTabAndroid, detachReason);
+        }
+        mCurrentTabSupplier.removeObserver(mActiveTabObserver);
+        mCurrentTabSupplier.removeLookAheadObserver(mActiveTabLookAheadObserver);
+        mCurrentTabSupplier = null;
+    }
+
+    void setNativePtrForTesting(long nativePtr) {
+        setNativePtr(nativePtr);
+        ResettersForTesting.register(this::clearNativePtr);
     }
 
     @NativeMethods
@@ -3020,6 +3064,14 @@ class TabImpl implements Tab {
                 @JniType("std::optional<base::Token>") @Nullable Token tabGroupId);
 
         void onDraggingStateChanged(long nativeTabAndroid, boolean isDragging);
+
+        void sendDidActivateUpdate(long nativeTabAndroid);
+
+        void sendWillDeactivateUpdate(long nativeTabAndroid);
+
+        void sendDidInsertUpdate(long nativeTabAndroid);
+
+        void sendWillDetachUpdate(long nativeTabAndroid, @DetachReason int detachReason);
     }
 
     @VisibleForTesting

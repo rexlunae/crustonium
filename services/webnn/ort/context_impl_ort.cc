@@ -369,7 +369,14 @@ void ContextImplOrt::HandleContextLostOrCrash(const std::string& error_message,
   // any error code.
   // TODO(crbug.com/462937875): Handle errors differently when ORT can report a
   // device-removal error code in the future.
-  DestroyAllContextsAndKillGpuProcess(error_message);
+  //
+  // Currently, we decide to not broadcast the lost reason across all contexts
+  // especially for contexts created from different origins as it may leak
+  // information about one origin to another.
+  // TODO(crbug.com/474141334): Broadcast the context lost reason across all
+  // contexts from the same origin.
+  OnLost(error_message);
+  DestroyAllContextsAndKillGpuProcess();
 }
 
 void ContextImplOrt::CreateGraphImpl(
@@ -443,22 +450,28 @@ ContextImplOrt::CreateTensorFromSharedImageImpl(
     mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
     mojom::TensorInfoPtr tensor_info,
     WebNNTensorImpl::RepresentationPtr representation) {
-  // Shared image representation must be retrieved on the main thread. If WebNN
-  // runs on its own thread, a task is posted to the main thread and waits to
-  // retrieve the backend representation. Otherwise, if WebNN is already running
-  // on the main thread, it directly gets the backend representation.
   ComPtr<ID3D12Resource> d3d12_buffer;
-  WebNNTensorImpl::RunOrPostTaskAndWaitOnSequence(
-      main_task_runner(),
-      base::BindOnce(
-          [](gpu::WebNNTensorRepresentation* representation,
-             ComPtr<ID3D12Resource>* out_buffer) {
-            *out_buffer = representation->GetD3D12Buffer();
-          },
-          // Safe to use base::Unretained because we must run or wait for the
-          // post task to complete and `representation` cannot destruct while
-          // the task is running.
-          base::Unretained(representation.get()), &d3d12_buffer));
+  // Shared image is thread-safe, directly get the backend representation.
+  if (representation->is_thread_safe()) {
+    d3d12_buffer = representation->GetD3D12Buffer();
+  } else {
+    // Shared image representation must be retrieved on the main thread. If
+    // WebNN runs on its own thread, a task is posted to the main thread and
+    // waits to retrieve the backend representation. Otherwise, if WebNN is
+    // already running on the main thread, it directly gets the backend
+    // representation.
+    WebNNTensorImpl::RunOrPostTaskAndWaitOnSequence(
+        main_task_runner(),
+        base::BindOnce(
+            [](gpu::WebNNTensorRepresentation* representation,
+               ComPtr<ID3D12Resource>* out_buffer) {
+              *out_buffer = representation->GetD3D12Buffer();
+            },
+            // Safe to use base::Unretained because we must run or wait for the
+            // post task to complete and `representation` cannot destruct while
+            // the task is running.
+            base::Unretained(representation.get()), &d3d12_buffer));
+  }
 
   CHECK(d3d12_buffer)
       << "[WebNN] Failed to get D3D12 buffer from shared image.";
@@ -520,8 +533,7 @@ ContextImplOrt::CreateTensorFromSharedImageImpl(
 
   return base::MakeRefCounted<TensorImplOrt>(
       std::move(receiver), AsWeakPtr(), std::move(tensor_info),
-      std::move(representation), size, std::move(tensor),
-      std::move(d3d12_buffer));
+      std::move(representation), size, std::move(tensor));
 }
 
 }  // namespace webnn::ort

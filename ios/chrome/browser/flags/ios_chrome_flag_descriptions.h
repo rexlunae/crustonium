@@ -106,12 +106,6 @@ extern const char kAutofillEnableSupportForNameAndEmailDescription[];
 extern const char kAutofillEnableWalletBrandingName[];
 extern const char kAutofillEnableWalletBrandingDescription[];
 
-extern const char kAutofillIsolatedWorldForJavascriptIOSName[];
-extern const char kAutofillIsolatedWorldForJavascriptIOSDescription[];
-
-extern const char kAutofillLocalSaveCardBottomSheetName[];
-extern const char kAutofillLocalSaveCardBottomSheetDescription[];
-
 extern const char kAutofillManualTestingDataName[];
 extern const char kAutofillManualTestingDataDescription[];
 
@@ -123,9 +117,6 @@ extern const char kAutofillPaymentsSheetV2Description[];
 
 extern const char kAutofillPruneSuggestionsName[];
 extern const char kAutofillPruneSuggestionsDescription[];
-
-extern const char kAutofillSaveCardBottomSheetName[];
-extern const char kAutofillSaveCardBottomSheetDescription[];
 
 extern const char kAutofillShowManualFillForVirtualCardsName[];
 extern const char kAutofillShowManualFillForVirtualCardsDescription[];
@@ -175,17 +166,20 @@ extern const char kCacheIdentityListInChromeDescription[];
 extern const char kChromeNextIaName[];
 extern const char kChromeNextIaDescription[];
 
-extern const char kChromeStartupParametersAsyncName[];
-extern const char kChromeStartupParametersAsyncDescription[];
-
 extern const char kCloseOtherTabsName[];
 extern const char kCloseOtherTabsDescription[];
 
 extern const char kCollaborationMessagingName[];
 extern const char kCollaborationMessagingDescription[];
 
+extern const char kComposeboxAIMDisabledName[];
+extern const char kComposeboxAIMDisabledDescription[];
+
 extern const char kComposeboxAIMNudgeName[];
 extern const char kComposeboxAIMNudgeDescription[];
+
+extern const char kComposeboxAdditionalAdvancedToolsName[];
+extern const char kComposeboxAdditionalAdvancedToolsDescription[];
 
 extern const char kComposeboxAttachmentsTypedStateName[];
 extern const char kComposeboxAttachmentsTypedStateDescription[];
@@ -240,9 +234,6 @@ extern const char kContentNotificationProvisionalIgnoreConditionsDescription[];
 extern const char kContentPushNotificationsName[];
 extern const char kContentPushNotificationsDescription[];
 
-extern const char kContextualPanelName[];
-extern const char kContextualPanelDescription[];
-
 extern const char kCredentialProviderExtensionPromoName[];
 extern const char kCredentialProviderExtensionPromoDescription[];
 
@@ -254,9 +245,6 @@ extern const char kCredentialProviderPasskeyPRFDescription[];
 
 extern const char kCredentialProviderPerformanceImprovementsName[];
 extern const char kCredentialProviderPerformanceImprovementsDescription[];
-
-extern const char kCredentialProviderSignalAPIName[];
-extern const char kCredentialProviderSignalAPIDescription[];
 
 extern const char kDataSharingDebugLogsName[];
 extern const char kDataSharingDebugLogsDescription[];
@@ -318,9 +306,6 @@ extern const char kEditPasswordsInSettingsDescription[];
 extern const char kEnableACPrefetchName[];
 extern const char kEnableACPrefetchDescription[];
 
-extern const char kEnableASWebAuthenticationSessionName[];
-extern const char kEnableASWebAuthenticationSessionDescription[];
-
 extern const char kEnableAutofillAddressSavePromptName[];
 extern const char kEnableAutofillAddressSavePromptDescription[];
 
@@ -345,17 +330,14 @@ extern const char kEnableFeedCardMenuSignInPromoDescription[];
 extern const char kEnableFeedHeaderSettingsName[];
 extern const char kEnableFeedHeaderSettingsDescription[];
 
-extern const char kEnableIdentityInAuthErrorName[];
-extern const char kEnableIdentityInAuthErrorDescription[];
-
 extern const char kEnableLensInOmniboxCopiedImageName[];
 extern const char kEnableLensInOmniboxCopiedImageDescription[];
 
 extern const char kEnableLensOverlayName[];
 extern const char kEnableLensOverlayDescription[];
 
-extern const char kEnableLensViewFinderUnifiedExperienceName[];
-extern const char kEnableLensViewFinderUnifiedExperienceDescription[];
+extern const char kEnableNewStartupFlowName[];
+extern const char kEnableNewStartupFlowDescription[];
 
 extern const char kEnableReadingListAccountStorageName[];
 extern const char kEnableReadingListAccountStorageDescription[];
@@ -372,9 +354,6 @@ extern const char kEnableVariationsGoogleGroupFilteringDescription[];
 extern const char kEnhancedCalendarName[];
 extern const char kEnhancedCalendarDescription[];
 
-extern const char kEnhancedSafeBrowsingPromoName[];
-extern const char kEnhancedSafeBrowsingPromoDescription[];
-
 extern const char kFRESignInHeaderTextUpdateName[];
 extern const char kFRESignInHeaderTextUpdateDescription[];
 
@@ -383,9 +362,6 @@ extern const char kFeedBackgroundRefreshDescription[];
 
 extern const char kFeedSwipeInProductHelpName[];
 extern const char kFeedSwipeInProductHelpDescription[];
-
-extern const char kFeedbackIncludeVariationsName[];
-extern const char kFeedbackIncludeVariationsDescription[];
 
 extern const char kForceStartupSigninPromoName[];
 extern const char kForceStartupSigninPromoDescription[];
@@ -480,6 +456,9 @@ extern const char kIOSEnableCloudProfileReportingDescription[];
 extern const char kIOSEnableRealtimeEventReportingName[];
 extern const char kIOSEnableRealtimeEventReportingDescription[];
 
+extern const char kIOSExpandedSetupListName[];
+extern const char kIOSExpandedSetupListDescription[];
+
 extern const char kIOSExpandedTipsName[];
 extern const char kIOSExpandedTipsDescription[];
 
@@ -500,9 +479,6 @@ extern const char kIOSOmniboxAimServerEligibilityDescription[];
 
 extern const char kIOSOmniboxAimShortcutName[];
 extern const char kIOSOmniboxAimShortcutDescription[];
-
-extern const char kIOSOneTapMiniMapRemoveSectionBreaksName[];
-extern const char kIOSOneTapMiniMapRemoveSectionBreaksDescription[];
 
 extern const char kIOSOneTapMiniMapRestrictionsName[];
 extern const char kIOSOneTapMiniMapRestrictionsDescription[];
@@ -525,12 +501,6 @@ extern const char kIOSSaveToDriveClientFolderDescription[];
 extern const char kIOSSoftLockName[];
 extern const char kIOSSoftLockDescription[];
 
-extern const char kIOSStartTimeBrowserBackgroundRemediationsName[];
-extern const char kIOSStartTimeBrowserBackgroundRemediationsDescription[];
-
-extern const char kIOSStartTimeStartupRemediationsName[];
-extern const char kIOSStartTimeStartupRemediationsDescription[];
-
 extern const char kIOSSyncedSetUpName[];
 extern const char kIOSSyncedSetUpDescription[];
 
@@ -543,17 +513,8 @@ extern const char kIOSTrustedVaultNotificationDescription[];
 extern const char kIOSWebContextMenuNewTitleName[];
 extern const char kIOSWebContextMenuNewTitleDescription[];
 
-extern const char kIPHPriceNotificationsWhileBrowsingName[];
-extern const char kIPHPriceNotificationsWhileBrowsingDescription[];
-
 extern const char kIdentityConfirmationSnackbarName[];
 extern const char kIdentityConfirmationSnackbarDescription[];
-
-extern const char kImageContextMenuGeminiEntryPointName[];
-extern const char kImageContextMenuGeminiEntryPointDescription[];
-
-extern const char kImportPasswordsFromSafariName[];
-extern const char kImportPasswordsFromSafariDescription[];
 
 extern const char kInProductHelpDemoModeName[];
 extern const char kInProductHelpDemoModeDescription[];
@@ -605,9 +566,6 @@ extern const char kLensOverlayCustomBottomSheetDescription[];
 
 extern const char kLensOverlayDisableIPHPanGestureName[];
 extern const char kLensOverlayDisableIPHPanGestureDescription[];
-
-extern const char kLensOverlayEnableIPadCompatibilityName[];
-extern const char kLensOverlayEnableIPadCompatibilityDescription[];
 
 extern const char kLensOverlayEnableLandscapeCompatibilityName[];
 extern const char kLensOverlayEnableLandscapeCompatibilityDescription[];
@@ -666,9 +624,6 @@ extern const char kMeasurementsDescription[];
 extern const char kMetrickitNonCrashReportName[];
 extern const char kMetrickitNonCrashReportDescription[];
 
-extern const char kMigrateAccountPrefsOnMobileName[];
-extern const char kMigrateAccountPrefsOnMobileDescription[];
-
 extern const char kMigrateIOSKeychainAccessibilityName[];
 extern const char kMigrateIOSKeychainAccessibilityDescription[];
 
@@ -710,9 +665,6 @@ extern const char kNonModalSignInPromoDescription[];
 
 extern const char kNotificationCollisionManagementName[];
 extern const char kNotificationCollisionManagementDescription[];
-
-extern const char kNotificationSettingsMenuItemName[];
-extern const char kNotificationSettingsMenuItemDescription[];
 
 extern const char kNtpAlphaBackgroundCollectionsName[];
 extern const char kNtpAlphaBackgroundCollectionsDescription[];
@@ -771,9 +723,6 @@ extern const char kOmniboxMobileParityUpdateDescription[];
 extern const char kOmniboxMobileParityUpdateV2Name[];
 extern const char kOmniboxMobileParityUpdateV2Description[];
 
-extern const char kOmniboxMobileParityUpdateV3Name[];
-extern const char kOmniboxMobileParityUpdateV3Description[];
-
 extern const char kOmniboxOnClobberFocusTypeOnIOSName[];
 extern const char kOmniboxOnClobberFocusTypeOnIOSDescription[];
 
@@ -797,9 +746,6 @@ extern const char kOmniboxZeroSuggestPrefetchingOnSRPDescription[];
 
 extern const char kOmniboxZeroSuggestPrefetchingOnWebName[];
 extern const char kOmniboxZeroSuggestPrefetchingOnWebDescription[];
-
-extern const char kOnlyAccessClipboardAsyncName[];
-extern const char kOnlyAccessClipboardAsyncDescription[];
 
 extern const char kOptimizationGuideDebugLogsName[];
 extern const char kOptimizationGuideDebugLogsDescription[];
@@ -855,17 +801,8 @@ extern const char kProvisionalNotificationAlertDescription[];
 extern const char kRcapsDynamicProfileCountryName[];
 extern const char kRcapsDynamicProfileCountryDescription[];
 
-extern const char kReaderModeBadgeSupportName[];
-extern const char kReaderModeBadgeSupportDescription[];
-
-extern const char kReaderModeName[];
-extern const char kReaderModeDescription[];
-
-extern const char kReaderModeNewCssName[];
-extern const char kReaderModeNewCssDescription[];
-
-extern const char kReaderModeOmniboxEntrypointName[];
-extern const char kReaderModeOmniboxEntrypointDescription[];
+extern const char kReaderModeOmniboxEntrypointInUSName[];
+extern const char kReaderModeOmniboxEntrypointInUSDescription[];
 
 extern const char kReaderModeOptimizationGuideEligibilityName[];
 extern const char kReaderModeOptimizationGuideEligibilityDescription[];
@@ -878,9 +815,6 @@ extern const char kReaderModeReadabilityHeuristicDescription[];
 
 extern const char kReaderModeSupportNewFontsName[];
 extern const char kReaderModeSupportNewFontsDescription[];
-
-extern const char kReaderModeTranslationName[];
-extern const char kReaderModeTranslationDescription[];
 
 extern const char kReaderModeTranslationWithInfobarName[];
 extern const char kReaderModeTranslationWithInfobarDescription[];
@@ -906,12 +840,6 @@ extern const char kSafeBrowsingRealTimeLookupDescription[];
 extern const char kSafeBrowsingTrustedURLName[];
 extern const char kSafeBrowsingTrustedURLDescription[];
 
-extern const char kSafetyCheckNotificationsName[];
-extern const char kSafetyCheckNotificationsDescription[];
-
-extern const char kScreenTimeIntegrationName[];
-extern const char kScreenTimeIntegrationDescription[];
-
 extern const char kSegmentationPlatformEphemeralCardRankerName[];
 extern const char kSegmentationPlatformEphemeralCardRankerDescription[];
 
@@ -924,9 +852,6 @@ extern const char kSegmentationPlatformIosModuleRankerDescription[];
 extern const char kSegmentationPlatformIosModuleRankerSplitBySurfaceName[];
 extern const char
     kSegmentationPlatformIosModuleRankerSplitBySurfaceDescription[];
-
-extern const char kSegmentationPlatformTipsEphemeralCardName[];
-extern const char kSegmentationPlatformTipsEphemeralCardDescription[];
 
 extern const char kSendTabToSelfIOSPushNotificationsName[];
 extern const char kSendTabToSelfIOSPushNotificationsDescription[];
@@ -960,6 +885,14 @@ extern const char kStrokesAPIEnabledDescription[];
 
 extern const char kSupervisedUserBlockInterstitialV3Name[];
 extern const char kSupervisedUserBlockInterstitialV3Description[];
+
+extern const char
+    kSupervisedUserMergeDeviceParentalControlsAndFamilyLinkPrefsName[];
+extern const char
+    kSupervisedUserMergeDeviceParentalControlsAndFamilyLinkPrefsDescription[];
+
+extern const char kSupervisedUserUseUrlFilteringServiceName[];
+extern const char kSupervisedUserUseUrlFilteringServiceDescription[];
 
 extern const char kSyncAutofillWalletCredentialDataName[];
 extern const char kSyncAutofillWalletCredentialDataDescription[];
@@ -1018,14 +951,14 @@ extern const char kUseFeedEligibilityServiceDescription[];
 extern const char kVariationsSeedCorpusName[];
 extern const char kVariationsSeedCorpusDescription[];
 
+extern const char kViewCertificateInformationName[];
+extern const char kViewCertificateInformationDescription[];
+
 extern const char kWaitThresholdMillisecondsForCapabilitiesApiName[];
 extern const char kWaitThresholdMillisecondsForCapabilitiesApiDescription[];
 
 extern const char kWalletServiceUseSandboxName[];
 extern const char kWalletServiceUseSandboxDescription[];
-
-extern const char kWebFeedFeedbackRerouteName[];
-extern const char kWebFeedFeedbackRerouteDescription[];
 
 extern const char kWebPageAlternativeTextZoomName[];
 extern const char kWebPageAlternativeTextZoomDescription[];
@@ -1041,9 +974,6 @@ extern const char kWebPageTextZoomIPadDescription[];
 
 extern const char kWelcomeBackName[];
 extern const char kWelcomeBackDescription[];
-
-extern const char kYoutubeIncognitoName[];
-extern const char kYoutubeIncognitoDescription[];
 
 extern const char kZeroStateSuggestionsName[];
 extern const char kZeroStateSuggestionsDescription[];

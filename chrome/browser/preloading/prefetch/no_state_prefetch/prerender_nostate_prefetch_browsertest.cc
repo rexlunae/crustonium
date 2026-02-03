@@ -2,16 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <string>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -39,8 +40,10 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
@@ -249,12 +252,14 @@ content::PreloadingFailureReason ToPreloadingFailureReasonFromFinalStatus(
 
 // Waits for a new tab to open and a navigation or swap in it.
 class NewTabNavigationOrSwapObserver : public TabStripModelObserver,
-                                       public BrowserListObserver {
+                                       public BrowserCollectionObserver {
  public:
   NewTabNavigationOrSwapObserver() {
-    BrowserList::AddObserver(this);
+    browser_collection_observation_.Observe(
+        GlobalBrowserCollection::GetInstance());
     ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
         [this](BrowserWindowInterface* browser) {
+          // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
           browser->GetTabStripModel()->AddObserver(this);
           return true;
         });
@@ -265,9 +270,7 @@ class NewTabNavigationOrSwapObserver : public TabStripModelObserver,
   NewTabNavigationOrSwapObserver& operator=(
       const NewTabNavigationOrSwapObserver&) = delete;
 
-  ~NewTabNavigationOrSwapObserver() override {
-    BrowserList::RemoveObserver(this);
-  }
+  ~NewTabNavigationOrSwapObserver() override = default;
 
   void Wait() {
     new_tab_run_loop_.Run();
@@ -291,14 +294,17 @@ class NewTabNavigationOrSwapObserver : public TabStripModelObserver,
     new_tab_run_loop_.Quit();
   }
 
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override {
-    browser->tab_strip_model()->AddObserver(this);
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override {
+    // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
+    browser->GetTabStripModel()->AddObserver(this);
   }
 
  private:
   base::RunLoop new_tab_run_loop_;
   std::unique_ptr<NavigationOrSwapObserver> swap_observer_;
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 };
 
 class NoStatePrefetchBrowserTest
@@ -408,9 +414,8 @@ class NoStatePrefetchBrowserTest
   // Returns length of |no_state_prefetch_manager_|'s history, or SIZE_MAX on
   // failure.
   size_t GetHistoryLength() const {
-    base::Value::Dict prerender_dict =
-        GetNoStatePrefetchManager()->CopyAsDict();
-    if (const base::Value::List* history_list =
+    base::DictValue prerender_dict = GetNoStatePrefetchManager()->CopyAsDict();
+    if (const base::ListValue* history_list =
             prerender_dict.FindList("history")) {
       return history_list->size();
     }
@@ -1652,10 +1657,10 @@ IN_PROC_BROWSER_TEST_F(NoStatePrefetchBrowserTest, HistoryUntouchedByPrefetch) {
   // Check that the URL that was explicitly navigated to is already in history.
   ui_test_utils::HistoryEnumerator enumerator(profile);
   std::vector<GURL>& urls = enumerator.urls();
-  EXPECT_TRUE(base::Contains(urls, navigated_url));
+  EXPECT_TRUE(std::ranges::contains(urls, navigated_url));
 
   // Check that the URL that was prefetched is not in history.
-  EXPECT_FALSE(base::Contains(urls, prefetched_url));
+  EXPECT_FALSE(std::ranges::contains(urls, prefetched_url));
 
   // The loader URL is the remaining entry.
   EXPECT_EQ(2U, urls.size());
@@ -1970,7 +1975,7 @@ IN_PROC_BROWSER_TEST_F(NoStatePrefetchPrerenderBrowserTest,
   const GURL prerender_url = embedded_test_server()->GetURL(kPrefetchPage);
 
   // Loads a page in the prerender.
-  const content::FrameTreeNodeId host_id =
+  const content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*GetWebContents(),
                                                      host_id);

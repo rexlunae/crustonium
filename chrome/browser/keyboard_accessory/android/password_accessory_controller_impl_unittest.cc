@@ -66,6 +66,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/service/sync_service_utils.h"
 #include "components/webauthn/android/cred_man_support.h"
+#include "components/webauthn/android/stub_webauthn_client_android.h"
 #include "components/webauthn/android/webauthn_cred_man_delegate.h"
 #include "components/webauthn/android/webauthn_cred_man_delegate_factory.h"
 #include "content/public/browser/render_frame_host.h"
@@ -375,6 +376,9 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
         .WillByDefault(Return(&mock_password_manager_));
     NavigateAndCommit(GURL(kExampleSite));
 
+    webauthn::WebAuthnClientAndroid::SetClient(
+        std::make_unique<webauthn::StubWebAuthnClientAndroid>());
+
     webauthn_credentials_delegate_ = std::make_unique<
         NiceMock<password_manager::MockWebAuthnCredentialsDelegate>>();
     ON_CALL(*webauthn_credentials_delegate(), GetPasskeys)
@@ -387,7 +391,7 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
             IsSecurityKeyOrHybridFlowAvailable)
         .WillByDefault(Return(false));
     ON_CALL(*password_client()->GetPasswordFeatureManager(),
-            IsAccountStorageEnabled)
+            IsAccountStorageActive)
         .WillByDefault(Return(false));
     window_android_.get()->get()->AddChild(web_contents()->GetNativeView());
 
@@ -399,6 +403,11 @@ class PasswordAccessoryControllerTest : public ChromeRenderViewHostTestHarness {
                     ShouldShowAction(false),
                     autofill::AccessoryAction::RETRIEVE_TRUSTED_VAULT_KEY))
         .Times(AnyNumber());
+  }
+
+  void TearDown() override {
+    webauthn::WebAuthnClientAndroid::ClearClientForTesting();
+    ChromeRenderViewHostTestHarness::TearDown();
   }
 
   webauthn::WebAuthnCredManDelegate* cred_man_delegate() {
@@ -1299,7 +1308,7 @@ TEST_F(PasswordAccessoryControllerTest, SavePasswordsToggledUpdatesCache) {
 TEST_F(PasswordAccessoryControllerTest,
        SavePasswordsEnabledUpdatesAccountStore) {
   ON_CALL(*password_client()->GetPasswordFeatureManager(),
-          IsAccountStorageEnabled)
+          IsAccountStorageActive)
       .WillByDefault(Return(true));
   CreateSheetController();
   password_manager::PasswordFormDigest form_digest(
@@ -1322,7 +1331,7 @@ TEST_F(PasswordAccessoryControllerTest,
 TEST_F(PasswordAccessoryControllerTest,
        SavePasswordsDisabledUpdatesAccountStore) {
   ON_CALL(*password_client()->GetPasswordFeatureManager(),
-          IsAccountStorageEnabled)
+          IsAccountStorageActive)
       .WillByDefault(Return(true));
   CreateSheetController();
   PasswordForm expected_form;

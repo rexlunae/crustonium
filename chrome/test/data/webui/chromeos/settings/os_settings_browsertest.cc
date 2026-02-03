@@ -48,9 +48,6 @@ class OSSettingsMochaTest : public WebUIMochaBrowserTest {
     });
     RunTest(path_with_parent_directory, trigger);
   }
-
-  base::test::ScopedFeatureList scoped_feature_list_{
-      ash::features::kEnableHostnameSetting};
 };
 
 /* Start Test Classes */
@@ -352,11 +349,6 @@ IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest, CrostiniPageBruschettaSubpage) {
 IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest,
                        CrostiniPageCrostiniExportImport) {
   RunSettingsTest("crostini_page/crostini_export_import_test.js");
-}
-
-IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest,
-                       CrostiniPageCrostiniExtraContainersSubpage) {
-  RunSettingsTest("crostini_page/crostini_extra_containers_subpage_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest,
@@ -970,10 +962,6 @@ IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
                        OsAboutPageDetailedBuildInfoSubpage) {
   RunSettingsTest("os_about_page/detailed_build_info_subpage_test.js");
-}
-
-IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, OsAboutPageEditHostnameDialog) {
-  RunSettingsTest("os_about_page/edit_hostname_dialog_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, OsAppsPage) {

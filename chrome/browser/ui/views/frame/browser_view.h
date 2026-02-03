@@ -33,6 +33,7 @@
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
 #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
 #include "chrome/browser/ui/views/intent_picker_bubble_view.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
@@ -102,6 +103,10 @@ class WebUITabStripContainerView;
 namespace gfx {
 class AnimationRunner;
 }  // namespace gfx
+
+namespace tabs {
+class VerticalTabStripStateController;
+}  // namespace tabs
 
 namespace ui {
 class NativeTheme;
@@ -181,7 +186,7 @@ class BrowserView : public BrowserWindow,
   Browser* browser() { return browser_; }
   const Browser* browser() const { return browser_; }
 
-  Profile* GetProfile();
+  Profile* GetProfile() const;
 
   const TopControlsSlideController* top_controls_slide_controller() const {
     return top_controls_slide_controller_.get();
@@ -194,9 +199,9 @@ class BrowserView : public BrowserWindow,
   // window.
   gfx::Rect GetFindBarBoundingBox() const;
 
-  // Returns the preferred height of the TabStrip. Used to position the
-  // incognito avatar icon.
-  int GetTabStripHeight() const;
+  // Returns information about elements that want to render in the top window
+  // frame area.
+  ClientFrameElementInfo GetFrameElementInfo() const;
 
   // Returns the preferred size of the Web App Frame Toolbar. Used for example
   // to determine the height of the title bar.
@@ -280,11 +285,13 @@ class BrowserView : public BrowserWindow,
   // automatically placed into VerticalTabs mode.
   VerticalTabStripRegionView* vertical_tab_strip_region_view_for_testing()
       const {
-    return vertical_tab_strip_container_.get();
+    return vertical_tab_strip_region_view_.get();
   }
 
   // Accessor for the TabStrip.
-  TabStrip* tabstrip() { return tab_strip_region_view_->tab_strip(); }
+  TabStrip* horizontal_tab_strip_for_testing() {
+    return horizontal_tab_strip_region_view_->tab_strip();
+  }
 
   // Accessor for the WebUI tab strip.
   WebUITabStripContainerView* webui_tab_strip() { return webui_tab_strip_; }
@@ -339,6 +346,12 @@ class BrowserView : public BrowserWindow,
 
   // Returns whether a vertical tabstrip should be shown.
   bool ShouldDrawVerticalTabStrip() const;
+
+  // Returns whether the webapp frame toolbar should be drawn.
+  bool ShouldDrawWebAppFrameToolbar() const;
+
+  // Returns whether or not strokes should be drawn around and under the tabs.
+  bool ShouldDrawTabStrokes() const;
 
   // Returns whether the vertical tabstrip is collapsed.
   bool IsVerticalTabStripCollapsed() const;
@@ -555,7 +568,6 @@ class BrowserView : public BrowserWindow,
   void SetDevToolsScrimVisibility(bool visible) override;
   void ResetToolbarTabState(content::WebContents* contents) override;
   void FocusToolbar() override;
-  ExtensionsContainer* GetExtensionsContainer() override;
   void ToolbarSizeChanged(bool is_animating) override;
   void TabDraggingStatusChanged(bool is_dragging) override;
   void LinkOpeningFromGesture(WindowOpenDisposition disposition) override;
@@ -613,9 +625,6 @@ class BrowserView : public BrowserWindow,
   void StartPartialTranslate(const std::string& source_language,
                              const std::string& target_language,
                              const std::u16string& text_selection) override;
-  void ShowOneClickSigninConfirmation(
-      const std::u16string& email,
-      base::OnceCallback<void(bool)> confirmed_callback) override;
   DownloadBubbleUIController* GetDownloadBubbleUIController() override;
   void ConfirmBrowserCloseWithPendingDownloads(
       int download_count,
@@ -796,10 +805,6 @@ class BrowserView : public BrowserWindow,
       split_tabs::SplitTabLayout layout,
       int tab_index_in_split) const;
 
-  // Gets the string id to format a tab's accessible label based on its tab
-  // alert.
-  int GetAccessibleTabLabelFormatStringForTabAlert(tabs::TabAlert alert) const;
-
   // Testing interface:
   views::View* GetContentsContainerForTest() { return contents_container_; }
   BrowserViewLayout* GetBrowserViewLayoutForTesting() {
@@ -864,7 +869,7 @@ class BrowserView : public BrowserWindow,
 
 #if BUILDFLAG(IS_CHROMEOS)
   // This is used only for SWA/PWA scenario.
-  void OnLockedForOnTaskUpdated();
+  void OnLockedForOnTaskUpdated(bool locked_for_on_task);
 
   bool IsLockedFullscreen() const;
 #endif
@@ -943,7 +948,7 @@ class BrowserView : public BrowserWindow,
   // affected.
   void RevealTabStripIfNeeded();
 
-  void OnVerticalTabStripStateChanged(
+  void OnVerticalTabStripModeChanged(
       tabs::VerticalTabStripStateController* controller);
 
   void OnProjectsPanelStateChanged(ProjectsPanelStateController* controller);
@@ -1217,11 +1222,12 @@ class BrowserView : public BrowserWindow,
   raw_ptr<views::Label> web_app_window_title_ = nullptr;
 
   // The view that contains the tabstrip, new tab button, and grab handle space.
-  raw_ptr<HorizontalTabStripRegionView> tab_strip_region_view_ = nullptr;
+  raw_ptr<HorizontalTabStripRegionView> horizontal_tab_strip_region_view_ =
+      nullptr;
   // The insertion index of the HorizontalTabStripRegionView in the BrowserView
   // view tree. This is used to correctly reparent the tabstrip when exiting
   // fullscreen mode. See BrowserView::ReparentTopContainerForEndOfImmersive.
-  std::optional<size_t> tab_strip_region_insertion_index_;
+  std::optional<size_t> horizontal_tab_strip_region_insertion_index_;
 
   // The webui based tabstrip, when applicable. see https://crbug.com/989131.
   raw_ptr<WebUITabStripContainerView> webui_tab_strip_ = nullptr;
@@ -1295,7 +1301,11 @@ class BrowserView : public BrowserWindow,
   raw_ptr<views::View> contents_container_ = nullptr;
 
   // The view responsible for housing the contents of the vertical tab strip.
-  raw_ptr<VerticalTabStripRegionView> vertical_tab_strip_container_ = nullptr;
+  raw_ptr<VerticalTabStripRegionView> vertical_tab_strip_region_view_ = nullptr;
+
+  // Outward-projecting corners of the vertical tab strip.
+  raw_ptr<views::View> vertical_tab_strip_top_corner_ = nullptr;
+  raw_ptr<views::View> vertical_tab_strip_bottom_corner_ = nullptr;
 
   // The view responsible for housing the contents of the projects panel.
   raw_ptr<ProjectsPanelView> projects_panel_container_ = nullptr;
@@ -1437,6 +1447,8 @@ class BrowserView : public BrowserWindow,
   base::CallbackListSubscription vertical_tab_subscription_;
 
   base::CallbackListSubscription projects_panel_subscription_;
+
+  base::CallbackListSubscription on_locked_task_subscription_;
 
   // Bitmask of current combination of reparenting states, e.g. immersive and
   // ChromeOS tablet modes.

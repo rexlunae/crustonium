@@ -534,7 +534,7 @@ class IdentityManager : public KeyedService,
 
   base::android::ScopedJavaLocalRef<jobject> GetPrimaryAccountInfo(
       JNIEnv* env,
-      jint consent_level) const;
+      int32_t consent_level) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetPrimaryAccountId(
       JNIEnv* env) const;
@@ -548,15 +548,12 @@ class IdentityManager : public KeyedService,
       JNIEnv* env,
       const base::android::JavaRef<jstring>& j_email) const;
 
-  base::android::ScopedJavaLocalRef<jobjectArray> GetAccountsWithRefreshTokens(
-      JNIEnv* env) const;
-
   // Refreshes all accounts with refresh tokens if they are stale. See
   // RefreshAccountInfoIfStale(const CoreAccountId&).
   void RefreshAccountInfoIfStale(JNIEnv* env);
 
   // Returns true if the browser allows the primary account to be cleared.
-  jboolean IsClearPrimaryAccountAllowed(JNIEnv* env) const;
+  bool IsClearPrimaryAccountAllowed(JNIEnv* env) const;
 #endif
 
   // Returns a weak pointer of this.

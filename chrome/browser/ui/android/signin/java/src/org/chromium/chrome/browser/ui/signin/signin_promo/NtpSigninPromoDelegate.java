@@ -22,6 +22,7 @@ import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
 import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
+import org.chromium.chrome.browser.ui.signin.SigninSurveyController;
 import org.chromium.components.signin.SigninFeatureMap;
 import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.base.CoreAccountInfo;
@@ -153,7 +154,7 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    void onDismissButtonClicked() {
+    void permanentlyDismissPromo() {
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.SIGNIN_PROMO_NTP_PROMO_DISMISSED, true);
     }
@@ -169,11 +170,6 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
         boolean wasStateChanged = mPromoState != newState;
         mPromoState = newState;
         return wasStateChanged;
-    }
-
-    @Override
-    boolean isSeamlessSigninAllowed() {
-        return SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN);
     }
 
     @Override
@@ -205,6 +201,13 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
     @Override
     int getPromoShownCount() {
         return ChromeSharedPreferences.getInstance().readInt(getPromoShowCountPreferenceName());
+    }
+
+    @Override
+    @Nullable
+    @SigninSurveyController.SigninSurveyType
+    Integer getSurveyTriggerType() {
+        return SigninSurveyController.SigninSurveyType.NTP_PROMO;
     }
 
     private static boolean timeElapsedSinceFirstShownExceedsLimit() {
@@ -250,8 +253,7 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
             return PromoState.SIGNIN;
         }
         // Don't show the promo if account image is not available yet.
-        return identityManager.findExtendedAccountInfoByEmailAddress(visibleAccount.getEmail())
-                        == null
+        return identityManager.findExtendedAccountInfoByAccountId(visibleAccount.getId()) == null
                 ? PromoState.NONE
                 : PromoState.SIGNIN;
     }

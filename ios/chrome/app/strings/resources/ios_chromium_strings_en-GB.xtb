@@ -41,6 +41,9 @@
 <translation id="1707458603865303524">Use Chrome any time that you tap links in messages and other apps.</translation>
 <translation id="1722370509450468186">Your password will be saved in your Account (<ph name="EMAIL" />).</translation>
 <translation id="1747088204252710672">A custom feed made for you</translation>
+<translation id="1761196287436320018">You reached Chromium's limit of <ph name="LIMIT" /> bookmarks, so some of your bookmarks haven't been saved in your Google Account yet.
+
+New bookmarks can't be saved in your account until you delete some. If you sign out now, unsaved bookmarks will be deleted.</translation>
 <translation id="1811860791247653035">To get personalisation and other features, include Chromium in <ph name="FEATURE_NAME_1" /> and <ph name="FEATURE_NAME_2" /></translation>
 <translation id="1838412507805038478">Chromium verified that <ph name="ISSUER" /> issued this website's certificate.</translation>
 <translation id="1839447949248872139">Open links in Chromium by default</translation>
@@ -129,6 +132,7 @@ Try waiting a few minutes before switching accounts. If you switch accounts now,
 <translation id="3728124580182886854">Link Chromium and other Google services for personalisation and other purposes</translation>
 <translation id="377649297473651452">Chromium autofill expanded view</translation>
 <translation id="3780779443901618967">Warns you about dangerous sites, even ones that Google didn't know about before, by analysing more data from sites than standard protection. You can choose to skip Chromium warnings.</translation>
+<translation id="3793136096560888222">Edit image with Gemini in Chromium</translation>
 <translation id="3805899903892079518">Chromium does not have access to your photos or videos. Enable access in iOS Settings &gt; Privacy &gt; Photos.</translation>
 <translation id="3816686541346279443">Chromium will offer to save your password.</translation>
 <translation id="3827545470516145620">You're getting standard security protection on this device</translation>
@@ -296,7 +300,6 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
 <translation id="7554983317097061001">Chromium tip: Move Chromium to the dock</translation>
 <translation id="7576863740961052505">Manage Chromium settings</translation>
 <translation id="7674213385180944843">Open Settings &gt; Privacy &gt; Camera &gt; Chromium and turn on the camera.</translation>
-<translation id="7685160423563372998">Create image with Gemini in Chromium</translation>
 <translation id="7733418656985455268">Chromium tip: Search with Lens</translation>
 <translation id="7747820849741499258">Search in Chromium</translation>
 <translation id="7753923083404296545">Opened in Chromium Incognito</translation>

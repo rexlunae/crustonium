@@ -647,6 +647,52 @@ TEST(StringViewTest, NextCodePointOffset) {
   EXPECT_EQ(1u, broken3.NextCodePointOffset(0));
 }
 
+TEST(StringViewTest, FindChar) {
+  EXPECT_EQ(kNotFound, StringView().find(0));
+  EXPECT_EQ(kNotFound, StringView("").find(0));
+  EXPECT_EQ(kNotFound, StringView(u"").find(0));
+  EXPECT_EQ(kNotFound, StringView().find('a'));
+  EXPECT_EQ(kNotFound, StringView("").find('a'));
+  EXPECT_EQ(kNotFound, StringView(u"").find('a'));
+
+  StringView view8("abcdeabcde");
+  ASSERT_TRUE(view8.Is8Bit());
+  EXPECT_EQ(0u, view8.find('a'));
+  EXPECT_EQ(2u, view8.find('c'));
+  EXPECT_EQ(4u, view8.find('e'));
+  EXPECT_EQ(kNotFound, view8.find('z'));
+  EXPECT_EQ(0u, view8.find('a', 0));
+  EXPECT_EQ(5u, view8.find('a', 1));
+  EXPECT_EQ(5u, view8.find('a', 5));
+  EXPECT_EQ(kNotFound, view8.find('a', 6));
+  EXPECT_EQ(9u, view8.find('e', 5));
+  EXPECT_EQ(kNotFound, view8.find('e', 10));
+  EXPECT_EQ(kNotFound, view8.find(UChar(0x1234)));
+
+  StringView view8_with_null(base::byte_span_from_cstring("as\0cii"));
+  ASSERT_TRUE(view8_with_null.Is8Bit());
+  EXPECT_EQ(2u, view8_with_null.find('\0'));
+  EXPECT_EQ(2u, view8_with_null.find('\0', 2));
+  EXPECT_EQ(3u, view8_with_null.find('c'));
+  EXPECT_EQ(kNotFound, view8_with_null.find('\0', 3));
+
+  StringView view16(u"abcde\u1234abcde");
+  ASSERT_FALSE(view16.Is8Bit());
+  EXPECT_EQ(0u, view16.find('a'));
+  EXPECT_EQ(2u, view16.find('c'));
+  EXPECT_EQ(5u, view16.find(UChar(0x1234)));
+  EXPECT_EQ(kNotFound, view16.find('z'));
+  EXPECT_EQ(6u, view16.find('a', 1));
+  EXPECT_EQ(kNotFound, view16.find(UChar(0x1234), 6));
+
+  StringView view16_with_null(base::span_from_cstring(u"asci\0i"));
+  ASSERT_FALSE(view16_with_null.Is8Bit());
+  EXPECT_EQ(4u, view16_with_null.find(UChar(0)));
+  EXPECT_EQ(4u, view16_with_null.find(UChar(0), 4));
+  EXPECT_EQ(5u, view16_with_null.find('i', 4));
+  EXPECT_EQ(kNotFound, view16_with_null.find(UChar(0), 5));
+}
+
 TEST(StringViewTest, Contains) {
   EXPECT_FALSE(StringView().contains(0));
   EXPECT_FALSE(StringView("").contains(0));
@@ -659,6 +705,142 @@ TEST(StringViewTest, Contains) {
   EXPECT_FALSE(StringView("ascii").contains(uchar::kBlackSquare));
   EXPECT_FALSE(StringView(u"ascii").contains(uchar::kBlackSquare));
   EXPECT_TRUE(StringView(u"ascii\u25A0").contains(uchar::kBlackSquare));
+}
+
+TEST(StringViewTest, StartsWith) {
+  EXPECT_TRUE(StringView().starts_with(""));
+  EXPECT_TRUE(StringView().starts_with(StringView()));
+  EXPECT_TRUE(StringView("").starts_with(""));
+  EXPECT_TRUE(StringView("").starts_with(StringView()));
+  EXPECT_TRUE(StringView("foo").starts_with("foo"));
+  EXPECT_FALSE(StringView("foo").starts_with("foobar"));
+  EXPECT_TRUE(StringView("foobar").starts_with("foo"));
+  EXPECT_TRUE(StringView(u"foo").starts_with("foo"));
+  EXPECT_TRUE(StringView("foobar").starts_with(u"foo"));
+  EXPECT_FALSE(StringView("foobar").starts_with(u"bar"));
+}
+
+TEST(StringViewTest, EndsWith) {
+  EXPECT_TRUE(StringView().ends_with(""));
+  EXPECT_TRUE(StringView().ends_with(StringView()));
+  EXPECT_TRUE(StringView("").ends_with(""));
+  EXPECT_TRUE(StringView("").ends_with(StringView()));
+  EXPECT_TRUE(StringView("foo").ends_with("foo"));
+  EXPECT_FALSE(StringView("foo").ends_with("barfoo"));
+  EXPECT_TRUE(StringView("foobar").ends_with("bar"));
+  EXPECT_TRUE(StringView(u"foo").ends_with("foo"));
+  EXPECT_TRUE(StringView("foobar").ends_with(u"bar"));
+  EXPECT_FALSE(StringView("foobar").ends_with(u"foo"));
+}
+
+TEST(StringViewTest, Substr) {
+  StringView view8("abc");
+  EXPECT_EQ(u"abc", view8.substr(0));
+  EXPECT_EQ("abc", view8.substr(0));
+  EXPECT_EQ("bc", view8.substr(1));
+  EXPECT_EQ("c", view8.substr(2));
+  EXPECT_EQ("", view8.substr(3));
+  EXPECT_EQ("", view8.substr(3, 1));
+  EXPECT_EQ("ab", view8.substr(0, 2));
+  EXPECT_EQ("abc", view8.substr(0, 3));
+  EXPECT_EQ("abc", view8.substr(0, 4));
+  EXPECT_EQ("b", view8.substr(1, 1));
+
+  StringView view16(u"abc");
+  EXPECT_EQ("abc", view16.substr(0));
+  EXPECT_EQ(u"abc", view16.substr(0));
+  EXPECT_EQ(u"bc", view16.substr(1));
+  EXPECT_EQ(u"c", view16.substr(2));
+  EXPECT_EQ(u"", view16.substr(3));
+  EXPECT_EQ(u"", view16.substr(3, 1));
+  EXPECT_EQ(u"ab", view16.substr(0, 2));
+  EXPECT_EQ(u"abc", view8.substr(0, 3));
+  EXPECT_EQ(u"abc", view8.substr(0, 4));
+  EXPECT_EQ(u"b", view16.substr(1, 1));
+}
+
+TEST(StringViewTest, RemovePrefix) {
+  auto apply_and_return = [](StringView view, wtf_size_t len) {
+    view.remove_prefix(len);
+    return view;
+  };
+  EXPECT_TRUE(apply_and_return(StringView(), 0).IsNull());
+  EXPECT_EQ("", apply_and_return(StringView(""), 0));
+
+  EXPECT_EQ("abc", apply_and_return(StringView("abc"), 0));
+  EXPECT_EQ("bc", apply_and_return(StringView("abc"), 1));
+  EXPECT_EQ("c", apply_and_return(StringView("abc"), 2));
+  EXPECT_EQ("", apply_and_return(StringView("abc"), 3));
+
+  EXPECT_EQ(u"abc", apply_and_return(StringView(u"abc"), 0));
+  EXPECT_EQ(u"bc", apply_and_return(StringView(u"abc"), 1));
+  EXPECT_EQ(u"c", apply_and_return(StringView(u"abc"), 2));
+  EXPECT_EQ(u"", apply_and_return(StringView(u"abc"), 3));
+}
+
+TEST(StringViewTest, RemoveSuffix) {
+  auto apply_and_return = [](StringView view, wtf_size_t len) {
+    view.remove_suffix(len);
+    return view;
+  };
+  EXPECT_TRUE(apply_and_return(StringView(), 0).IsNull());
+  EXPECT_EQ("", apply_and_return(StringView(""), 0));
+
+  EXPECT_EQ("abc", apply_and_return(StringView("abc"), 0));
+  EXPECT_EQ("ab", apply_and_return(StringView("abc"), 1));
+  EXPECT_EQ("a", apply_and_return(StringView("abc"), 2));
+  EXPECT_EQ("", apply_and_return(StringView("abc"), 3));
+
+  EXPECT_EQ(u"abc", apply_and_return(StringView(u"abc"), 0));
+  EXPECT_EQ(u"ab", apply_and_return(StringView(u"abc"), 1));
+  EXPECT_EQ(u"a", apply_and_return(StringView(u"abc"), 2));
+  EXPECT_EQ(u"", apply_and_return(StringView(u"abc"), 3));
+}
+
+TEST(StringViewTest, StripWhiteSpace) {
+  StringView expected("Hello  world");
+  EXPECT_EQ(expected, StringView("Hello  world").StripWhiteSpace());
+  EXPECT_EQ(expected, StringView("  Hello  world  ").StripWhiteSpace());
+  EXPECT_EQ(expected, StringView("\nHello  world\v  ").StripWhiteSpace());
+
+  EXPECT_EQ(StringView(), StringView().StripWhiteSpace());
+  EXPECT_EQ(StringView(""), StringView("").StripWhiteSpace());
+  EXPECT_EQ(StringView(""), StringView("\n").StripWhiteSpace());
+  EXPECT_EQ(StringView(""), StringView(u"\u3000").StripWhiteSpace());
+}
+
+TEST(StringViewTest, StripWhiteSpaceWithPredicate) {
+  StringView expected("Hello  world");
+  IsWhiteSpaceFunctionPtr p = IsASCIISpaceWHATWG;
+  EXPECT_EQ(expected, StringView("Hello  world").StripWhiteSpace(p));
+  EXPECT_EQ(expected, StringView("  Hello  world  ").StripWhiteSpace(p));
+  EXPECT_EQ("Hello  world\v",
+            StringView("\nHello  world\v  ").StripWhiteSpace(p));
+
+  EXPECT_EQ(StringView(), StringView().StripWhiteSpace(p));
+  EXPECT_EQ(StringView(""), StringView("").StripWhiteSpace(p));
+  EXPECT_EQ(StringView(""), StringView("\n").StripWhiteSpace(p));
+  EXPECT_EQ(StringView(u"\u3000"), StringView(u"\u3000").StripWhiteSpace(p));
+}
+
+TEST(StringViewTest, SplitByChar) {
+  auto result = StringView("").SplitSkippingEmpty(' ');
+  EXPECT_EQ(0u, result.size());
+
+  result = StringView("  foo  bar").SplitSkippingEmpty(' ');
+  EXPECT_EQ(2u, result.size());
+  EXPECT_EQ("foo", result[0]);
+  EXPECT_EQ("bar", result[1]);
+
+  result = StringView("").Split(',');
+  EXPECT_EQ(1u, result.size());
+  EXPECT_EQ("", result[0]);
+
+  result = StringView("foo,,bar").Split(',');
+  EXPECT_EQ(3u, result.size());
+  EXPECT_EQ("foo", result[0]);
+  EXPECT_EQ("", result[1]);
+  EXPECT_EQ("bar", result[2]);
 }
 
 }  // namespace blink

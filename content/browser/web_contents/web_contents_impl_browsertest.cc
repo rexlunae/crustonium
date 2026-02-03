@@ -13,7 +13,6 @@
 
 #include "base/allocator/partition_alloc_features.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -2747,7 +2746,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTestClientHintsEnabled,
   const std::string mobile_id = network::GetClientHintToNameMap().at(
       network::mojom::WebClientHintsType::kUAMobile);
   const net::test_server::HttpRequest& request = request_future.Get();
-  ASSERT_TRUE(base::Contains(request.headers, mobile_id));
+  ASSERT_TRUE(request.headers.contains(mobile_id));
   // "?!" corresponds to "mobile=true".
   EXPECT_EQ("?1", request.headers.at(mobile_id));
   ShellContentBrowserClient::Get()
@@ -3677,7 +3676,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest, SyncRendererPrefs) {
     DLOG(INFO) << "render_view_host=" << render_view_host;
 
     // Multiple frame hosts can be associated to the same RenderViewHost.
-    if (!base::Contains(render_view_hosts, render_view_host)) {
+    if (!std::ranges::contains(render_view_hosts, render_view_host)) {
       render_view_hosts.push_back(render_view_host);
     }
   }
@@ -4597,10 +4596,11 @@ IN_PROC_BROWSER_TEST_F(UnownedInnerWebContentsBrowserTest,
       inner_wc->GetPrimaryMainFrame()->GetParentOrOuterDocumentOrEmbedder());
   EXPECT_EQ(nullptr,
             inner_wc->GetPrimaryMainFrame()->GetParentOrOuterDocument());
-  EXPECT_TRUE(base::Contains(CollectAllRenderFrameHosts(outer_wc),
-                             inner_wc->GetPrimaryMainFrame()));
+  EXPECT_TRUE(std::ranges::contains(CollectAllRenderFrameHosts(outer_wc),
+                                    inner_wc->GetPrimaryMainFrame()));
 
-  EXPECT_TRUE(base::Contains(outer_wc->GetInnerWebContents(), inner_wc.get()));
+  EXPECT_TRUE(
+      std::ranges::contains(outer_wc->GetInnerWebContents(), inner_wc.get()));
 
   // Verify that the inner WebContents can navigate while attached.
   EXPECT_TRUE(NavigateToURL(inner_wc.get(), another_url));
@@ -4700,12 +4700,13 @@ IN_PROC_BROWSER_TEST_F(UnownedInnerWebContentsBrowserTest,
   // Verify that the connection is broken.
   EXPECT_EQ(nullptr, inner_wc->GetOuterWebContents());
   EXPECT_TRUE(inner_wc_impl->GetOuterDelegateFrameTreeNodeId().is_null());
-  EXPECT_FALSE(base::Contains(outer_wc->GetInnerWebContents(), inner_wc.get()));
+  EXPECT_FALSE(
+      std::ranges::contains(outer_wc->GetInnerWebContents(), inner_wc.get()));
   EXPECT_EQ(
       nullptr,
       inner_wc->GetPrimaryMainFrame()->GetParentOrOuterDocumentOrEmbedder());
-  EXPECT_FALSE(base::Contains(CollectAllRenderFrameHosts(outer_wc),
-                              inner_wc->GetPrimaryMainFrame()));
+  EXPECT_FALSE(std::ranges::contains(CollectAllRenderFrameHosts(outer_wc),
+                                     inner_wc->GetPrimaryMainFrame()));
   EXPECT_FALSE(iframe_rfh->frame_tree_node()->render_manager()
             ->is_attaching_inner_delegate());
 
@@ -5278,7 +5279,7 @@ IN_PROC_BROWSER_TEST_F(UnownedInnerWebContentsBrowserTest,
   set_prerender_target_web_contents(inner_wc.get());
   ASSERT_TRUE(NavigateToURL(inner_wc.get(), inner_url));
   // Add a prerender in inner WebContents.
-  FrameTreeNodeId prerender_host_id =
+  PrerenderHostId prerender_host_id =
       prerender_helper().AddPrerender(prerender_url);
 
   // Get the RenderFrameHosts in inner WebContents.
@@ -5612,8 +5613,9 @@ IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
 // frame and mouse up is on OOF iframe, the mouse up event is delivered to the
 // main frame as well to clear cached mouse states including autoscroll
 // selection state.
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
 // TODO(crbug.com/421826783): Re-enable this test
+// TODO(crbug.com/475802008): Re-enable this test
 #define MAYBE_MouseUpInOOPIframeShouldCancelMainFrameAutoscrollSelection \
   DISABLED_MouseUpInOOPIframeShouldCancelMainFrameAutoscrollSelection
 #else
@@ -7274,7 +7276,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsPrerenderBrowserTest,
 
   // Prerender a page that has a MIME type, text/plain.
   const GURL prerendering_url = embedded_test_server()->GetURL("/plain.txt");
-  FrameTreeNodeId host_id = prerender_helper().AddPrerender(prerendering_url);
+  PrerenderHostId host_id = prerender_helper().AddPrerender(prerendering_url);
 
   // Check MIME type for each page.
   EXPECT_EQ("text/html",
@@ -7309,7 +7311,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsPrerenderWithDiscardBrowserTest,
 
   // Prerender a page.
   const GURL prerendering_url = embedded_test_server()->GetURL("/plain.txt");
-  const FrameTreeNodeId host_id =
+  const PrerenderHostId host_id =
       prerender_helper().AddPrerender(prerendering_url);
   PrerenderHostRegistry* registry =
       static_cast<WebContentsImpl*>(web_contents())->GetPrerenderHostRegistry();

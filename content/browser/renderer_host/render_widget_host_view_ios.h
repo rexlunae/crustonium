@@ -124,6 +124,7 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
   void CopyFromSurface(
       const gfx::Rect& src_rect,
       const gfx::Size& dst_size,
+      base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
       override;
   ui::FilteredGestureProvider* GetFilteredGestureProviderForTesting() override;
@@ -222,6 +223,9 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
                                  const std::u16string& replacement_text);
   void ExecuteEditCommand(const std::string& command);
   void SendKeyEvent(const input::NativeWebKeyboardEvent& event);
+  void ForwardKeyboardEventWithCommands(
+      const input::NativeWebKeyboardEvent& key_event,
+      std::vector<blink::mojom::EditCommandPtr> commands);
 
   void StartAutoscrollForSelectionToPoint(const gfx::PointF& point);
   void StopAutoscroll();

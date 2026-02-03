@@ -86,6 +86,9 @@ Počakajte nekaj minut, preden se odjavite. Če se odjavite zdaj, bodo ti podatk
 <translation id="2767464022270041271">Ni shranjenih gesel. Googlov upravitelj gesel lahko preveri gesla, če jih shranite.</translation>
 <translation id="2788811701191021538">V Chromu odpre stran z nastavitvijo plačilnih sredstev.</translation>
 <translation id="2876628302275096482">Preberite več o tem, <ph name="BEGIN_LINK" />kako Chrome zagotavlja zasebnost vaših podatkov<ph name="END_LINK" /></translation>
+<translation id="288992067439702510">Dosegli ste omejitev Google Chroma za toliko zaznamkov: <ph name="LIMIT" />, zato nekateri zaznamki še niso bili shranjeni v računu Google.
+
+Novih zaznamkov ni mogoče shraniti v račun, dokler nekaterih ne izbrišete. Če se odjavite zdaj, bodo neshranjeni zaznamki izbrisani.</translation>
 <translation id="2922914028977213693">Dotaknite se tukaj, če želite kar najbolje izkoristiti Chrome v iPadu.</translation>
 <translation id="292371311537977079">Chromove nastavitve</translation>
 <translation id="2923827943290349720">Zaklepanje anonimnih zavihkov po zaprtju Chroma</translation>
@@ -304,11 +307,11 @@ Podatki so šifrirani z vašim geslom. Vnesite ga, če želite podatke iz Chroma
 <translation id="7787205077729386167">V sistemu iOS odprite nastavitve za Chrome, nato se dotaknite »Privzeti brskalnik« in izberite Chrome.</translation>
 <translation id="778855399387580014">Začnite iskanje na novem Chromovem zavihku.</translation>
 <translation id="7792140019572081272">Chrome zagotavlja varnost občutljivih podatkov s funkcijo Face ID.</translation>
+<translation id="7825648984449922731">Urejanje slike z Geminijem v Chromu</translation>
 <translation id="7855730255114109580">Google Chrome je posodobljen</translation>
 <translation id="787226752901403048">Prijavite se v Chrome, če želite deliti in se pridružiti skupinam zavihkov ter skupaj razvijati zamisli</translation>
 <translation id="7897703007638178753">Ogled nedavnih zavihkov v Chromu</translation>
 <translation id="7948283758957877064">Novosti v Chromu</translation>
-<translation id="7996707498590516621">Ustvarjanje slike z Geminijem v Chromu</translation>
 <translation id="8000174216052461231">Nasvet za Chrome: Prejmite Chromovo najmočnejšo varnost</translation>
 <translation id="8006014511203279255">Chrome lahko uporabljate, kadar koli se dotaknete povezav v sporočilih ali drugih aplikacijah.</translation>
 <translation id="8014670471808569312">Chrome bo ponudil shranjevanje gesla.</translation>

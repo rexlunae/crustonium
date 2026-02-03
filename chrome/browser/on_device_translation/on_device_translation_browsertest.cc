@@ -27,7 +27,6 @@
 #include "chrome/browser/component_updater/translate_kit_component_installer.h"
 #include "chrome/browser/on_device_translation/component_manager.h"
 #include "chrome/browser/on_device_translation/constants.h"
-#include "chrome/browser/on_device_translation/pref_names.h"
 #include "chrome/browser/on_device_translation/service_controller.h"
 #include "chrome/browser/on_device_translation/service_controller_manager.h"
 #include "chrome/browser/on_device_translation/test/test_util.h"
@@ -44,6 +43,7 @@
 #include "components/language/core/browser/pref_names.h"
 #include "components/on_device_translation/features.h"
 #include "components/on_device_translation/public/language_pack.h"
+#include "components/on_device_translation/public/pref_names.h"
 #include "components/on_device_translation/service/test/test_util.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/render_frame_host.h"
@@ -1083,12 +1083,12 @@ class OnDeviceTranslationProgressMonitorBrowserTest
   }
 
   void ExpectUpdatesAre(const std::vector<double>& expected_updates) {
-    base::Value::List actual_updates = EvalJs(R"((async () => {
+    base::ListValue actual_updates = EvalJs(R"((async () => {
                             await self.createTranslatorPromise;
                             return self.progressEvents;
                           })())")
-                                           .TakeValue()
-                                           .TakeList();
+                                         .TakeValue()
+                                         .TakeList();
 
     ASSERT_EQ(actual_updates.size(), expected_updates.size());
     for (size_t i = 0; i < actual_updates.size(); i++) {

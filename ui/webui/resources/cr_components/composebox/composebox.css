@@ -248,7 +248,7 @@ search-animated-glow {
 #input {
   background-color: inherit;
   border: none;
-  caret-color: var(--google-blue-500);
+  caret-color: var(--color-composebox-font-light);
   color: var(--color-composebox-font-light);
   field-sizing: content;
   mask-image: linear-gradient(transparent 7px, black calc(var(--text-input-top-spacing) + 7px));
@@ -258,7 +258,8 @@ search-animated-glow {
   resize: none;
 }
 
-#input:focus {
+:host(:not([disable-caret-color-animation])) #input:focus {
+  caret-color: var(--google-blue-500);
   animation: color-change 5s infinite;
 }
 
@@ -358,7 +359,7 @@ search-animated-glow {
   transition: var(--submit-enabled-transition);
 }
 
-:host([searchbox-layout-mode="Compact"]) {
+:host([searchbox-layout-mode='Compact']) {
   /* Used in search-animated-glow-element. */
   --search-animated-glow-drag-drop-placeholder-top: 16px;
   /* Changes both composebox and voice-search's: */
@@ -459,6 +460,18 @@ search-animated-glow {
   transition: var(--submit-enabled-transition);
 }
 
+#submitContainer:has(#submitIcon[disabled]) {
+  cursor: not-allowed;
+}
+
+#submitContainer:has(#submitIcon[disabled]):hover #submitOverlay {
+  background-color: transparent;
+}
+
+#submitContainer #submitIcon[disabled] {
+  opacity: 0.4;
+}
+
 #submitContainer:focus-visible {
   outline: none;
 }
@@ -520,26 +533,26 @@ search-animated-glow {
   margin-bottom: 10px;
 }
 
-:host([searchbox-layout-mode="Compact"])
+:host([searchbox-layout-mode='Compact'])
     contextual-entrypoint-and-carousel::part(context-menu-entrypoint-icon) {
   position: absolute;
   top: 10px;
 }
 
-:host([searchbox-next-enabled][searchbox-layout-mode^="Tall"][show-dropdown_]) {
+:host([searchbox-next-enabled][searchbox-layout-mode^='Tall'][show-dropdown_]) {
   --expanded-border-radius: var(--cr-composebox-expanded-border-radius, 24px);
 }
 
-:host([searchbox-next-enabled][searchbox-layout-mode="Compact"]) {
+:host([searchbox-next-enabled][searchbox-layout-mode='Compact']) {
   --expanded-border-radius: var(--cr-composebox-expanded-border-radius, 30px);
-  --input-bottom-spacing: 10px;
+  --input-bottom-spacing: 16px;
 }
 
-:host([searchbox-next-enabled][searchbox-layout-mode="Compact"]) #iconContainer {
+:host([searchbox-next-enabled][searchbox-layout-mode='Compact']) #iconContainer {
   display: none;
 }
 
-:host([searchbox-next-enabled][searchbox-layout-mode="Compact"]) #textContainer {
+:host([searchbox-next-enabled][searchbox-layout-mode='Compact']) #textContainer {
   --text-input-inline-start-spacing: 40px;
   padding-block: 6px 0;
 }
@@ -557,11 +570,11 @@ search-animated-glow {
   --cr-icon-button-icon-size: 12px;
 }
 
-:host([searchbox-next-enabled][searchbox-layout-mode="Compact"]) #context {
-  margin-top: -48px;
+:host([searchbox-next-enabled][searchbox-layout-mode='Compact']) #context {
+  margin-top: var(--cr-composebox-context-margin-top, -48px);
 }
 
-:host([expanding_][show-dropdown_][searchbox-next-enabled][searchbox-layout-mode="Compact"]) cr-composebox-dropdown {
+:host([expanding_][show-dropdown_][searchbox-next-enabled][searchbox-layout-mode='Compact']) cr-composebox-dropdown {
   padding-bottom: 0;
   padding-top: 8px;
 }
@@ -640,13 +653,13 @@ contextual-entrypoint-and-carousel::part(voice-icon) {
   position: relative;
 }
 
-:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact'][context-files-size_="0"]) #submitContainer {
+:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact'][context-files-size_='0']) #submitContainer {
   bottom: 0px;
   margin-inline-end: -2px;
   margin-top: 16px;
 }
 
-:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact']:not([context-files-size_="0"])) #submitContainer {
+:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact']:not([context-files-size_='0'])) #submitContainer {
   bottom: 14px;
 }
 
@@ -660,19 +673,19 @@ contextual-entrypoint-and-carousel::part(voice-icon) {
 }
 
 :host([show-submit_][submit-enabled_][searchbox-layout-mode='TallBottomContext'][show-dropdown_]) #submitContainer {
-  top: 58px;
+  top: var(--cr-composebox-submit-container-top, 58px);
 }
 
-:host([show-submit_][submit-enabled_][searchbox-layout-mode='TallBottomContext'][show-dropdown_][context-files-size_="0"]) contextual-entrypoint-and-carousel::part(carousel-divider) {
+:host([show-submit_][submit-enabled_][searchbox-layout-mode='TallBottomContext'][show-dropdown_][context-files-size_='0']) contextual-entrypoint-and-carousel::part(carousel-divider) {
   --contextual-entrypoint-and-carousel-carousel-divider-margin-top: 50px;
 }
 
-:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact'][show-dropdown_][context-files-size_="0"]) contextual-entrypoint-and-carousel::part(carousel-divider) {
+:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact'][show-dropdown_][context-files-size_='0']) contextual-entrypoint-and-carousel::part(carousel-divider) {
   --contextual-entrypoint-and-carousel-carousel-divider-margin-top: 12px;
 }
 
-:host([show-submit_][submit-enabled_][searchbox-layout-mode='TallBottomContext'][show-dropdown_]:not([context-files-size_="0"])) contextual-entrypoint-and-carousel::part(carousel-divider),
-:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact'][show-dropdown_]:not([context-files-size_="0"])) contextual-entrypoint-and-carousel::part(carousel-divider) {
+:host([show-submit_][submit-enabled_][searchbox-layout-mode='TallBottomContext'][show-dropdown_]:not([context-files-size_='0'])) contextual-entrypoint-and-carousel::part(carousel-divider),
+:host([show-submit_][submit-enabled_][searchbox-layout-mode='Compact'][show-dropdown_]:not([context-files-size_='0'])) contextual-entrypoint-and-carousel::part(carousel-divider) {
   --contextual-entrypoint-and-carousel-carousel-divider-margin-top: 8px;
 }
 
@@ -682,7 +695,7 @@ contextual-entrypoint-and-carousel::part(voice-icon) {
 
 :host([show-submit_][submit-enabled_][searchbox-layout-mode='TallBottomContext'][show-dropdown_]) contextual-entrypoint-and-carousel::part(voice-icon) {
   bottom: unset;
-  top: 60px;
+  top: var(--cr-composebox-voice-icon-top, 60px);
 }
 
 :host([searchbox-next-enabled]) contextual-entrypoint-and-carousel::part(context-menu-entrypoint-icon) {
@@ -691,7 +704,7 @@ contextual-entrypoint-and-carousel::part(voice-icon) {
   --cr-icon-button-size: 36px;
 }
 
-:host([searchbox-next-enabled][searchbox-layout-mode^="Tall"]) contextual-entrypoint-and-carousel::part(context-menu-entrypoint-icon) {
+:host([searchbox-next-enabled][searchbox-layout-mode^='Tall']) contextual-entrypoint-and-carousel::part(context-menu-entrypoint-icon) {
   --cr-icon-button-icon-size: 20px;
 }
 
@@ -723,7 +736,7 @@ cr-composebox-voice-search {
   @starting-style {
     opacity: 0;  /* Since hidden elements have no previous state. */
   }
-  transition: opacity 100ms ease-in-out, display 200ms allow-discrete;
+  transition: opacity 90ms ease-in-out, display 100ms allow-discrete;
   z-index: 2;
 }
 

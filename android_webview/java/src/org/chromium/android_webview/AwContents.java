@@ -162,6 +162,7 @@ import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -556,13 +557,13 @@ public class AwContents implements SmartClipProvider {
         }
     }
 
-    private static final class AwContentsDestroyRunnable implements Runnable {
+    private static final class AwContentsDestroyConsumer implements Consumer<Boolean> {
         private final long mNativeAwContents;
         // Hold onto a reference to the window (via its wrapper), so that it is not destroyed
         // until we are done here.
         private final WindowAndroidWrapper mWindowAndroid;
 
-        private AwContentsDestroyRunnable(
+        private AwContentsDestroyConsumer(
                 long nativeAwContents, WindowAndroidWrapper windowAndroid) {
             mNativeAwContents = nativeAwContents;
             mWindowAndroid = windowAndroid;
@@ -570,7 +571,10 @@ public class AwContents implements SmartClipProvider {
         }
 
         @Override
-        public void run() {
+        public void accept(Boolean isExplicitCleanup) {
+            if (!isExplicitCleanup) {
+                TraceEvent.instant("CleanupReference.garbageCollection.AwContents");
+            }
             AwContentsJni.get().destroy(mNativeAwContents);
             mWindowAndroid.decrementRefFromDestroyRunnable();
         }
@@ -1439,7 +1443,7 @@ public class AwContents implements SmartClipProvider {
         }
     }
 
-    // This class destroys the WindowAndroid when after it is gc-ed.
+    // This class destroys the WindowAndroid after it is gc-ed.
     private static class WindowAndroidWrapper {
         private final WindowAndroid mWindowAndroid;
         private final CleanupReference mCleanupReference;
@@ -1449,24 +1453,9 @@ public class AwContents implements SmartClipProvider {
         // if a Wrapper is created without any AwContents.
         private int mRefFromAwContentsDestroyRunnable;
 
-        private static final class DestroyRunnable implements Runnable {
-            private final WindowAndroid mWindowAndroid;
-
-            private DestroyRunnable(WindowAndroid windowAndroid) {
-                mWindowAndroid = windowAndroid;
-            }
-
-            @Override
-            public void run() {
-                mWindowAndroid.destroy();
-            }
-        }
-
         public WindowAndroidWrapper(WindowAndroid windowAndroid) {
-            try (DualTraceEvent e = DualTraceEvent.scoped("WindowAndroidWrapper.constructor")) {
-                mWindowAndroid = windowAndroid;
-                mCleanupReference = new CleanupReference(this, new DestroyRunnable(windowAndroid));
-            }
+            mWindowAndroid = windowAndroid;
+            mCleanupReference = new CleanupReference(this, (e) -> windowAndroid.destroy());
         }
 
         public WindowAndroid getWindowAndroid() {
@@ -1653,7 +1642,7 @@ public class AwContents implements SmartClipProvider {
         // bind all the native->java relationships.
         mCleanupReference =
                 new CleanupReference(
-                        this, new AwContentsDestroyRunnable(mNativeAwContents, mWindowAndroid));
+                        this, new AwContentsDestroyConsumer(mNativeAwContents, mWindowAndroid));
         if (textClassifier != null) setTextClassifier(textClassifier);
         if (mOnscreenContentProvider != null) {
             mOnscreenContentProvider.onWebContentsChanged(mWebContents);
@@ -3111,7 +3100,8 @@ public class AwContents implements SmartClipProvider {
                                 mNativeAwContents,
                                 new WebMessageListenerHolder(listener),
                                 jsObjectName,
-                                allowedOriginRules);
+                                allowedOriginRules,
+                                /* worldId= */ 0);
 
         if (!TextUtils.isEmpty(exceptionMessage)) {
             throw new IllegalArgumentException(exceptionMessage);
@@ -3127,7 +3117,8 @@ public class AwContents implements SmartClipProvider {
     public void removeWebMessageListener(@NonNull String jsObjectName) {
         if (TRACE) Log.i(TAG, "%s removeWebMessageListener=%s", this, jsObjectName);
         if (isDestroyed(WARN)) return;
-        AwContentsJni.get().removeWebMessageListener(mNativeAwContents, jsObjectName);
+        AwContentsJni.get()
+                .removeWebMessageListener(mNativeAwContents, jsObjectName, /* worldId= */ 0);
     }
 
     /**
@@ -5000,10 +4991,12 @@ public class AwContents implements SmartClipProvider {
         String addWebMessageListener(
                 long nativeAwContents,
                 WebMessageListenerHolder listener,
-                String jsObjectName,
-                String[] allowedOrigins);
+                @JniType("std::u16string") String jsObjectName,
+                @JniType("std::vector<std::string>") String[] allowedOrigins,
+                int worldId);
 
-        void removeWebMessageListener(long nativeAwContents, String jsObjectName);
+        void removeWebMessageListener(
+                long nativeAwContents, @JniType("std::u16string") String jsObjectName, int worldId);
 
         @JniType("std::vector")
         WebMessageListenerInfo[] getWebMessageListenerInfos(long nativeAwContents);

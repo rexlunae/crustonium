@@ -32,7 +32,7 @@ function createSearchMatch(modifiers: Partial<AutocompleteMatch> = {}):
       createAutocompleteMatch(), {
         isSearchType: true,
         contents: 'hello world',
-        destinationUrl: {url: 'https://www.google.com/search?q=hello+world'},
+        destinationUrl: 'https://www.google.com/search?q=hello+world',
         fillIntoEdit: 'hello world',
         type: 'search-suggest',
       },
@@ -68,6 +68,12 @@ class TestSearchboxBrowserProxy extends TestBrowserProxy {
 
   getCallbackRouter() {
     return this.callbackRouter;
+  }
+
+  initVisibilityPrefs() {
+    this.page.updateAimEligibility(true);
+    this.page.onShowAiModePrefChanged(true);
+    this.page.updateContentSharingPolicy(true);
   }
 }
 
@@ -147,10 +153,7 @@ suite('AppTest', function() {
 
       localApp = document.createElement('omnibox-popup-app');
       document.body.appendChild(localApp);
-      testProxy.page.updateAimEligibility(true);
-      await microtasksFinished();
-
-      testProxy.page.onShowAiModePrefChanged(true);
+      testProxy.initVisibilityPrefs();
       await microtasksFinished();
     });
 
@@ -230,11 +233,10 @@ suite('AppTest', function() {
         composeboxShowRecentTabChip: true,
         addTabUploadDelayOnRecentTabChipClick: true,
       });
-      testProxy.page.updateAimEligibility(true);
       const tabInfo = {
         tabId: 1,
         title: 'Tab 1',
-        url: {url: 'https://www.google.com/search?q=foo'},
+        url: 'https://www.google.com/search?q=foo',
         showInPreviousTabChip: true,
       };
       testProxy.handler.setResultFor(
@@ -242,9 +244,10 @@ suite('AppTest', function() {
       localApp.remove();
       localApp = document.createElement('omnibox-popup-app');
       document.body.appendChild(localApp);
+      testProxy.page.autocompleteResultChanged(createAutocompleteResult());
       await microtasksFinished();
 
-      testProxy.page.onShowAiModePrefChanged(true);
+      testProxy.initVisibilityPrefs();
       await microtasksFinished();
 
       const carousel = localApp.shadowRoot?.querySelector(
@@ -266,7 +269,7 @@ suite('AppTest', function() {
       localApp = document.createElement('omnibox-popup-app');
       document.body.appendChild(localApp);
 
-      testProxy.page.onShowAiModePrefChanged(true);
+      testProxy.initVisibilityPrefs();
       await microtasksFinished();
     });
 

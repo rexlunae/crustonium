@@ -6,8 +6,6 @@
 
 #import <optional>
 
-#import "base/feature_list.h"
-#import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/form_util/autofill_form_features_java_script_feature.h"
 #import "components/autofill/ios/form_util/form_activity_tab_helper.h"
 #import "ios/web/public/js_messaging/content_world.h"
@@ -45,10 +43,7 @@ ProgrammaticFormSubmissionHandlerJavaScriptFeature::
               FeatureScript::InjectionTime::kDocumentStart,
               FeatureScript::TargetFrames::kAllFrames,
               FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)},
-          {
-              web::java_script_features::GetCommonJavaScriptFeature(),
-              AutofillFormFeaturesJavaScriptFeature::GetInstance(),
-          }) {}
+          {AutofillFormFeaturesJavaScriptFeature::GetInstance()}) {}
 
 ProgrammaticFormSubmissionHandlerJavaScriptFeature::
     ~ProgrammaticFormSubmissionHandlerJavaScriptFeature() = default;
@@ -61,10 +56,6 @@ std::optional<std::string> ProgrammaticFormSubmissionHandlerJavaScriptFeature::
 void ProgrammaticFormSubmissionHandlerJavaScriptFeature::ScriptMessageReceived(
     web::WebState* web_state,
     const web::ScriptMessage& message) {
-  if (!base::FeatureList::IsEnabled(kAutofillIsolatedWorldForJavascriptIos)) {
-    return;
-  }
-
   // Delegate message handling to FormActivityTabHelper.
   FormActivityTabHelper* helper =
       FormActivityTabHelper::GetOrCreateForWebState(web_state);

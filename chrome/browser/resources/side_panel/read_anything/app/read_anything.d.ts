@@ -83,14 +83,20 @@ declare namespace chrome {
 
     // Enum values for line focus modes.
     let lineFocusOff: number;
-    let lineFocusOneLineWindow: number;
-    let lineFocusThreeLineWindow: number;
-    let lineFocusFiveLineWindow: number;
+    let lineFocusSmallStaticWindow: number;
+    let lineFocusMediumStaticWindow: number;
+    let lineFocusLargeStaticWindow: number;
+    let lineFocusSmallCursorWindow: number;
+    let lineFocusMediumCursorWindow: number;
+    let lineFocusLargeCursorWindow: number;
     let lineFocusStaticLine: number;
     let lineFocusCursorLine: number;
 
     // Whether the Immersive Read Anything feature flag is enabled.
     let isImmersiveEnabled: boolean;
+
+    // Whether Read Anything is pinned to the toolbar.
+    let isReadAnythingPinned: boolean;
 
     // Whether the Read Aloud feature flag is enabled.
     let isReadAloudEnabled: boolean;
@@ -134,6 +140,12 @@ declare namespace chrome {
 
     // Max number of characters to display in one line of Reading mode.
     let maxLineWidth: number;
+
+    // Distiled title from DOM distiller distillation.
+    let htmlTitle: string;
+
+    // Distiled html content from DOM distiller distillation.
+    let htmlContent: string;
 
     // Returns whether the reading highlight is currently on.
     function isHighlightOn(): boolean;
@@ -331,6 +343,12 @@ declare namespace chrome {
     // Called by the Read Anything app to close the Read Anything UI.
     function close(): void;
 
+    // Called by the ReadAnything app to toggle the pin state.
+    function togglePinState(): void;
+
+    // Called to get the pin state from the browser.
+    function sendPinStateRequest(): void;
+
     // Called by the Read Anything app to toggle between presentation modes.
     function togglePresentation(): void;
 
@@ -346,6 +364,8 @@ declare namespace chrome {
 
     // Sets the current presentation state.
     function onPresentationStateReceived(presentationState: number): void;
+
+    function onPinStateReceived(pinState: boolean): void;
 
     // Display the empty state page to tell the user we can't distill the page.
     function showEmpty(): void;

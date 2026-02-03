@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
@@ -689,7 +691,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, BackgroundIsOpaque) {
   // can't use subpixel rendering.
   OmniboxViewViews* view = BrowserView::GetBrowserViewForBrowser(browser())
                                ->toolbar()
-                               ->location_bar()
+                               ->location_bar_view()
                                ->omnibox_view();
   ASSERT_TRUE(view);
   EXPECT_FALSE(view->GetRenderText()->subpixel_rendering_suppressed());
@@ -1385,7 +1387,7 @@ IN_PROC_BROWSER_TEST_F(
   histograms.ExpectTotalCount(
       security_interstitials::omnibox_https_upgrades::kEventHistogram, 0);
   ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
-  EXPECT_TRUE(base::Contains(enumerator.urls(), url));
+  EXPECT_TRUE(std::ranges::contains(enumerator.urls(), url));
 
   // Now click the omnibox. This should trigger a zero suggest request with the
   // text "site-with-good-https.com" despite the omnibox URL being
@@ -1469,7 +1471,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsOnFocusZpsTest, ShowHatsSurvey) {
 
   auto* location_bar = BrowserView::GetBrowserViewForBrowser(browser())
                            ->toolbar()
-                           ->location_bar();
+                           ->location_bar_view();
 
   // After 5 focuses of the omnibox, the HaTS survey should show if the omnibox
   // isn't still focused after the survey delay.
@@ -1488,7 +1490,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsOnFocusZpsTest,
 
   auto* location_bar = BrowserView::GetBrowserViewForBrowser(browser())
                            ->toolbar()
-                           ->location_bar();
+                           ->location_bar_view();
 
   for (int i = 0; i < 4; i++) {
     location_bar->omnibox_view()->RequestFocus();
@@ -1774,8 +1776,10 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsAIMButtonPreferenceTest,
 class OmniboxViewViewsPlaceholderTest : public InProcessBrowserTest {
  public:
   OmniboxViewViewsPlaceholderTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        contextual_tasks::kContextualTasks);
+    scoped_feature_list_.InitWithFeatures(
+        {contextual_tasks::kContextualTasks,
+         contextual_tasks::kContextualTasksForceEntryPointEligibility},
+        {});
   }
 
  protected:

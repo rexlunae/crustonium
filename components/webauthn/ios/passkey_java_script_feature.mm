@@ -4,7 +4,7 @@
 
 #import "components/webauthn/ios/passkey_java_script_feature.h"
 
-#import "base/base64.h"
+#import "base/base64url.h"
 #import "base/no_destructor.h"
 #import "base/strings/strcat.h"
 #import "base/strings/sys_string_conversions.h"
@@ -35,8 +35,8 @@ constexpr char kScriptName[] = "passkey_controller";
 constexpr char kHandlerName[] = "PasskeyInteractionHandler";
 
 // Placeholder logic.
-constexpr char kHandleModalPasskeyRequestsPlaceholder[] =
-    "/*! {{PLACEHOLDER_HANDLE_MODAL_PASSKEY_REQUESTS}} */";
+constexpr char kHandlePasskeyRequestsPlaceholder[] =
+    "/*! {{PLACEHOLDER_HANDLE_PASSKEY_REQUESTS}} */";
 
 // Message event.
 constexpr char kEvent[] = "event";
@@ -59,24 +59,48 @@ constexpr char kIsGpm[] = "isGpm";
 // Returns the placeholder replacements for the JavaScript feature script.
 web::JavaScriptFeature::FeatureScript::PlaceholderReplacements
 GetPlaceholderReplacements() {
-  // Overrides the placeholder for whether modal passkey requests can be handled
-  // by the browser.
+  // Overrides the placeholder for whether modal and conditional passkey
+  // requests can be handled by the browser.
   bool handle_modal_passkey_requests =
       base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim);
-  std::u16string full_script_block = base::StrCat(
+  bool handle_conditional_passkey_requests =
+      base::FeatureList::IsEnabled(kIOSPasskeyConditionalLoginWithShim);
+  std::u16string handle_passkey_requests_script_block = base::StrCat(
       {u"const shouldHandleModalPasskeyRequests = () => { return ",
-       handle_modal_passkey_requests ? u"true;" : u"false;", u" };"});
+       handle_modal_passkey_requests ? u"true;" : u"false;", u" };\n\n",
+       u"const shouldHandleConditionalPasskeyRequests = () => { return ",
+       handle_conditional_passkey_requests ? u"true;" : u"false;", u" };"});
   return @{
-    base::SysUTF8ToNSString(kHandleModalPasskeyRequestsPlaceholder) :
-        base::SysUTF16ToNSString(full_script_block),
+    base::SysUTF8ToNSString(kHandlePasskeyRequestsPlaceholder) :
+        base::SysUTF16ToNSString(handle_passkey_requests_script_block),
   };
+}
+
+// Encodes a byte vector to base 64 URL encoded string.
+std::string Base64UrlEncode(base::span<const uint8_t> input) {
+  std::string output;
+  // Omit padding, according to the spec. See:
+  // https://w3c.github.io/webauthn/#base64url-encoding
+  base::Base64UrlEncode(input, base::Base64UrlEncodePolicy::OMIT_PADDING,
+                        &output);
+  return output;
+}
+
+// Encodes a string to a base 64 URL encoded string.
+std::string Base64UrlEncode(std::string_view input) {
+  std::string output;
+  // Omit padding, according to the spec. See:
+  // https://w3c.github.io/webauthn/#base64url-encoding
+  base::Base64UrlEncode(input, base::Base64UrlEncodePolicy::OMIT_PADDING,
+                        &output);
+  return output;
 }
 
 // Reads the type of log event received.
 // Returns std::nullopt on any non log event or invalid log event.
 std::optional<PasskeyTabHelper::WebAuthenticationIOSContentAreaEvent>
 ReadLogEventType(const std::string& event,
-                 const base::Value::Dict& dict,
+                 const base::DictValue& dict,
                  const PasskeyTabHelper& tab_helper) {
   if (event == kLogGetRequest) {
     return kGetRequested;
@@ -104,17 +128,27 @@ ReadLogEventType(const std::string& event,
   return std::nullopt;
 }
 
+bool ValidateFeatureUsage(const PasskeyRequestParams& request_params) {
+  if (request_params.IsConditional()) {
+    return base::FeatureList::IsEnabled(kIOSPasskeyConditionalLoginWithShim);
+  } else {
+    return base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim);
+  }
+}
+
 }  // namespace
 
 PasskeyJavaScriptFeature::AttestationData::AttestationData(
     std::vector<uint8_t> attestation_object,
     std::vector<uint8_t> authenticator_data,
     std::vector<uint8_t> public_key_spki_der,
-    std::string client_data_json)
+    std::string client_data_json,
+    passkey_model_utils::ExtensionOutputData extension_output_data)
     : attestation_object(std::move(attestation_object)),
       authenticator_data(std::move(authenticator_data)),
       public_key_spki_der(std::move(public_key_spki_der)),
-      client_data_json(std::move(client_data_json)) {}
+      client_data_json(std::move(client_data_json)),
+      extension_output_data(std::move(extension_output_data)) {}
 
 PasskeyJavaScriptFeature::AttestationData::AttestationData(
     PasskeyJavaScriptFeature::AttestationData&& other) = default;
@@ -124,11 +158,13 @@ PasskeyJavaScriptFeature::AssertionData::AssertionData(
     std::vector<uint8_t> signature,
     std::vector<uint8_t> authenticator_data,
     std::vector<uint8_t> user_handle,
-    std::string client_data_json)
+    std::string client_data_json,
+    passkey_model_utils::ExtensionOutputData extension_output_data)
     : signature(std::move(signature)),
       authenticator_data(std::move(authenticator_data)),
       user_handle(std::move(user_handle)),
-      client_data_json(std::move(client_data_json)) {}
+      client_data_json(std::move(client_data_json)),
+      extension_output_data(std::move(extension_output_data)) {}
 
 PasskeyJavaScriptFeature::AssertionData::AssertionData(
     PasskeyJavaScriptFeature::AssertionData&& other) = default;
@@ -152,15 +188,14 @@ PasskeyJavaScriptFeature::PasskeyJavaScriptFeature()
               // (https://w3c.github.io/webauthn/#sctn-permissions-policy).
               FeatureScript::TargetFrames::kAllFrames,
               FeatureScript::ReinjectionBehavior::kInjectOncePerWindow,
-              base::BindRepeating(&GetPlaceholderReplacements))},
-          {web::java_script_features::GetCommonJavaScriptFeature()}) {}
+              base::BindRepeating(&GetPlaceholderReplacements))}) {}
 
 PasskeyJavaScriptFeature::~PasskeyJavaScriptFeature() = default;
 
 void PasskeyJavaScriptFeature::DeferToRenderer(web::WebFrame* web_frame,
                                                std::string_view request_id) {
   CallJavaScriptFunction(web_frame, "passkey.deferToRenderer",
-                         base::Value::List().Append(request_id));
+                         base::ListValue().Append(request_id));
 }
 
 void PasskeyJavaScriptFeature::ResolveAttestationRequest(
@@ -170,13 +205,15 @@ void PasskeyJavaScriptFeature::ResolveAttestationRequest(
     AttestationData attestation_data) {
   CallJavaScriptFunction(
       web_frame, "passkey.resolveAttestationRequest",
-      base::Value::List()
+      base::ListValue()
           .Append(request_id)
-          .Append(base::Base64Encode(credential_id))
-          .Append(base::Base64Encode(attestation_data.attestation_object))
-          .Append(base::Base64Encode(attestation_data.authenticator_data))
-          .Append(base::Base64Encode(attestation_data.public_key_spki_der))
-          .Append(attestation_data.client_data_json));
+          .Append(Base64UrlEncode(credential_id))
+          .Append(Base64UrlEncode(attestation_data.attestation_object))
+          .Append(Base64UrlEncode(attestation_data.authenticator_data))
+          .Append(Base64UrlEncode(attestation_data.public_key_spki_der))
+          .Append(attestation_data.client_data_json)
+          .Append(ToAuthenticationExtensionsClientOutputsJSON(
+              std::move(attestation_data.extension_output_data))));
 }
 
 void PasskeyJavaScriptFeature::ResolveAssertionRequest(
@@ -186,13 +223,15 @@ void PasskeyJavaScriptFeature::ResolveAssertionRequest(
     AssertionData assertion_data) {
   CallJavaScriptFunction(
       web_frame, "passkey.resolveAssertionRequest",
-      base::Value::List()
+      base::ListValue()
           .Append(request_id)
-          .Append(base::Base64Encode(credential_id))
-          .Append(base::Base64Encode(assertion_data.authenticator_data))
+          .Append(Base64UrlEncode(credential_id))
+          .Append(Base64UrlEncode(assertion_data.signature))
+          .Append(Base64UrlEncode(assertion_data.authenticator_data))
+          .Append(Base64UrlEncode(assertion_data.user_handle))
           .Append(assertion_data.client_data_json)
-          .Append(base::Base64Encode(assertion_data.signature))
-          .Append(base::Base64Encode(assertion_data.user_handle)));
+          .Append(ToAuthenticationExtensionsClientOutputsJSON(
+              std::move(assertion_data.extension_output_data))));
 }
 
 std::optional<std::string>
@@ -225,7 +264,7 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  const base::Value::Dict& dict = body->GetDict();
+  const base::DictValue& dict = body->GetDict();
   const std::string* event = dict.FindString(kEvent);
   if (!event || event->empty()) {
     return;
@@ -243,7 +282,8 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  if (!base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim)) {
+  if (!base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim) &&
+      !base::FeatureList::IsEnabled(kIOSPasskeyConditionalLoginWithShim)) {
     // TODO(crbug.com/369629469): Log metrics for unexpected events.
     return;
   }
@@ -260,7 +300,14 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
     auto assertion_request_params =
         BuildAssertionRequestParams(std::move(*request_info), dict);
     if (!assertion_request_params.has_value()) {
-      // TODO(460485333): Call DeferToRenderer.
+      // TODO(460485333): Log the error.
+      passkey_tab_helper->DeferToRenderer(std::move(*request_info));
+      return;
+    }
+
+    if (!ValidateFeatureUsage(*assertion_request_params)) {
+      // TODO(460485333): Log the error.
+      passkey_tab_helper->DeferToRenderer(std::move(*request_info));
       return;
     }
 
@@ -273,7 +320,14 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
     auto registration_request_params =
         BuildRegistrationRequestParams(std::move(*request_info), dict);
     if (!registration_request_params.has_value()) {
-      // TODO(460485333): Call DeferToRenderer.
+      // TODO(460485333): Log the error.
+      passkey_tab_helper->DeferToRenderer(std::move(*request_info));
+      return;
+    }
+
+    if (!ValidateFeatureUsage(*registration_request_params)) {
+      // TODO(460485333): Log the error.
+      passkey_tab_helper->DeferToRenderer(std::move(*request_info));
       return;
     }
 

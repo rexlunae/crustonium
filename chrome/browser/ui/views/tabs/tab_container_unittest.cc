@@ -135,10 +135,7 @@ class FakeTabContainerController final : public TabContainerController {
     return tab_strip_controller_->IsBrowserClosing();
   }
 
-  bool CanExtendDragHandle() const override {
-    return !tab_strip_controller_->IsFrameCondensed() &&
-           !tab_strip_controller_->EverHasVisibleBackgroundTabShapes();
-  }
+  bool CanExtendDragHandle() const override { return true; }
 
   const views::View* GetTabClosingModeMouseWatcherHostView() const override {
     return nullptr;
@@ -383,7 +380,8 @@ class TabContainerTest : public ChromeViewsTestBase {
 
   void SetTabContainerWidth(int width) {
     tab_container_width_ = width;
-    gfx::Size size(tab_container_width_, GetLayoutConstant(TAB_STRIP_HEIGHT));
+    gfx::Size size(tab_container_width_,
+                   GetLayoutConstant(LayoutConstant::kTabStripHeight));
     drag_context_->SetSize(size);
     widget_->SetSize(size);
     tab_container_->SetSize(size);
@@ -393,7 +391,8 @@ class TabContainerTest : public ChromeViewsTestBase {
   // from Widget::SetSize.
   void SetTabContainerWidthSingleLayout(int width) {
     tab_container_width_ = width;
-    gfx::Size size(tab_container_width_, GetLayoutConstant(TAB_STRIP_HEIGHT));
+    gfx::Size size(tab_container_width_,
+                   GetLayoutConstant(LayoutConstant::kTabStripHeight));
     tab_container_->SetSize(size);
   }
 

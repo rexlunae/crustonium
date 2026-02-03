@@ -119,6 +119,7 @@
 #include "third_party/blink/renderer/core/scroll/scroll_into_view_util.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/timing/event_timing.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition.h"
@@ -199,7 +200,6 @@ void PaintLayerScrollableArea::DisposeImpl() {
   for (ScrollMarkerGroupData* scroll_marker_group :
        scroll_marker_group_data_set_) {
     scroll_marker_group->SetNeedsScrollersMapUpdate();
-    GetLayoutBox()->GetDocument().SetNeedsScrollTargetGroupsMapUpdate();
   }
   if (InResizeMode() && !GetLayoutBox()->DocumentBeingDestroyed()) {
     if (LocalFrame* frame = GetLayoutBox()->GetFrame())
@@ -1262,11 +1262,9 @@ void PaintLayerScrollableArea::ClampScrollOffsetAfterOverflowChangeInternal() {
     // marker is currently pinned.
     ScrollMarkerGroupPseudoElement* group = GetScrollMarkerGroup();
     bool targeted_scroll = group && group->SelectedMarkerIsPinned();
-    ScrollableArea::SetScrollOffset(GetScrollOffset(),
-                                    mojom::blink::ScrollType::kClamping,
-                                    cc::ScrollSourceType::kStationaryScroll,
-                                    mojom::blink::ScrollBehavior::kInstant,
-                                    ScrollCallback(), targeted_scroll);
+    SetScrollOffset(GetScrollOffset(), mojom::blink::ScrollType::kClamping,
+                    cc::ScrollSourceType::kStationaryScroll,
+                    mojom::blink::ScrollBehavior::kInstant, targeted_scroll);
   }
 
   SetNeedsScrollOffsetClamp(false);
@@ -2297,12 +2295,6 @@ bool PaintLayerScrollableArea::HitTestOverflowControls(
   }
 
   if (scroll_corner_ && ScrollCornerRect().Contains(local_point)) {
-    if (GetLayoutBox() && GetLayoutBox()->GetFrame()) {
-      base::debug::CrashKeyString* crash_key =
-          GetLayoutBox()->GetFrame()->GetEventHandler().CrashKeyForBug1519197();
-      base::debug::SetCrashKeyString(crash_key,
-                                     GetLayoutBox()->DebugName().Utf8());
-    }
     result.SetIsOverScrollCorner(true);
     return true;
   }
@@ -2401,12 +2393,18 @@ void PaintLayerScrollableArea::EnqueueForSnapUpdateIfNeeded() {
     return;
   }
 
-  // Enqueue ourselves for a snap update if we have any snap-areas, or if we
-  // currently have snap-data (and it needs to be cleared).
-  for (const auto& fragment : box->PhysicalFragments()) {
-    if (fragment.SnapAreas() || GetSnapContainerData()) {
-      box->GetFrameView()->AddPendingSnapUpdate(this);
-      break;
+  if (box->IsPseudo(kPseudoIdOverscrollAreaParent)) {
+    // ::-internal-overscroll-area-parent has implicit snap areas and should
+    // always be enqueued for pending snap updates.
+    box->GetFrameView()->AddPendingSnapUpdate(this);
+  } else {
+    // Enqueue ourselves for a snap update if we have any snap-areas, or if we
+    // currently have snap-data (and it needs to be cleared).
+    for (const auto& fragment : box->PhysicalFragments()) {
+      if (fragment.SnapAreas() || GetSnapContainerData()) {
+        box->GetFrameView()->AddPendingSnapUpdate(this);
+        break;
+      }
     }
   }
 }
@@ -2583,13 +2581,13 @@ PhysicalRect PaintLayerScrollableArea::ScrollIntoView(
   if (params->is_for_scroll_sequence) {
     mojom::blink::ScrollBehavior behavior = DetermineScrollBehavior(
         params->behavior, GetLayoutBox()->StyleRef().GetScrollBehavior());
-    SetScrollOffset(new_scroll_offset, params->type,
-                    cc::ScrollSourceType::kAbsoluteScroll, behavior,
-                    ScrollCallback(), true);
+    SetScrollOffsetInternal(new_scroll_offset, params->type,
+                            cc::ScrollSourceType::kAbsoluteScroll, behavior,
+                            true);
   } else {
-    SetScrollOffset(
-        new_scroll_offset, params->type, cc::ScrollSourceType::kAbsoluteScroll,
-        mojom::blink::ScrollBehavior::kInstant, ScrollCallback(), true);
+    SetScrollOffsetInternal(new_scroll_offset, params->type,
+                            cc::ScrollSourceType::kAbsoluteScroll,
+                            mojom::blink::ScrollBehavior::kInstant, true);
   }
   ScrollOffset scroll_offset_difference = new_scroll_offset - old_scroll_offset;
   // The container hasn't performed the scroll yet if it's for scroll sequence.

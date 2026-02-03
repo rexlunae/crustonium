@@ -247,7 +247,7 @@ class GlicActorWithActorDisabledUiTest : public test::InteractiveGlicTest {
 };
 
 IN_PROC_BROWSER_TEST_F(GlicActorWithActorDisabledUiTest, ActorNotAvailable) {
-  RunTestSequence(OpenGlicWindow(GlicWindowMode::kAttached),
+  RunTestSequence(DeprecatedOpenGlicWindow(GlicWindowMode::kAttached),
                   InAnyContext(CheckJsResult(
                       kGlicContentsElementId,
                       "() => { return !(client.browser.actInFocusedTab); }")));
@@ -363,7 +363,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorGeneralUiTest, WaitObserveTabFirstAction) {
   RunTestSequence(
       // Create a task without taking any actions so as not to add a tab to the
       // task's acting set.
-      OpenGlicWindow(GlicWindowMode::kAttached),
+      DeprecatedOpenGlicWindow(GlicWindowMode::kAttached),
       CreateTask(task_id_, ""),
 
       // Add two tabs to ensure the correct tab is being added to the
@@ -624,7 +624,8 @@ class GlicActorCallbackOrderGeneralUiTest : public GlicActorGeneralUiTest {
     feature_list_.InitWithFeaturesAndParameters(
         {
             {features::kGlicActor,
-             {{features::kGlicActorClickDelay.name, "60000ms"}}},
+             {{features::kGlicActorClickDelay.name, "60000ms"},
+              {features::kGlicActorPolicyControlExemption.name, "true"}}},
             {actor::kGlicPerformActionsReturnsBeforeStateChange, {}},
         },
         /*disabled_features=*/{});

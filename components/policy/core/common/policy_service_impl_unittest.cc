@@ -144,7 +144,8 @@ class PolicyServiceTest : public testing::Test {
     provider1_.Init();
     provider2_.Init();
 
-    UpdatePolicy0();
+    policy0_.Set("pre", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                 POLICY_SOURCE_ENTERPRISE_DEFAULT, base::Value(13), nullptr);
     provider0_.UpdateChromePolicy(policy0_);
 
     PolicyServiceImpl::Providers providers;
@@ -163,11 +164,6 @@ class PolicyServiceTest : public testing::Test {
     policy_service_ = std::make_unique<PolicyServiceImpl>(
         std::move(providers), PolicyServiceImpl::ScopeForMetrics::kUnspecified,
         std::move(migrators));
-  }
-
-  virtual void UpdatePolicy0() {
-    policy0_.Set("pre", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                 POLICY_SOURCE_ENTERPRISE_DEFAULT, base::Value(13), nullptr);
   }
 
   void TearDown() override {
@@ -1201,138 +1197,6 @@ TEST_F(PolicyServiceTest, InitializationThrottledProvidersAlreadyInitialized) {
   policy_service_->RemoveObserver(POLICY_DOMAIN_EXTENSION_INSTALL, &observer);
 }
 
-class PolicyServiceStartupTest : public PolicyServiceTest {
- public:
-  void UpdatePolicy0() override {
-    PolicyServiceTest::UpdatePolicy0();
-    policy0_.Set(policy::key::kComponentUpdatesEnabled, POLICY_LEVEL_MANDATORY,
-                 POLICY_SCOPE_USER, POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                 base::Value(true), nullptr);
-    policy0_.Set(policy::key::kAutofillAddressEnabled, POLICY_LEVEL_MANDATORY,
-                 POLICY_SCOPE_USER, POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                 base::Value(true), nullptr);
-  }
-};
-
-TEST_F(PolicyServiceStartupTest, StartupPolicyMap_Initialized) {
-  // The `policy_service_` from the fixture is fully initialized, and should
-  // have snapshotted the startup policies.
-
-  PolicyMap expected_startup_policies;
-  expected_startup_policies.Set(
-      "pre", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-      POLICY_SOURCE_ENTERPRISE_DEFAULT, base::Value(13), nullptr);
-  expected_startup_policies.Set("migrated", POLICY_LEVEL_MANDATORY,
-                                POLICY_SCOPE_USER, POLICY_SOURCE_PLATFORM,
-                                base::Value(15), nullptr);
-  expected_startup_policies.Set(policy::key::kComponentUpdatesEnabled,
-                                POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                                POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                                base::Value(true), nullptr);
-  expected_startup_policies.Set(policy::key::kAutofillAddressEnabled,
-                                POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                                POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                                base::Value(true), nullptr);
-
-  auto expected_startup_policies_hash =
-      PolicyServiceImpl::CopyPoliciesStartupHash(expected_startup_policies);
-  for (const auto& [policy_name, hash] : expected_startup_policies_hash) {
-    EXPECT_EQ(hash,
-              policy_service_->GetInitialChromePolicyValueHash(policy_name));
-  }
-  EXPECT_FALSE(
-      policy_service_->GetInitialChromePolicyValueHash("non-existing"));
-
-  // A new policy update shouldn't change the startup policies.
-  policy1_.Set("aaa", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-               POLICY_SOURCE_CLOUD, base::Value(123), nullptr);
-  provider1_.UpdateChromePolicy(policy1_);
-  RunUntilIdle();
-  for (const auto& [policy_name, hash] : expected_startup_policies_hash) {
-    EXPECT_EQ(hash,
-              policy_service_->GetInitialChromePolicyValueHash(policy_name));
-  }
-  EXPECT_FALSE(policy_service_->GetInitialChromePolicyValueHash("aaa"));
-
-  PolicyMap expected_current_policies = expected_startup_policies.Clone();
-  expected_current_policies.MergeFrom(policy1_);
-  EXPECT_TRUE(
-      policy_service_->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME, ""))
-          .Equals(expected_current_policies));
-}
-
-TEST_F(PolicyServiceStartupTest, StartupPolicyMap_Throttled) {
-  // `policy_service_` from the test fixture is initialized. Destroy it and
-  // set up a new one with throttled initialization, to test the startup
-  // policy map logic.
-  policy_service_.reset();
-
-  // The providers are already initialized by the test fixture's SetUp().
-  PolicyServiceImpl::Providers providers;
-  providers.push_back(&provider0_);
-  providers.push_back(&provider1_);
-  providers.push_back(&provider2_);
-
-  // Create a migrator, similar to the one in SetUp().
-  auto migrator = std::make_unique<MockPolicyMigrator>();
-  EXPECT_CALL(*migrator, Migrate(_)).WillRepeatedly([](PolicyBundle* bundle) {
-    bundle->Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
-        .Set("migrated", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-             POLICY_SOURCE_PLATFORM, base::Value(15), nullptr);
-  });
-  PolicyServiceImpl::Migrators migrators;
-  migrators.push_back(std::move(migrator));
-
-  policy_service_ = PolicyServiceImpl::CreateWithThrottledInitialization(
-      std::move(providers), PolicyServiceImpl::ScopeForMetrics::kUser,
-      std::move(migrators));
-  EXPECT_FALSE(policy_service_->GetInitialChromePolicyValueHash("pre"));
-  EXPECT_FALSE(policy_service_->IsInitializationComplete(POLICY_DOMAIN_CHROME));
-
-  // The policy from provider0_ is already available from the fixture's SetUp(),
-  // which is "pre". The migrator will add "migrated".
-  PolicyMap expected_startup_policies = policy0_.Clone();
-  expected_startup_policies.Set("migrated", POLICY_LEVEL_MANDATORY,
-                                POLICY_SCOPE_USER, POLICY_SOURCE_PLATFORM,
-                                base::Value(15), nullptr);
-
-  // Unthrottle. The policies from the providers should be loaded and
-  // snapshotted.
-  policy_service_->UnthrottleInitialization();
-  RunUntilIdle();
-
-  // The startup policy map is now available.
-  auto expected_startup_policies_hash =
-      PolicyServiceImpl::CopyPoliciesStartupHash(expected_startup_policies);
-  for (const auto& [policy_name, hash] : expected_startup_policies_hash) {
-    EXPECT_EQ(hash,
-              policy_service_->GetInitialChromePolicyValueHash(policy_name));
-  }
-  // The current policies should be the same.
-  EXPECT_TRUE(
-      policy_service_->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME, ""))
-          .Equals(expected_startup_policies));
-
-  // A new policy update shouldn't change the startup policies.
-  PolicyMap new_policy;
-  new_policy.Set("aaa", POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                 POLICY_SOURCE_CLOUD, base::Value(123), nullptr);
-  provider1_.UpdateChromePolicy(new_policy);
-  RunUntilIdle();
-  for (const auto& [policy_name, hash] : expected_startup_policies_hash) {
-    EXPECT_EQ(hash,
-              policy_service_->GetInitialChromePolicyValueHash(policy_name));
-  }
-  EXPECT_FALSE(policy_service_->GetInitialChromePolicyValueHash("aaa"));
-
-  // But the current policies should have changed.
-  PolicyMap expected_current_policies = expected_startup_policies.Clone();
-  expected_current_policies.MergeFrom(new_policy);
-  EXPECT_TRUE(
-      policy_service_->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME, ""))
-          .Equals(expected_current_policies));
-}
-
 TEST_F(PolicyServiceTest, IsFirstPolicyLoadComplete) {
   // |provider0_| has all domains initialized.
   Mock::VerifyAndClearExpectations(&provider1_);
@@ -1483,18 +1347,18 @@ TEST_F(PolicyServiceTest, IsFirstPolicyLoadComplete) {
 TEST_F(PolicyServiceTest, DictionaryPoliciesMerging) {
   const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
 
-  base::Value::Dict dict1;
+  base::DictValue dict1;
   dict1.Set(kUrl3, false);
   dict1.Set(kUrl2, true);
-  base::Value::Dict dict2;
+  base::DictValue dict2;
   dict2.Set(kUrl1, true);
   dict2.Set(kUrl2, false);
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kUrl1, true);
   result.Set(kUrl2, true);
   result.Set(kUrl3, false);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(key::kExtensionSettings);
 
   std::vector<std::pair<std::string, base::Value>> policies_1;
@@ -1541,12 +1405,12 @@ TEST_F(PolicyServiceTest, DictionaryPoliciesMerging) {
 TEST_F(PolicyServiceTest, DictionaryPoliciesMerging_InvalidType) {
   const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
 
-  base::Value::Dict dict_value;
+  base::DictValue dict_value;
   dict_value.Set(kUrl1, true);
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kUrl1, true);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kExtensionSettings);
 
   // policy_bundle_1 is treated as a machine platform bundle.
@@ -1604,22 +1468,22 @@ TEST_F(PolicyServiceTest, DictionaryPoliciesMerging_PrecedenceChange) {
   ids.insert(kAffiliationId1);
 
   // Initialize dictionaries of URLs used for ExtensionSettings policy values.
-  base::Value::Dict dict1;
+  base::DictValue dict1;
   dict1.Set(kUrl2, true);
   dict1.Set(kUrl3, false);
-  base::Value::Dict dict2;
+  base::DictValue dict2;
   dict2.Set(kUrl1, true);
   dict2.Set(kUrl2, false);
-  base::Value::Dict dict3;
+  base::DictValue dict3;
   dict3.Set(kUrl3, true);
   dict3.Set(kUrl4, false);
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kUrl1, true);
   result.Set(kUrl2, false);
   result.Set(kUrl3, true);
   result.Set(kUrl4, false);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(key::kExtensionSettings);
 
   // policy_bundle_1 is treated as a machine platform bundle. The metapolicies
@@ -1701,18 +1565,18 @@ TEST_F(PolicyServiceTest, DictionaryPoliciesMerging_PrecedenceChange) {
 TEST_F(PolicyServiceTest, ListsPoliciesMerging) {
   const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
 
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl3);
   list1.Append(kUrl2);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl1);
   list2.Append(kUrl2);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl3);
   result.Append(kUrl2);
   result.Append(kUrl1);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   std::vector<std::pair<std::string, base::Value>> policies_1;
@@ -1759,12 +1623,12 @@ TEST_F(PolicyServiceTest, ListsPoliciesMerging) {
 TEST_F(PolicyServiceTest, ListsPoliciesMerging_InvalidType) {
   const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
 
-  base::Value::List list_value;
+  base::ListValue list_value;
   list_value.Append(kUrl1);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl1);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a machine platform bundle.
@@ -1823,22 +1687,22 @@ TEST_F(PolicyServiceTest, ListsPoliciesMerging_CloudMetapolicy) {
   base::flat_set<std::string> ids;
   ids.insert(kAffiliationId1);
 
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl1);
   list1.Append(kUrl2);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl2);
   list2.Append(kUrl3);
-  base::Value::List list3;
+  base::ListValue list3;
   list2.Append(kUrl3);
   list2.Append(kUrl4);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl1);
   result.Append(kUrl2);
   result.Append(kUrl3);
   result.Append(kUrl4);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a machine platform bundle.
@@ -1912,17 +1776,17 @@ TEST_F(PolicyServiceTest, ListsPoliciesMerging_CloudMetapolicy) {
 TEST_F(PolicyServiceTest, GroupPoliciesMergingDisabledForCloudUsers) {
   const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
 
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl3);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl1);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl4);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl3);
   result.Append(kUrl1);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kExtensionInstallForcelist);
   policy.Append(policy::key::kExtensionInstallBlocklist);
 
@@ -1989,17 +1853,17 @@ TEST_F(PolicyServiceTest, GroupPoliciesMergingDisabledForCloudUsers) {
 TEST_F(PolicyServiceTest, GroupPoliciesMergingEnabled) {
   const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
 
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl3);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl1);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl4);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl3);
   result.Append(kUrl1);
 
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
   policy.Append(policy::key::kExtensionInstallBlocklist);
 
@@ -2075,23 +1939,23 @@ TEST_F(PolicyServiceTest, CloudUserListPolicyMerge_Successful) {
 
   // Initialize lists of URLs used for DefaultSearchProviderEncodings policy
   // values.
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl1);
   list1.Append(kUrl2);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl2);
   list2.Append(kUrl3);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl3);
   list3.Append(kUrl4);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl1);
   result.Append(kUrl2);
   result.Append(kUrl3);
   result.Append(kUrl4);
 
   // Populate separate policy bundles.
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a machine platform bundle. The metadata
@@ -2173,20 +2037,20 @@ TEST_F(PolicyServiceTest, CloudUserListPolicyMerge_Unaffiliated) {
 
   // Initialize lists of URLs used for DefaultSearchProviderEncodings policy
   // values.
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl1);
   list1.Append(kUrl2);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl3);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl4);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl1);
   result.Append(kUrl2);
   result.Append(kUrl3);
 
   // Populate separate policy bundles.
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a machine platform bundle. The metadata
@@ -2269,18 +2133,18 @@ TEST_F(PolicyServiceTest, CloudUserListPolicyMerge_FalsePolicy) {
 
   // Initialize lists of URLs used for DefaultSearchProviderEncodings policy
   // values.
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl1);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl2);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl3);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl1);
   result.Append(kUrl2);
 
   // Populate separate policy bundles.
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a machine platform bundle. The metadata
@@ -2361,18 +2225,18 @@ TEST_F(PolicyServiceTest, PlatformUserListPolicyMerge_Affiliated) {
 
   // Initialize lists of URLs used for DefaultSearchProviderEncodings policy
   // values.
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl1);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl2);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl3);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl2);
   result.Append(kUrl3);
 
   // Populate separate policy bundles.
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a user platform bundle. The metadata policies
@@ -2453,17 +2317,17 @@ TEST_F(PolicyServiceTest, PlatformUserListPolicyMerge_Unaffiliated) {
 
   // Initialize lists of URLs used for DefaultSearchProviderEncodings policy
   // values.
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(kUrl1);
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(kUrl2);
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(kUrl3);
-  base::Value::List result;
+  base::ListValue result;
   result.Append(kUrl1);
 
   // Populate separate policy bundles.
-  base::Value::List policy;
+  base::ListValue policy;
   policy.Append(policy::key::kDefaultSearchProviderEncodings);
 
   // policy_bundle_1 is treated as a machine platform bundle. The metadata

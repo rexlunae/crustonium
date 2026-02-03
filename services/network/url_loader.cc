@@ -106,9 +106,7 @@
 #include "services/network/public/cpp/parsed_headers.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/sri_message_signatures.h"
-#include "services/network/public/mojom/client_security_state.mojom-forward.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
-#include "services/network/public/mojom/cookie_access_observer.mojom-forward.h"
 #include "services/network/public/mojom/cookie_access_observer.mojom.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
@@ -180,13 +178,9 @@ bool ShouldNotifyAboutCookie(net::CookieInclusionStatus status) {
 }
 
 scoped_refptr<RefCountedDeviceBoundSessionAccessObserverRemote>
-MaybeInitializeDeviceBoundSessionAccessObserverSharedRemote(
-    ObserverWrapper<mojom::DeviceBoundSessionAccessObserver>& observer,
+InitializeDeviceBoundSessionAccessObserverSharedRemote(
+    ObserverWrapper<mojom::DeviceBoundSessionAccessObserver> observer,
     URLLoaderContext& context) {
-  if (!base::FeatureList::IsEnabled(
-          features::kDeviceBoundSessionAccessObserverSharedRemote)) {
-    return nullptr;
-  }
   auto remote = observer.TakeRemote();
   if (remote) {
     return base::MakeRefCounted<
@@ -261,17 +255,6 @@ bool IncludesValidLoadField(const net::HttpResponseHeaders* headers) {
     return false;
   }
   return item->item.is_token() && item->item.GetString() == "load";
-}
-
-mojo::SharedRemote<mojom::DeviceBoundSessionAccessObserver> Clone(
-    mojom::DeviceBoundSessionAccessObserver& observer) {
-  TRACE_EVENT("loading", "CloneDeviceBoundSessionAccessObserver");
-  base::ScopedUmaHistogramTimer timer(
-      "NetworkService.URLLoader.CloneDeviceBoundSessionAccessObserver",
-      base::ScopedUmaHistogramTimer::ScopedHistogramTiming::kMicrosecondTimes);
-  mojo::SharedRemote<mojom::DeviceBoundSessionAccessObserver> new_observer;
-  observer.Clone(new_observer.BindNewPipeAndPassReceiver());
-  return new_observer;
 }
 
 int32_t PopulateOptions(int32_t initial_options,
@@ -411,10 +394,9 @@ URLLoader::URLLoader(
       trust_token_observer_(std::move(trust_token_observer)),
       url_loader_network_observer_(std::move(url_loader_network_observer)),
       devtools_observer_(std::move(devtools_observer)),
-      device_bound_session_observer_(std::move(device_bound_session_observer)),
       device_bound_session_observer_shared_remote_(
-          MaybeInitializeDeviceBoundSessionAccessObserverSharedRemote(
-              device_bound_session_observer_,
+          InitializeDeviceBoundSessionAccessObserverSharedRemote(
+              std::move(device_bound_session_observer),
               context)),
       shared_storage_request_helper_(
           std::make_unique<SharedStorageRequestHelper>(
@@ -474,6 +456,10 @@ URLLoader::URLLoader(
   receiver_.set_disconnect_handler(
       base::BindOnce(&URLLoader::OnMojoDisconnect, base::Unretained(this)));
 
+  url_request_ = url_request_context_->CreateRequest(
+      request.url, request.priority, this, traffic_annotation,
+      /*is_for_websockets=*/false, request.net_log_create_info);
+
   // If the request is to a URL that we can determine is an LNA request from
   // just the URL, then trigger the LNA prompt. We only trigger this for request
   // where GetAddressSpaceFromUrl() returns a value as those would also trigger
@@ -503,14 +489,29 @@ URLLoader::URLLoader(
         // the result.
         url_loader_network_observer_->OnLocalNetworkAccessPermissionRequired(
             mojom::TransportType::kDirect, *url_address_space,
-            base::BindOnce([](mojom::LocalNetworkAccessResult result) {}));
+            base::BindOnce(
+                [](const net::NetLogWithSource& net_log,
+                   const mojom::TransportType transport_type,
+                   const mojom::IPAddressSpace address_space,
+                   mojom::LocalNetworkAccessResult result) {
+                  net_log.AddEvent(
+                      net::NetLogEventType::
+                          LOCAL_NETWORK_ACCESS_PERMISSION_REQUESTED,
+                      [&] {
+                        return base::DictValue()
+                            .Set("address_space",
+                                 IPAddressSpaceToStringPiece(address_space))
+                            .Set("transport_type",
+                                 TransportTypeToStringPiece(transport_type))
+                            .Set("result",
+                                 LocalNetworkAccessResultToStringPiece(result));
+                      });
+                },
+                url_request_->net_log(), mojom::TransportType::kDirect,
+                *url_address_space));
       }
     }
   }
-
-  url_request_ = url_request_context_->CreateRequest(
-      request.url, request.priority, this, traffic_annotation,
-      /*is_for_websockets=*/false, request.net_log_create_info);
 
   TRACE_EVENT("loading", "URLLoader::URLLoader",
               net::NetLogWithSourceToFlow(url_request_->net_log()));
@@ -586,14 +587,6 @@ void URLLoader::SetUpUrlRequestCallbacks(
           shared_remote.get()->data->OnDeviceBoundSessionAccessed(access);
         },
         device_bound_session_observer_shared_remote_));
-  } else if (device_bound_session_observer_) {
-    // This is just for the experiment to measure the impact on the
-    // DeviceBoundSessionAccessObserverSharedRemote feature.
-    // TODO(crbug.com/407680127): Remove this and when the feature is enabled
-    // and the feature flag is removed.
-    url_request_->SetDeviceBoundSessionAccessCallback(base::BindRepeating(
-        &mojom::DeviceBoundSessionAccessObserver::OnDeviceBoundSessionAccessed,
-        Clone(*device_bound_session_observer_)));
   }
 }
 
@@ -620,9 +613,10 @@ void URLLoader::OpenFilesForUpload(const ResourceRequest& request) {
     return;
   }
   url_request_->LogBlockedBy("Opening Files");
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
   file_opener_for_upload_ = std::make_unique<FileOpenerForUpload>(
-      std::move(paths), url_request_->url(), factory_params_->process_id,
-      network_context_client_,
+      std::move(paths), url_request_->url(),
+      factory_params_->process_id.GetUnsafeValue(), network_context_client_,
       base::BindOnce(&URLLoader::SetUpUpload, base::Unretained(this), request));
   file_opener_for_upload_->Start();
 }
@@ -1836,7 +1830,8 @@ net::UploadProgress URLLoader::GetUploadProgress() const {
 }
 
 int32_t URLLoader::GetProcessId() const {
-  return factory_params_->process_id;
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
+  return factory_params_->process_id.GetUnsafeValue();
 }
 
 uint32_t URLLoader::GetResourceType() const {
@@ -2220,9 +2215,22 @@ void URLLoader::DispatchOnRawRequest(
     }
   }
 
+  std::vector<mojom::DeviceBoundSessionWithUsagePtr>
+      device_bound_session_usages;
+  device_bound_session_usages.reserve(
+      url_request_->device_bound_session_usage().size());
+  for (const auto& [session_key, usage] :
+       url_request_->device_bound_session_usage()) {
+    auto entry = mojom::DeviceBoundSessionWithUsage::New();
+    entry->session_key = session_key;
+    entry->usage = static_cast<network::mojom::DeviceBoundSessionUsage>(usage);
+    device_bound_session_usages.push_back(std::move(entry));
+  }
+
   devtools_observer_->OnRawRequest(
       devtools_request_id().value(), url_request_->maybe_sent_cookies(),
       std::move(headers), load_timing_info.request_start,
+      std::move(device_bound_session_usages),
       private_network_access_interceptor_.CloneClientSecurityState(),
       std::move(other_partition_info),
       std::move(applied_network_conditions_id));

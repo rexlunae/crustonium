@@ -13,6 +13,7 @@
 #import "ios/chrome/browser/intents/model/intents_donation_helper.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/net/model/crurl.h"
+#import "ios/chrome/browser/settings/ui_bundled/clear_browsing_data/public/features.h"
 #import "ios/chrome/browser/settings/ui_bundled/clear_browsing_data/public/quick_delete_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/clear_browsing_data/ui/quick_delete_mutator.h"
 #import "ios/chrome/browser/settings/ui_bundled/clear_browsing_data/ui/quick_delete_presentation_commands.h"
@@ -49,7 +50,11 @@ constexpr CGFloat kTrashIconContainerViewSize = 64;
 constexpr CGFloat kTrashIconContainerViewCornerRadius = 15;
 
 // Trash icon size that sits inside the entire view.
-constexpr CGFloat kTrashIconSize = 32;
+constexpr CGFloat kOldTrashIconSize = 32;
+
+// New trash icon size that sits inside the entire view when the feature flag
+// `kPasswordRemovalFromDeleteBrowsingData` is enabled.
+constexpr CGFloat kTrashIconSize = 24;
 
 // Top padding for the trash icon view.
 constexpr CGFloat kTrashIconContainerViewTopPadding = 33;
@@ -79,6 +84,12 @@ typedef NS_ENUM(NSInteger, ItemIdentifier) {
   ItemIdentifierBrowsingData,
 };
 
+// Returns the Trash icon size.
+CGFloat TrashIconSize() {
+  return IsPasswordRemovalFromDeleteBrowsingDataEnabled() ? kTrashIconSize
+                                                          : kOldTrashIconSize;
+}
+
 }  // namespace
 
 @interface QuickDeleteViewController () <
@@ -92,6 +103,8 @@ typedef NS_ENUM(NSInteger, ItemIdentifier) {
 
   browsing_data::TimePeriod _timeRange;
   NSString* _browsingDataSummary;
+  // TODO(crbug.com/463402932): Remove once
+  // `kPasswordRemovalFromDeleteBrowsingData` is enabled by default.
   BOOL _shouldShowFooter;
 
   BOOL _historySelected;
@@ -135,7 +148,10 @@ typedef NS_ENUM(NSInteger, ItemIdentifier) {
       l10n_util::GetNSString(IDS_IOS_DELETE_BROWSING_DATA_BUTTON);
   self.configuration.secondaryActionString =
       l10n_util::GetNSString(IDS_IOS_DELETE_BROWSING_DATA_CANCEL);
-  self.configuration.primaryButtonStyle = ChromeButtonStylePrimaryDestructive;
+  self.configuration.primaryButtonStyle =
+      IsPasswordRemovalFromDeleteBrowsingDataEnabled()
+          ? ChromeButtonStylePrimary
+          : ChromeButtonStylePrimaryDestructive;
 
   self.underTitleView = _tableView;
 
@@ -301,7 +317,8 @@ typedef NS_ENUM(NSInteger, ItemIdentifier) {
   if (_shouldShowFooter == shouldShowFooter) {
     return;
   }
-  _shouldShowFooter = shouldShowFooter;
+  _shouldShowFooter =
+      shouldShowFooter && !IsPasswordRemovalFromDeleteBrowsingDataEnabled();
   // Reload the footer section.
   __weak __typeof(self) weakSelf = self;
   NSDiffableDataSourceSnapshot<NSNumber*, NSNumber*>* snapshot =
@@ -362,6 +379,7 @@ typedef NS_ENUM(NSInteger, ItemIdentifier) {
 }
 
 - (void)setPasswordsSelection:(BOOL)selected {
+  CHECK(!IsPasswordRemovalFromDeleteBrowsingDataEnabled());
   _passwordsSelected = selected;
   [self updatePrimaryActionButtonEnabledStatus];
 }
@@ -650,7 +668,7 @@ typedef NS_ENUM(NSInteger, ItemIdentifier) {
   // Trash icon that inside the container with the red background.
   UIImageView* icon =
       [[UIImageView alloc] initWithImage:DefaultSymbolTemplateWithPointSize(
-                                             kTrashSymbol, kTrashIconSize)];
+                                             kTrashSymbol, TrashIconSize())];
   icon.clipsToBounds = YES;
   icon.translatesAutoresizingMaskIntoConstraints = NO;
   icon.tintColor = [UIColor colorNamed:kRedColor];

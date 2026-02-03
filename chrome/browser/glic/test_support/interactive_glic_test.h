@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_GLIC_TEST_SUPPORT_INTERACTIVE_GLIC_TEST_H_
 #define CHROME_BROWSER_GLIC_TEST_SUPPORT_INTERACTIVE_GLIC_TEST_H_
 
+#include <algorithm>
 #include <map>
 #include <sstream>
 #include <string_view>
@@ -138,7 +139,6 @@ class InteractiveGlicTestMixin : public T {
       : T(std::forward<Args>(args)...), glic_test_environment_(glic_config) {
     features_.InitWithFeaturesAndParameters(
         {{features::kGlic, glic_params},
-         {features::kTabstripComboButton, {}},
          {features::kGlicRollout, {}},
          {features::kGlicKeyboardShortcutNewBadge, {}},
 #if BUILDFLAG(IS_CHROMEOS)
@@ -368,13 +368,32 @@ class InteractiveGlicTestMixin : public T {
     Api::AddDescriptionPrefix(steps, "WaitForAndInstrumentGlic");
     return steps;
   }
+
+  // Activate one of the glic entrypoints.
+  // In single-instance, this will open floaty, in multi-instance it will open
+  // side panel.
+  auto OpenGlic(GlicInstrumentMode instrument_mode =
+                    GlicInstrumentMode::kHostAndContents) {
+    // NOTE: The use of "Api::" here is required because this is a template
+    // class with weakly-specified base class; it is not necessary in derived
+    // test classes.
+    auto steps =
+        Api::Steps(Api::Log("Opening glic window"), CheckGlicIsClosed(),
+                   // Technically, this toggles the window, but we've
+                   // already ensured that it's closed.
+                   ToggleGlicWindow(GlicWindowMode::kDetached),
+                   WaitForAndInstrumentGlic(instrument_mode));
+    Api::AddDescriptionPrefix(steps, "OpenGlicWindow");
+    return steps;
+  }
+
   // Activate one of the glic entrypoints.
   // If `instrument_glic_contents` is true both the host and contents will be
   // instrumented (see `WaitForAndInstrumentGlic()`) else only the host will be
   // instrumented (`WaitForAndInstrumentGlicHostOnly()`).
-  auto OpenGlicWindow(GlicWindowMode window_mode,
-                      GlicInstrumentMode instrument_mode =
-                          GlicInstrumentMode::kHostAndContents) {
+  auto DeprecatedOpenGlicWindow(GlicWindowMode window_mode,
+                                GlicInstrumentMode instrument_mode =
+                                    GlicInstrumentMode::kHostAndContents) {
     // NOTE: The use of "Api::" here is required because this is a template
     // class with weakly-specified base class; it is not necessary in derived
     // test classes.
@@ -473,7 +492,7 @@ class InteractiveGlicTestMixin : public T {
       Api::AddDescriptionPrefix(steps, "OpenGlicFloatingWindow");
       return steps;
     } else {
-      return OpenGlicWindow(GlicWindowMode::kDetached, instrument_mode);
+      return OpenGlic(instrument_mode);
     }
   }
 
@@ -520,9 +539,9 @@ class InteractiveGlicTestMixin : public T {
         if (!instance) {
           return;
         }
-        instance->CloseAllEmbeddersForTesting();
+        instance->CloseAllEmbedders();
       } else {
-        window_controller().Close();
+        window_controller().Close(CloseOptions());
       }
     });
   }
@@ -755,18 +774,6 @@ class InteractiveGlicTestMixin : public T {
         mode, "CheckControllerWidgetMode");
   }
 
-  auto CheckPointIsWithinDraggableArea(const gfx::Point& point,
-                                       bool expect_within_area) {
-    return Api::CheckResult(
-        [this, point]() {
-          return GetWindowControllerImpl()
-              .GetGlicViewForTesting()
-              ->IsPointWithinDraggableArea(point);
-        },
-        expect_within_area,
-        "CheckPointIsWithinDraggableArea_" + point.ToString());
-  }
-
   auto CheckIfAttachedToBrowser(Browser* new_browser) {
     return Api::CheckResult(
         [this] { return window_controller().attached_browser(); }, new_browser,
@@ -777,6 +784,13 @@ class InteractiveGlicTestMixin : public T {
     return Api::CheckResult(
         [this] { return browser()->tab_strip_model()->count(); },
         expected_count, "CheckTabCount");
+  }
+
+  // Opens a new incognito browser to keep the test process alive, then closes
+  // the main browser.
+  void CloseMainBrowserWithIncognitoKeepAlive() {
+    T::CreateIncognitoBrowser();
+    T::CloseBrowserAsynchronously(T::browser());
   }
 
   auto CheckPopupCount(int expected_count) {
@@ -798,10 +812,11 @@ class InteractiveGlicTestMixin : public T {
   auto CheckOcclusionTracked(bool expect_is_tracked) {
     return Api::CheckResult(
         [this]() {
-          return base::Contains(PictureInPictureWindowManager::GetInstance()
-                                    ->GetOcclusionTracker()
-                                    ->GetPictureInPictureWidgetsForTesting(),
-                                GetGlicWidget());
+          return std::ranges::contains(
+              PictureInPictureWindowManager::GetInstance()
+                  ->GetOcclusionTracker()
+                  ->GetPictureInPictureWidgetsForTesting(),
+              GetGlicWidget());
         },
         expect_is_tracked, "CheckOcclusionTracked");
   }

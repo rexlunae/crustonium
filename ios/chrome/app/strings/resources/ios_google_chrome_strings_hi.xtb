@@ -86,6 +86,9 @@
 <translation id="2767464022270041271">कोई भी पासवर्ड सेव नहीं किया गया है. पासवर्ड सेव होने पर ही, Google Password Manager आपके पासवर्ड की जांच कर सकता है.</translation>
 <translation id="2788811701191021538">इससे Chrome में, पेमेंट के तरीकों की सेटिंग वाला पेज खुलता है.</translation>
 <translation id="2876628302275096482"><ph name="BEGIN_LINK" />Chrome आपके डेटा को निजी कैसे रखता है<ph name="END_LINK" />, इसके बारे में ज़्यादा जानें</translation>
+<translation id="288992067439702510">आपने Google Chrome में <ph name="LIMIT" /> बुकमार्क सेव करने की सीमा पूरी कर ली है. इसलिए, कुछ बुकमार्क अब तक आपके Google खाते में सेव नहीं किए गए हैं.
+
+जब तक कुछ बुकमार्क नहीं मिटाए जाते, तब तक आपके खाते में नए बुकमार्क सेव नहीं किए जा सकते. अभी साइन आउट करने पर, सेव नहीं किए गए बुकमार्क मिट जाएंगे.</translation>
 <translation id="2922914028977213693">अपने iPad पर Chrome का भरपूर फ़ायदा पाने के लिए यहां टैप करें.</translation>
 <translation id="292371311537977079">Chrome की सेटिंग</translation>
 <translation id="2923827943290349720">Chrome बंद करने पर, गुप्त टैब लॉक करें</translation>
@@ -304,11 +307,11 @@ Chrome के अनुभव को बेहतर बनाने के ल�
 <translation id="7787205077729386167">iOS पर Chrome Settings खोलें. इसके बाद, "Default Browser App" पर टैप करें और Chrome चुनें.</translation>
 <translation id="778855399387580014">नए Chrome टैब में खोज शुरू करें.</translation>
 <translation id="7792140019572081272">Chrome, Face ID की मदद से आपकी संवेदनशील जानकारी को सुरक्षित रखता है.</translation>
+<translation id="7825648984449922731">Chrome में Gemini की मदद से इमेज में बदलाव करें</translation>
 <translation id="7855730255114109580">Google Chrome अप टू डेट है</translation>
 <translation id="787226752901403048">टैब ग्रुप शेयर करने और उनमें शामिल होने के लिए, Chrome में साइन इन करें और आइडिया पर मिलकर काम करें</translation>
 <translation id="7897703007638178753">Chrome में हाल ही के टैब देखें</translation>
 <translation id="7948283758957877064">Chrome में नया क्या है</translation>
-<translation id="7996707498590516621">Chrome में Gemini की मदद से इमेज जनरेट करें</translation>
 <translation id="8000174216052461231">Chrome की सलाह: Chrome की बेहतरीन सुरक्षा सुविधा पाएं</translation>
 <translation id="8006014511203279255">मैसेज या अन्य ऐप्लिकेशन में मिले लिंक पर टैप करने पर, Chrome का इस्तेमाल करें.</translation>
 <translation id="8014670471808569312">Chrome आपको पासवर्ड सेव करने का विकल्प देगा.</translation>

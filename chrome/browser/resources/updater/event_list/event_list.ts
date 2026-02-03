@@ -6,6 +6,7 @@ import './event_list_item.js';
 import './filter_bar.js';
 import './raw_event_details.js';
 import '//resources/cr_elements/cr_button/cr_button.js';
+import '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 
 import {assert} from '//resources/js/assert.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
@@ -13,8 +14,9 @@ import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
 
 import {deduplicateEvents, mergeEvents, parseEvents, UpdaterProcessMap} from '../event_history.js';
-import type {HistoryEvent, MergedHistoryEvent} from '../event_history.js';
+import type {HistoryEvent, MergedHistoryEvent, PolicySet} from '../event_history.js';
 import {loadTimeData} from '../i18n_setup.js';
+import {formatDateShort, formatRelativeDate} from '../tools.js';
 
 import {getCss} from './event_list.css.js';
 import {getHtml} from './event_list.html.js';
@@ -23,60 +25,48 @@ import {applyFilterSettings, createDefaultFilterSettings} from './filter_setting
 import type {FilterSettings} from './filter_settings.js';
 
 /**
+ * Returns the effective policy set for an event if one exists and should be
+ * presented.
+ */
+function getEffectivePolicySet(
+    processMap: UpdaterProcessMap, event: HistoryEvent|MergedHistoryEvent,
+    allEvents: Array<HistoryEvent|MergedHistoryEvent>): PolicySet|undefined {
+  return event.eventType === 'UPDATE' || event.eventType === 'INSTALL' ?
+      processMap.effectivePolicySet(event, allEvents) :
+      undefined;
+}
+
+/**
  * Maps a set of events to EventEntry objects, which have all of the necessary
  * information to render an event-list-item. All of the provided events must
  * have dates (via processMap).
  */
 function getEventEntries(
     processMap: UpdaterProcessMap|undefined,
-    events: Array<HistoryEvent|MergedHistoryEvent>): EventEntry[] {
+    filteredEvents: Array<HistoryEvent|MergedHistoryEvent>,
+    allEvents: Array<HistoryEvent|MergedHistoryEvent>): EventEntry[] {
   if (processMap === undefined) {
     return [];
   }
-  return events.map((event, index) => {
+  return filteredEvents.map(event => {
     const eventDate = processMap.eventDate(event);
     assert(eventDate !== undefined);
-    const nextEvent = events[index - 1];
-    const nextEventDate =
-        nextEvent ? processMap.eventDate(nextEvent) : undefined;
     return {
       event,
-      shouldShowBreak: index > 0 && nextEventDate !== undefined &&
-          nextEventDate.getTime() - eventDate.getTime() > 1000 * 60 * 60,
       eventDate,
-      formattedEventDate: eventDate.toLocaleString(),
-      formattedRelativeEventDate: getRelativeDate(eventDate),
+      formattedEventDate: formatDateShort(eventDate),
+      formattedRelativeEventDate: formatRelativeDate(eventDate),
+      policies: getEffectivePolicySet(processMap, event, allEvents),
     };
   });
 }
 
-function getRelativeDate(date: Date): string {
-  const now = new Date();
-  const diffInSeconds = (now.getTime() - date.getTime()) / 1000;
-  const rtf = new Intl.RelativeTimeFormat();
-
-  if (diffInSeconds < 60) {
-    return rtf.format(-Math.floor(diffInSeconds), 'second');
-  }
-  const diffInMinutes = diffInSeconds / 60;
-  if (diffInMinutes < 60) {
-    return rtf.format(-Math.floor(diffInMinutes), 'minute');
-  }
-  const diffInHours = diffInMinutes / 60;
-  if (diffInHours < 24) {
-    return rtf.format(-Math.floor(diffInHours), 'hour');
-  }
-  const diffInDays = diffInHours / 24;
-  return rtf.format(-Math.floor(diffInDays), 'day');
-}
-
-interface EventEntry {
+export interface EventEntry {
   event: HistoryEvent|MergedHistoryEvent;
-  // Whether a list break should be displayed before the entry.
-  shouldShowBreak: boolean;
   eventDate: Date;
   formattedEventDate: string;
   formattedRelativeEventDate: string;
+  policies: PolicySet|undefined;
 }
 
 export class EventListElement extends CrLitElement {
@@ -100,6 +90,7 @@ export class EventListElement extends CrLitElement {
       eventsWithParseErrorsLabel: {type: String},
       expandAllButtonLabel: {type: String},
       events: {type: Array},
+      scrollTarget: {type: Object},
     };
   }
 
@@ -110,6 +101,7 @@ export class EventListElement extends CrLitElement {
   protected accessor expandAllButtonLabel: string =
       loadTimeData.getString('expandAll');
   protected accessor events: EventEntry[] = [];
+  protected accessor scrollTarget: HTMLElement = document.documentElement;
 
   protected processMap: UpdaterProcessMap|undefined = undefined;
   protected eventsWithParseErrors: Array<Record<string, unknown>> = [];
@@ -171,7 +163,8 @@ export class EventListElement extends CrLitElement {
   updateEventEntries() {
     const filteredEvents = applyFilterSettings(
         this.processMap, this.sortedEventsWithDates, this.filterSettings);
-    this.events = getEventEntries(this.processMap, filteredEvents);
+    this.events = getEventEntries(
+        this.processMap, filteredEvents, this.sortedEventsWithDates);
   }
 
   protected onFiltersChanged() {
@@ -193,6 +186,12 @@ export class EventListElement extends CrLitElement {
   protected onEventItemExpandedChanged() {
     this.expandAllButtonLabel =
         loadTimeData.getString(this.anyExpanded ? 'collapseAll' : 'expandAll');
+  }
+
+  protected get numDisplayedEventsLabel(): string {
+    return loadTimeData.getStringF(
+        'displayedEventsCount', this.events.length,
+        this.sortedEventsWithDates.length);
   }
 }
 

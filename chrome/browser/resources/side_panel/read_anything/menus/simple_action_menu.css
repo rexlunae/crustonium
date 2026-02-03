@@ -58,3 +58,17 @@ cr-icon {
   margin: 0px 8px 0px 4px;
   width: var(--icon-size);
 }
+
+cr-action-menu::part(dialog) {
+  z-index: 9999;
+}
+
+cr-action-menu[non-modal]::part(dialog) {
+  border-radius: var(--cornerRadii-medium-small, 12px);
+}
+
+@media (forced-colors: active) {
+  .dropdown-item {
+    color: LinkText;
+  }
+}

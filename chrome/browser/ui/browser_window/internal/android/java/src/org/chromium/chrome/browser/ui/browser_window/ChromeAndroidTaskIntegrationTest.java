@@ -282,7 +282,10 @@ public class ChromeAndroidTaskIntegrationTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         firstChromeAndroidTask.addFeature(
-                                TestChromeAndroidTaskFeature.class, () -> testFeature));
+                                new ChromeAndroidTaskFeatureKey(
+                                        TestChromeAndroidTaskFeature.class,
+                                        webPageStation.getTab().getProfile()),
+                                () -> testFeature));
 
         // Act:
         // Open a new window. The first window will lose focus.
@@ -611,6 +614,24 @@ public class ChromeAndroidTaskIntegrationTest {
 
     @Test
     @MediumTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.R)
+    @Restriction(DeviceFormFactor.PHONE_OR_TABLET)
+    public void maximize_cannotSetBounds_noOp() {
+        // Arrange.
+        mFreshCtaTransitTestRule.startOnBlankPage();
+        var chromeAndroidTask =
+                getChromeAndroidTask(mFreshCtaTransitTestRule.getActivity().getTaskId());
+        assertNotNull(chromeAndroidTask);
+
+        // Act.
+        ThreadUtils.runOnUiThreadBlocking(chromeAndroidTask::maximize);
+
+        // Assert: the state should be IDLE as we can't change bounds.
+        assertEquals(ChromeAndroidTaskImpl.State.IDLE, chromeAndroidTask.getState());
+    }
+
+    @Test
+    @MediumTest
     public void minimize_moveTaskToBack() {
         // Arrange
         AsyncInitializationActivity.interceptMoveTaskToBackForTesting();
@@ -630,6 +651,57 @@ public class ChromeAndroidTaskIntegrationTest {
         // Assert
         CriteriaHelper.pollUiThread(
                 AsyncInitializationActivity::wasMoveTaskToBackInterceptedForTesting);
+    }
+
+    @Test
+    @MediumTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.R)
+    @Restriction(DeviceFormFactor.PHONE_OR_TABLET)
+    public void restore_afterMaximize_cannotSetBounds_noOp() {
+        // Arrange.
+        mFreshCtaTransitTestRule.startOnBlankPage();
+        var chromeAndroidTask =
+                getChromeAndroidTask(mFreshCtaTransitTestRule.getActivity().getTaskId());
+        assertNotNull(chromeAndroidTask);
+
+        // Act.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    chromeAndroidTask.maximize();
+                    chromeAndroidTask.restore();
+                });
+
+        // Assert: the state should be IDLE as we can't change bounds.
+        assertEquals(ChromeAndroidTaskImpl.State.IDLE, chromeAndroidTask.getState());
+    }
+
+    @Test
+    @MediumTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.R)
+    @Restriction(DeviceFormFactor.PHONE_OR_TABLET)
+    public void setBoundsInDp_cannotSetBounds_noOp() {
+        // Arrange.
+        mFreshCtaTransitTestRule.startOnBlankPage();
+        var chromeAndroidTask =
+                getChromeAndroidTask(mFreshCtaTransitTestRule.getActivity().getTaskId());
+        assertNotNull(chromeAndroidTask);
+        Rect currentBounds = ThreadUtils.runOnUiThreadBlocking(chromeAndroidTask::getBoundsInDp);
+
+        // Act.
+        Rect newBounds =
+                new Rect(
+                        currentBounds.left + 100,
+                        currentBounds.top + 100,
+                        currentBounds.right - 100,
+                        currentBounds.bottom - 100);
+        ThreadUtils.runOnUiThreadBlocking(() -> chromeAndroidTask.setBoundsInDp(newBounds));
+
+        // Assert:
+        // (1) The state should be IDLE as we can't change bounds.
+        // (2) getBoundsInDp() should return the unchanged bounds.
+        assertEquals(ChromeAndroidTaskImpl.State.IDLE, chromeAndroidTask.getState());
+        assertEquals(
+                currentBounds, ThreadUtils.runOnUiThreadBlocking(chromeAndroidTask::getBoundsInDp));
     }
 
     /**
@@ -855,7 +927,9 @@ public class ChromeAndroidTaskIntegrationTest {
                     Criteria.checkThat(
                             assumeNonNull(newActivity.getWindowAndroid()).isTopResumedActivity(),
                             Matchers.is(false));
-                });
+                },
+                /* maxTimeoutMs= */ 15_000L,
+                /* checkIntervalMs= */ 1000L);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     assertTrue(chromeAndroidTask.isMaximized());
@@ -1020,12 +1094,12 @@ public class ChromeAndroidTaskIntegrationTest {
         return intent;
     }
 
-    private @Nullable ChromeAndroidTask getChromeAndroidTask(int taskId) {
+    private @Nullable ChromeAndroidTaskImpl getChromeAndroidTask(int taskId) {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     var chromeAndroidTaskTracker =
                             assumeNonNull(ChromeAndroidTaskTrackerFactory.getInstance());
-                    return chromeAndroidTaskTracker.get(taskId);
+                    return (ChromeAndroidTaskImpl) chromeAndroidTaskTracker.get(taskId);
                 });
     }
 
@@ -1039,7 +1113,7 @@ public class ChromeAndroidTaskIntegrationTest {
         public void onAddedToTask() {}
 
         @Override
-        public void onTaskRemoved() {}
+        public void onFeatureRemoved() {}
 
         @Override
         public void onTaskBoundsChanged(Rect newBoundsInDp) {

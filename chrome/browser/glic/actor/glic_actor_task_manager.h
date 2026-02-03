@@ -13,15 +13,8 @@
 #include "chrome/common/actor_webui.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/tabs/public/tab_interface.h"
-
-#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/actor/tools/observation_delay_controller.h"
 #include "chrome/common/actor.mojom-forward.h"
-#else
-namespace actor::mojom {
-enum class ActionResultCode;
-}
-#endif
 
 class Profile;
 
@@ -46,6 +39,8 @@ class GlicActorTaskManager {
                   mojom::WebClientHandler::CreateTaskCallback callback);
   void PerformActions(const std::vector<uint8_t>& actions_proto,
                       mojom::WebClientHandler::PerformActionsCallback callback);
+  void CancelActions(actor::TaskId task_id,
+                     mojom::WebClientHandler::CancelActionsCallback callback);
   void StopActorTask(actor::TaskId task_id,
                      mojom::ActorTaskStopReason stop_reason);
   void PauseActorTask(actor::TaskId task_id,
@@ -71,7 +66,7 @@ class GlicActorTaskManager {
   base::WeakPtr<GlicActorTaskManager> GetWeakPtr();
 
  private:
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)  // NEEDS_ANDROID_IMPL
   void PerformActionsFinished(
       mojom::WebClientHandler::PerformActionsCallback callback,
       actor::TaskId task_id,

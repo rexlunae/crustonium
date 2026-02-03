@@ -53,7 +53,8 @@ import org.chromium.base.ValueChangedCallback;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -328,7 +329,7 @@ class TabListMediator implements TabListNotificationHandler {
     private final TabListModel mModelList;
     private final @TabListMode int mMode;
     private final @Nullable ModalDialogManager mModalDialogManager;
-    private final ObservableSupplier<@Nullable TabGroupModelFilter>
+    private final NullableObservableSupplier<TabGroupModelFilter>
             mCurrentTabGroupModelFilterSupplier;
     private final @Nullable ThumbnailProvider mThumbnailProvider;
     private final TabListFaviconProvider mTabListFaviconProvider;
@@ -1030,7 +1031,7 @@ class TabListMediator implements TabListNotificationHandler {
             TabListModel modelList,
             @TabListMode int mode,
             @Nullable ModalDialogManager modalDialogManager,
-            ObservableSupplier<@Nullable TabGroupModelFilter> tabGroupModelFilterSupplier,
+            NullableObservableSupplier<TabGroupModelFilter> tabGroupModelFilterSupplier,
             @Nullable ThumbnailProvider thumbnailProvider,
             TabListFaviconProvider tabListFaviconProvider,
             boolean actionOnRelatedTabs,
@@ -1046,7 +1047,8 @@ class TabListMediator implements TabListNotificationHandler {
             @Nullable UndoBarExplicitTrigger undoBarExplicitTrigger,
             @Nullable SnackbarManager snackbarManager,
             int allowedSelectionCount,
-            boolean isSingleContextMode) {
+            boolean isSingleContextMode,
+            Runnable onDragStateChangedListener) {
         mActivity = activity;
         mModelList = modelList;
         mMode = mode;
@@ -1423,7 +1425,8 @@ class TabListMediator implements TabListNotificationHandler {
                         mTabGridDialogHandler,
                         mComponentName,
                         mActionsOnAllRelatedTabs,
-                        mMode);
+                        mMode,
+                        onDragStateChangedListener);
     }
 
     private TabGroupModelFilter getCurrentFilterChecked() {
@@ -1752,6 +1755,7 @@ class TabListMediator implements TabListNotificationHandler {
             selectTab(mLastSelectedTabListModelIndex, index);
             mTabToAddDelayed = null;
         }
+        mTabGridItemTouchHelperCallback.clearCardState();
     }
 
     private boolean isSelectedTab(Tab tab, int tabModelSelectedTabId) {
@@ -2790,7 +2794,7 @@ class TabListMediator implements TabListNotificationHandler {
     }
 
     /** Provides the tab ID for the most recently swiped tab. */
-    ObservableSupplier<Integer> getRecentlySwipedTabSupplier() {
+    NonNullObservableSupplier<Integer> getRecentlySwipedTabSupplier() {
         return mTabGridItemTouchHelperCallback.getRecentlySwipedTabIdSupplier();
     }
 
@@ -3393,9 +3397,17 @@ class TabListMediator implements TabListNotificationHandler {
 
     private void showLimitSnackbar() {
         if (mSnackbarManager == null) return;
+
+        int limitCount = mIsSingleContextMode ? 1 : 10;
+        String message =
+                mActivity
+                        .getResources()
+                        .getQuantityString(
+                                R.plurals.tab_item_picker_limit_reached, limitCount, limitCount);
+
         Snackbar snackbar =
                 Snackbar.make(
-                        mActivity.getString(R.string.tab_item_picker_limit_reached),
+                        message,
                         null,
                         Snackbar.TYPE_NOTIFICATION,
                         Snackbar.UMA_TAB_PICKER_LIMIT_REACHED);

@@ -12,7 +12,7 @@
 #include "components/prefs/pref_registry.h"
 #include "components/prefs/pref_registry_simple.h"
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)  // NEEDS_ANDROID_IMPL
 #include "chrome/browser/glic/widget/local_hotkey_manager.h"
 #include "ui/base/accelerators/command.h"
 #endif
@@ -68,11 +68,15 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterListPref(prefs::kGlicActuationOnWebBlockedForURLs);
 
   registry->RegisterBooleanPref(prefs::kGlicUserEnabledActuationOnWeb, false);
+
+  registry->RegisterStringPref(prefs::kGlicGuestUrlPresetAutopush, "");
+  registry->RegisterStringPref(prefs::kGlicGuestUrlPresetPreprod, "");
+  registry->RegisterStringPref(prefs::kGlicGuestUrlPresetProd, "");
 }
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kGlicLauncherEnabled, false);
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)  // NEEDS_ANDROID_IMPL
   registry->RegisterStringPref(
       prefs::kGlicLauncherHotkey,
       ui::Command::AcceleratorToString(

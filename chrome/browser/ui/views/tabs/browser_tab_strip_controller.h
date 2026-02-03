@@ -22,8 +22,8 @@
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/menus/simple_menu_model.h"
 
-class Browser;
 class BrowserFrameView;
+class BrowserWindowInterface;
 class Tab;
 class TabGroup;
 
@@ -52,15 +52,12 @@ class BrowserTabStripController : public TabStripController,
   ~BrowserTabStripController() override;
 
   void InitFromModel(TabStrip* tabstrip);
-
-  TabStripModel* model() const { return model_; }
+  void Reset();
 
   // TabStripController implementation:
   ui::ListSelectionModel GetSelectionModel() const override;
 
   int GetCount() const override;
-  bool CanShowModalUI() const override;
-  std::unique_ptr<ScopedTabStripModalUI> ShowModalUI() override;
   bool IsValidIndex(int model_index) const override;
   bool IsActiveTab(int model_index) const override;
   std::optional<int> GetActiveIndex() const override;
@@ -93,7 +90,7 @@ class BrowserTabStripController : public TabStripController,
   int HasAvailableDragActions() const override;
   void OnDropIndexUpdate(std::optional<int> index, bool drop_before) override;
   void CreateNewTab(NewTabTypes context) override;
-  void OnStartedDragging(bool dragging_window) override;
+  void OnStartedDragging() override;
   void OnStoppedDragging() override;
   void OnKeyboardFocusedTabChanged(std::optional<int> index) override;
   std::u16string GetGroupTitle(
@@ -115,22 +112,11 @@ class BrowserTabStripController : public TabStripController,
       const tab_groups::TabGroupId& group) const override;
   gfx::Range ListTabsInGroup(
       const tab_groups::TabGroupId& group_id) const override;
-  bool IsFrameCondensed() const override;
-  bool HasVisibleBackgroundTabShapes() const override;
-  bool EverHasVisibleBackgroundTabShapes() const override;
-  bool CanDrawStrokes() const override;
-  SkColor GetFrameColor(BrowserFrameActiveState active_state) const override;
-  std::optional<int> GetCustomBackgroundId(
-      BrowserFrameActiveState active_state) const override;
   std::u16string GetAccessibleTabName(const Tab* tab) const override;
-  Profile* GetProfile() const override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
-  Browser* GetBrowser() override;
 #if BUILDFLAG(IS_CHROMEOS)
   bool IsLockedForOnTask() override;
 #endif
-
-  const Browser* browser() const { return browser_view_->browser(); }
 
   // Test-specific methods.
   void CloseContextMenuForTesting();
@@ -156,13 +142,10 @@ class BrowserTabStripController : public TabStripController,
                               std::optional<tab_groups::TabGroupId> new_group,
                               tabs::TabInterface* tab,
                               int index) override;
-  void OnTabNeedsAttentionChanged(int index, bool attention) override;
-  void OnTabGroupNeedsAttentionChanged(const tab_groups::TabGroupId& group,
-                                       bool attention) override;
   void OnSplitTabChanged(const SplitTabChange& change) override;
   void OnTabGroupFocusChanged(
-      std::optional<tab_groups::TabGroupId> new_group_id,
-      std::optional<tab_groups::TabGroupId> old_group_id) override;
+      std::optional<tab_groups::TabGroupId> new_focused_group_id,
+      std::optional<tab_groups::TabGroupId> old_focused_group_id) override;
 
   BrowserFrameView* GetFrameView();
   const BrowserFrameView* GetFrameView() const;
@@ -206,11 +189,7 @@ class BrowserTabStripController : public TabStripController,
   // tabs.
   std::unique_ptr<ImmersiveRevealedLock> immersive_reveal_lock_;
 
-  PrefChangeRegistrar local_state_registrar_;
-
   std::unique_ptr<TabMenuModelFactory> menu_model_factory_;
-
-  bool should_show_discard_indicator_ = true;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_BROWSER_TAB_STRIP_CONTROLLER_H_

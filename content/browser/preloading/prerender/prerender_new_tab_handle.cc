@@ -60,8 +60,9 @@ PrerenderNewTabHandle::PrerenderNewTabHandle(
 }
 
 PrerenderNewTabHandle::~PrerenderNewTabHandle() {
-  if (web_contents_)
+  if (web_contents_) {
     web_contents_->SetDelegate(nullptr);
+  }
 }
 
 PrerenderHostId PrerenderNewTabHandle::StartPrerendering(
@@ -85,8 +86,7 @@ PrerenderHostId PrerenderNewTabHandle::StartPrerendering(
   auto* preloading_attempt =
       static_cast<PreloadingAttemptImpl*>(preloading_data->AddPreloadingAttempt(
           creating_predictor, enacting_predictor, PreloadingType::kPrerender,
-          std::move(same_url_matcher),
-          triggered_primary_page_source_id));
+          std::move(same_url_matcher), triggered_primary_page_source_id));
   preloading_data->AddPreloadingPrediction(
       enacting_predictor, confidence,
       PreloadingData::GetSameURLMatcher(attributes_.prerendering_url),
@@ -105,12 +105,7 @@ PrerenderHostId PrerenderNewTabHandle::StartPrerendering(
 
 void PrerenderNewTabHandle::CancelPrerendering(
     const PrerenderCancellationReason& reason) {
-  if (!prerender_host_id_) {
-    return;
-  }
-  FrameTreeNodeId frame_tree_node_id =
-      PrerenderHost::GetFrameTreeNodeIdForId(prerender_host_id_);
-  GetPrerenderHostRegistry().CancelHost(frame_tree_node_id, reason);
+  GetPrerenderHostRegistry().CancelHost(prerender_host_id_, reason);
 }
 
 std::unique_ptr<WebContentsImpl>

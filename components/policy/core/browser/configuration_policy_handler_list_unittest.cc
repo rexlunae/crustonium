@@ -130,7 +130,7 @@ class ConfigurationPolicyHandlerListTest : public ::testing::Test {
   PolicyMap policies_;
   PoliciesSet deprecated_policies_;
   PoliciesSet future_policies_;
-  PolicyDetails details_{false, false, false, kProfile, 0, 0, {}};
+  PolicyDetails details_{false, false, kProfile, 0, 0, {}};
 
   std::unique_ptr<ConfigurationPolicyHandlerList> handler_list_;
 };
@@ -165,7 +165,7 @@ TEST_F(ConfigurationPolicyHandlerListTest, ApplySettingsWithFuturePolicy) {
 #endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
 
   // Whitelist a different policy.
-  base::Value::List enabled_future_policies;
+  base::ListValue enabled_future_policies;
   enabled_future_policies.Append(kPolicyName2);
   AddPolicy(key::kEnableExperimentalPolicies, /*is_cloud=*/true,
             base::Value(enabled_future_policies.Clone()));

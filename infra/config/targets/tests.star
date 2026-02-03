@@ -990,18 +990,6 @@ targets.tests.gtest_test(
 )
 
 targets.tests.gtest_test(
-    name = "cronet_tests",
-)
-
-targets.tests.gtest_test(
-    name = "cronet_tests_android",
-)
-
-targets.tests.gtest_test(
-    name = "cronet_unittests",
-)
-
-targets.tests.gtest_test(
     name = "cronet_unittests_android",
 )
 
@@ -1700,6 +1688,10 @@ targets.tests.isolated_script_test(
 
 targets.tests.isolated_script_test(
     name = "ios_net_unittests",
+)
+
+targets.tests.isolated_script_test(
+    name = "ios_swift_interop_xcuitests_module",
 )
 
 targets.tests.isolated_script_test(

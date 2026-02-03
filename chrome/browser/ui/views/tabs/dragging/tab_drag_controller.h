@@ -127,8 +127,7 @@ class TabDragController : public views::WidgetObserver,
   // Initializes TabDragController to drag the views in `dragging_views`
   // originating from `source_context`. `source_view` is the view that
   // initiated the drag and is either a Tab or a TabGroupHeader contained in
-  // `dragging_views`. `offset_from_first_dragged_view` is the distance of the
-  // mouse pointer from the origin of the first view in `dragging_views` and
+  // `dragging_views`.
   // `offset_from_source_view` the offset from `source_view`.
   // `initial_selection_model` is the selection model before the drag started
   // and is only non-empty if the original selection isn't the same as the
@@ -137,7 +136,6 @@ class TabDragController : public views::WidgetObserver,
   [[nodiscard]] Liveness Init(TabDragContext* source_context,
                               TabSlotView* source_view,
                               const std::vector<TabSlotView*>& dragging_views,
-                              const gfx::Point& offset_from_first_dragged_view,
                               const gfx::Point& offset_from_source_view,
                               ui::ListSelectionModel initial_selection_model,
                               ui::mojom::DragEventSource event_source);
@@ -218,6 +216,12 @@ class TabDragController : public views::WidgetObserver,
   //   kDraggingUsingSystemDnD state for the first time.
   void SetDragLoopDoneCallbackForTesting(base::OnceClosure callback);
 
+  // TabDragTarget::DragController
+  std::unique_ptr<tabs::TabModel> DetachTabAtForInsertion(
+      int drag_idx) override;
+  const DragSessionData& GetSessionData() const override;
+  const TabDragContext* GetAttachedContext() const override;
+
  private:
   friend class TabDragControllerTest;
 
@@ -283,11 +287,6 @@ class TabDragController : public views::WidgetObserver,
   void OnWidgetBoundsChanged(views::Widget* widget,
                              const gfx::Rect& new_bounds) override;
   void OnWidgetDestroyed(views::Widget* widget) override;
-
-  // TabDragTarget::DragController
-  std::unique_ptr<tabs::TabModel> DetachTabAtForInsertion(
-      int drag_idx) override;
-  const DragSessionData& GetSessionData() const override;
 
   // Forget the source tabstrip. It doesn't exist any more, so it doesn't
   // make sense to insert dragged tabs back into it if the drag is reverted.
@@ -532,6 +531,11 @@ class TabDragController : public views::WidgetObserver,
   // the logic for retaining previous active and anchor tabs for split.
   void UpdateSelectionModel(TabStripModel* tab_strip_model,
                             ui::ListSelectionModel selection_model);
+
+  void OnContextStartedDragging(const std::vector<TabSlotView*>& views);
+  void OnContextStoppedDragging();
+  void OnContextDraggedTabsDetached();
+  void UpdateBrowserViewsForDragEnd();
 
 #if defined(USE_AURA)
   // aura::client::DragDropClientObserver:

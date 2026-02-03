@@ -277,6 +277,7 @@ class TabContentsTest : public ChromeViewsTestBase {
 
     controller_ = new FakeBaseTabStripController;
     tab_strip_ = new TabStrip(std::unique_ptr<TabStripController>(controller_));
+    tab_strip_->Initialize();
     controller_->set_tab_strip(tab_strip_);
 
     // The tab strip must be added to the view hierarchy for it to create the
@@ -380,8 +381,8 @@ TEST_F(TabTest, HitTest) {
   int middle_x = tab->width() / 2;
   EXPECT_FALSE(tab->HitTestPoint(gfx::Point(middle_x, -1)));
 
-  int tab_starting_y =
-      GetLayoutConstant(TAB_STRIP_HEIGHT) - GetLayoutConstant(TAB_HEIGHT);
+  int tab_starting_y = GetLayoutConstant(LayoutConstant::kTabStripHeight) -
+                       GetLayoutConstant(LayoutConstant::kTabHeight);
 
   // Attempt to click on the top pixel of the tab. This should be part of the
   // hit target.
@@ -468,7 +469,7 @@ TEST_F(TabTest, LayoutAndVisibilityOfElements) {
                   ? TabStyle::Get()->GetMinimumActiveWidth(/*is_split=*/false)
                   : TabStyle::Get()->GetMinimumInactiveWidth();
         }
-        const int height = GetLayoutConstant(TAB_HEIGHT);
+        const int height = GetLayoutConstant(LayoutConstant::kTabHeight);
         for (; width >= min_width; --width) {
           SCOPED_TRACE(::testing::Message() << "width=" << width);
           tab->SetBounds(0, 0, width, height);  // Invokes layout.

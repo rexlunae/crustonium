@@ -22,6 +22,22 @@
   return [TestArgs readTestArgument:kOutputDirName];
 }
 
++ (NSString*)readModelQueryFromTestArgs {
+  return [TestArgs readTestArgument:kModelQuery];
+}
+
++ (NSString*)readMQLSLoggingTagFromTestArgs {
+  return [TestArgs readTestArgument:kMQLSLoggingTag];
+}
+
++ (BOOL)shouldUploadToMQLSFromTestArgs {
+  NSString* value = [TestArgs readTestArgument:kUploadToMQLS];
+  if (value == nil) {
+    return NO;
+  }
+  return YES;
+}
+
 #pragma mark - Helper
 + (NSString*)readTestArgument:(NSString*)argumentName {
   NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];

@@ -15,7 +15,6 @@
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "components/unexportable_keys/background_task_priority.h"
-#include "components/unexportable_keys/mojom/unexportable_key_service.mojom-data-view.h"
 #include "components/unexportable_keys/mojom/unexportable_key_service.mojom.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
@@ -62,15 +61,6 @@ ServiceErrorOr<mojom::NewKeyDataPtr> PopulateNewKeyData(
                    AdaptOperationNotSupported(
                        unexportable_key_service.GetCreationTime(key_id)));
   return new_key_data;
-}
-
-std::optional<ServiceError> AdaptErrorOrVoid(
-    const ServiceErrorOr<void> result) {
-  if (result.has_value()) {
-    return std::nullopt;
-  } else {
-    return result.error();
-  }
 }
 
 ServiceErrorOr<uint64_t> AdaptSizeType(ServiceErrorOr<size_t> result) {
@@ -129,13 +119,13 @@ void unexportable_keys::UnexportableKeyServiceProxyImpl::
       priority, std::move(callback));
 }
 
-void unexportable_keys::UnexportableKeyServiceProxyImpl::DeleteKey(
-    const UnexportableKeyId& key_id,
+void unexportable_keys::UnexportableKeyServiceProxyImpl::DeleteKeys(
+    const std::vector<UnexportableKeyId>& key_ids,
     BackgroundTaskPriority priority,
-    DeleteKeyCallback callback) {
-  unexportable_key_service_->DeleteKeySlowlyAsync(
-      key_id, priority,
-      base::BindOnce(&AdaptErrorOrVoid).Then(std::move(callback)));
+    DeleteKeysCallback callback) {
+  unexportable_key_service_->DeleteKeysSlowlyAsync(
+      key_ids, priority,
+      base::BindOnce(&AdaptSizeType).Then(std::move(callback)));
 }
 
 void unexportable_keys::UnexportableKeyServiceProxyImpl::DeleteAllKeys(

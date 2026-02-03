@@ -15,17 +15,17 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "build/build_config.h"
+#include "chrome/browser/glic/common/glic_tab_observer.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/host/glic_web_client_access.h"
 #include "chrome/browser/glic/host/host.h"
+#include "chrome/browser/glic/public/context/glic_sharing_manager.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/service/glic_instance_impl.h"
-#include "chrome/browser/glic/service/glic_tab_creation_observer.h"
 #include "chrome/browser/glic/service/metrics/glic_instance_coordinator_metrics.h"
 #include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/views/widget/widget.h"
@@ -86,8 +86,10 @@ class GlicInstanceCoordinatorImpl
   // per profile.
   void OnWillCreateFloaty() override;
   void UnbindTabFromAnyInstance(tabs::TabInterface* tab) override;
-  std::vector<glic::mojom::ConversationInfoPtr> GetRecentlyActiveConversations()
-      override;
+  // Sorts conversations by recency and returns the ConversationInfoPtr of each
+  // conversation. Used by the web client to get recent conversations.
+  std::vector<glic::mojom::ConversationInfoPtr> GetRecentlyActiveConversations(
+      size_t limit) override;
   void ContextAccessIndicatorChanged(GlicInstanceImpl& instance,
                                      bool enabled) override;
 
@@ -97,12 +99,20 @@ class GlicInstanceCoordinatorImpl
   // GlicWindowController implementation
   HostManager& host_manager() override;
   GlicInstance* GetInstanceForTab(const tabs::TabInterface* tab) const override;
+  // Sorts instances by recency and returns the instance id and
+  // conversation title of each conversation.
+  std::vector<ConversationInfo> GetRecentlyActiveInstances(
+      size_t limit) override;
 
   // Creates a new conversation and pins the given tabs.
   // This overrides any conversation that was already associated with any
   // of the given tabs.
   void CreateNewConversationForTabs(
       const std::vector<tabs::TabInterface*>& tabs) override;
+
+  // Pins the given tabs to the instance with the given id.
+  void ShowInstanceForTabs(const std::vector<tabs::TabInterface*>& tabs,
+                           const InstanceId& instance_id) override;
 
   // Toggles the side panel for the active tab if `browser` is provided,
   // otherwise toggles the floating window for the instance. Focus is given
@@ -116,7 +126,7 @@ class GlicInstanceCoordinatorImpl
   // Shuts down all hosts. Only call it before destruction of the instance
   // coordinator.
   void Shutdown() override;
-  void Close() override;
+  void Close(const CloseOptions& options) override;
   void CloseInstanceWithFrame(
       content::RenderFrameHost* render_frame_host) override;
   void CloseAndShutdownInstanceWithFrame(
@@ -164,22 +174,34 @@ class GlicInstanceCoordinatorImpl
   }
   std::string DescribeForTesting();
 
- private:
-  void OnTabCreated(tabs::TabInterface& old_tab, tabs::TabInterface& new_tab);
-  GlicInstanceImpl* GetOrCreateGlicInstanceImplForTab(tabs::TabInterface* tab);
+  // Testing support. These methods should not be added to the public interface.
   GlicInstanceImpl* GetInstanceImplFor(const InstanceId& id) const;
   GlicInstanceImpl* GetInstanceImplForTab(const tabs::TabInterface* tab) const;
+
+ private:
+  void OnTabEvent(const GlicTabEvent& event);
+  GlicInstanceImpl* GetOrCreateGlicInstanceImplForTab(tabs::TabInterface* tab);
   GlicInstanceImpl* GetOrCreateInstanceImplForFloaty();
   GlicInstanceImpl* CreateGlicInstance();
   std::unique_ptr<GlicInstanceImpl> CreateInstanceImpl();
   void CreateWarmedInstance();
 
-  void ToggleFloaty(bool prevent_close, glic::mojom::InvocationSource source);
+  // Helper method to get a list of recently active instances sorted by time.
+  std::vector<GlicInstanceImpl*> GetSortedRecentInstances(size_t limit) const;
+
+  void ShowInstanceForTabs(GlicInstanceImpl* instance,
+                           const std::vector<tabs::TabInterface*>& tabs,
+                           GlicPinTrigger pin_trigger);
+
+  void ToggleFloaty(bool prevent_close,
+                    glic::mojom::InvocationSource source,
+                    std::optional<std::string> prompt_suggestion);
   void ToggleSidePanel(BrowserWindowInterface* browser,
                        bool prevent_close,
-                       glic::mojom::InvocationSource source);
+                       glic::mojom::InvocationSource source,
+                       std::optional<std::string> prompt_suggestion);
 
-  void CloseFloaty();
+  void CloseFloaty(const CloseOptions& options = {});
 
   void OnMemoryPressure(base::MemoryPressureLevel level) override;
   void CheckMemoryUsage();
@@ -217,7 +239,7 @@ class GlicInstanceCoordinatorImpl
 
   GlicInstanceCoordinatorMetrics metrics_;
 
-  std::unique_ptr<GlicTabCreationObserver> tab_creation_observer_;
+  std::unique_ptr<GlicTabObserver> tab_observer_;
 
   base::WeakPtrFactory<GlicInstanceCoordinatorImpl> weak_ptr_factory_{this};
 };

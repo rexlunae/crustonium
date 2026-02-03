@@ -5,6 +5,8 @@
 package org.chromium.chrome.browser.ui;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.ui.activity_recreation.ActivityRecreationController.IS_TAB_SWITCHER_SHOWN;
+import static org.chromium.chrome.browser.ui.activity_recreation.ActivityRecreationController.URL_BAR_EDIT_TEXT;
 
 import android.app.Activity;
 import android.app.Fragment;
@@ -37,14 +39,15 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneShotCallback;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.ActivityUtils;
@@ -121,6 +124,8 @@ import org.chromium.chrome.browser.omnibox.OmniboxActionDelegateImpl;
 import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
 import org.chromium.chrome.browser.omnibox.geo.GeolocationHeader;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+import org.chromium.chrome.browser.open_in_app.OpenInAppEntryPoint;
+import org.chromium.chrome.browser.open_in_app.OpenInAppMenuItemProvider;
 import org.chromium.chrome.browser.paint_preview.DemoPaintPreview;
 import org.chromium.chrome.browser.password_manager.ManagePasswordsReferrer;
 import org.chromium.chrome.browser.password_manager.PasswordManagerLauncher;
@@ -175,11 +180,13 @@ import org.chromium.chrome.browser.ui.appmenu.AppMenuSubmenuHeaderItemProperties
 import org.chromium.chrome.browser.ui.appmenu.AppMenuUtil;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
 import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
+import org.chromium.chrome.browser.ui.desktop_windowing.TopControlsLockCoordinator;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerCreator;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils.MissingNavbarInsetsReason;
+import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.chrome.browser.ui.system.StatusBarColorController;
@@ -220,6 +227,7 @@ import org.chromium.content_public.browser.ActionModeCallbackHelper;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.WebContentsAccessibility;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.IntentRequestTracker;
@@ -257,17 +265,17 @@ public class RootUiCoordinator
                 ContextualSearchTabPromotionDelegate,
                 WindowFocusChangedObserver {
 
-    protected final SettableObservableSupplier<TabObscuringHandler> mTabObscuringHandlerSupplier =
-            ObservableSuppliers.createMonotonic();
+    protected final SettableMonotonicObservableSupplier<TabObscuringHandler>
+            mTabObscuringHandlerSupplier = ObservableSuppliers.createMonotonic();
 
-    private final SettableObservableSupplier<DeviceLockActivityLauncher>
+    private final SettableMonotonicObservableSupplier<DeviceLockActivityLauncher>
             mDeviceLockActivityLauncherSupplier = ObservableSuppliers.createMonotonic();
 
-    protected final SettableObservableSupplier<ContextualSearchManager>
+    protected final SettableMonotonicObservableSupplier<ContextualSearchManager>
             mContextualSearchManagerSupplier = ObservableSuppliers.createMonotonic();
 
-    protected final SettableObservableSupplier<ReadAloudController> mReadAloudControllerSupplier =
-            ObservableSuppliers.createMonotonic();
+    protected final SettableMonotonicObservableSupplier<ReadAloudController>
+            mReadAloudControllerSupplier = ObservableSuppliers.createMonotonic();
 
     protected AppCompatActivity mActivity;
     protected @Nullable AppMenuCoordinator mAppMenuCoordinator;
@@ -276,7 +284,7 @@ public class RootUiCoordinator
     private final OneshotSupplier<ChromeAndroidTask> mChromeAndroidTaskSupplier;
 
     protected final ActivityTabProvider mActivityTabProvider;
-    protected ObservableSupplier<ShareDelegate> mShareDelegateSupplier;
+    protected MonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier;
 
     protected @Nullable FindToolbarManager mFindToolbarManager;
     private @Nullable FindToolbarObserver mFindToolbarObserver;
@@ -316,21 +324,21 @@ public class RootUiCoordinator
 
     private ScrimManager mScrimManager;
     private final ToolbarActionModeCallback mActionModeControllerCallback;
-    private final ObservableSupplierImpl<Boolean> mOmniboxFocusStateSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<MerchantTrustSignalsCoordinator>
-            mMerchantTrustSignalsCoordinatorSupplier = new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<ScrimManager> mScrimManagerSupplier =
-            new ObservableSupplierImpl<>();
-    protected final ObservableSupplier<Profile> mProfileSupplier;
-    protected final ObservableSupplier<BookmarkModel> mBookmarkModelSupplier;
-    protected final ObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
+    private final SettableNonNullObservableSupplier<Boolean> mOmniboxFocusStateSupplier =
+            ObservableSuppliers.createNonNull(false);
+    private final SettableMonotonicObservableSupplier<MerchantTrustSignalsCoordinator>
+            mMerchantTrustSignalsCoordinatorSupplier = ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<ScrimManager> mScrimManagerSupplier =
+            ObservableSuppliers.createMonotonic();
+    protected final MonotonicObservableSupplier<Profile> mProfileSupplier;
+    protected final NullableObservableSupplier<BookmarkModel> mBookmarkModelSupplier;
+    protected final MonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
     private final OneshotSupplierImpl<AppMenuCoordinator> mAppMenuSupplier;
     private BottomSheetObserver mBottomSheetObserver;
     protected final CallbackController mCallbackController;
     protected final BrowserControlsManager mBrowserControlsManager;
     private BrowserControlsStateProvider.Observer mBrowserControlsObserver;
-    protected final ObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
+    protected final MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
     protected final OneshotSupplier<TabSwitcher> mTabSwitcherSupplier;
     protected final OneshotSupplier<TabSwitcher> mIncognitoTabSwitcherSupplier;
     @Nullable protected ManagedMessageDispatcher mMessageDispatcher;
@@ -344,11 +352,12 @@ public class RootUiCoordinator
     private MediaCaptureOverlayController mCaptureController;
     private @Nullable ScrollCaptureManager mScrollCaptureManager;
     protected final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
-    protected final ObservableSupplier<LayoutManagerImpl> mLayoutManagerImplSupplier;
+    protected final MonotonicObservableSupplier<LayoutManagerImpl> mLayoutManagerImplSupplier;
     protected final NullableObservableSupplier<@StripVisibilityState Integer>
             mTabStripVisibilitySupplier;
-    protected final ObservableSupplierImpl<LayoutManager> mLayoutManagerSupplier;
-    protected final ObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    protected final SettableMonotonicObservableSupplier<LayoutManager> mLayoutManagerSupplier =
+            ObservableSuppliers.createMonotonic();
+    protected final MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
     private final AppMenuBlocker mAppMenuBlocker;
     private final BooleanSupplier mSupportsAppMenuSupplier;
     protected final BooleanSupplier mSupportsFindInPageSupplier;
@@ -357,7 +366,8 @@ public class RootUiCoordinator
     protected final Supplier<CompositorViewHolder> mCompositorViewHolderSupplier;
     protected StatusBarColorController mStatusBarColorController;
     protected final Supplier<SnackbarManager> mSnackbarManagerSupplier;
-    protected final ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
+    protected final SettableMonotonicObservableSupplier<EdgeToEdgeController>
+            mEdgeToEdgeControllerSupplier;
     protected Destroyable mEdgeToEdgeBottomChin;
     protected final @ActivityType int mActivityType;
     protected final Supplier<Boolean> mIsInOverviewModeSupplier;
@@ -365,7 +375,7 @@ public class RootUiCoordinator
     private final Supplier<TabContentManager> mTabContentManagerSupplier;
     private final IntentRequestTracker mIntentRequestTracker;
     private final boolean mInitializeUiWithIncognitoColors;
-    protected final SettableObservableSupplier<EphemeralTabCoordinator>
+    protected final SettableMonotonicObservableSupplier<EphemeralTabCoordinator>
             mEphemeralTabCoordinatorSupplier;
     @Nullable protected final BackPressManager mBackPressManager;
     private final boolean mIsIncognitoReauthPendingOnRestore;
@@ -373,7 +383,8 @@ public class RootUiCoordinator
     protected @Nullable EdgeToEdgeControllerCreator mEdgeToEdgeControllerCreator;
     protected final BottomControlsStacker mBottomControlsStacker;
     protected final TopControlsStacker mTopControlsStacker;
-    @NonNull protected final ObservableSupplier<Integer> mOverviewColorSupplier;
+    protected final @Nullable TopControlsLockCoordinator mTopControlsLockCoordinator;
+    @NonNull protected final NonNullObservableSupplier<Integer> mOverviewColorSupplier;
     @Nullable private ContextualSearchObserver mReadAloudContextualSearchObserver;
     @Nullable private PageZoomBarCoordinator mPageZoomBarCoordinator;
     @Nullable private ReaderModeBottomSheetManager mReaderModeBottomSheetManager;
@@ -390,16 +401,17 @@ public class RootUiCoordinator
     protected final @NonNull EdgeToEdgeManager mEdgeToEdgeManager;
     private AutomotiveBackButtonToolbarCoordinator mAutomotiveBackButtonToolbarCoordinator;
     protected AdaptiveToolbarUiCoordinator mAdaptiveToolbarUiCoordinator;
-    private final @Nullable ObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
+    private final @Nullable MonotonicObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
     private final boolean mIsTablet;
-    private final ObservableSupplierImpl<TopInsetCoordinator> mTopInsetCoordinatorSupplier;
+    private final SettableMonotonicObservableSupplier<TopInsetProvider> mTopInsetProviderSupplier;
     private @Nullable ToolbarControlContainer mToolbarContainer;
     private @Nullable DesktopWindowStateManager mDesktopWindowStateManager;
     private @Nullable final ExclusiveAccessManager mExclusiveAccessManager;
     private final PageZoomManager mPageZoomManager;
     private @Nullable AppHeaderObserver mAppHeaderObserver;
-    protected final ObservableSupplierImpl<ReaderModeIphController>
-            mReaderModeIphControllerSupplier = new ObservableSupplierImpl<>();
+    protected final SettableMonotonicObservableSupplier<ReaderModeIphController>
+            mReaderModeIphControllerSupplier = ObservableSuppliers.createMonotonic();
+    protected @Nullable OpenInAppEntryPoint mOpenInAppEntryPoint;
 
     /**
      * Create a new {@link RootUiCoordinator} for the given activity.
@@ -433,7 +445,7 @@ public class RootUiCoordinator
      * @param tabContentManagerSupplier Supplies the {@link TabContentManager}.
      * @param snackbarManagerSupplier Supplies the {@link SnackbarManager}.
      * @param edgeToEdgeControllerSupplier Supplies an {@link EdgeToEdgeController}.
-     * @param topInsetCoordinatorSupplier Suppliers an {@link TopInsetCoordinator}.
+     * @param topInsetProviderSupplier Suppliers an {@link TopInsetProvider}.
      * @param activityType The {@link ActivityType} for the activity.
      * @param isInOverviewModeSupplier Supplies whether the app is in overview mode.
      * @param appMenuDelegate The app menu delegate.
@@ -453,12 +465,12 @@ public class RootUiCoordinator
     public RootUiCoordinator(
             @NonNull AppCompatActivity activity,
             @Nullable Callback<Boolean> onOmniboxFocusChangedListener,
-            @NonNull ObservableSupplier<ShareDelegate> shareDelegateSupplier,
+            @NonNull MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier,
             @NonNull ActivityTabProvider tabProvider,
-            @NonNull ObservableSupplier<Profile> profileSupplier,
-            @NonNull ObservableSupplier<BookmarkModel> bookmarkModelSupplier,
-            @NonNull ObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
-            @NonNull ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
+            @NonNull MonotonicObservableSupplier<Profile> profileSupplier,
+            @NonNull NullableObservableSupplier<BookmarkModel> bookmarkModelSupplier,
+            @NonNull MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
+            @NonNull MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
             @NonNull OneshotSupplier<TabSwitcher> tabSwitcherSupplier,
             @NonNull OneshotSupplier<TabSwitcher> incognitoTabSwitcherSupplier,
             @NonNull OneshotSupplier<ToolbarIntentMetadata> intentMetadataOneshotSupplier,
@@ -467,10 +479,10 @@ public class RootUiCoordinator
             @NonNull ActivityWindowAndroid windowAndroid,
             @NonNull OneshotSupplier<ChromeAndroidTask> chromeAndroidTaskSupplier,
             @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
+            @NonNull MonotonicObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
             @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
             @NonNull Supplier<Integer> activityThemeColorSupplier,
-            @NonNull ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            @NonNull MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
             @NonNull AppMenuBlocker appMenuBlocker,
             @NonNull BooleanSupplier supportsAppMenuSupplier,
             @NonNull BooleanSupplier supportsFindInPage,
@@ -479,23 +491,25 @@ public class RootUiCoordinator
             @NonNull Supplier<CompositorViewHolder> compositorViewHolderSupplier,
             @NonNull Supplier<TabContentManager> tabContentManagerSupplier,
             @NonNull Supplier<SnackbarManager> snackbarManagerSupplier,
-            @NonNull ObservableSupplierImpl<EdgeToEdgeController> edgeToEdgeControllerSupplier,
-            @NonNull ObservableSupplierImpl<TopInsetCoordinator> topInsetCoordinatorSupplier,
+            @NonNull
+                    SettableMonotonicObservableSupplier<EdgeToEdgeController>
+                            edgeToEdgeControllerSupplier,
+            @NonNull SettableMonotonicObservableSupplier<TopInsetProvider> topInsetProviderSupplier,
             @ActivityType int activityType,
             @NonNull Supplier<Boolean> isInOverviewModeSupplier,
             @NonNull AppMenuDelegate appMenuDelegate,
             @NonNull StatusBarColorProvider statusBarColorProvider,
             @NonNull IntentRequestTracker intentRequestTracker,
             @NonNull
-                    SettableObservableSupplier<EphemeralTabCoordinator>
+                    SettableMonotonicObservableSupplier<EphemeralTabCoordinator>
                             ephemeralTabCoordinatorSupplier,
             boolean initializeUiWithIncognitoColors,
             @Nullable BackPressManager backPressManager,
             @Nullable Bundle savedInstanceState,
             @Nullable PersistableBundle persistentState,
-            @NonNull ObservableSupplier<Integer> overviewColorSupplier,
+            @NonNull NonNullObservableSupplier<Integer> overviewColorSupplier,
             @NonNull EdgeToEdgeManager edgeToEdgeManager,
-            @Nullable ObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
+            @Nullable MonotonicObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
             @Nullable DesktopWindowStateManager desktopWindowStateManager) {
         mCallbackController = new CallbackController();
         mActivity = activity;
@@ -515,7 +529,7 @@ public class RootUiCoordinator
         mTabContentManagerSupplier = tabContentManagerSupplier;
         mSnackbarManagerSupplier = snackbarManagerSupplier;
         mEdgeToEdgeControllerSupplier = edgeToEdgeControllerSupplier;
-        mTopInsetCoordinatorSupplier = topInsetCoordinatorSupplier;
+        mTopInsetProviderSupplier = topInsetProviderSupplier;
         mActivityType = activityType;
         mIsInOverviewModeSupplier = isInOverviewModeSupplier;
         mAppMenuDelegate = appMenuDelegate;
@@ -541,7 +555,6 @@ public class RootUiCoordinator
         mAppMenuSupplier = new OneshotSupplierImpl<>();
         mIsTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(activity);
         mActionModeControllerCallback = new ToolbarActionModeCallback();
-        mLayoutManagerSupplier = new ObservableSupplierImpl<>();
         mTabStripVisibilitySupplier =
                 mLayoutManagerImplSupplier.createTransitiveNullable(
                         layoutManagerImpl -> {
@@ -560,8 +573,6 @@ public class RootUiCoordinator
                         && savedInstanceState.getBoolean(
                                 IncognitoReauthControllerImpl.KEY_IS_INCOGNITO_REAUTH_PENDING,
                                 false);
-        // TODO(crbug.com/459921316): Only persist incognito state for app updates, state should be
-        //  discarded after a reboot.
         boolean persistedIncognitoReauthPending =
                 persistentState != null
                         && persistentState.getBoolean(
@@ -732,25 +743,15 @@ public class RootUiCoordinator
                 new TopControlsStacker(
                         mBrowserControlsManager, getAppBrowserControlsVisibilityDelegate());
 
-        if (BrowserControlsUtils.doSyncMinHeightWithTotalHeightV2()) {
-            if (DeviceInfo.isDesktop()
-                    || BrowserControlsUtils.doSyncMinHeightWithTotalHeight(mActivity)) {
-                mTopControlsStacker.setScrollingDisabled(true);
-            } else if (mDesktopWindowStateManager != null) {
-                mAppHeaderObserver =
-                        new AppHeaderObserver() {
-                            @Override
-                            public void onDesktopWindowingModeChanged(boolean isInDesktopWindow) {
-                                mTopControlsStacker.setScrollingDisabled(isInDesktopWindow);
-                            }
-                        };
-                mDesktopWindowStateManager.addObserver(mAppHeaderObserver);
-                var appHeaderState = mDesktopWindowStateManager.getAppHeaderState();
-                if (appHeaderState != null) {
-                    mAppHeaderObserver.onDesktopWindowingModeChanged(
-                            appHeaderState.isInDesktopWindow());
-                }
-            }
+        if (BrowserControlsUtils.doSyncMinHeightWithTotalHeightV2(mActivity)) {
+            mTopControlsLockCoordinator =
+                    new TopControlsLockCoordinator(
+                            mActivity,
+                            mTopControlsStacker,
+                            mTabStripVisibilitySupplier,
+                            mDesktopWindowStateManager);
+        } else {
+            mTopControlsLockCoordinator = null;
         }
     }
 
@@ -946,9 +947,9 @@ public class RootUiCoordinator
             mEdgeToEdgeBottomChin.destroy();
         }
 
-        var topInsetCoordinator = mTopInsetCoordinatorSupplier.get();
-        if (topInsetCoordinator != null) {
-            topInsetCoordinator.destroy();
+        var topInsetProvider = mTopInsetProviderSupplier.get();
+        if (topInsetProvider != null) {
+            topInsetProvider.destroy();
         }
 
         if (mBoardingPassController != null) {
@@ -969,6 +970,9 @@ public class RootUiCoordinator
         if (mAutomotiveBackButtonToolbarCoordinator != null) {
             mAutomotiveBackButtonToolbarCoordinator.destroy();
             mAutomotiveBackButtonToolbarCoordinator = null;
+        }
+        if (mTopControlsLockCoordinator != null) {
+            mTopControlsLockCoordinator.destroy();
         }
         mBottomControlsStacker.destroy();
         mTopControlsStacker.destroy();
@@ -1208,7 +1212,7 @@ public class RootUiCoordinator
                             mActivityTabProvider.asObservable(),
                             mWindowAndroid.getInsetObserver(),
                             mLayoutStateProviderOneShotSupplier);
-            mTopInsetCoordinatorSupplier.set(topInsetCoordinator);
+            mTopInsetProviderSupplier.set(topInsetCoordinator);
         }
         if (ChromeFeatureList.isEnabled(ChromeFeatureList.LINK_HOVER_STATUS_BAR)) {
             ViewStub statusBarStub = mActivity.findViewById(R.id.link_hover_status_bar_stub);
@@ -1261,7 +1265,8 @@ public class RootUiCoordinator
                 mBottomControlsStacker);
     }
 
-    public ObservableSupplier<ContextualSearchManager> getContextualSearchManagerSupplier() {
+    public MonotonicObservableSupplier<ContextualSearchManager>
+            getContextualSearchManagerSupplier() {
         return mContextualSearchManagerSupplier;
     }
 
@@ -1342,14 +1347,46 @@ public class RootUiCoordinator
         mMessageContainerObserver =
                 new MessageContainerObserver() {
                     @Override
-                    public void onShowMessageContainer() {
+                    public void onShowMessageContainer(int viewId, Rect rect) {
                         if (mPageZoomBarCoordinator != null) {
                             mPageZoomBarCoordinator.hide();
+                        }
+
+                        TabModelSelector tabModelSelector = mTabModelSelectorSupplier.get();
+                        if (tabModelSelector == null) {
+                            return;
+                        }
+
+                        Tab tab = tabModelSelector.getCurrentTab();
+                        if (tab == null) {
+                            return;
+                        }
+
+                        WebContentsAccessibility wcax =
+                                WebContentsAccessibility.fromWebContents(tab.getWebContents());
+                        if (wcax != null) {
+                            wcax.setOccludingRect(rect, viewId);
                         }
                     }
 
                     @Override
-                    public void onHideMessageContainer() {}
+                    public void onHideMessageContainer(int viewId) {
+                        TabModelSelector tabModelSelector = mTabModelSelectorSupplier.get();
+                        if (tabModelSelector == null) {
+                            return;
+                        }
+
+                        Tab tab = tabModelSelector.getCurrentTab();
+                        if (tab == null) {
+                            return;
+                        }
+
+                        WebContentsAccessibility wcax =
+                                WebContentsAccessibility.fromWebContents(tab.getWebContents());
+                        if (wcax != null) {
+                            wcax.setOccludingRect(null, viewId);
+                        }
+                    }
                 };
         mMessageContainerCoordinator.addObserver(mMessageContainerObserver);
         mMessageDispatcher =
@@ -1810,7 +1847,7 @@ public class RootUiCoordinator
                             mTabBookmarkerSupplier,
                             getMenuButtonVisibilityDelegate(),
                             mTopControlsStacker,
-                            mTopInsetCoordinatorSupplier,
+                            mTopInsetProviderSupplier,
                             mXrSpaceModeObservableSupplier,
                             mPageZoomManager,
                             mSnackbarManagerSupplier.get());
@@ -1849,7 +1886,7 @@ public class RootUiCoordinator
     }
 
     protected void onScrimColorChanged(@ColorInt int scrimColor) {
-        mStatusBarColorController.setScrimColor(scrimColor);
+        mStatusBarColorController.onScrimColorChanged(scrimColor);
     }
 
     protected void setLayoutStateProvider(LayoutStateProvider layoutStateProvider) {
@@ -2404,12 +2441,40 @@ public class RootUiCoordinator
     }
 
     /**
+     * Saves relevant information preserved by {@code RootUiCoordinator#prepareUiState()} to the
+     * persistent bundle that will be used to restore the UI state after the activity is recreated.
+     * This is expected to be invoked in {@code Activity#onSaveInstanceState(Bundle,
+     * PersistableBundle)}.
+     *
+     * @param outPersistentState The {@link PersistableBundle} that is used to save state
+     *     information.
+     */
+    public void onSavePersistentState(PersistableBundle outPersistentState) {
+        if (mToolbarManager.isUrlBarFocused()) {
+            outPersistentState.putString(
+                    URL_BAR_EDIT_TEXT, mToolbarManager.getUrlBarTextWithoutAutocomplete());
+        }
+        outPersistentState.putBoolean(
+                IS_TAB_SWITCHER_SHOWN, mLayoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER));
+    }
+
+    /**
      * Restores the relevant UI state when the activity is recreated on a device fold transition.
      *
      * @param savedInstanceState The {@link Bundle} that is used to restore the UI state.
      */
     public void restoreUiState(Bundle savedInstanceState) {
         mActivityRecreationController.restoreUiState(savedInstanceState);
+    }
+
+    /**
+     * Restores the relevant UI state when the activity is recreated after a device reboot or app
+     * update.
+     *
+     * @param outPersistentState The {@link PersistableBundle} that is used to restore the UI state.
+     */
+    public void restorePersistentUiState(@Nullable PersistableBundle outPersistentState) {
+        mActivityRecreationController.restorePersistentState(outPersistentState);
     }
 
     private void attemptToShowRestoreTabsPromo() {
@@ -2501,7 +2566,7 @@ public class RootUiCoordinator
     }
 
     /** Returns the entry point for all scrim interactions. */
-    public ObservableSupplier<ScrimManager> getScrimManagerSupplier() {
+    public MonotonicObservableSupplier<ScrimManager> getScrimManagerSupplier() {
         return mScrimManagerSupplier;
     }
 
@@ -2516,5 +2581,9 @@ public class RootUiCoordinator
 
     public @Nullable ExclusiveAccessManager getExclusiveAccessManager() {
         return mExclusiveAccessManager;
+    }
+
+    public @Nullable OpenInAppMenuItemProvider getOpenInAppMenuItemProvider() {
+        return mOpenInAppEntryPoint;
     }
 }

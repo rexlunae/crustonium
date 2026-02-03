@@ -18,9 +18,9 @@
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/guided_tour_commands.h"
-#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
@@ -28,7 +28,7 @@
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_mediator.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_view_controller.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/primary_toolbar_view_controller_delegate.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/tab_groups/coordinator/tab_group_indicator_coordinator.h"
+#import "ios/chrome/browser/toolbar/tab_group/coordinator/tab_group_indicator_coordinator.h"
 
 @interface PrimaryToolbarCoordinator () <PrimaryToolbarViewControllerDelegate>
 
@@ -63,8 +63,8 @@
 
   self.viewController = [[PrimaryToolbarViewController alloc] init];
   self.viewController.shouldHideOmniboxOnNTP = !isOffTheRecord;
-  self.viewController.omniboxCommandsHandler =
-      HandlerForProtocol(dispatcher, OmniboxCommands);
+  self.viewController.browserCoordinatorHandler =
+      HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
   self.viewController.popupMenuCommandsHandler =
       HandlerForProtocol(dispatcher, PopupMenuCommands);
   CHECK(self.viewControllerDelegate);

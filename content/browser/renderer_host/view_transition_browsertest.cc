@@ -93,8 +93,16 @@ class ViewTransitionBrowserTest : public ContentBrowserTest {
   std::unique_ptr<base::RunLoop> run_loop_;
 };
 
+// TODO(crbug.com/468211765): Flaky on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_NavigationCancelledAfterScreenshot \
+  DISABLED_NavigationCancelledAfterScreenshot
+#else
+#define MAYBE_NavigationCancelledAfterScreenshot \
+  NavigationCancelledAfterScreenshot
+#endif
 IN_PROC_BROWSER_TEST_F(ViewTransitionBrowserTest,
-                       NavigationCancelledAfterScreenshot) {
+                       MAYBE_NavigationCancelledAfterScreenshot) {
   // Start with a page which has an opt-in for VT.
   GURL test_url(
       embedded_test_server()->GetURL("/view_transitions/basic-vt-opt-in.html"));
@@ -428,7 +436,8 @@ class ViewTransitionCaptureTest
   SkBitmap TakeScreenshot() {
     base::test::TestFuture<const content::CopyFromSurfaceResult&> future_bitmap;
     shell()->web_contents()->GetRenderWidgetHostView()->CopyFromSurface(
-        gfx::Rect(), gfx::Size(), future_bitmap.GetCallback());
+        gfx::Rect(), gfx::Size(), base::TimeDelta(),
+        future_bitmap.GetCallback());
     return future_bitmap.Take()
         .value_or(viz::CopyOutputBitmapWithMetadata())
         .bitmap;

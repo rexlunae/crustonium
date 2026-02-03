@@ -12,7 +12,6 @@
 #include "base/no_destructor.h"
 #include "chrome/browser/actor/ui/actor_border_view_controller.h"
 #include "chrome/browser/actor/ui/actor_ui_window_controller.h"
-#include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/collaboration/collaboration_service_factory.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
@@ -29,6 +28,7 @@
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_service_factory.h"
+#include "chrome/browser/skills/skills_ui_controller.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar_controller.h"
 #include "chrome/browser/ui/breadcrumb_manager_browser_agent.h"
@@ -119,6 +119,7 @@
 #include "chrome/browser/ui/views/upgrade_notification_controller.h"
 #include "chrome/browser/ui/views/user_education/impl/browser_user_education_interface_impl.h"
 #include "chrome/browser/ui/waap/initial_web_ui_manager.h"
+#include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/ui/webui_browser/browser_elements_webui_browser.h"
@@ -162,6 +163,10 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/ui/views/frame/windows_taskbar_icon_updater.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #endif
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -438,6 +443,12 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
               *browser, browser);
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
+#if BUILDFLAG(IS_CHROMEOS)
+  on_task_locked_controller_ =
+      GetUserDataFactory().CreateInstance<ash::boca::OnTaskLockedController>(
+          *browser, browser);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
   // Initialize embedder features last.
   embedder_browser_window_features_ =
       GetUserDataFactory().CreateInstance<EmbedderBrowserWindowFeatures>(
@@ -445,6 +456,11 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
 }
 
 void BrowserWindowFeatures::InitPostWindowConstruction(Browser* browser) {
+  if (waap::IsInitialWebUIMetricsLoggingEnabled()) {
+    initial_webui_window_metrics_manager_ =
+        std::make_unique<InitialWebUIWindowMetricsManager>(browser);
+  }
+
   desktop_browser_window_capabilities_ =
       GetUserDataFactory().CreateInstance<DesktopBrowserWindowCapabilities>(
           *browser, browser, browser->window(),
@@ -529,16 +545,11 @@ void BrowserWindowFeatures::InitPostWindowConstruction(Browser* browser) {
     }
 
     if (browser_view && IsPageActionMigrated(PageActionIconType::kAiMode)) {
-      const auto* aim_eligibility_service =
-          AimEligibilityServiceFactory::GetForProfile(profile);
-      if (OmniboxFieldTrial::IsAimOmniboxEntrypointEnabled(
-              aim_eligibility_service)) {
-        LocationBarView* location_bar_view = browser_view->GetLocationBarView();
-        ai_mode_page_action_controller_ =
-            GetUserDataFactory()
-                .CreateInstance<omnibox::AiModePageActionController>(
-                    *browser, *browser, *profile, *location_bar_view);
-      }
+      LocationBarView* location_bar_view = browser_view->GetLocationBarView();
+      ai_mode_page_action_controller_ =
+          GetUserDataFactory()
+              .CreateInstance<omnibox::AiModePageActionController>(
+                  *browser, *browser, *profile, *location_bar_view);
     }
 
     auto* experiment_manager =
@@ -760,20 +771,18 @@ void BrowserWindowFeatures::InitPostBrowserViewConstruction(
 
       if (features::kGlicActorUiTaskIcon.Get() &&
           browser_->GetProfile()->IsRegularProfile()) {
-          // Will be referenced in GlicActorNudgeController and thus needs to be
-          // instantiated first.
-          actor_task_list_bubble_controller_ =
-              GetUserDataFactory()
-                  .CreateInstance<ActorTaskListBubbleController>(*browser_,
-                                                                 browser_);
-          // Includes browser twice to enable injecting for testing.
-          glic_actor_nudge_controller_ =
-              GetUserDataFactory()
-                  .CreateInstance<tabs::GlicActorNudgeController>(
-                      *browser_, browser_,
-                      BrowserElementsViews::From(browser_view->browser())
-                          ->GetViewAs<TabStripActionContainer>(
-                              kTabStripActionContainerElementId));
+        // Will be referenced in GlicActorNudgeController and thus needs to be
+        // instantiated first.
+        actor_task_list_bubble_controller_ =
+            GetUserDataFactory().CreateInstance<ActorTaskListBubbleController>(
+                *browser_, browser_);
+        // Includes browser twice to enable injecting for testing.
+        glic_actor_nudge_controller_ =
+            GetUserDataFactory().CreateInstance<tabs::GlicActorNudgeController>(
+                *browser_, browser_,
+                BrowserElementsViews::From(browser_view->browser())
+                    ->GetViewAs<TabStripActionContainer>(
+                        kTabStripActionContainerElementId));
       }
     }
 #endif  // BUILDFLAG(ENABLE_GLIC)
@@ -805,17 +814,21 @@ void BrowserWindowFeatures::InitPostBrowserViewConstruction(
               *browser_, browser_, std::move(container_overlay_view_pairs));
     }
 
-    data_protection_ui_controller_ =
-        GetUserDataFactory()
-            .CreateInstance<
-                enterprise_data_protection::DataProtectionUIController>(
-                *browser_view->browser(), browser_view);
-
     if (features::HasTabSearchToolbarButton() ||
         tabs::IsVerticalTabsFeatureEnabled()) {
       tab_search_toolbar_button_controller_ =
           std::make_unique<TabSearchToolbarButtonController>(browser_view);
     }
+  }
+
+  if (browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL ||
+      browser_->GetType() == BrowserWindowInterface::Type::TYPE_POPUP ||
+      browser_view->GetIsWebAppType()) {
+    data_protection_ui_controller_ =
+        GetUserDataFactory()
+            .CreateInstance<
+                enterprise_data_protection::DataProtectionUIController>(
+                *browser_view->browser(), browser_view);
   }
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -848,6 +861,9 @@ void BrowserWindowFeatures::InitPostBrowserViewConstruction(
 
   omnibox_popup_closer_ =
       std::make_unique<omnibox::OmniboxPopupCloser>(browser_view);
+
+  skills_ui_controller_ =
+      std::make_unique<skills::SkillsUiController>(browser_);
 
   // Initialize post-BrowserView-dependent embedder features last.
   embedder_browser_window_features_->InitPostBrowserViewConstruction(
@@ -927,6 +943,7 @@ void BrowserWindowFeatures::TearDownPreBrowserWindowDestruction() {
   data_protection_ui_controller_.reset();
 
   desktop_browser_window_capabilities_.reset();
+  initial_webui_window_metrics_manager_.reset();
   signin_view_controller_->TearDownPreBrowserWindowDestruction();
 
   // Destroy fullscreen control host before exclusive access manager.
@@ -971,10 +988,12 @@ void BrowserWindowFeatures::TearDownPreBrowserWindowDestruction() {
   find_bar_owner_.reset();
 
   ai_mode_page_action_controller_.reset();
+
+  skills_ui_controller_.reset();
 }
 
 SidePanelUI* BrowserWindowFeatures::side_panel_ui() {
-  if (webui_browser::IsWebUIBrowserEnabled()) {
+  if (webui_browser::IsWebUIBrowserEnabled() && webui_browser_side_panel_ui_) {
     return webui_browser_side_panel_ui_.get();
   }
 

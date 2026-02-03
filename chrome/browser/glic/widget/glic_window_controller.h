@@ -16,9 +16,9 @@
 #include "base/scoped_observation.h"
 #include "base/scoped_observation_traits.h"
 #include "build/build_config.h"
-#include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/host/glic_web_client_access.h"
 #include "chrome/browser/glic/host/host.h"
+#include "chrome/browser/glic/public/glic_close_options.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_instance.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,10 +27,6 @@
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget.h"
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/glic/widget/local_hotkey_manager.h"
-#endif
 
 class Browser;
 
@@ -51,6 +47,11 @@ DECLARE_CUSTOM_ELEMENT_EVENT_TYPE(kGlicWidgetAttached);
 class GlicWidget;
 class GlicKeyedService;
 enum class AttachChangeReason;
+
+struct ConversationInfo {
+  InstanceId instance_id;
+  std::string title;
+};
 
 // MIGRATION IN PROGRESS - WARNING
 //
@@ -73,6 +74,10 @@ class GlicWindowController {
       const tabs::TabInterface* tab) const = 0;
   virtual void CreateNewConversationForTabs(
       const std::vector<tabs::TabInterface*>& tabs) = 0;
+  virtual void ShowInstanceForTabs(const std::vector<tabs::TabInterface*>& tabs,
+                                   const InstanceId& instance_id) = 0;
+  virtual std::vector<ConversationInfo> GetRecentlyActiveInstances(
+      size_t limit) = 0;
 
   // Show, summon, or activate the panel if needed, or close it if it's already
   // active and prevent_close is false.
@@ -90,7 +95,7 @@ class GlicWindowController {
   virtual void Shutdown() = 0;
 
   // Close the panel but keep the glic WebContents alive in the background.
-  virtual void Close() = 0;
+  virtual void Close(const CloseOptions& options) = 0;
   // Closes the active embedder of an instance with matching render_frame_host
   // without resetting webcontents.
   virtual void CloseInstanceWithFrame(

@@ -61,21 +61,21 @@ suite('NewTabPageAppTest', () => {
         CustomizeButtonsHandlerRemote,
         mock => CustomizeButtonsProxy.setInstance(
             mock, new CustomizeButtonsDocumentCallbackRouter()));
-    handler.setResultFor('getMostVisitedSettings', Promise.resolve({
+    handler.setPromiseResolveFor('getMostVisitedSettings', {
       customLinksEnabled: false,
       shortcutsVisible: false,
-    }));
-    handler.setResultFor('getDoodle', Promise.resolve({
+    });
+    handler.setPromiseResolveFor('getDoodle', {
       doodle: null,
-    }));
-    handler.setResultFor('getModulesIdNames', Promise.resolve({data: []}));
+    });
+    handler.setPromiseResolveFor('getModulesIdNames', {data: []});
     windowProxy.setResultMapperFor('matchMedia', () => ({
                                                    addListener() {},
                                                    addEventListener() {},
                                                    removeListener() {},
                                                    removeEventListener() {},
                                                  }));
-    windowProxy.setResultFor('waitForLazyRender', Promise.resolve());
+    windowProxy.setPromiseResolveFor('waitForLazyRender');
     windowProxy.setResultFor('createIframeSrc', '');
     windowProxy.setResultFor('url', url);
     callbackRouterRemote = NewTabPageProxy.getInstance()
@@ -84,8 +84,8 @@ suite('NewTabPageAppTest', () => {
         CustomizeButtonsProxy.getInstance()
             .callbackRouter.$.bindNewPipeAndPassRemote();
     backgroundManager = installMock(BackgroundManager);
-    backgroundManager.setResultFor(
-        'getBackgroundImageLoadTime', Promise.resolve(backgroundImageLoadTime));
+    backgroundManager.setPromiseResolveFor(
+        'getBackgroundImageLoadTime', backgroundImageLoadTime);
     moduleRegistry = installMock(ModuleRegistry);
     moduleResolver = new PromiseResolver();
     moduleRegistry.setResultFor('initializeModules', moduleResolver.promise);
@@ -101,7 +101,7 @@ suite('NewTabPageAppTest', () => {
       ComposeboxProxyImpl.getInstance().searchboxHandler = mock;
       SearchboxBrowserProxy.getInstance().handler = mock;
     });
-    searchboxHandler.setResultFor('getRecentTabs', Promise.resolve({tabs: []}));
+    searchboxHandler.setPromiseResolveFor('getRecentTabs', {tabs: []});
 
     app = document.createElement('ntp-app');
     document.body.appendChild(app);
@@ -343,7 +343,7 @@ suite('NewTabPageAppTest', () => {
       // Arrange.
       const theme = createTheme();
       theme.backgroundImage = createBackgroundImage('https://foo.com');
-      theme.backgroundImage.attributionUrl = {url: 'chrome://theme/foo'};
+      theme.backgroundImage.attributionUrl = 'chrome://theme/foo';
 
       // Act.
       callbackRouterRemote.setTheme(theme);
@@ -381,7 +381,7 @@ suite('NewTabPageAppTest', () => {
       assertEquals(1, backgroundManager.getCallCount('setBackgroundImage'));
       assertEquals(
           'https://img.png',
-          (await backgroundManager.whenCalled('setBackgroundImage')).url.url);
+          (await backgroundManager.whenCalled('setBackgroundImage')).url);
       assertTrue(!!app.$.logo.theme?.backgroundColor);
     });
 
@@ -390,7 +390,7 @@ suite('NewTabPageAppTest', () => {
       const theme = createTheme();
       theme.backgroundImageAttribution1 = 'foo';
       theme.backgroundImageAttribution2 = 'bar';
-      theme.backgroundImageAttributionUrl = {url: 'https://info.com'};
+      theme.backgroundImageAttributionUrl = 'https://info.com';
 
       // Act.
       callbackRouterRemote.setTheme(theme);
@@ -647,8 +647,8 @@ suite('NewTabPageAppTest', () => {
       const promoBrowserCommandHandler = installMock(
           CommandHandlerRemote,
           mock => BrowserCommandProxy.getInstance().handler = mock);
-      promoBrowserCommandHandler.setResultFor(
-          'canExecuteCommand', Promise.resolve({canExecute: true}));
+      promoBrowserCommandHandler.setPromiseResolveFor(
+          'canExecuteCommand', {canExecute: true});
 
       const commandId = 123;  // Unsupported command.
       window.dispatchEvent(new MessageEvent('message', {
@@ -678,8 +678,8 @@ suite('NewTabPageAppTest', () => {
       const promoBrowserCommandHandler = installMock(
           CommandHandlerRemote,
           mock => BrowserCommandProxy.getInstance().handler = mock);
-      promoBrowserCommandHandler.setResultFor(
-          'executeCommand', Promise.resolve({commandExecuted: true}));
+      promoBrowserCommandHandler.setPromiseResolveFor(
+          'executeCommand', {commandExecuted: true});
 
       const commandId = 123;  // Unsupported command.
       const clickInfo = {middleButton: true};
@@ -982,6 +982,7 @@ suite('NewTabPageAppTest', () => {
     suiteSetup(() => {
       loadTimeData.overrideValues({
         searchboxLensSearch: true,
+        ntpRealboxNextEnabled: true,
       });
     });
 
@@ -1010,6 +1011,31 @@ suite('NewTabPageAppTest', () => {
 
       // Assert.
       assertStyle($$(app, '#searchbox')!, 'visibility', 'visible');
+    });
+
+    test('scrim is visible when Lens upload dialog is open', async () => {
+      // Arrange.
+      callbackRouterRemote.setTheme(createTheme());
+      await callbackRouterRemote.$.flushForTesting();
+
+      // Act.
+      $$(app, '#searchbox')!.dispatchEvent(new Event('open-lens-search'));
+      await microtasksFinished();
+
+      // Assert.
+      const dialog = app.shadowRoot.querySelector('ntp-lens-upload-dialog');
+      assertTrue(!!dialog);
+      const scrim = getScrim();
+      assertTrue(!!scrim);
+      assertFalse(scrim.hidden);
+
+      // Act.
+      scrim.click();
+      await microtasksFinished();
+
+      // Assert.
+      assertTrue(scrim.hidden);
+      assertFalse(!!app.shadowRoot.querySelector('ntp-lens-upload-dialog'));
     });
   });
 
@@ -1253,7 +1279,7 @@ suite('NewTabPageAppTest', () => {
 
       assertEquals('test input', composebox.$.input.value);
 
-      //First ESC: Clear Input (Content present)
+      // First ESC: Clear Input (Content present)
       const closePromise1 = eventToPromise('close-composebox', composebox);
       let closedAfterFirstEsc = false;
       closePromise1.then(() => closedAfterFirstEsc = true);
@@ -2016,7 +2042,7 @@ suite('NewTabPageAppTest', () => {
       const theme = createTheme();
       theme.backgroundImageAttribution1 = 'foo';
       theme.backgroundImageAttribution2 = 'bar';
-      theme.backgroundImageAttributionUrl = {url: 'https://info.com'};
+      theme.backgroundImageAttributionUrl = 'https://info.com';
       callbackRouterRemote.setTheme(theme);
       await callbackRouterRemote.$.flushForTesting();
 
@@ -2132,7 +2158,7 @@ suite('NewTabPageAppTest', () => {
       const fakeTab: TabInfo = {
         tabId: 1,
         title: 'Test Title',
-        url: {url: 'https://example.com/test'},
+        url: 'https://example.com/test',
         lastActiveTime: {internalValue: BigInt(12345)},
       };
       actionChipsPageRemote =
@@ -2141,18 +2167,21 @@ suite('NewTabPageAppTest', () => {
         actionChipsPageRemote.onActionChipsChanged([
           {
             title: 'TabContext',
+            subtitle: 'tab-subtitle',
             suggestion: 'tab-suggestion',
             type: ChipType.kRecentTab,
             tab: fakeTab,
           },
           {
             title: 'Nano Banana',
+            subtitle: 'image-subtitle',
             suggestion: 'image-suggestion',
             type: ChipType.kImage,
             tab: null,
           },
           {
             title: 'DeepSearch',
+            subtitle: 'ds-subtitle',
             suggestion: 'ds-suggestion',
             type: ChipType.kDeepSearch,
             tab: null,
@@ -2203,11 +2232,44 @@ suite('NewTabPageAppTest', () => {
               assertEquals(!!chips, isActionChipsVisible);
             }));
 
+    test('Show background when non-GM3 theme', async () => {
+      // Arrange.
+      const theme = createTheme({isGm3: false});
+      callbackRouterRemote.setTheme(theme);
+      await callbackRouterRemote.$.flushForTesting();
+
+      // Assert.
+      const chips = $$(app, 'ntp-action-chips')!;
+      assertTrue(chips.showBackground);
+    });
+
+    test('Show background when background image', async () => {
+      // Arrange.
+      const theme = createTheme({isGm3: true});
+      theme.backgroundImage = createBackgroundImage('https://img.png');
+      callbackRouterRemote.setTheme(theme);
+      await callbackRouterRemote.$.flushForTesting();
+
+      // Assert.
+      const chips = $$(app, 'ntp-action-chips')!;
+      assertTrue(chips.showBackground);
+    });
+
+    test('Do not show background when GM2 w/ no background image', async () => {
+      // Arrange.
+      const theme = createTheme({isGm3: true});
+      callbackRouterRemote.setTheme(theme);
+      await callbackRouterRemote.$.flushForTesting();
+
+      // Assert.
+      const chips = $$(app, 'ntp-action-chips')!;
+      assertFalse(chips.showBackground);
+    });
+
     test(
         'Nano Banana chip click opens composebox create image mode',
         async () => {
-          searchboxHandler.setResultFor(
-              'getRecentTabs', Promise.resolve({tabs: []}));
+          searchboxHandler.setPromiseResolveFor('getRecentTabs', {tabs: []});
           const actionChipsElement =
               app.shadowRoot.querySelector('ntp-action-chips');
           assertTrue(!!actionChipsElement);
@@ -2266,15 +2328,17 @@ suite('NewTabPageAppTest', () => {
     test(
         'Deep dive chip click opens composebox with context and suggestion',
         async () => {
-          const suggestion = 'Help me with this page';
+          const subtitle = 'Help me with this page subtitle';
+          const suggestion = 'Help me with this page suggestion';
           actionChipsPageRemote.onActionChipsChanged([{
             title: 'Deep dive',
+            subtitle: subtitle,
             suggestion: suggestion,
             type: ChipType.kDeepDive,
             tab: {
               tabId: 1,
               title: 'Test Title',
-              url: {url: 'https://example.com/test'},
+              url: 'https://example.com/test',
               lastActiveTime: {internalValue: BigInt(0)},
             },
           }]);
@@ -2287,6 +2351,10 @@ suite('NewTabPageAppTest', () => {
           const deepDiveChip =
               actionChipsElement.shadowRoot.getElementById('deep-dive-0');
           assertTrue(!!deepDiveChip);
+
+          const chipBody = deepDiveChip.querySelector('.chip-body');
+          assertTrue(!!chipBody);
+          assertEquals(subtitle, chipBody.textContent.trim());
 
           // Act.
           deepDiveChip.click();
@@ -2303,5 +2371,72 @@ suite('NewTabPageAppTest', () => {
           assertTrue(!!composebox.$.input);
           assertEquals(suggestion, composebox.$.input.value);
         });
+  });
+
+  suite('ThreadsRail', () => {
+    async function setThreadsRailEnabled(enabled: boolean) {
+      loadTimeData.overrideValues({enableThreadsRail: enabled});
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      app = document.createElement('ntp-app');
+      document.body.appendChild(app);
+      await microtasksFinished();
+    }
+
+    test('threads rail is not visible when feature disabled', async () => {
+      await setThreadsRailEnabled(false);
+      const searchbox = $$(app, '#searchbox');
+      assertTrue(!!searchbox);
+      searchbox.dispatchEvent(new CustomEvent('open-composebox', {
+        detail: {searchboxText: '', contextFiles: []},
+      }));
+      await microtasksFinished();
+
+      const threadsRail = app.shadowRoot.querySelector('cr-threads-rail');
+      assertFalse(!!threadsRail);
+    });
+
+    test('threads rail is visible when feature enabled', async () => {
+      await setThreadsRailEnabled(true);
+      const searchbox = $$(app, '#searchbox');
+      assertTrue(!!searchbox);
+      searchbox.dispatchEvent(new CustomEvent('open-composebox', {
+        detail: {searchboxText: '', contextFiles: []},
+      }));
+      await microtasksFinished();
+
+      const threadsRail = app.shadowRoot.querySelector('cr-threads-rail');
+      assertTrue(!!threadsRail);
+    });
+
+    test('records impression metric when threads rail is shown', async () => {
+      await setThreadsRailEnabled(true);
+      // Act: Open composebox to show threads rail.
+      ($$(app, '#searchbox')!.dispatchEvent(new CustomEvent('open-composebox', {
+        detail: {searchboxText: '', contextFiles: []},
+      })));
+      await microtasksFinished();
+
+      // Assert: Verify impression metric is recorded.
+      assertEquals(1, metrics.count('NewTabPage.ThreadsRail.Shown', true));
+    });
+
+    test('clicking threads rail records click', async () => {
+      await setThreadsRailEnabled(true);
+      // Arrange: Open composebox.
+      ($$(app, '#searchbox')!.dispatchEvent(new CustomEvent('open-composebox', {
+        detail: {searchboxText: '', contextFiles: []},
+      })));
+      await microtasksFinished();
+
+      const threadsRail = app.shadowRoot.querySelector('cr-threads-rail');
+      assertTrue(!!threadsRail);
+
+      // Act.
+      threadsRail.click();
+
+      // Assert.
+      assertEquals(
+          1, metrics.count('NewTabPage.Click', NtpElement.THREADS_RAIL));
+    });
   });
 });

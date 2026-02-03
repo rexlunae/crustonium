@@ -8,7 +8,7 @@
 #include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/bind_post_task.h"
@@ -363,8 +363,11 @@ void OpenXrRenderLoop::StartRuntimeFinish(
     transport_options->transport_method =
         device::mojom::XRPresentationTransportMethod::SUBMIT_AS_TEXTURE_HANDLE;
   } else {
+    // TODO(crbug.com/476100354): Verify that this path is not taken and remove
+    // it.
+    base::debug::DumpWithoutCrashing();
     transport_options->transport_method =
-        device::mojom::XRPresentationTransportMethod::SUBMIT_AS_MAILBOX_HOLDER;
+        device::mojom::XRPresentationTransportMethod::SUBMIT_AS_TEST;
   }
 
   if (graphics_binding_->IsWebGPUSession() &&
@@ -407,6 +410,9 @@ void OpenXrRenderLoop::StartRuntimeFinish(
   session->device_config->views = openxr_->GetDefaultViews();
   if (auto* depth = openxr_->GetDepthSensor(); depth) {
     session->device_config->depth_configuration = depth->GetDepthConfig();
+  }
+  if (openxr_->IsFeatureEnabled(mojom::XRSessionFeature::LAYERS)) {
+    session->device_config->max_render_layers = openxr_->GetMaxRenderLayers();
   }
 
   session->enviroment_blend_mode =
@@ -887,13 +893,14 @@ bool OpenXrRenderLoop::SubmitCompositedFrame() {
 }
 
 void OpenXrRenderLoop::SubmitFrame(int16_t frame_index,
-                                   const gpu::MailboxHolder& mailbox,
                                    base::TimeDelta time_waited) {
   DVLOG(3) << __func__ << " frame_index=" << frame_index;
   CHECK(!graphics_binding_->IsUsingSharedImages());
   DCHECK(BUILDFLAG(IS_ANDROID));
+  // The sync token passed here is unused by OpenXR backend's implementation of
+  // SubmitFrameMissing.
   // TODO(crbug.com/40917172): Support non-shared buffer mode.
-  SubmitFrameMissing(frame_index, mailbox.sync_token);
+  SubmitFrameMissing(frame_index, gpu::SyncToken());
 }
 
 void OpenXrRenderLoop::SubmitFrameDrawnIntoTexture(
@@ -1084,11 +1091,19 @@ void OpenXrRenderLoop::DestroyCompositionLayer(const LayerId& layer_id) {
 void OpenXrRenderLoop::SetEnabledCompositionLayers(
     const std::vector<LayerId>& layer_ids) {
   if (!openxr_->IsFeatureEnabled(mojom::XRSessionFeature::LAYERS)) {
+    layer_manager_receiver_.ReportBadMessage("Layers feature is not enabled.");
     return;
   }
   if (!context_provider_) {
+    layer_manager_receiver_.ReportBadMessage("Context was lost.");
     return;
   }
+  if (layer_ids.size() > openxr_->GetMaxRenderLayers()) {
+    layer_manager_receiver_.ReportBadMessage(
+        "Tried to enable too many layers.");
+    return;
+  }
+
   graphics_binding_->SetEnabledCompositionLayers(
       layer_ids, openxr_->session(),
       openxr_->GetRecommendedSwapchainSampleCount(),

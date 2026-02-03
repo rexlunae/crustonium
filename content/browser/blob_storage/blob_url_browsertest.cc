@@ -471,17 +471,16 @@ class BlobUrlDevToolsIssueTest : public ContentBrowserTest {
                                TestDevToolsProtocolClient* client,
                                const std::string& expected_info_enum) {
     // Wait for notification of a Partitioning Blob URL Issue.
-    base::Value::Dict params = client->WaitForMatchingNotification(
+    base::DictValue params = client->WaitForMatchingNotification(
         "Audits.issueAdded",
-        base::BindRepeating([](const base::Value::Dict& params) {
+        base::BindRepeating([](const base::DictValue& params) {
           const std::string* issue_code =
               params.FindStringByDottedPath("issue.code");
           return issue_code && *issue_code == "PartitioningBlobURLIssue";
         }));
 
-    EXPECT_THAT(params,
-                base::test::IsSupersetOfValue(base::test::ParseJson(JsReplace(
-                    R"({
+    EXPECT_THAT(params, base::test::IsSupersetOfValue(JsReplace(
+                            R"({
                   "issue": {
                     "code": "PartitioningBlobURLIssue",
                     "details": {
@@ -492,7 +491,7 @@ class BlobUrlDevToolsIssueTest : public ContentBrowserTest {
                     }
                   }
                 })",
-                    url, expected_info_enum))));
+                            url, expected_info_enum)));
 
     // Clear existing notifications so subsequent calls don't fail by checking
     // `url` against old notifications.

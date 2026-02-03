@@ -13,7 +13,6 @@
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -231,7 +230,7 @@ void AccountTrackerService::StartTrackingAccount(
   // TODO(crbug.com/40283610): Change into a CHECK once there are no crash
   // reports for tracking empty account ids.
   DUMP_WILL_BE_CHECK(!account_id.empty());
-  if (!base::Contains(accounts_, account_id)) {
+  if (!accounts_.contains(account_id)) {
     DVLOG(1) << "StartTracking " << account_id;
     AccountInfo account_info;
     account_info.account_id = account_id;
@@ -240,13 +239,13 @@ void AccountTrackerService::StartTrackingAccount(
 }
 
 bool AccountTrackerService::IsTrackingAccount(const CoreAccountId& account_id) {
-  return base::Contains(accounts_, account_id);
+  return accounts_.contains(account_id);
 }
 
 void AccountTrackerService::StopTrackingAccount(
     const CoreAccountId& account_id) {
   DVLOG(1) << "StopTracking " << account_id;
-  if (base::Contains(accounts_, account_id)) {
+  if (accounts_.contains(account_id)) {
     AccountInfo account_info = std::move(accounts_[account_id]);
     RemoveFromPrefs(account_info);
     RemoveAccountImageFromDisk(account_id);
@@ -260,8 +259,8 @@ void AccountTrackerService::StopTrackingAccount(
 
 void AccountTrackerService::SetAccountInfoFromUserInfo(
     const CoreAccountId& account_id,
-    const base::Value::Dict& user_info) {
-  DCHECK(base::Contains(accounts_, account_id));
+    const base::DictValue& user_info) {
+  DCHECK(accounts_.contains(account_id));
   AccountInfo& account_info = accounts_[account_id];
 
   AccountInPrefState state = AccountInPrefState::kValid;
@@ -327,7 +326,7 @@ void AccountTrackerService::SetAccountImage(
 void AccountTrackerService::SetAccountCapabilities(
     const CoreAccountId& account_id,
     const AccountCapabilities& account_capabilities) {
-  DCHECK(base::Contains(accounts_, account_id));
+  DCHECK(accounts_.contains(account_id));
   AccountInfo& account_info = accounts_[account_id];
 
   bool modified = account_info.capabilities.UpdateWith(account_capabilities);
@@ -353,7 +352,7 @@ void AccountTrackerService::SetAccountCapabilities(
 
 void AccountTrackerService::SetIsChildAccount(const CoreAccountId& account_id,
                                               bool is_child_account) {
-  DCHECK(base::Contains(accounts_, account_id)) << account_id.ToString();
+  DCHECK(accounts_.contains(account_id)) << account_id.ToString();
   AccountInfo& account_info = accounts_[account_id];
   bool modified = UpdateAccountInfoChildStatus(account_info, is_child_account);
   if (!modified) {
@@ -368,7 +367,7 @@ void AccountTrackerService::SetIsChildAccount(const CoreAccountId& account_id,
 void AccountTrackerService::SetIsAdvancedProtectionAccount(
     const CoreAccountId& account_id,
     bool is_under_advanced_protection) {
-  DCHECK(base::Contains(accounts_, account_id)) << account_id.ToString();
+  DCHECK(accounts_.contains(account_id)) << account_id.ToString();
   AccountInfo& account_info = accounts_[account_id];
   if (account_info.is_under_advanced_protection ==
       is_under_advanced_protection) {
@@ -422,7 +421,7 @@ void AccountTrackerService::MigrateToGaiaId() {
     // If there is already an account keyed to the current account's gaia id,
     // assume this is the result of a partial migration and skip the account
     // that is currently inspected.
-    if (base::Contains(accounts_, new_account_id)) {
+    if (accounts_.contains(new_account_id)) {
       continue;
     }
 
@@ -444,7 +443,7 @@ void AccountTrackerService::MigrateToGaiaId() {
 
   // Remove any obsolete account.
   for (const auto& account_id : to_remove) {
-    DCHECK(base::Contains(accounts_, account_id));
+    DCHECK(accounts_.contains(account_id));
     AccountInfo& account_info = accounts_[account_id];
     RemoveAccountImageFromDisk(account_id);
     RemoveFromPrefs(account_info);
@@ -582,10 +581,10 @@ void AccountTrackerService::OnAccountImageUpdated(
     return;
   }
 
-  base::Value::Dict* dict = nullptr;
+  base::DictValue* dict = nullptr;
   ScopedListPrefUpdate update(pref_service_, prefs::kAccountInfo);
   for (base::Value& value : *update) {
-    base::Value::Dict* maybe_dict = value.GetIfDict();
+    base::DictValue* maybe_dict = value.GetIfDict();
     if (maybe_dict) {
       const std::string* account_key =
           maybe_dict->FindString(signin::kAccountIdKey);
@@ -612,10 +611,10 @@ void AccountTrackerService::RemoveAccountImageFromDisk(
 }
 
 void AccountTrackerService::LoadFromPrefs() {
-  const base::Value::List& list = pref_service_->GetList(prefs::kAccountInfo);
+  const base::ListValue& list = pref_service_->GetList(prefs::kAccountInfo);
   std::set<CoreAccountId> to_remove;
   for (size_t i = 0; i < list.size(); ++i) {
-    const base::Value::Dict* dict = list[i].GetIfDict();
+    const base::DictValue* dict = list[i].GetIfDict();
     if (!dict) {
       continue;
     }
@@ -684,11 +683,11 @@ void AccountTrackerService::LoadFromPrefs() {
                            accounts_.size());
 }
 
-base::Value::Dict* AccountTrackerService::FindOrCreateDictForAccount(
+base::DictValue* AccountTrackerService::FindOrCreateDictForAccount(
     ScopedListPrefUpdate& update,
     const CoreAccountId& account_id) {
   for (base::Value& value : *update) {
-    base::Value::Dict* dict = value.GetIfDict();
+    base::DictValue* dict = value.GetIfDict();
     if (dict) {
       const std::string* account_key = dict->FindString(signin::kAccountIdKey);
       if (account_key && *account_key == account_id.ToString()) {
@@ -697,8 +696,8 @@ base::Value::Dict* AccountTrackerService::FindOrCreateDictForAccount(
     }
   }
 
-  update->Append(base::Value::Dict());
-  base::Value::Dict* new_dict = &update->back().GetDict();
+  update->Append(base::DictValue());
+  base::DictValue* new_dict = &update->back().GetDict();
   new_dict->Set(signin::kAccountIdKey, account_id.ToString());
   return new_dict;
 }
@@ -709,7 +708,7 @@ void AccountTrackerService::SaveToPrefs(const AccountInfo& account_info) {
   }
 
   ScopedListPrefUpdate update(pref_service_, prefs::kAccountInfo);
-  base::Value::Dict* dict =
+  base::DictValue* dict =
       FindOrCreateDictForAccount(update, account_info.account_id);
   dict->Merge(signin::SerializeAccountInfo(account_info));
 }
@@ -781,7 +780,7 @@ CoreAccountId AccountTrackerService::SeedAccountInfo(AccountInfo info) {
     return CoreAccountId();
   }
 
-  const bool already_exists = base::Contains(accounts_, info.account_id);
+  const bool already_exists = accounts_.contains(info.account_id);
   StartTrackingAccount(info.account_id);
   AccountInfo& account_info = accounts_[info.account_id];
   DCHECK(!already_exists || account_info.gaia.empty() ||
@@ -820,8 +819,8 @@ void AccountTrackerService::SeedAccountsInfo(
     for (const auto& account : GetAccounts()) {
       CoreAccountId curr_account_id = account.account_id;
       if (curr_account_id != primary_account_id &&
-          !base::Contains(accounts, curr_account_id,
-                          &AccountInfo::account_id)) {
+          !std::ranges::contains(accounts, curr_account_id,
+                                 &AccountInfo::account_id)) {
         RemoveAccount(curr_account_id);
       }
     }

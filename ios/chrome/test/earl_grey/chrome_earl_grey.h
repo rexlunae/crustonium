@@ -98,9 +98,6 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Returns whether the current layout is showing the bottom omnibox.
 - (BOOL)isCurrentLayoutBottomOmnibox;
 
-// Returns whether the Enhanced Safe Browsing Infobar Promo feature is enabled.
-- (BOOL)isEnhancedSafeBrowsingInfobarEnabled;
-
 // Returns whether the Ask Gemini Chip feature is enabled.
 - (BOOL)isAskGeminiChipEnabled;
 
@@ -234,9 +231,6 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Waits for there to be `count` number of incognito tabs within a timeout, or a
 // GREYAssert is induced.
 - (void)waitForIncognitoTabCount:(NSUInteger)count;
-
-// Loads `URL` as if it was opened from an external application.
-- (void)openURLFromExternalApp:(const GURL&)URL;
 
 // Programmatically dismisses settings screen.
 - (void)dismissSettings;
@@ -770,9 +764,6 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // can, open multiple windows.
 - (BOOL)areMultipleWindowsSupported;
 
-// Returns whether the NewOverflowMenu feature is enabled.
-- (BOOL)isNewOverflowMenuEnabled;
-
 // Returns whether the UseLensToSearchForImage feature is enabled;
 - (BOOL)isUseLensToSearchForImageEnabled;
 
@@ -830,6 +821,10 @@ id<GREYAction> grey_longPressWithDuration(base::TimeDelta duration);
 // Creates a `AppGroupCommand` based on the provided text and writes it the
 // shared NSUserDefaults.
 - (void)setAppGroupCommandToSearchText:(NSString*)text;
+
+// Creates an incognito `AppGroupCommand` based on the provided text and writes
+// it the shared NSUserDefaults.
+- (void)setAppGroupCommandToIncognitoSearchText:(NSString*)text;
 
 #pragma mark - Pref Utilities (EG2)
 

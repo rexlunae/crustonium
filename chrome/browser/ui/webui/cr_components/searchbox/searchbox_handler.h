@@ -17,6 +17,8 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/omnibox_proto/aim_models.pb.h"
+#include "third_party/omnibox_proto/aim_tools.pb.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
 
@@ -127,6 +129,8 @@ class SearchboxHandler : public searchbox::mojom::PageHandler,
                    bool meta_key,
                    bool shift_key) override {}
   void OpenLensSearch() override {}
+  void SetActiveToolMode(omnibox::ToolMode tool) override {}
+  void SetActiveModelMode(omnibox::ModelMode model) override {}
 
   // Stores `callback` to be run when the page remote is bound and ready to
   // receive calls. Runs `callback` immediately if the remote is already bound.
@@ -150,7 +154,7 @@ class SearchboxHandler : public searchbox::mojom::PageHandler,
 
   const AutocompleteMatch* GetMatchWithUrl(size_t index, const GURL& url) const;
 
-  virtual omnibox::ChromeAimToolsAndModels GetAimToolMode() const;
+  virtual omnibox::ToolMode GetAimToolMode() const;
 
   raw_ptr<Profile> profile_;
   raw_ptr<content::WebContents> web_contents_;

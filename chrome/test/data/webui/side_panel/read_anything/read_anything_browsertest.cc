@@ -207,6 +207,11 @@ IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, FontSelect) {
                    "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, SimpleActionMenu) {
+  RunSidePanelTest("side_panel/read_anything/simple_action_menu_test.js",
+                   "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, ColorMenu) {
   RunSidePanelTest("side_panel/read_anything/color_menu_test.js",
                    "mocha.run()");
@@ -261,11 +266,6 @@ IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, RateMenu) {
   RunSidePanelTest("side_panel/read_anything/rate_menu_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, SettingsMenu) {
-  RunSidePanelTest("side_panel/read_anything/settings_menu_test.js",
-                   "mocha.run()");
-}
-
 IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, ToolbarOverflow) {
   RunSidePanelTest("side_panel/read_anything/toolbar_overflow_test.js",
                    "mocha.run()");
@@ -286,6 +286,11 @@ IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, ReadAloudHighlight) {
 IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest,
                        LineFocusController) {
   RunSidePanelTest("side_panel/read_anything/line_focus_controller_test.js",
+                   "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_P(ReadAnythingMochaParameterizedTest, DomQueries) {
+  RunSidePanelTest("side_panel/read_anything/dom_queries_test.js",
                    "mocha.run()");
 }
 
@@ -328,4 +333,52 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingReadAloudTsSegmentationMochaTest,
                        ReadAloudModel) {
   RunSidePanelTest("side_panel/read_anything/read_aloud_model_test.js",
                    "mocha.run()");
+}
+
+class ImmersiveReadAnythingMochaTest : public ReadAnythingMochaBrowserTest {
+ protected:
+  ImmersiveReadAnythingMochaTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kReadAnythingReadAloud, features::kImmersiveReadAnything},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ImmersiveReadAnythingMochaTest, PresentationMenu) {
+  RunSidePanelTest("side_panel/read_anything/presentation_menu_test.js",
+                   "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(ImmersiveReadAnythingMochaTest, SettingsMenu) {
+  RunSidePanelTest("side_panel/read_anything/settings_menu_test.js",
+                   "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(ImmersiveReadAnythingMochaTest, ToolbarSettingsMenu) {
+  RunSidePanelTest("side_panel/read_anything/toolbar_settings_menu_test.js",
+                   "mocha.run()");
+}
+
+class ImmersiveReadAnythingWithReadabilityMochaTest
+    : public ReadAnythingMochaBrowserTest {
+ protected:
+  ImmersiveReadAnythingWithReadabilityMochaTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kImmersiveReadAnything,
+         features::kReadAnythingWithReadability},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ImmersiveReadAnythingWithReadabilityMochaTest,
+                       ReadabilityImageClassifier) {
+  RunSidePanelTest(
+      "side_panel/read_anything/readability_image_classifier_test.js",
+      "mocha.run()");
 }

@@ -37,6 +37,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/values_equivalent.h"
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/css/css_color_channel_keywords.h"
 #include "third_party/blink/renderer/core/css/css_custom_ident_value.h"
 #include "third_party/blink/renderer/core/css/css_math_function_value.h"
@@ -45,6 +46,7 @@
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/css_value_clamping_utils.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_local_context.h"
 #include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
@@ -719,6 +721,33 @@ bool CanEagerlySimplify(const CSSMathExpressionOperation::Operands& operands) {
   return true;
 }
 
+std::optional<CSSMathExpressionNode*> MaybeSimplifyComparisonFunction(
+    const CSSMathExpressionOperation::Operands& operands) {
+  DCHECK_EQ(operands.size(), 3u);
+  const CSSMathExpressionNode* min = operands[0];
+  const CSSMathExpressionNode* val = operands[1];
+  const CSSMathExpressionNode* max = operands[2];
+  // clamp(MIN, none, MAX) is not allowed
+  if (val->IsKeywordLiteral()) {
+    return nullptr;
+  }
+  // clamp(none, VAL, none) is equivalent to just calc(VAL)
+  if (min->IsKeywordLiteral() && max->IsKeywordLiteral()) {
+    return val->Copy();
+  }
+  // clamp(none, VAL, MAX) is equivalent to min(VAL, MAX)
+  if (min->IsKeywordLiteral()) {
+    return CSSMathExpressionOperation::CreateComparisonFunction(
+        {val->Copy(), max->Copy()}, CSSMathOperator::kMin);
+  }
+  // clamp(MIN, VAL, none) is equivalent to max(MIN, VAL)
+  if (max->IsKeywordLiteral()) {
+    return CSSMathExpressionOperation::CreateComparisonFunction(
+        {min->Copy(), val->Copy()}, CSSMathOperator::kMax);
+  }
+  return std::nullopt;
+}
+
 enum class ProgressArgsSimplificationStatus {
   kAllArgsResolveToCanonical,
   kAllArgsHaveSameType,
@@ -1202,11 +1231,7 @@ CSSMathExpressionNumericLiteral* CSSMathExpressionNumericLiteral::Create(
 
 CSSMathExpressionNumericLiteral::CSSMathExpressionNumericLiteral(
     const CSSNumericLiteralValue* value)
-    : CSSMathExpressionNode(UnitCategory(value->GetType()),
-                            false /* has_comparisons*/,
-                            false /* has_anchor_functions*/,
-                            false /* needs_tree_scope_population*/),
-      value_(value) {
+    : CSSMathExpressionNode(UnitCategory(value->GetType())), value_(value) {
   if (!value_->IsNumber() && CanEagerlySimplify(this)) {
     // "If root is a dimension that is not expressed in its canonical unit, and
     // there is enough information available to convert it to the canonical
@@ -1529,10 +1554,7 @@ static CalculationResultCategory DetermineCalcSizeCategory(
 
 CSSMathExpressionIdentifierLiteral::CSSMathExpressionIdentifierLiteral(
     AtomicString identifier)
-    : CSSMathExpressionNode(UnitCategory(CSSPrimitiveValue::UnitType::kIdent),
-                            false /* has_comparisons*/,
-                            false /* has_anchor_unctions*/,
-                            false /* needs_tree_scope_population*/),
+    : CSSMathExpressionNode(UnitCategory(CSSPrimitiveValue::UnitType::kIdent)),
       identifier_(std::move(identifier)) {}
 
 const CalculationExpressionNode*
@@ -1617,6 +1639,12 @@ CalculationResultCategory DetermineKeywordCategory(
       return kCalcLengthFunction;
     case CSSMathExpressionKeywordLiteral::Context::kColorChannel:
       return kCalcNumber;
+    case CSSMathExpressionKeywordLiteral::Context::kClamp:
+      // "none" keyword used in clamp() bounds can be any category, not only
+      // number, but since we simplify clamp() with "none" bounds anyway to
+      // min()/max()/calc(), we don't care about the category here. We just need
+      // to use any category other than `kCalcOther` to create a keyword node.
+      return kCalcIdent;
   };
 }
 
@@ -1625,10 +1653,7 @@ CalculationResultCategory DetermineKeywordCategory(
 CSSMathExpressionKeywordLiteral::CSSMathExpressionKeywordLiteral(
     CSSValueID keyword,
     Context context)
-    : CSSMathExpressionNode(DetermineKeywordCategory(keyword, context),
-                            false /* has_comparisons*/,
-                            false /* has_anchor_unctions*/,
-                            false /* needs_tree_scope_population*/),
+    : CSSMathExpressionNode(DetermineKeywordCategory(keyword, context)),
       keyword_(keyword),
       context_(context) {}
 
@@ -1656,6 +1681,8 @@ CSSMathExpressionKeywordLiteral::ToCalculationExpression(
     case CSSMathExpressionKeywordLiteral::Context::kColorChannel:
       return MakeGarbageCollected<CalculationExpressionColorChannelKeywordNode>(
           CSSValueIDToColorChannelKeyword(keyword_));
+    case CSSMathExpressionKeywordLiteral::Context::kClamp:
+      NOTREACHED();
   };
 }
 
@@ -1674,6 +1701,8 @@ double CSSMathExpressionKeywordLiteral::ComputeDouble(
     }
     case CSSMathExpressionKeywordLiteral::Context::kCalcSize:
     case CSSMathExpressionKeywordLiteral::Context::kColorChannel:
+      NOTREACHED();
+    case CSSMathExpressionKeywordLiteral::Context::kClamp:
       NOTREACHED();
   };
 }
@@ -1694,6 +1723,8 @@ CSSMathExpressionKeywordLiteral::ToPixelsAndPercent(
     case CSSMathExpressionKeywordLiteral::Context::kCalcSize:
     case CSSMathExpressionKeywordLiteral::Context::kColorChannel:
       return std::nullopt;
+    case CSSMathExpressionKeywordLiteral::Context::kClamp:
+      NOTREACHED();
   }
 }
 
@@ -1772,6 +1803,14 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateComparisonFunction(
   DCHECK(op == CSSMathOperator::kMin || op == CSSMathOperator::kMax ||
          op == CSSMathOperator::kClamp);
 
+  if (op == CSSMathOperator::kClamp) {
+    std::optional<CSSMathExpressionNode*> simplified_comparisson_operation =
+        MaybeSimplifyComparisonFunction(operands);
+    if (simplified_comparisson_operation.has_value()) {
+      return *simplified_comparisson_operation;
+    }
+  }
+
   CalculationResultCategory category = DetermineComparisonCategory(operands);
   if (category == kCalcOther) {
     return nullptr;
@@ -1802,20 +1841,6 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateComparisonFunction(
 
   return MakeGarbageCollected<CSSMathExpressionOperation>(
       category, std::move(operands), op, CSSMathType());
-}
-
-const CSSMathExpressionNode*
-CSSMathExpressionOperation::CopyRandomWithPropertyNameAndValueIndexIfNeeded(
-    const CSSPropertyName& property_name,
-    wtf_size_t property_value_index) const {
-  DCHECK(NeedsPropertyNameAndValueIndexForRandom());
-  Operands operands(operands_);
-  for (wtf_size_t i = 0; i < operands_.size(); i++) {
-    operands[i] = operands_[i]->CopyRandomWithPropertyNameAndValueIndexIfNeeded(
-        property_name, property_value_index);
-  }
-  return MakeGarbageCollected<CSSMathExpressionOperation>(
-      category_, std::move(operands), operator_, type_);
 }
 
 // Helper function for parsing number value
@@ -2108,7 +2133,7 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateSignRelatedFunction(
     CSSValueID function_id) {
   const CSSMathExpressionNode* operand = operands.front();
 
-  if (operand->IsCalcSize()) {
+  if (operand->IsCalcSize() || CSSMathType(*operand).IsIntermediateResult()) {
     return nullptr;
   }
 
@@ -2223,6 +2248,12 @@ inline bool CanArithmeticOperationBeSimplified(
          !DetermineType(*left_side, *right_side, op).IsIntermediateResult();
 }
 
+bool IsClampKeywordLiteral(const CSSMathExpressionNode* exp_node) {
+  return exp_node->IsKeywordLiteral() &&
+         DynamicTo<CSSMathExpressionKeywordLiteral>(exp_node)->GetContext() ==
+             CSSMathExpressionKeywordLiteral::Context::kClamp;
+}
+
 }  // namespace
 
 // static
@@ -2233,6 +2264,13 @@ CSSMathExpressionOperation::CreateArithmeticOperationSimplified(
     CSSMathOperator op) {
   DCHECK(op == CSSMathOperator::kAdd || op == CSSMathOperator::kSubtract ||
          op == CSSMathOperator::kMultiply || op == CSSMathOperator::kDivide);
+
+  // 'none' keyword for clamp() upper and lower bounds is only allowed
+  // as a single top level keyword, cannot be combined with other
+  // <calc-sum>.
+  if (IsClampKeywordLiteral(left_side) || IsClampKeywordLiteral(right_side)) {
+    return nullptr;
+  }
 
   if (CSSMathExpressionNode* result =
           MaybeDistributeArithmeticOperation(left_side, right_side, op)) {
@@ -2612,22 +2650,27 @@ CSSMathExpressionOperation::CSSMathExpressionOperation(
     CSSMathOperator op,
     CalculationResultCategory category,
     CSSMathType type)
-    : CSSMathExpressionNode(
-          category,
-          left_side->HasComparisons() || right_side->HasComparisons(),
-          left_side->HasAnchorFunctions() || right_side->HasAnchorFunctions(),
-          !left_side->IsScopedValue() || !right_side->IsScopedValue()),
+    : CSSMathExpressionNode(category),
       operands_({left_side, right_side}),
       operator_(op),
       type_(std::move(type)) {
   DCHECK_NE(CSSMathOperator::kDivide, op);
+  if (left_side->HasComparisons() || right_side->HasComparisons()) {
+    value_feature_flags_ = kHasComparisons;
+  }
+  if (left_side->HasAnchorFunctions() || right_side->HasAnchorFunctions()) {
+    value_feature_flags_ |= kHasAnchorFunctions;
+  }
+  if (left_side->HasRandomFunctions() || right_side->HasRandomFunctions()) {
+    value_feature_flags_ |= kHasRandomFunctions;
+  }
+  if (!left_side->IsScopedValue() || !right_side->IsScopedValue()) {
+    value_feature_flags_ |= kNeedsTreeScopePopulation;
+  }
   has_nested_intermediate_result_ = type_.IsIntermediateResult();
   has_nested_intermediate_result_ |= NodeHasNestedIntermediateResult(left_side);
   has_nested_intermediate_result_ |=
       NodeHasNestedIntermediateResult(right_side);
-  needs_property_name_and_value_index_for_random_ |=
-      (left_side && left_side->NeedsPropertyNameAndValueIndexForRandom()) ||
-      (right_side && right_side->NeedsPropertyNameAndValueIndexForRandom());
 }
 
 bool CSSMathExpressionOperation::HasPercentage() const {
@@ -2686,6 +2729,16 @@ static bool AnyOperandHasAnchorFunctions(
   return false;
 }
 
+static bool AnyOperandHasRandom(
+    CSSMathExpressionOperation::Operands& operands) {
+  for (const CSSMathExpressionNode* operand : operands) {
+    if (operand->HasRandomFunctions()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool AnyOperandNeedsTreeScopePopulation(
     CSSMathExpressionOperation::Operands& operands) {
   for (const CSSMathExpressionNode* operand : operands) {
@@ -2701,15 +2754,23 @@ CSSMathExpressionOperation::CSSMathExpressionOperation(
     Operands&& operands,
     CSSMathOperator op,
     CSSMathType type)
-    : CSSMathExpressionNode(
-          category,
-          IsComparison(op) || AnyOperandHasComparisons(operands),
-          AnyOperandHasAnchorFunctions(operands),
-          AnyOperandNeedsTreeScopePopulation(operands)),
+    : CSSMathExpressionNode(category),
       operands_(std::move(operands)),
       operator_(op),
       type_(std::move(type)) {
   DCHECK_NE(CSSMathOperator::kDivide, op);
+  if (IsComparison(operator_) || AnyOperandHasComparisons(operands_)) {
+    value_feature_flags_ = kHasComparisons;
+  }
+  if (AnyOperandHasAnchorFunctions(operands_)) {
+    value_feature_flags_ |= kHasAnchorFunctions;
+  }
+  if (AnyOperandHasRandom(operands_)) {
+    value_feature_flags_ |= kHasRandomFunctions;
+  }
+  if (AnyOperandNeedsTreeScopePopulation(operands_)) {
+    value_feature_flags_ |= kNeedsTreeScopePopulation;
+  }
   has_nested_intermediate_result_ = type_.IsIntermediateResult();
   if (IsArithmeticOperation()) {
     has_nested_intermediate_result_ |=
@@ -2717,23 +2778,17 @@ CSSMathExpressionOperation::CSSMathExpressionOperation(
     has_nested_intermediate_result_ |=
         NodeHasNestedIntermediateResult(operands_.back());
   }
-  for (const CSSMathExpressionNode* operand : operands_) {
-    needs_property_name_and_value_index_for_random_ |=
-        operand && operand->NeedsPropertyNameAndValueIndexForRandom();
-  }
 }
 
 CSSMathExpressionOperation::CSSMathExpressionOperation(
     CalculationResultCategory category,
     CSSMathOperator op,
     CSSMathType type)
-    : CSSMathExpressionNode(category,
-                            IsComparison(op),
-                            false /*has_anchor_functions*/,
-                            false),
-      operator_(op),
-      type_(std::move(type)) {
+    : CSSMathExpressionNode(category), operator_(op), type_(std::move(type)) {
   DCHECK_NE(CSSMathOperator::kDivide, op);
+  if (IsComparison(operator_)) {
+    value_feature_flags_ = kHasComparisons;
+  }
   has_nested_intermediate_result_ = type_.IsIntermediateResult();
 }
 
@@ -3665,15 +3720,13 @@ double EvaluateContainerSize(const CSSIdentifierValue* size_feature,
 CSSMathExpressionContainerFeature::CSSMathExpressionContainerFeature(
     const CSSIdentifierValue* size_feature,
     const CSSCustomIdentValue* container_name)
-    : CSSMathExpressionNode(
-          CalculationResultCategory::kCalcLength,
-          /*has_comparisons =*/false,
-          /*has_anchor_functions =*/false,
-          /*needs_tree_scope_population =*/
-          (container_name && !container_name->IsScopedValue())),
+    : CSSMathExpressionNode(CalculationResultCategory::kCalcLength),
       size_feature_(size_feature),
       container_name_(container_name) {
   CHECK(size_feature);
+  if (container_name_ && !container_name_->IsScopedValue()) {
+    value_feature_flags_ = kNeedsTreeScopePopulation;
+  }
 }
 
 String CSSMathExpressionContainerFeature::CustomCSSText() const {
@@ -3736,16 +3789,17 @@ CSSMathExpressionAnchorQuery::CSSMathExpressionAnchorQuery(
     const CSSValue* anchor_specifier,
     const CSSValue* value,
     const CSSPrimitiveValue* fallback)
-    : CSSMathExpressionNode(
-          AnchorQueryCategory(fallback),
-          false /* has_comparisons */,
-          true /* has_anchor_functions */,
-          (anchor_specifier && !anchor_specifier->IsScopedValue()) ||
-              (fallback && !fallback->IsScopedValue())),
+    : CSSMathExpressionNode(AnchorQueryCategory(fallback)),
       type_(type),
       anchor_specifier_(anchor_specifier),
       value_(value),
-      fallback_(fallback) {}
+      fallback_(fallback) {
+  value_feature_flags_ = kHasAnchorFunctions;
+  if ((anchor_specifier_ && !anchor_specifier_->IsScopedValue()) ||
+      (fallback_ && !fallback_->IsScopedValue())) {
+    value_feature_flags_ |= kNeedsTreeScopePopulation;
+  }
+}
 
 double CSSMathExpressionAnchorQuery::DoubleValue() const {
   NOTREACHED();
@@ -4104,6 +4158,7 @@ class CSSMathExpressionNodeParser {
    public:
     uint8_t depth;
     bool allow_size_keyword;
+    bool allow_clamp_none = false;
 
     static_assert(uint8_t(kMaxExpressionDepth + 1) == kMaxExpressionDepth + 1);
 
@@ -4113,10 +4168,12 @@ class CSSMathExpressionNodeParser {
   };
 
   CSSMathExpressionNodeParser(const CSSParserContext& context,
+                              CSSParserLocalContext& local_context,
                               const Flags parsing_flags,
                               CSSAnchorQueryTypes allowed_anchor_queries,
                               const CSSColorChannelMap& color_channel_map)
       : context_(context),
+        local_context_(local_context),
         allowed_anchor_queries_(allowed_anchor_queries),
         parsing_flags_(parsing_flags),
         color_channel_map_(color_channel_map) {}
@@ -4186,7 +4243,7 @@ class CSSMathExpressionNodeParser {
 
     // |anchor_specifier| may be omitted to represent the default anchor.
     const CSSValue* anchor_specifier =
-        css_parsing_utils::ConsumeDashedIdent(stream, context_);
+        css_parsing_utils::ConsumeDashedIdent(stream, context_, local_context_);
 
     stream.ConsumeWhitespace();
     const CSSValue* value = nullptr;
@@ -4199,7 +4256,8 @@ class CSSMathExpressionNodeParser {
             CSSValueID::kSelfEnd, CSSValueID::kCenter>(stream);
         if (!value) {
           value = css_parsing_utils::ConsumePercent(
-              stream, context_, CSSPrimitiveValue::ValueRange::kAll);
+              stream, context_, local_context_,
+              CSSPrimitiveValue::ValueRange::kAll);
         }
         break;
       case CSSAnchorQueryType::kAnchorSize:
@@ -4216,8 +4274,8 @@ class CSSMathExpressionNodeParser {
     stream.ConsumeWhitespace();
     // |anchor_specifier| may appear after the <anchor-side> / <anchor-size>.
     if (!anchor_specifier) {
-      anchor_specifier =
-          css_parsing_utils::ConsumeDashedIdent(stream, context_);
+      anchor_specifier = css_parsing_utils::ConsumeDashedIdent(stream, context_,
+                                                               local_context_);
     }
 
     bool expect_comma = anchor_specifier || value;
@@ -4225,7 +4283,7 @@ class CSSMathExpressionNodeParser {
     if (!expect_comma ||
         css_parsing_utils::ConsumeCommaIncludingWhitespace(stream)) {
       fallback = css_parsing_utils::ConsumeLengthOrPercent(
-          stream, context_, CSSPrimitiveValue::ValueRange::kAll,
+          stream, context_, local_context_, CSSPrimitiveValue::ValueRange::kAll,
           css_parsing_utils::UnitlessQuirk::kForbid, allowed_anchor_queries_);
       if (expect_comma && !fallback) {
         return nullptr;
@@ -4291,7 +4349,8 @@ class CSSMathExpressionNodeParser {
       if (stream.Peek().Id() == CSSValueID::kOf) {
         stream.ConsumeIncludingWhitespace();
         const CSSCustomIdentValue* container_name =
-            css_parsing_utils::ConsumeCustomIdent(stream, context_);
+            css_parsing_utils::ConsumeCustomIdent(stream, context_,
+                                                  local_context_);
         if (!container_name) {
           return nullptr;
         }
@@ -4428,6 +4487,7 @@ class CSSMathExpressionNodeParser {
   CSSMathExpressionNode* ParseMathFunction(CSSValueID function_id,
                                            CSSParserTokenStream& stream,
                                            State state) {
+    state.allow_clamp_none = false;
     if (!IsSupportedMathFunction(function_id)) {
       return nullptr;
     }
@@ -4466,6 +4526,7 @@ class CSSMathExpressionNodeParser {
       case CSSValueID::kClamp:
         min_argument_count = 3;
         max_argument_count = 3;
+        state.allow_clamp_none = true;
         break;
       case CSSValueID::kSin:
       case CSSValueID::kCos:
@@ -4542,14 +4603,14 @@ class CSSMathExpressionNodeParser {
         // Parse the (optional) <random-value-sharing> argument of the random()
         // function.
         const RandomValueSharing* random_value_sharing =
-            RandomValueSharing::Parse(stream, context_);
+            RandomValueSharing::Parse(stream, context_, local_context_);
         if (random_value_sharing) {
           if (!css_parsing_utils::ConsumeCommaIncludingWhitespace(stream)) {
             return nullptr;
           }
           non_expr_argument = random_value_sharing;
         } else {
-          non_expr_argument = RandomValueSharing::Auto();
+          non_expr_argument = RandomValueSharing::Auto(local_context_);
         }
         break;
       }
@@ -4668,6 +4729,7 @@ class CSSMathExpressionNodeParser {
         DCHECK(RuntimeEnabledFeatures::CSSRandomFunctionEnabled());
         DCHECK_GE(nodes.size(), 2u);
         DCHECK_LE(nodes.size(), 3u);
+        local_context_.IncrementRandomValueCount();
         const auto& random_value_sharing =
             std::get<const RandomValueSharing*>(non_expr_argument);
         return CSSMathExpressionRandomFunction::Create(random_value_sharing,
@@ -4718,6 +4780,10 @@ class CSSMathExpressionNodeParser {
       return CSSMathExpressionKeywordLiteral::Create(
           CSSValueID::kSize,
           CSSMathExpressionKeywordLiteral::Context::kCalcSize);
+    }
+    if (state.allow_clamp_none && token.Id() == CSSValueID::kNone) {
+      return CSSMathExpressionKeywordLiteral::Create(
+          CSSValueID::kNone, CSSMathExpressionKeywordLiteral::Context::kClamp);
     }
     if (!(token.GetType() == kNumberToken ||
           (token.GetType() == kPercentageToken &&
@@ -4790,7 +4856,9 @@ class CSSMathExpressionNodeParser {
         CSSParserTokenStream::BlockGuard guard(stream);
         stream.ConsumeWhitespace();
         result = ParseValueExpression(stream, state);
-        if (!result || !stream.AtEnd()) {
+        // 'none' keyword for clamp() upper and lower bounds is only allowed
+        // as a single top level keyword, not inside parenthesis.
+        if (!result || !stream.AtEnd() || IsClampKeywordLiteral(result)) {
           return nullptr;
         }
         result->SetIsNestedCalc();
@@ -4939,6 +5007,7 @@ class CSSMathExpressionNodeParser {
   }
 
   const CSSParserContext& context_;
+  CSSParserLocalContext& local_context_;
   const CSSAnchorQueryTypes allowed_anchor_queries_;
   const Flags parsing_flags_;
   const CSSColorChannelMap& color_channel_map_;
@@ -5237,10 +5306,11 @@ CSSMathExpressionNode* CSSMathExpressionNode::ParseMathFunction(
     CSSValueID function_id,
     CSSParserTokenStream& stream,
     const CSSParserContext& context,
+    CSSParserLocalContext& local_context,
     const Flags parsing_flags,
     CSSAnchorQueryTypes allowed_anchor_queries,
     const CSSColorChannelMap& color_channel_map) {
-  CSSMathExpressionNodeParser parser(context, parsing_flags,
+  CSSMathExpressionNodeParser parser(context, local_context, parsing_flags,
                                      allowed_anchor_queries, color_channel_map);
   CSSMathExpressionNodeParser::State state;
   CSSMathExpressionNode* result =
@@ -5330,7 +5400,7 @@ bool RandomValueSharing::IsAuto() const {
   return !std::holds_alternative<NameAndElementShared>(value_) ||
          !std::get<NameAndElementShared>(value_).name.StartsWith("--");
 }
-AtomicString RandomValueSharing::Name() const {
+const AtomicString& RandomValueSharing::Name() const {
   if (!std::holds_alternative<NameAndElementShared>(value_)) {
     return g_null_atom;
   }
@@ -5338,43 +5408,13 @@ AtomicString RandomValueSharing::Name() const {
 }
 bool RandomValueSharing::IsElementShared() const {
   return std::holds_alternative<NameAndElementShared>(value_) &&
-         std::get<NameAndElementShared>(value_).element_shared;
-}
-
-const RandomValueSharing*
-RandomValueSharing::CopyWithPropertyValueIndexNameIfNeeded(
-    const CSSPropertyName& property_name,
-    wtf_size_t property_value_index) const {
-  if (IsFixed()) {
-    const CSSPrimitiveValue* fixed_with_property = To<CSSPrimitiveValue>(
-        GetFixed()->CopyRandomValueWithPropertyNameAndValueIndexIfNeeded(
-            property_name, property_value_index));
-    return MakeGarbageCollected<RandomValueSharing>(fixed_with_property);
-  }
-  NameAndElementShared name_and_element_shared =
-      std::get<NameAndElementShared>(value_);
-  if (name_and_element_shared.name.IsNull()) {
-    StringBuilder str;
-    // Use string of form "PROPERTY {property_name} {property_value_index}"
-    // as name, this is later used for caching random values [0]. The prefix
-    // "PROPERTY" is needed since we need to make distinguish between custom
-    // property name and random value identifier, i.e. <dashed-ident> value in
-    // <random-value-sharing> [1]
-    // [0] https://drafts.csswg.org/css-values-5/#random-caching-key
-    // [1] https://drafts.csswg.org/css-values-5/#typedef-random-value-sharing
-    str.Append("PROPERTY ");
-    str.Append(property_name.ToAtomicString());
-    str.Append(" ");
-    str.AppendNumber(property_value_index);
-    return MakeGarbageCollected<RandomValueSharing>(
-        str.ToAtomicString(), name_and_element_shared.element_shared);
-  }
-  return this;
+         std::get<NameAndElementShared>(value_).is_element_shared;
 }
 
 const RandomValueSharing* RandomValueSharing::Parse(
     CSSParserTokenStream& stream,
-    const CSSParserContext& context) {
+    const CSSParserContext& context,
+    CSSParserLocalContext& local_context) {
   if (stream.Peek().GetType() != kIdentToken) {
     return nullptr;
   }
@@ -5385,7 +5425,7 @@ const RandomValueSharing* RandomValueSharing::Parse(
     stream.ConsumeIncludingWhitespace();
 
     CSSPrimitiveValue* fixed_value = css_parsing_utils::ConsumeNumber(
-        stream, context, CSSPrimitiveValue::ValueRange::kAll);
+        stream, context, local_context, CSSPrimitiveValue::ValueRange::kAll);
     if (!fixed_value) {
       stream.Restore(savepoint);
       return nullptr;
@@ -5415,16 +5455,16 @@ const RandomValueSharing* RandomValueSharing::Parse(
   }
 
   token = stream.Peek();
+  AtomicString name = local_context.PropertyNameAndRandomCount();
   if (stream.Peek().GetType() != kIdentToken) {
-    return MakeGarbageCollected<RandomValueSharing>(element_shared);
+    return MakeGarbageCollected<RandomValueSharing>(name, element_shared);
   }
 
-  AtomicString name = g_null_atom;
   if (token.Value() == "auto") {
     stream.ConsumeIncludingWhitespace();
   }
 
-  if (token.Value().ToString().StartsWith("--")) {
+  if (token.Value().starts_with("--")) {
     name = stream.ConsumeIncludingWhitespace().Value().ToAtomicString();
   }
 
@@ -5445,6 +5485,12 @@ const RandomValueSharing* RandomValueSharing::Fixed(double fixed_value) {
   return MakeGarbageCollected<RandomValueSharing>(
       CSSNumericLiteralValue::Create(fixed_value,
                                      CSSPrimitiveValue::UnitType::kNumber));
+}
+
+const RandomValueSharing* RandomValueSharing::Auto(
+    const CSSParserLocalContext& local_context) {
+  return MakeGarbageCollected<RandomValueSharing>(
+      local_context.PropertyNameAndRandomCount(), ElementShared(false));
 }
 
 void RandomValueSharing::Trace(Visitor* visitor) const {
@@ -5493,16 +5539,12 @@ CSSMathExpressionRandomFunction::CSSMathExpressionRandomFunction(
     const CSSMathExpressionNode* min,
     const CSSMathExpressionNode* max,
     const CSSMathExpressionNode* step)
-    : CSSMathExpressionNode(category,
-                            /*has_comparisons=*/false,
-                            /*has_anchor_functions=*/false,
-                            /*needs_tree_scope_population=*/false),
+    : CSSMathExpressionNode(category),
       random_value_sharing_(random_value_sharing),
       min_(min),
       max_(max),
       step_(step) {
-  needs_property_name_and_value_index_for_random_ =
-      random_value_sharing->Name().IsNull();
+  value_feature_flags_ = kHasRandomFunctions;
 }
 
 CSSMathExpressionRandomFunction* CSSMathExpressionRandomFunction::Create(
@@ -5534,18 +5576,6 @@ CSSMathExpressionNode* CSSMathExpressionRandomFunction::Copy() const {
   return MakeGarbageCollected<CSSMathExpressionRandomFunction>(
       base::PassKey<CSSMathExpressionRandomFunction>(), category_,
       random_value_sharing_, min_, max_, step_);
-}
-
-const CSSMathExpressionNode* CSSMathExpressionRandomFunction::
-    CopyRandomWithPropertyNameAndValueIndexIfNeeded(
-        const CSSPropertyName& property_name,
-        wtf_size_t property_value_index) const {
-  const RandomValueSharing* random_value_sharing =
-      random_value_sharing_->CopyWithPropertyValueIndexNameIfNeeded(
-          property_name, property_value_index);
-  return MakeGarbageCollected<CSSMathExpressionRandomFunction>(
-      base::PassKey<CSSMathExpressionRandomFunction>(), category_,
-      random_value_sharing, min_, max_, step_);
 }
 
 bool CSSMathExpressionRandomFunction::IsComputationallyIndependent() const {
@@ -5641,6 +5671,75 @@ double CSSMathExpressionRandomFunction::ComputeDouble(
     step = step_->ComputeNumber(length_resolver);
   }
   return ComputeCSSRandomValue(random_base_value, min, max, step);
+}
+
+std::optional<double>
+CSSMathExpressionRandomFunction::ComputeValueInCanonicalUnit() const {
+  if (category_ != kCalcIntermediate && !HasCanonicalUnit(category_)) {
+    return std::nullopt;
+  }
+  if (!random_value_sharing_->IsFixed()) {
+    // We can only resolve fixed random() values without having access to an
+    // element or a document.
+    return std::nullopt;
+  }
+  std::optional<double> fixed_value =
+      random_value_sharing_->GetFixed()->GetValueIfKnown();
+  if (!fixed_value.has_value()) {
+    return std::nullopt;
+  }
+  double random_base_value = std::clamp(*fixed_value, 0., 1.);
+  if (random_base_value == 1.0) {
+    random_base_value = std::nextafter(1.0f, 0.0f);
+  }
+
+  std::optional<double> min = min_->ComputeValueInCanonicalUnit();
+  if (!min.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<double> max = max_->ComputeValueInCanonicalUnit();
+  if (!max.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<double> step = std::nullopt;
+  if (step_) {
+    step = step_->ComputeValueInCanonicalUnit();
+    if (!step.has_value()) {
+      return std::nullopt;
+    }
+  }
+  return ComputeCSSRandomValue(random_base_value, *min, *max, step);
+}
+
+std::optional<double>
+CSSMathExpressionRandomFunction::ComputeValueInCanonicalUnit(
+    const CSSLengthResolver& length_resolver) const {
+  if (category_ != kCalcIntermediate && !HasCanonicalUnit(category_)) {
+    return std::nullopt;
+  }
+  if (!random_value_sharing_->IsElementShared()) {
+    length_resolver.ReferenceElementDependentRandom();
+  }
+  double random_base_value =
+      GetRandomBaseValue(random_value_sharing_, length_resolver);
+  std::optional<double> min =
+      min_->ComputeValueInCanonicalUnit(length_resolver);
+  if (!min.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<double> max =
+      max_->ComputeValueInCanonicalUnit(length_resolver);
+  if (!max.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<double> step = std::nullopt;
+  if (step_) {
+    step = step_->ComputeValueInCanonicalUnit(length_resolver);
+    if (!step.has_value()) {
+      return std::nullopt;
+    }
+  }
+  return ComputeCSSRandomValue(random_base_value, *min, *max, step);
 }
 
 CSSPrimitiveValue::UnitType CSSMathExpressionRandomFunction::ResolvedUnitType()

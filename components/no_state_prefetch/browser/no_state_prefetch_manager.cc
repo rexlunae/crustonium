@@ -16,7 +16,6 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -363,10 +362,10 @@ bool NoStatePrefetchManager::HasRecentlyBeenNavigatedTo(Origin origin,
 
   return false;
 }
-base::Value::Dict NoStatePrefetchManager::CopyAsDict() const {
+base::DictValue NoStatePrefetchManager::CopyAsDict() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  base::Value::Dict dict_value;
+  base::DictValue dict_value;
   dict_value.Set("history", prefetch_history_->CopyEntriesAsValue());
   dict_value.Set("active", GetActivePrerenders());
   dict_value.Set("enabled", delegate_->IsNetworkPredictionPreferenceEnabled());
@@ -969,10 +968,10 @@ void NoStatePrefetchManager::AddToHistory(NoStatePrefetchContents* contents) {
   prefetch_history_->AddEntry(entry);
 }
 
-base::Value::List NoStatePrefetchManager::GetActivePrerenders() const {
-  base::Value::List list;
+base::ListValue NoStatePrefetchManager::GetActivePrerenders() const {
+  base::ListValue list;
   for (const auto& prefetch : active_prefetches_) {
-    if (std::optional<base::Value::Dict> prefetch_value =
+    if (std::optional<base::DictValue> prefetch_value =
             prefetch->contents()->GetAsDict()) {
       list.Append(std::move(*prefetch_value));
     }
@@ -1017,7 +1016,7 @@ bool NoStatePrefetchManager::MayReuseProcessHost(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // Isolate prefetch processes to make the resource monitoring check more
   // accurate.
-  return !base::Contains(prerender_process_hosts_, process_host);
+  return !prerender_process_hosts_.contains(process_host);
 }
 
 void NoStatePrefetchManager::RenderProcessHostDestroyed(

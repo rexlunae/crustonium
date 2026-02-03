@@ -34,14 +34,17 @@ import static org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskUni
 
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
+import android.app.role.RoleManager;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Build;
+import android.os.Process;
 import android.util.Pair;
 import android.view.WindowMetrics;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -50,25 +53,34 @@ import org.mockito.InOrder;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowRoleManager;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.Promise;
 import org.chromium.base.TimeUtils;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcherProvider;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.lifecycle.TopResumedActivityChangedWithNativeObserver;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask.ActivityScopedObjects;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskImpl.State;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskUnitTestSupport.ChromeAndroidTaskWithMockDeps;
 import org.chromium.chrome.browser.ui.browser_window.PendingActionManager.PendingAction;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 import org.chromium.ui.display.DisplayUtil;
 import org.chromium.ui.mojom.WindowShowState;
 
@@ -118,35 +130,49 @@ public class ChromeAndroidTaskImplUnitTest {
     }
 
     private static void assertListenersRegisteredForActivity(
-            ChromeAndroidTaskImpl chromeAndroidTask, ActivityScopedObjects activityScopedObjects) {
+            ChromeAndroidTaskImpl chromeAndroidTask,
+            ActivityScopedObjects activityScopedObjects,
+            @Nullable TabModelObserver tabModelObserver) {
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects,
+                tabModelObserver,
+                /* expectedNumberOfInvocations= */ 1);
     }
 
     private static void assertListenersRegisteredForActivity(
             ChromeAndroidTaskImpl chromeAndroidTask,
             ActivityScopedObjects activityScopedObjects,
+            @Nullable TabModelObserver tabModelObserver,
             int expectedNumberOfInvocations) {
         assertListenersForActivity(
                 chromeAndroidTask,
                 activityScopedObjects,
+                tabModelObserver,
                 /* assertListenerRegistration= */ true,
                 expectedNumberOfInvocations);
     }
 
     private static void assertListenersUnregisteredForActivity(
-            ChromeAndroidTaskImpl chromeAndroidTask, ActivityScopedObjects activityScopedObjects) {
+            ChromeAndroidTaskImpl chromeAndroidTask,
+            ActivityScopedObjects activityScopedObjects,
+            @Nullable TabModelObserver tabModelObserver) {
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects,
+                tabModelObserver,
+                /* expectedNumberOfInvocations= */ 1);
     }
 
     private static void assertListenersUnregisteredForActivity(
             ChromeAndroidTaskImpl chromeAndroidTask,
             ActivityScopedObjects activityScopedObjects,
+            @Nullable TabModelObserver tabModelObserver,
             int expectedNumberOfInvocations) {
         assertListenersForActivity(
                 chromeAndroidTask,
                 activityScopedObjects,
+                tabModelObserver,
                 /* assertListenerRegistration= */ false,
                 expectedNumberOfInvocations);
     }
@@ -154,6 +180,7 @@ public class ChromeAndroidTaskImplUnitTest {
     private static void assertListenersForActivity(
             ChromeAndroidTaskImpl chromeAndroidTask,
             ActivityScopedObjects activityScopedObjects,
+            @Nullable TabModelObserver tabModelObserver,
             boolean assertListenerRegistration,
             int expectedNumberOfInvocations) {
         var activity = activityScopedObjects.mActivityWindowAndroid.getActivity().get();
@@ -162,23 +189,59 @@ public class ChromeAndroidTaskImplUnitTest {
 
         var activityLifecycleDispatcher =
                 ((ActivityLifecycleDispatcherProvider) activity).getLifecycleDispatcher();
-        var tabModel = activityScopedObjects.mTabModel;
+        var tabModel = activityScopedObjects.mTabModelSelector.getCurrentModel();
         assertTrue(mockingDetails(activityLifecycleDispatcher).isMock());
         assertTrue(mockingDetails(tabModel).isMock());
 
+        // The observer is recreated each time so we can't use times(expectedNumberOfInvocations).
+        var observerTimes = expectedNumberOfInvocations == 0 ? never() : times(1);
         if (assertListenerRegistration) {
             verify(activityLifecycleDispatcher, times(expectedNumberOfInvocations))
                     .register(isA(TopResumedActivityChangedWithNativeObserver.class));
             verify(activityLifecycleDispatcher, times(expectedNumberOfInvocations))
                     .register(isA(ConfigurationChangedObserver.class));
-            verify(tabModel, times(expectedNumberOfInvocations)).addObserver(chromeAndroidTask);
+
+            if (tabModelObserver != null) {
+                assertNotEquals(
+                        SupportedProfileType.MIXED, activityScopedObjects.mSupportedProfileType);
+                verify(tabModel, observerTimes).addObserver(tabModelObserver);
+            } else {
+                assertEquals(
+                        SupportedProfileType.MIXED, activityScopedObjects.mSupportedProfileType);
+                verify(tabModel, never()).addObserver(any());
+            }
         } else {
             verify(activityLifecycleDispatcher, times(expectedNumberOfInvocations))
                     .unregister(isA(TopResumedActivityChangedWithNativeObserver.class));
             verify(activityLifecycleDispatcher, times(expectedNumberOfInvocations))
                     .unregister(isA(ConfigurationChangedObserver.class));
-            verify(tabModel, times(expectedNumberOfInvocations)).removeObserver(chromeAndroidTask);
+
+            if (tabModelObserver != null) {
+                assertNotEquals(
+                        SupportedProfileType.MIXED, activityScopedObjects.mSupportedProfileType);
+                verify(tabModel, observerTimes).removeObserver(tabModelObserver);
+            } else {
+                assertEquals(
+                        SupportedProfileType.MIXED, activityScopedObjects.mSupportedProfileType);
+                verify(tabModel, never()).removeObserver(any());
+            }
         }
+    }
+
+    private static void assertNoPendingActions(ChromeAndroidTaskImpl chromeAndroidTask) {
+        int[] pendingActions =
+                chromeAndroidTask.getPendingActionManagerForTesting().getPendingActionsForTesting();
+        assertEquals(2, pendingActions.length);
+        assertEquals(PendingAction.NONE, pendingActions[0]);
+        assertEquals(PendingAction.NONE, pendingActions[1]);
+    }
+
+    @Before
+    public void setUp() {
+        ShadowRoleManager.addRoleHolder(
+                RoleManager.ROLE_BROWSER,
+                ContextUtils.getApplicationContext().getPackageName(),
+                Process.myUserHandle());
     }
 
     @Test
@@ -205,7 +268,10 @@ public class ChromeAndroidTaskImplUnitTest {
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var activityScopedObjects = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
 
-        assertListenersRegisteredForActivity(chromeAndroidTask, activityScopedObjects);
+        assertListenersRegisteredForActivity(
+                chromeAndroidTask,
+                activityScopedObjects,
+                chromeAndroidTask.getTabModelObserverForTesting());
         assertTrue(
                 ApplicationStatus.getTaskVisibilityListenersForTesting()
                         .hasObserver(chromeAndroidTask));
@@ -215,7 +281,9 @@ public class ChromeAndroidTaskImplUnitTest {
     public void constructor_withActivityScopedObjects_associateTabModelWithNativeBrowserWindow() {
         // Arrange & Act.
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
-        var mockTabModel = chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mTabModel;
+        var mockTabModel =
+                chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mTabModelSelector
+                        .getCurrentModel();
 
         // Assert.
         verify(mockTabModel, times(1))
@@ -236,30 +304,23 @@ public class ChromeAndroidTaskImplUnitTest {
         assertNotNull(actualPendingTaskInfo);
         assertEquals(pendingTaskInfo.mPendingTaskId, actualPendingTaskInfo.mPendingTaskId);
         assertEquals(pendingTaskInfo.mCreateParams.getWindowType(), task.getBrowserWindowType());
-        assertEquals(pendingTaskInfo.mCreateParams.getProfile(), task.getProfile());
         assertEquals(State.PENDING_CREATE, task.getState());
         assertNull(task.getId());
         assertTrue(task.getActivityScopedObjectsListForTesting().isEmpty());
     }
 
     @Test
-    public void getProfile_returnsInitialProfile() {
-        // Arrange.
-        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
-        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
-        var initialProfile = chromeAndroidTaskWithMockDeps.mMockProfile;
-
-        // Act & Assert.
-        assertEquals(
-                "The returned Profile should be the same as the one from the constructor.",
-                initialProfile,
-                chromeAndroidTask.getProfile());
-    }
-
-    @Test
     public void didAddTab_withDifferentProfile_throwsAssertionError() {
         // Arrange.
+        ArgumentCaptor<TabModelObserver> tabModelObserverCaptor =
+                ArgumentCaptor.forClass(TabModelObserver.class);
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        verify(
+                        chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mTabModelSelector
+                                .getCurrentModel(),
+                        times(1))
+                .addObserver(tabModelObserverCaptor.capture());
+        var tabModelObserver = tabModelObserverCaptor.getValue();
         var chromeAndroidTask =
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var initialProfile = chromeAndroidTaskWithMockDeps.mMockProfile;
@@ -273,7 +334,7 @@ public class ChromeAndroidTaskImplUnitTest {
         assertThrows(
                 AssertionError.class,
                 () ->
-                        chromeAndroidTask.didAddTab(
+                        tabModelObserver.didAddTab(
                                 tabWithDifferentProfile,
                                 TabLaunchType.FROM_CHROME_UI,
                                 TabCreationState.LIVE_IN_FOREGROUND,
@@ -321,12 +382,18 @@ public class ChromeAndroidTaskImplUnitTest {
         var activityScopedObjects1 = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
         var activityScopedObjects2 = createActivityScopedObjects(taskId);
 
+        TabModelObserver observer1 = chromeAndroidTask.getTabModelObserverForTesting();
+
         // Act.
         chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
 
         // Assert.
-        assertListenersUnregisteredForActivity(chromeAndroidTask, activityScopedObjects1);
-        assertListenersRegisteredForActivity(chromeAndroidTask, activityScopedObjects2);
+        assertListenersUnregisteredForActivity(
+                chromeAndroidTask, activityScopedObjects1, observer1);
+        assertListenersRegisteredForActivity(
+                chromeAndroidTask,
+                activityScopedObjects2,
+                chromeAndroidTask.getTabModelObserverForTesting());
     }
 
     @Test
@@ -360,27 +427,45 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var activityScopedObjects1 = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
+        TabModelObserver observer1 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Arrange: Add the 2nd instance of ActivityScopedObjects.
         var activityScopedObjects2 = createActivityScopedObjects(taskId);
         chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
+        TabModelObserver observer2 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Act: Add the 1st instance of ActivityScopedObjects again.
         chromeAndroidTask.addActivityScopedObjects(activityScopedObjects1);
+        TabModelObserver observer3 = chromeAndroidTask.getTabModelObserverForTesting();
 
         // Assert:
         // (1) Unregister listeners for the previous top Activity;
         // (2) Re-register listeners for the Activity that's moved to top.
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 2);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer3,
+                /* expectedNumberOfInvocations= */ 2);
     }
 
     @Test
@@ -420,7 +505,7 @@ public class ChromeAndroidTaskImplUnitTest {
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
 
         var newActivityScopedObjects = createActivityScopedObjects(taskId);
-        var newMockTabModel = newActivityScopedObjects.mTabModel;
+        var newMockTabModel = newActivityScopedObjects.mTabModelSelector.getCurrentModel();
 
         // Act.
         chromeAndroidTask.addActivityScopedObjects(newActivityScopedObjects);
@@ -501,28 +586,46 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var activityScopedObjects1 = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
+        TabModelObserver observer1 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Arrange: Add the 2nd instance of ActivityScopedObjects.
         var activityScopedObjects2 = createActivityScopedObjects(taskId);
         chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
+        TabModelObserver observer2 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Act: Remove activityScopedObjects2, which represents the top Activity.
         chromeAndroidTask.removeActivityScopedObjects(
                 activityScopedObjects2.mActivityWindowAndroid);
+        TabModelObserver observer3 = chromeAndroidTask.getTabModelObserverForTesting();
 
         // Assert:
         // (1) Unregister listeners for the previous top Activity (activityScopedObjects2);
         // (2) Re-register listeners for the Activity that's moved to top (activityScopedObjects1).
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 2);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer3,
+                /* expectedNumberOfInvocations= */ 2);
 
         // Assert: TaskVisibilityListener still exists for the Task.
         assertTrue(
@@ -539,16 +642,27 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var activityScopedObjects1 = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
+        TabModelObserver observer1 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Arrange: Add the 2nd instance of ActivityScopedObjects.
         var activityScopedObjects2 = createActivityScopedObjects(taskId);
         chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
+        TabModelObserver observer2 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Act: Remove activityScopedObjects1, which doesn't represent the top Activity.
         chromeAndroidTask.removeActivityScopedObjects(
@@ -563,13 +677,25 @@ public class ChromeAndroidTaskImplUnitTest {
         // Assert: no listener should be registered or unregistered as a result of removing
         // activityScopedObjects1.
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 0);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 0);
         assertTrue(
                 ApplicationStatus.getTaskVisibilityListenersForTesting()
                         .hasObserver(chromeAndroidTask));
@@ -578,17 +704,25 @@ public class ChromeAndroidTaskImplUnitTest {
     @Test
     public void addFeature_addsFeatureToInternalFeatureMap() {
         // Arrange.
-        var chromeAndroidTask =
-                createChromeAndroidTaskWithMockDeps(/* taskId= */ 1).mChromeAndroidTask;
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var profile = chromeAndroidTaskWithMockDeps.mMockProfile;
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(TestChromeAndroidTaskFeature.class, profile);
+        var altFeatureKeyRef =
+                new ChromeAndroidTaskFeatureKey(TestChromeAndroidTaskFeature.class, profile);
+        var profileLessFeatureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
 
         // Act.
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         // Assert.
-        assertEquals(
-                testFeature,
-                chromeAndroidTask.getFeatureForTesting(TestChromeAndroidTaskFeature.class));
+        assertEquals(testFeature, chromeAndroidTask.getFeatureForTesting(featureKey));
+        assertEquals(testFeature, chromeAndroidTask.getFeatureForTesting(altFeatureKeyRef));
+        assertNull(chromeAndroidTask.getFeatureForTesting(profileLessFeatureKey));
     }
 
     @Test
@@ -599,7 +733,10 @@ public class ChromeAndroidTaskImplUnitTest {
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
 
         // Act.
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        chromeAndroidTask.addFeature(
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null),
+                () -> testFeature);
 
         // Assert.
         testFeature.mOnAddedToTaskHelper.waitForCallback(
@@ -613,10 +750,13 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 createChromeAndroidTaskWithMockDeps(/* taskId= */ 1).mChromeAndroidTask;
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
 
         // Act: add the feature twice.
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         // Assert: only the first addFeature() should invoke onAddedToTask().
         testFeature.mOnAddedToTaskHelper.waitForCallback(
@@ -626,8 +766,9 @@ public class ChromeAndroidTaskImplUnitTest {
     @Test
     public void addFeature_calledAfterTaskDestroyed_throwsException() {
         // Arrange.
-        var chromeAndroidTask =
-                createChromeAndroidTaskWithMockDeps(/* taskId= */ 1).mChromeAndroidTask;
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var profile = chromeAndroidTaskWithMockDeps.mMockProfile;
         chromeAndroidTask.destroy();
 
         // Act & Assert.
@@ -636,7 +777,9 @@ public class ChromeAndroidTaskImplUnitTest {
                 AssertionError.class,
                 () ->
                         chromeAndroidTask.addFeature(
-                                TestChromeAndroidTaskFeature.class, () -> testFeature));
+                                new ChromeAndroidTaskFeatureKey(
+                                        TestChromeAndroidTaskFeature.class, profile),
+                                () -> testFeature));
     }
 
     @Test
@@ -721,23 +864,37 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
         var activityScopedObjects1 = chromeAndroidTaskWithMockDeps.mActivityScopedObjects;
+        TabModelObserver observer1 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Arrange: Add the 2nd instance of ActivityScopedObjects.
         var activityScopedObjects2 = createActivityScopedObjects(taskId);
         chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
+        TabModelObserver observer2 = chromeAndroidTask.getTabModelObserverForTesting();
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects1, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects1,
+                observer1,
+                /* expectedNumberOfInvocations= */ 1);
         assertListenersRegisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
 
         // Act.
         chromeAndroidTask.destroy();
 
         // Assert.
         assertListenersUnregisteredForActivity(
-                chromeAndroidTask, activityScopedObjects2, /* expectedNumberOfInvocations= */ 1);
+                chromeAndroidTask,
+                activityScopedObjects2,
+                observer2,
+                /* expectedNumberOfInvocations= */ 1);
     }
 
     @Test
@@ -760,7 +917,10 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 createChromeAndroidTaskWithMockDeps(/* taskId= */ 1).mChromeAndroidTask;
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         // Act.
         chromeAndroidTask.destroy();
@@ -816,11 +976,46 @@ public class ChromeAndroidTaskImplUnitTest {
         var chromeAndroidTask =
                 createChromeAndroidTaskWithMockDeps(/* taskId= */ 1).mChromeAndroidTask;
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
         testFeature.mShouldRefuseToBeRemoved = true;
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         // Act & Assert.
         assertThrows(AssertionError.class, chromeAndroidTask::destroy);
+    }
+
+    @Test
+    public void onProfileDestroyed_removesProfileScopedFeature() throws Exception {
+        // Arrange.
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var chromeAndroidTask =
+                (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var profile = chromeAndroidTaskWithMockDeps.mMockProfile;
+
+        var profileScopedFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        var profileScopedFeatureKey =
+                new ChromeAndroidTaskFeatureKey(TestChromeAndroidTaskFeature.class, profile);
+        chromeAndroidTask.addFeature(profileScopedFeatureKey, () -> profileScopedFeature);
+
+        var nonProfileScopedFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        var nonProfileScopedFeatureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
+        chromeAndroidTask.addFeature(nonProfileScopedFeatureKey, () -> nonProfileScopedFeature);
+
+        // Act.
+        // Simulate a profile destruction.
+        ProfileManager.onProfileDestroyed(profile);
+
+        // Assert.
+        profileScopedFeature.mOnTaskRemovedHelper.waitForCallback(0, 1);
+        assertNull(chromeAndroidTask.getFeatureForTesting(profileScopedFeatureKey));
+        assertEquals(
+                nonProfileScopedFeature,
+                chromeAndroidTask.getFeatureForTesting(nonProfileScopedFeatureKey));
+        assertEquals(0, nonProfileScopedFeature.mOnTaskRemovedHelper.getCallCount());
     }
 
     @Test
@@ -832,7 +1027,10 @@ public class ChromeAndroidTaskImplUnitTest {
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
 
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         var mockWindowManager =
                 chromeAndroidTaskWithMockDeps.mActivityWindowAndroidMocks.mMockWindowManager;
@@ -867,7 +1065,10 @@ public class ChromeAndroidTaskImplUnitTest {
         when(mockDisplayAndroid.getDipScale()).thenReturn(dipScale);
 
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         var mockWindowManager =
                 chromeAndroidTaskWithMockDeps.mActivityWindowAndroidMocks.mMockWindowManager;
@@ -899,7 +1100,10 @@ public class ChromeAndroidTaskImplUnitTest {
                 (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
 
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         var mockWindowManager =
                 chromeAndroidTaskWithMockDeps.mActivityWindowAndroidMocks.mMockWindowManager;
@@ -971,7 +1175,10 @@ public class ChromeAndroidTaskImplUnitTest {
                 (ChromeAndroidTaskImpl)
                         createChromeAndroidTaskWithMockDeps(/* taskId= */ 1).mChromeAndroidTask;
         var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
-        chromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> testFeature);
+        var featureKey =
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null);
+        chromeAndroidTask.addFeature(featureKey, () -> testFeature);
 
         // Act.
         chromeAndroidTask.onTopResumedActivityChangedWithNative(/* isTopResumedActivity= */ true);
@@ -1003,6 +1210,26 @@ public class ChromeAndroidTaskImplUnitTest {
                 "Not moving to target bound",
                 DEFAULT_MAXIMIZED_WINDOW_BOUNDS_IN_PX,
                 capturedBounds);
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.BAKLAVA)
+    public void maximize_cannotSetBounds_noOp() {
+        // Arrange: Set up ChromeAndroidTask and its mock dependencies.
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var apiDelegate = chromeAndroidTaskWithMockDeps.mMockAconfigFlaggedApiDelegate;
+        var chromeAndroidTask =
+                (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+
+        // Arrange: Enter non-desktop-windowing mode, where we can't set window bounds.
+        AppHeaderUtils.setAppInDesktopWindowForTesting(false);
+
+        // Act.
+        chromeAndroidTask.maximize();
+
+        // Assert.
+        assertNoPendingActions(chromeAndroidTask);
+        verify(apiDelegate, never()).moveTaskToWithPromise(any(), anyInt(), any());
     }
 
     @Test
@@ -1212,6 +1439,34 @@ public class ChromeAndroidTaskImplUnitTest {
 
     @Test
     @Config(sdk = Build.VERSION_CODES.BAKLAVA)
+    public void setBoundsInDp_cannotSetBounds_noOp() {
+        // Arrange: Set up ChromeAndroidTask and its dependencies.
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var chromeAndroidTask =
+                (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var apiDelegate = chromeAndroidTaskWithMockDeps.mMockAconfigFlaggedApiDelegate;
+        var displayAndroid =
+                chromeAndroidTaskWithMockDeps.mActivityWindowAndroidMocks.mMockDisplayAndroid;
+        float dipScale = 2.0f;
+        when(displayAndroid.getDipScale()).thenReturn(dipScale);
+
+        // Arrange: Enter non-desktop-windowing mode, where we can't set window bounds.
+        AppHeaderUtils.setAppInDesktopWindowForTesting(false);
+
+        // Act.
+        Rect newBoundsInDp =
+                DisplayUtil.scaleToEnclosingRect(
+                        DEFAULT_CURRENT_WINDOW_BOUNDS_IN_PX, 1.0f / dipScale);
+        newBoundsInDp.offset(/* dx= */ 10, /* dy= */ 10);
+        chromeAndroidTask.setBoundsInDp(newBoundsInDp);
+
+        // Assert.
+        assertNoPendingActions(chromeAndroidTask);
+        verify(apiDelegate, never()).moveTaskToWithPromise(any(), anyInt(), any());
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.BAKLAVA)
     public void restore_restoresToPreviousBounds() {
         // Arrange
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
@@ -1294,6 +1549,43 @@ public class ChromeAndroidTaskImplUnitTest {
     }
 
     @Test
+    @Config(sdk = Build.VERSION_CODES.BAKLAVA)
+    public void restore_cannotSetBounds_noOp() {
+        // Arrange: Set up ChromeAndroidTask and its mock dependencies.
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var apiDelegate = chromeAndroidTaskWithMockDeps.mMockAconfigFlaggedApiDelegate;
+        var chromeAndroidTask =
+                (ChromeAndroidTaskImpl) chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+
+        // Check the default test setup.
+        assertFalse("Task shouldn't be minimized", chromeAndroidTask.isMinimized());
+        assertFalse("Task shouldn't be maximized", chromeAndroidTask.isMaximized());
+        assertFalse("Task shouldn't be fullscreen", chromeAndroidTask.isFullscreen());
+
+        // Arrange: Call maximize(). This should set mRestoredBounds to the current bounds.
+        chromeAndroidTask.maximize();
+        assertEquals(
+                "restored bounds should be set to the current bounds",
+                DEFAULT_CURRENT_WINDOW_BOUNDS_IN_PX,
+                chromeAndroidTask.getRestoredBoundsInPxForTesting());
+        chromeAndroidTask.getPendingActionManagerForTesting().clearPendingActionsForTesting();
+
+        // Arrange: Enter non-desktop-windowing mode, where we can't set window bounds.
+        AppHeaderUtils.setAppInDesktopWindowForTesting(false);
+
+        // Act
+        chromeAndroidTask.restore();
+
+        // Assert:
+        // (1) No pending actions.
+        // (2) moveTaskToWithPromise() should only be called once
+        // (for maximize() during test setup).
+        assertNoPendingActions(chromeAndroidTask);
+        verify(apiDelegate, times(1))
+                .moveTaskToWithPromise(any(), anyInt(), eq(DEFAULT_MAXIMIZED_WINDOW_BOUNDS_IN_PX));
+    }
+
+    @Test
     @SuppressLint("NewApi" /* @Config already specifies the required SDK */)
     public void minimize_alreadyMinimized_doesNotMinimizeAgain() {
         // Arrange.
@@ -1323,13 +1615,9 @@ public class ChromeAndroidTaskImplUnitTest {
         // Act.
         task.show();
 
-        // Assert.
-        int[] pendingActions =
-                task.getPendingActionManagerForTesting().getPendingActionsForTesting();
-        assertEquals(
-                "The task defaults to be visible and so show becomes a no-op",
-                PendingAction.NONE,
-                pendingActions[0]);
+        // Assert:
+        // The Task is visible by default, so show() should be a no-op.
+        assertNoPendingActions(task);
     }
 
     @Test
@@ -1449,13 +1737,9 @@ public class ChromeAndroidTaskImplUnitTest {
         // Act.
         task.activate();
 
-        // Assert.
-        int[] pendingActions =
-                task.getPendingActionManagerForTesting().getPendingActionsForTesting();
-        assertEquals(
-                "The task defaults to be active and so activate becomes a no-op",
-                PendingAction.NONE,
-                pendingActions[0]);
+        // Assert:
+        // The Task is active by default, so activate() should be a no-op.
+        assertNoPendingActions(task);
     }
 
     @Test
@@ -1674,6 +1958,7 @@ public class ChromeAndroidTaskImplUnitTest {
     }
 
     @Test
+    @Config(sdk = Build.VERSION_CODES.BAKLAVA)
     public void maximize_whenPendingUpdate_isMaximizeReturnsTrue() {
         // Arrange.
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
@@ -1714,6 +1999,7 @@ public class ChromeAndroidTaskImplUnitTest {
     }
 
     @Test
+    @Config(sdk = Build.VERSION_CODES.BAKLAVA)
     public void maximize_whenPendingUpdate_notAffectIsActive() {
         // Arrange.
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
@@ -1859,12 +2145,11 @@ public class ChromeAndroidTaskImplUnitTest {
         task.setBoundsInDp(new Rect());
 
         // Assert.
-        var pendingActionManager = task.getPendingActionManagerForTesting();
-        assertEquals(PendingAction.NONE, pendingActionManager.getPendingActionsForTesting()[0]);
+        assertNoPendingActions(task);
         assertEquals(
                 "Initial bounds default to empty",
                 new Rect(),
-                pendingActionManager.getFutureBoundsInDp());
+                task.getPendingActionManagerForTesting().getFutureBoundsInDp());
     }
 
     @Test
@@ -1990,6 +2275,7 @@ public class ChromeAndroidTaskImplUnitTest {
     }
 
     @Test
+    @Config(sdk = Build.VERSION_CODES.BAKLAVA)
     public void isMaximized_whenSetBoundsPending_returnsBasedOnFutureBounds() {
         // Arrange.
         var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
@@ -2550,6 +2836,79 @@ public class ChromeAndroidTaskImplUnitTest {
                 .onResult(ChromeAndroidTaskUnitTestSupport.FAKE_NATIVE_ANDROID_BROWSER_WINDOW_PTR);
     }
 
+    @Test
+    public void addFeature_invokesOnTabModelSelected() throws Exception {
+        // Arrange.
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        var expectedTabModel =
+                chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mTabModelSelector
+                        .getCurrentModel();
+
+        // Act.
+        chromeAndroidTask.addFeature(
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null),
+                () -> testFeature);
+
+        // Assert.
+        assertEquals(1, testFeature.mTabModelSelectedHistory.size());
+        assertEquals(expectedTabModel, testFeature.mTabModelSelectedHistory.get(0));
+    }
+
+    @Test
+    public void onTabModelSelected_invokedWhenTabModelChanges() throws Exception {
+        // Arrange.
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(/* taskId= */ 1);
+        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var tabModelSelector =
+                chromeAndroidTaskWithMockDeps.mActivityScopedObjects.mTabModelSelector;
+        var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        chromeAndroidTask.addFeature(
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null),
+                () -> testFeature);
+        assertEquals(1, testFeature.mTabModelSelectedHistory.size());
+
+        var newTabModel = mock(TabModel.class);
+        when(tabModelSelector.getCurrentModel()).thenReturn(newTabModel);
+
+        // Act.
+        // Simulate a tab model change by invoking the observer callback.
+        ((SettableMonotonicObservableSupplier<TabModel>)
+                        tabModelSelector.getCurrentTabModelSupplier())
+                .set(newTabModel);
+
+        // Assert.
+        assertEquals(2, testFeature.mTabModelSelectedHistory.size());
+        assertEquals(newTabModel, testFeature.mTabModelSelectedHistory.get(1));
+    }
+
+    @Test
+    public void addActivityScopedObjects_invokesOnTabModelSelectedOnFeatures() throws Exception {
+        // Arrange.
+        int taskId = 1;
+        var chromeAndroidTaskWithMockDeps = createChromeAndroidTaskWithMockDeps(taskId);
+        var chromeAndroidTask = chromeAndroidTaskWithMockDeps.mChromeAndroidTask;
+        var testFeature = new TestChromeAndroidTaskFeature(chromeAndroidTask);
+        chromeAndroidTask.addFeature(
+                new ChromeAndroidTaskFeatureKey(
+                        TestChromeAndroidTaskFeature.class, /* profile= */ null),
+                () -> testFeature);
+        assertEquals(1, testFeature.mTabModelSelectedHistory.size());
+
+        var activityScopedObjects2 = createActivityScopedObjects(taskId);
+        var expectedTabModel = activityScopedObjects2.mTabModelSelector.getCurrentModel();
+
+        // Act.
+        chromeAndroidTask.addActivityScopedObjects(activityScopedObjects2);
+
+        // Assert.
+        assertEquals(2, testFeature.mTabModelSelectedHistory.size());
+        assertEquals(expectedTabModel, testFeature.mTabModelSelectedHistory.get(1));
+    }
+
     private static final class TestChromeAndroidTaskFeature implements ChromeAndroidTaskFeature {
 
         final CallbackHelper mOnAddedToTaskHelper = new CallbackHelper();
@@ -2560,6 +2919,9 @@ public class ChromeAndroidTaskImplUnitTest {
 
         /** Records the {@code hasFocus} values passed to {@link #onTaskFocusChanged}. */
         final List<Boolean> mTaskFocusChangeHistory = new ArrayList<>();
+
+        /** Records the {@link TabModel} passed to {@link #onTabModelSelected}. */
+        final List<TabModel> mTabModelSelectedHistory = new ArrayList<>();
 
         /**
          * If true, enable the malicious behavior: add the feature itself to {@link
@@ -2579,11 +2941,14 @@ public class ChromeAndroidTaskImplUnitTest {
         }
 
         @Override
-        public void onTaskRemoved() {
+        public void onFeatureRemoved() {
             mOnTaskRemovedHelper.notifyCalled();
 
             if (mShouldRefuseToBeRemoved) {
-                mChromeAndroidTask.addFeature(TestChromeAndroidTaskFeature.class, () -> this);
+                var featureKey =
+                        new ChromeAndroidTaskFeatureKey(
+                                TestChromeAndroidTaskFeature.class, /* profile= */ null);
+                mChromeAndroidTask.addFeature(featureKey, () -> this);
             }
         }
 
@@ -2595,6 +2960,11 @@ public class ChromeAndroidTaskImplUnitTest {
         @Override
         public void onTaskFocusChanged(boolean hasFocus) {
             mTaskFocusChangeHistory.add(hasFocus);
+        }
+
+        @Override
+        public void onTabModelSelected(TabModel tabModel) {
+            mTabModelSelectedHistory.add(tabModel);
         }
     }
 }

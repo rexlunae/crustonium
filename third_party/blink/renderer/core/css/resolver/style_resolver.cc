@@ -92,6 +92,7 @@
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
+#include "third_party/blink/renderer/core/dom/node-inl.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/space_split_string.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -129,7 +130,7 @@
 #include "third_party/blink/renderer/core/style_property_shorthand.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/svg/svg_svg_element.h"
-#include "third_party/blink/renderer/core/view_transition/view_transition_pseudo_element_base.h"
+#include "third_party/blink/renderer/core/view_transition/view_transition_transition_element.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -256,13 +257,13 @@ bool HasAnimationsOrTransitions(const StyleResolverState& state) {
 }
 
 bool HasTimelines(const StyleResolverState& state) {
-  if (state.StyleBuilder().ScrollTimelineName()) {
+  if (!state.StyleBuilder().ScrollTimelineName().empty()) {
     return true;
   }
-  if (state.StyleBuilder().ViewTimelineName()) {
+  if (!state.StyleBuilder().ViewTimelineName().empty()) {
     return true;
   }
-  if (state.StyleBuilder().TimelineScope()) {
+  if (!state.StyleBuilder().TimelineScope().IsNone()) {
     return true;
   }
   if (ElementAnimations* element_animations = GetElementAnimations(state)) {
@@ -509,13 +510,17 @@ void ApplyInertness(StyleResolverState& state) {
   std::optional<bool> css_inert;
 
   if (state.StyleBuilder().Interactivity() == EInteractivity::kInert &&
-      !state.StyleBuilder().InteractivityIsInherited() &&
-      !state.StyleBuilder().IsCSSInert()) {
-    // If the computed value of 'interactivity' is 'inert', set the internal
-    // CSS inertness flag to true. With this flag set, it is not possible to
-    // escape CSS inertness in the subtree with 'interactivity' set to 'auto'
-    // in a descendant.
+      !state.StyleBuilder().InteractivityIsInherited()) {
+    // If we applied interactivity:inert to this element, we also need to
+    // set IsCSSInert to true. With this flag set, it is not possible to escape
+    // CSS inertness in the subtree with 'interactivity' set to 'auto' in a
+    // descendant.
+    //
     // TODO(crbug.com/413291835): This is not in line with the current spec.
+    //
+    // We explicitly set css_inert even if the inherited IsCSSInert is already
+    // true because we need independent property inheritance from an ancestor
+    // to stop by setting IsCSSInertIsInherited to false.
     css_inert = true;
   }
 
@@ -1417,7 +1422,6 @@ const ComputedStyle* StyleResolver::ResolveStyle(
 
   ApplyAnchorData(state);
   ApplyInertness(state);
-  ApplyTriggerData(state);
 
   IncrementResolvedStyleCounters(style_request, GetDocument());
   if (InvalidationTracingFlag::IsEnabled()) [[unlikely]] {
@@ -1826,6 +1830,13 @@ void StyleResolver::ApplyBaseStyleNoCache(
                 state.OriginatingElementStyle(), state);
       StyleAdjuster::AdjustComputedStyle(state, nullptr /* element */);
       state.SetHadNoMatchedProperties();
+      // Even though there were no matched properties, we may still have
+      // pseudo-element styles to set (e.g. only ::column::scroll-marker rule
+      // and no ::column rule should still have ::column style).
+      if (match_result.PseudoElementStyles().HasAny()) {
+        state.StyleBuilder().SetPseudoElementStyles(
+            match_result.PseudoElementStyles().Bits());
+      }
       return;
     }
   }
@@ -2510,8 +2521,8 @@ void StyleResolver::CollectPseudoRulesForElement(
         element.GetPseudoElement(kPseudoIdViewTransition);
     if (view_transition_element) {
       auto* view_transition_group_element =
-          view_transition_element->GetPseudoElement(
-              kPseudoIdViewTransitionGroup, pseudo_argument);
+          To<ViewTransitionTransitionElement>(*view_transition_element)
+              .FindViewTransitionGroupPseudoElement(pseudo_argument);
       if (view_transition_group_element) {
         style_request.pseudo_ident_list =
             To<ViewTransitionPseudoElementBase>(*view_transition_group_element)
@@ -2583,7 +2594,7 @@ bool StyleResolver::ApplyAnimatedStyle(
       state.AnimationUpdate(), *animating_element, state.StyleBuilder(),
       state.OldStyle(), style_recalc_context, state.CanTriggerAnimations());
 
-  bool apply = !state.AnimationUpdate().IsEmpty();
+  bool apply = state.AnimationUpdate().HasActiveInterpolations();
   if (apply) {
     const ActiveInterpolationsMap& animations =
         state.AnimationUpdate().ActiveInterpolationsForAnimations();
@@ -3660,21 +3671,6 @@ StyleRulePositionTry* StyleResolver::ResolvePositionTryRule(
   }
 
   return position_try_rule;
-}
-
-void StyleResolver::ApplyTriggerData(StyleResolverState& state) {
-  if (state.GetPseudoId() != PseudoId::kPseudoIdNone) {
-    // TODO(crbug.com/451477493): Applying trigger data here would clobber the
-    // style of the pseudo's originating element. We should investigate a
-    // cleaner solution to this than making an exception here.
-    return;
-  }
-
-  // TODO(crbug.com/467727342): Move this to a safer location. This function
-  // is called during ResolveStyle which might not correspond to an actual
-  // change in the affected element's style.
-  CSSAnimations::UpdateNamedTriggers(
-      state.StyleBuilder(), state.AnimationUpdate(), state.GetElement());
 }
 
 }  // namespace blink

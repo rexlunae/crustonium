@@ -8,8 +8,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.app.ActivityManager;
-import android.content.Context;
+import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Rect;
@@ -17,7 +16,6 @@ import android.os.Build;
 import android.os.Build.VERSION;
 import android.os.Build.VERSION_CODES;
 import android.util.ArrayMap;
-import android.util.Pair;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 
@@ -28,8 +26,11 @@ import androidx.core.view.WindowInsetsAnimationCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import org.chromium.base.AconfigFlaggedApiDelegate;
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.TaskVisibilityListener;
+import org.chromium.base.Callback;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.JniOnceCallback;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
@@ -41,12 +42,18 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcherProvider
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.lifecycle.TopResumedActivityChangedWithNativeObserver;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tabmodel.TabModelObserver;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabModelObserver;
 import org.chromium.chrome.browser.ui.browser_window.PendingActionManager.PendingAction;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 import org.chromium.chrome.browser.util.AndroidTaskUtils;
+import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.display.DisplayUtil;
@@ -67,7 +74,6 @@ final class ChromeAndroidTaskImpl
         implements ChromeAndroidTask,
                 ConfigurationChangedObserver,
                 TopResumedActivityChangedWithNativeObserver,
-                TabModelObserver,
                 TaskVisibilityListener {
 
     private static final String TAG = "ChromeAndroidTask";
@@ -90,7 +96,21 @@ final class ChromeAndroidTaskImpl
         /** The Task is pending and not yet associated with an Activity. */
         int PENDING_CREATE = 1;
 
-        /** The Task has a state being updated but not finished yet. */
+        /**
+         * The Task has a state that's being updated but not finished yet.
+         *
+         * <p>This state should only be set when all preconditions for the state update have been
+         * met and we are confident that the Android OS will successfully complete the update.
+         *
+         * <p>Otherwise:
+         *
+         * <ul>
+         *   <li>If the Android framework doesn't provide an API to listen for failures, the {@link
+         *       ChromeAndroidTask} will be stuck in {@code PENDING_UPDATE}.
+         *   <li>The predicted future state {@link ChromeAndroidTask} provides during {@code
+         *       PENDING_UPDATE} will be wrong.
+         * </ul>
+         */
         int PENDING_UPDATE = 2;
 
         /** The Task is alive without any pending state change. */
@@ -104,33 +124,79 @@ final class ChromeAndroidTaskImpl
     }
 
     /**
-     * Interface for logic reading a value from an {@link Activity} and its {@link
-     * ActivityWindowAndroid}.
+     * Contains objects whose lifecycle is in sync with the top {@code Activity} tracked by this
+     * {@link ChromeAndroidTask}.
+     *
+     * <p>An instance of this class should always be derived from the top {@link
+     * ActivityScopedObjects} in {@link #mActivityScopedObjectsDeque} using {@link #obtain}.
+     *
+     * <p>The differences between this class and {@link ActivityScopedObjects} are:
+     *
+     * <ul>
+     *   <li>{@link ActivityScopedObjects} is part of {@link ChromeAndroidTask}'s public APIs, where
+     *       its {@code Activity} can be null as it's held as a weak reference in {@link
+     *       ActivityWindowAndroid}.
+     *   <li>This class is for {@link ChromeAndroidTaskImpl}'s internal logic. A non-null instance
+     *       guarantees a non-null {@code Activity}.
+     * </ul>
      */
-    private interface ActivityReader<T> {
-        T read(Activity activity, ActivityWindowAndroid activityWindowAndroid);
+    private static final class TopActivityScopedObjects {
+        final Activity mActivity;
+        final ActivityWindowAndroid mActivityWindowAndroid;
+        final @Nullable DesktopWindowStateManager mDesktopWindowStateManager;
+
+        static @Nullable TopActivityScopedObjects obtain(ChromeAndroidTaskImpl chromeAndroidTask) {
+            var activityScopedObjects = chromeAndroidTask.mActivityScopedObjectsDeque.peekFirst();
+            var activityWindowAndroid =
+                    activityScopedObjects == null
+                            ? null
+                            : activityScopedObjects.mActivityWindowAndroid;
+            var activity =
+                    activityWindowAndroid == null
+                            ? null
+                            : activityWindowAndroid.getActivity().get();
+            return activityWindowAndroid == null || activity == null
+                    ? null
+                    : new TopActivityScopedObjects(
+                            activity,
+                            activityWindowAndroid,
+                            activityScopedObjects.mDesktopWindowStateManager);
+        }
+
+        private TopActivityScopedObjects(
+                Activity activity,
+                ActivityWindowAndroid activityWindowAndroid,
+                @Nullable DesktopWindowStateManager desktopWindowStateManager) {
+            mActivity = activity;
+            mActivityWindowAndroid = activityWindowAndroid;
+            mDesktopWindowStateManager = desktopWindowStateManager;
+        }
     }
 
-    /**
-     * Interface for logic updating an {@link Activity} and/or its {@link ActivityWindowAndroid}.
-     */
+    /** Interface for logic reading a value from {@link TopActivityScopedObjects}. */
+    private interface ActivityReader<T> {
+        T read(TopActivityScopedObjects activityScopedObjects);
+    }
+
+    /** Interface for logic updating an {@link Activity}. */
     private interface ActivityUpdater {
-        void update(Activity activity, ActivityWindowAndroid activityWindowAndroid);
+        void update(TopActivityScopedObjects activityScopedObjects);
     }
 
     private final PendingActionManager mPendingActionManager = new PendingActionManager();
 
     private final @BrowserWindowType int mBrowserWindowType;
 
-    private final AndroidBrowserWindow mAndroidBrowserWindow;
+    // TODO(crbug.com/475200706): Support regular + OTR for mobile.
     private final Profile mInitialProfile;
+    private final AndroidBrowserWindow mAndroidBrowserWindow;
 
     /**
      * Contains all {@link ChromeAndroidTaskFeature}s associated with this {@link
      * ChromeAndroidTask}.
      */
-    private final Map<Class<? extends ChromeAndroidTaskFeature>, ChromeAndroidTaskFeature>
-            mFeatures = new ArrayMap<>();
+    private final Map<ChromeAndroidTaskFeatureKey, ChromeAndroidTaskFeature> mFeatures =
+            new ArrayMap<>();
 
     /**
      * All {@link ActivityScopedObjects} instances associated with this Task.
@@ -143,6 +209,33 @@ final class ChromeAndroidTaskImpl
      * @see #removeActivityScopedObjects
      */
     private final Deque<ActivityScopedObjects> mActivityScopedObjectsDeque = new ArrayDeque<>();
+
+    /**
+     * Observer for profile removal. This is attached to the {@link ProfileManager} in the
+     * constructor and is removed when the {@link ChromeAndroidTask} is destroyed.
+     */
+    private final ProfileManager.Observer mProfileObserver =
+            new ProfileManager.Observer() {
+                @Override
+                public void onProfileAdded(Profile profile) {}
+
+                @Override
+                public void onProfileDestroyed(Profile profile) {
+                    var iterator = mFeatures.entrySet().iterator();
+                    while (iterator.hasNext()) {
+                        var entry = iterator.next();
+                        var key = entry.getKey();
+                        if (profile.equals(key.mProfile)) {
+                            entry.getValue().onFeatureRemoved();
+                            iterator.remove();
+                        }
+                    }
+                }
+            };
+
+    private final Callback<TabModel> mOnTabModelSelectedCallback = this::onTabModelSelected;
+
+    private @Nullable TabModelSelectorTabModelObserver mPreventAddTabToOtherModelObserver;
 
     private @Nullable Integer mId;
     private @Nullable Long mLastActivatedTimeMillis;
@@ -172,9 +265,10 @@ final class ChromeAndroidTaskImpl
                 @Override
                 public void onPrepare(WindowInsetsAnimationCompat animation) {
                     useActivity(
-                            (activity, unused) -> {
-                                mIsRestored = isRestoredInternal(activity);
-                                mBoundsBeforeAnimation = getCurrentBoundsInPx(activity);
+                            topActivityScopedObjects -> {
+                                mIsRestored = isRestoredInternal(topActivityScopedObjects);
+                                mBoundsBeforeAnimation =
+                                        getCurrentBoundsInPx(topActivityScopedObjects);
                             });
                 }
 
@@ -191,8 +285,9 @@ final class ChromeAndroidTaskImpl
                 @Override
                 public void onEnd(WindowInsetsAnimationCompat animation) {
                     useActivity(
-                            (activity, unused) -> {
-                                boolean isFullscreen = isFullscreenInternal(activity);
+                            topActivityScopedObjects -> {
+                                boolean isFullscreen =
+                                        isFullscreenInternal(topActivityScopedObjects);
                                 if (mIsRestored && isFullscreen) {
                                     mRestoredBoundsInPx = mBoundsBeforeAnimation;
                                 }
@@ -217,32 +312,70 @@ final class ChromeAndroidTaskImpl
         return ((ActivityLifecycleDispatcherProvider) activity).getLifecycleDispatcher();
     }
 
-    /** Check whether the task can be moved to another display. */
-    private static boolean isTaskMoveAllowedOnDisplay(Activity activity) {
-        // If and only if all the following are met, the task can be moved to the target display.
-        // 1. app is in desktop windowing mode.
-        // 2. task is not moved to another display
-        // 3. the new task bound is within the range of minimum and maximum bound
-        // The existing code has already handled 2 & 3, and so this function only checks 1
-        return isDesktopWindowingMode(activity);
-    }
+    /**
+     * Returns true if the Task (window) bounds for the top {@code Activity} can be changed.
+     *
+     * <p>This method checks all preconditions on changing Task bounds. It should be called before
+     * {@link #mState} is set to {@link State#PENDING_UPDATE}.
+     */
+    private static boolean canSetBounds(TopActivityScopedObjects topActivityScopedObjects) {
+        // The Android API to change window bounds is available on BAKLAVA+.
+        if (Build.VERSION.SDK_INT < VERSION_CODES.BAKLAVA) {
+            Log.w(TAG, "Unable to set bounds: unsupported API level");
+            return false;
+        }
 
-    private static boolean isDesktopWindowingMode(Activity activity) {
-        // TODO(crbug.com/467457794): Identify a more reliable alternative for desktop windowing
-        //  mode detection.
-        return activity.isInMultiWindowMode();
+        // For the window bounds to be changed, the app must hold the browser role.
+        var roleManager = ContextUtils.getApplicationContext().getSystemService(RoleManager.class);
+        if (!roleManager.isRoleHeld(RoleManager.ROLE_BROWSER)) {
+            Log.w(TAG, "Unable to set bounds: the app doesn't hold the browser role");
+            return false;
+        }
+
+        // Only free-form windows can change bounds.
+        if (!AppHeaderUtils.isAppInDesktopWindow(
+                topActivityScopedObjects.mDesktopWindowStateManager)) {
+            Log.w(TAG, "Unable to set bounds: the app isn't in desktop windowing mode");
+            return false;
+        }
+
+        // The Android API to change window bounds is accessed via AppTask, so AppTask must be
+        // non-null.
+        // AppTask can be null when ChromeAndroidTask is for a CCT window. Please see
+        // http://crbug.com/468113288 for details.
+        var activity = topActivityScopedObjects.mActivity;
+        var appTask = AndroidTaskUtils.getAppTaskFromId(activity, activity.getTaskId());
+        if (appTask == null) {
+            Log.w(TAG, "Unable to set bounds: null AppTask");
+            return false;
+        }
+
+        // Chrome wraps the Android API in AconfigFlaggedApiDelegate, so AconfigFlaggedApiDelegate
+        // must be non-null.
+        var aconfigFlaggedApiDelegate = AconfigFlaggedApiDelegate.getInstance();
+        if (aconfigFlaggedApiDelegate == null) {
+            Log.w(TAG, "Unable to set bounds: null AconfigFlaggedApiDelegate");
+            return false;
+        }
+
+        return true;
     }
 
     ChromeAndroidTaskImpl(
             @BrowserWindowType int browserWindowType, ActivityScopedObjects activityScopedObjects) {
         mBrowserWindowType = browserWindowType;
         mId = getActivity(activityScopedObjects.mActivityWindowAndroid).getTaskId();
-        mAndroidBrowserWindow = new AndroidBrowserWindow(/* chromeAndroidTask= */ this);
 
-        Profile initialProfile = activityScopedObjects.mTabModel.getProfile();
+        Profile initialProfile =
+                activityScopedObjects.mTabModelSelector.getCurrentModel().getProfile();
         assert initialProfile != null
                 : "ChromeAndroidTask must be initialized with a non-null profile";
         mInitialProfile = initialProfile;
+
+        // TODO(crbug.com/475200706): Support regular + OTR for mobile.
+        mAndroidBrowserWindow =
+                new AndroidBrowserWindow(/* chromeAndroidTask= */ this, initialProfile);
+        ProfileManager.addObserver(mProfileObserver);
 
         mState = State.IDLE;
         addActivityScopedObjectsInternal(activityScopedObjects);
@@ -252,8 +385,11 @@ final class ChromeAndroidTaskImpl
         mPendingTaskInfo = pendingTaskInfo;
 
         mBrowserWindowType = pendingTaskInfo.mCreateParams.getWindowType();
-        mAndroidBrowserWindow = new AndroidBrowserWindow(/* chromeAndroidTask= */ this);
         mInitialProfile = pendingTaskInfo.mCreateParams.getProfile();
+        mAndroidBrowserWindow =
+                new AndroidBrowserWindow(/* chromeAndroidTask= */ this, mInitialProfile);
+        ProfileManager.addObserver(mProfileObserver);
+
         mState = State.PENDING_CREATE;
         mPendingActionManager.updateFutureStates(mPendingTaskInfo);
     }
@@ -285,7 +421,7 @@ final class ChromeAndroidTaskImpl
     @Override
     public void onNativeInitializationFinished() {
         ThreadUtils.assertOnUiThread();
-        var topActivityScopedObjects = mActivityScopedObjectsDeque.peekFirst();
+        var topActivityScopedObjects = TopActivityScopedObjects.obtain(this);
         if (mPendingTaskInfo == null || topActivityScopedObjects == null) {
             return;
         }
@@ -294,13 +430,11 @@ final class ChromeAndroidTaskImpl
         assert mState == State.PENDING_CREATE;
         assert mId == null;
 
-        var activityWindowAndroid = topActivityScopedObjects.mActivityWindowAndroid;
-        var activity = getActivity(activityWindowAndroid);
-        mId = activity.getTaskId();
+        mId = topActivityScopedObjects.mActivity.getTaskId();
         @Nullable Rect futureBounds = mPendingActionManager.getFutureBoundsInDp();
         @Nullable Rect futureRestoredBounds = mPendingActionManager.getFutureRestoredBoundsInDp();
         mState = State.IDLE;
-        dispatchPendingActions(activity, activityWindowAndroid, futureBounds, futureRestoredBounds);
+        dispatchPendingActions(topActivityScopedObjects, futureBounds, futureRestoredBounds);
 
         JniOnceCallback<Long> taskCreationCallbackForNative =
                 mPendingTaskInfo.mTaskCreationCallbackForNative;
@@ -314,8 +448,11 @@ final class ChromeAndroidTaskImpl
     @Override
     public @Nullable ActivityWindowAndroid getTopActivityWindowAndroid() {
         ThreadUtils.assertOnUiThread();
-        Pair<Activity, ActivityWindowAndroid> pair = getTopActivityAndWindowAndroid();
-        return pair == null ? null : pair.second;
+        assertAlive();
+        var topActivityScopedObjects = TopActivityScopedObjects.obtain(this);
+        return topActivityScopedObjects == null
+                ? null
+                : topActivityScopedObjects.mActivityWindowAndroid;
     }
 
     @Override
@@ -347,18 +484,33 @@ final class ChromeAndroidTaskImpl
 
     @Override
     public <T extends ChromeAndroidTaskFeature> void addFeature(
-            Class<T> featureClazz, Supplier<@Nullable T> featureSupplier) {
+            ChromeAndroidTaskFeatureKey featureKey, Supplier<@Nullable T> featureSupplier) {
         ThreadUtils.assertOnUiThread();
         assertPendingCreateOrIdle();
 
-        if (mFeatures.containsKey(featureClazz)) {
+        if (mFeatures.containsKey(featureKey)) {
             return;
         }
 
+        // TODO(crbug.com/475200706): Support regular + OTR for mobile.
+        if (featureKey.mProfile != null && !featureKey.mProfile.equals(mInitialProfile)) {
+            throw new IllegalArgumentException(
+                    "Feature is profile-scoped but the profile doesn't match the task's profile.");
+        }
+
+        var topActivityScopedObjects = mActivityScopedObjectsDeque.peekFirst();
+        var tabModelSelector =
+                topActivityScopedObjects == null
+                        ? null
+                        : topActivityScopedObjects.mTabModelSelector;
+
         var feature = featureSupplier.get();
         if (feature != null) {
-            mFeatures.put(featureClazz, feature);
+            mFeatures.put(featureKey, feature);
             feature.onAddedToTask();
+            if (tabModelSelector != null) {
+                feature.onTabModelSelected(tabModelSelector.getCurrentModel());
+            }
         }
     }
 
@@ -401,10 +553,10 @@ final class ChromeAndroidTaskImpl
         // One case where the "DESTROYING" state is crucial:
         //
         // If a ChromeAndroidTaskFeature ("Feature") holds a ChromeAndroidTask ("Task") reference,
-        // the Feature could call the Task's APIs during Feature#onTaskRemoved(). Since mState won't
-        // become "DESTROYED" until after Feature#onTaskRemoved(), we need the "DESTROYING" state to
-        // prevent the Feature from accessing the Task's APIs that should only be called when mState
-        // is "ALIVE".
+        // the Feature could call the Task's APIs during Feature#onFeatureRemoved(). Since mState
+        // won't become "DESTROYED" until after Feature#onFeatureRemoved(), we need the "DESTROYING"
+        // state to prevent the Feature from accessing the Task's APIs that should only be called
+        // when mState is "ALIVE".
         mState = State.DESTROYING;
 
         if (mPendingTaskInfo != null) {
@@ -414,6 +566,7 @@ final class ChromeAndroidTaskImpl
 
         removeAllActivityScopedObjects();
         destroyFeatures();
+        ProfileManager.removeObserver(mProfileObserver);
 
         mAndroidBrowserWindow.destroy();
         mState = State.DESTROYED;
@@ -433,9 +586,7 @@ final class ChromeAndroidTaskImpl
             return isActiveFuture;
         }
 
-        return useActivity(
-                (unused, activityWindowAndroid) -> isActiveInternal(activityWindowAndroid),
-                /* defaultValue= */ false);
+        return useActivity(ChromeAndroidTaskImpl::isActiveInternal, /* defaultValue= */ false);
     }
 
     @Override
@@ -451,8 +602,7 @@ final class ChromeAndroidTaskImpl
             return isMaximizedFuture;
         }
 
-        return useActivity(
-                (activity, unused) -> isMaximizedInternal(activity), /* defaultValue= */ false);
+        return useActivity(ChromeAndroidTaskImpl::isMaximizedInternal, /* defaultValue= */ false);
     }
 
     @Override
@@ -463,8 +613,7 @@ final class ChromeAndroidTaskImpl
             return !isVisibleFuture;
         }
 
-        return useActivity(
-                (activity, unused) -> isMinimizedInternal(activity), /* defaultValue= */ false);
+        return useActivity(ChromeAndroidTaskImpl::isMinimizedInternal, /* defaultValue= */ false);
     }
 
     @Override
@@ -479,8 +628,7 @@ final class ChromeAndroidTaskImpl
             return false;
         }
 
-        return useActivity(
-                (activity, unused) -> isFullscreenInternal(activity), /* defaultValue= */ false);
+        return useActivity(ChromeAndroidTaskImpl::isFullscreenInternal, /* defaultValue= */ false);
     }
 
     @Override
@@ -492,14 +640,18 @@ final class ChromeAndroidTaskImpl
         }
 
         return useActivity(
-                (activity, activityWindowAndroid) -> {
+                topActivityScopedObjects -> {
                     Rect restoredBoundsInPx =
                             mRestoredBoundsInPx == null
-                                    ? getCurrentBoundsInPx(activity)
+                                    ? getCurrentBoundsInPx(topActivityScopedObjects)
                                     : mRestoredBoundsInPx;
-                    return DisplayUtil.scaleToEnclosingRect(
-                            restoredBoundsInPx,
-                            1.0f / activityWindowAndroid.getDisplay().getDipScale());
+
+                    float dipScale =
+                            topActivityScopedObjects
+                                    .mActivityWindowAndroid
+                                    .getDisplay()
+                                    .getDipScale();
+                    return DisplayUtil.scaleToEnclosingRect(restoredBoundsInPx, 1.0f / dipScale);
                 },
                 /* defaultValue= */ new Rect());
     }
@@ -508,12 +660,6 @@ final class ChromeAndroidTaskImpl
     public long getLastActivatedTimeMillis() {
         ThreadUtils.assertOnUiThread();
         return assertNonNull(mLastActivatedTimeMillis);
-    }
-
-    @Override
-    public Profile getProfile() {
-        ThreadUtils.assertOnUiThread();
-        return mInitialProfile;
     }
 
     @Override
@@ -546,8 +692,7 @@ final class ChromeAndroidTaskImpl
         Boolean isVisible = mPendingActionManager.isVisibleFuture(mState);
         if (isVisible != null) return isVisible;
 
-        return useActivity(
-                (activity, unused) -> isVisibleInternal(activity), /* defaultValue= */ false);
+        return useActivity(ChromeAndroidTaskImpl::isVisibleInternal, /* defaultValue= */ false);
     }
 
     @Override
@@ -563,9 +708,10 @@ final class ChromeAndroidTaskImpl
         }
 
         useActivity(
-                (activity, activityWindowAndroid) -> {
-                    if (!isDesktopWindowingMode(activity)
-                            || !isActiveInternal(activityWindowAndroid)) {
+                topActivityScopedObjects -> {
+                    if (!AppHeaderUtils.isAppInDesktopWindow(
+                                    topActivityScopedObjects.mDesktopWindowStateManager)
+                            || !isActiveInternal(topActivityScopedObjects)) {
                         return;
                     }
 
@@ -595,8 +741,8 @@ final class ChromeAndroidTaskImpl
         // Therefore, we obtain the new bounds using an Activity API (see
         // getBoundsInternalLocked()).
         useActivity(
-                (activity, activityWindowAndroid) -> {
-                    var newBoundsInDp = getCurrentBoundsInDp(activity, activityWindowAndroid);
+                topActivityScopedObjects -> {
+                    var newBoundsInDp = getCurrentBoundsInDp(topActivityScopedObjects);
                     if (newBoundsInDp.equals(mLastBoundsInDpOnConfigChanged)) {
                         return;
                     }
@@ -616,7 +762,7 @@ final class ChromeAndroidTaskImpl
             return;
         }
 
-        useActivity((activity, unused) -> closeInternal(activity));
+        useActivity(this::closeInternal);
     }
 
     @Override
@@ -630,9 +776,9 @@ final class ChromeAndroidTaskImpl
         }
 
         useActivity(
-                (activity, activityWindowAndroid) -> {
-                    if (!isActiveInternal(activityWindowAndroid)) {
-                        activateInternal(activity);
+                topActivityScopedObjects -> {
+                    if (!isActiveInternal(topActivityScopedObjects)) {
+                        activateInternal(topActivityScopedObjects);
                     }
                 });
     }
@@ -648,9 +794,10 @@ final class ChromeAndroidTaskImpl
         }
 
         useActivity(
-                (activity, activityWindowAndroid) -> {
-                    if (!isDesktopWindowingMode(activity)
-                            || !isActiveInternal(activityWindowAndroid)) {
+                topActivityScopedObjects -> {
+                    if (!AppHeaderUtils.isAppInDesktopWindow(
+                                    topActivityScopedObjects.mDesktopWindowStateManager)
+                            || !isActiveInternal(topActivityScopedObjects)) {
                         return;
                     }
 
@@ -681,13 +828,7 @@ final class ChromeAndroidTaskImpl
             return;
         }
 
-        useActivity(
-                (activity, activityWindowAndroid) -> {
-                    // No maximize action in non desktop window mode.
-                    if (isDesktopWindowingMode(activity)) {
-                        maximizeInternal(activity, activityWindowAndroid);
-                    }
-                });
+        useActivity(this::maximizeInternal);
     }
 
     @Override
@@ -705,7 +846,7 @@ final class ChromeAndroidTaskImpl
             return;
         }
 
-        useActivity((activity, unused) -> minimizeInternal(activity));
+        useActivity(this::minimizeInternal);
     }
 
     @Override
@@ -721,12 +862,7 @@ final class ChromeAndroidTaskImpl
             return;
         }
 
-        useActivity(
-                (activity, activityWindowAndroid) -> {
-                    if (isDesktopWindowingMode(activity)) {
-                        restoreInternal(activity, activityWindowAndroid);
-                    }
-                });
+        useActivity(this::restoreInternal);
     }
 
     @Override
@@ -743,17 +879,8 @@ final class ChromeAndroidTaskImpl
         }
 
         useActivity(
-                (activity, activityWindowAndroid) -> {
-                    if (!isDesktopWindowingMode(activity)
-                            || getCurrentBoundsInDp(activity, activityWindowAndroid)
-                                    .equals(boundsInDp)) {
-                        return;
-                    }
-
-                    mPendingActionManager.requestSetBounds(boundsInDp);
-                    mState = State.PENDING_UPDATE;
-                    setBoundsInDpInternal(activity, activityWindowAndroid, boundsInDp);
-                });
+                topActivityScopedObjects ->
+                        setBoundsInDpInternal(topActivityScopedObjects, boundsInDp));
     }
 
     @Override
@@ -793,22 +920,6 @@ final class ChromeAndroidTaskImpl
         }
     }
 
-    @Override
-    public void didAddTab(
-            Tab tab,
-            @TabLaunchType int type,
-            @TabCreationState int creationState,
-            boolean markedForSelection) {
-        if (isDestroyed()) return;
-
-        Profile newTabProfile = tab.getProfile();
-        assert mInitialProfile.equals(newTabProfile)
-                : "A tab with a different profile was added to this task. Initial: "
-                        + mInitialProfile
-                        + ", New: "
-                        + newTabProfile;
-    }
-
     List<ActivityScopedObjects> getActivityScopedObjectsListForTesting() {
         ThreadUtils.assertOnUiThread();
         return new ArrayList<>(mActivityScopedObjectsDeque);
@@ -816,9 +927,9 @@ final class ChromeAndroidTaskImpl
 
     @Override
     public @Nullable ChromeAndroidTaskFeature getFeatureForTesting(
-            Class<? extends ChromeAndroidTaskFeature> featureClazz) {
+            ChromeAndroidTaskFeatureKey featureKey) {
         ThreadUtils.assertOnUiThread();
-        return mFeatures.get(featureClazz);
+        return mFeatures.get(featureKey);
     }
 
     @Override
@@ -893,10 +1004,35 @@ final class ChromeAndroidTaskImpl
                     .addWindowInsetsAnimationListener(mWindowInsetsAnimationListener);
         }
 
-        // Register TabModel observer.
-        topActivityScopedObjects.mTabModel.addObserver(this);
-        topActivityScopedObjects.mTabModel.associateWithBrowserWindow(
-                mAndroidBrowserWindow.getOrCreateNativePtr());
+        TabModelSelector tabModelSelector = topActivityScopedObjects.mTabModelSelector;
+        assert mPreventAddTabToOtherModelObserver == null;
+        if (topActivityScopedObjects.mSupportedProfileType != SupportedProfileType.MIXED) {
+            mPreventAddTabToOtherModelObserver =
+                    new TabModelSelectorTabModelObserver(tabModelSelector) {
+                        @Override
+                        public void didAddTab(
+                                Tab tab,
+                                @TabLaunchType int type,
+                                @TabCreationState int creationState,
+                                boolean markedForSelection) {
+                            if (isDestroyed()) return;
+
+                            Profile newTabProfile = tab.getProfile();
+                            assert mInitialProfile.equals(newTabProfile)
+                                    : "A tab with a different profile was added to this task."
+                                            + " Initial: "
+                                            + mInitialProfile
+                                            + ", New: "
+                                            + newTabProfile;
+                        }
+                    };
+        }
+        // TODO(crbug.com/475200706): Associate both models in MIXED state.
+        TabModel currentTabModel = tabModelSelector.getCurrentModel();
+        currentTabModel.associateWithBrowserWindow(mAndroidBrowserWindow.getOrCreateNativePtr());
+
+        tabModelSelector.getCurrentTabModelSupplier().addObserver(mOnTabModelSelectedCallback);
+        onTabModelSelected(tabModelSelector.getCurrentModel());
     }
 
     private void unregisterListenersForTopActivity() {
@@ -921,19 +1057,27 @@ final class ChromeAndroidTaskImpl
                     .removeWindowInsetsAnimationListener(mWindowInsetsAnimationListener);
         }
 
-        // Unregister TabModel observer
-        topActivityScopedObjects.mTabModel.removeObserver(this);
+        if (mPreventAddTabToOtherModelObserver != null) {
+            mPreventAddTabToOtherModelObserver.destroy();
+            mPreventAddTabToOtherModelObserver = null;
+        }
+
+        var tabModelSelector = topActivityScopedObjects.mTabModelSelector;
+        if (tabModelSelector != null) {
+            tabModelSelector
+                    .getCurrentTabModelSupplier()
+                    .removeObserver(mOnTabModelSelectedCallback);
+        }
     }
 
     /**
-     * @param activityWindowAndroid The associated {@link ActivityWindowAndroid}.
+     * @param topActivityScopedObjects The {@link TopActivityScopedObjects} for this task.
      * @param futureBoundsInDp The future bounds the task is supposed to be when becoming alive.
      * @param futureRestoredBoundsInDp The restored bounds recorded before becoming alive.
      */
     @SuppressLint("NewApi")
     private void dispatchPendingActions(
-            Activity activity,
-            ActivityWindowAndroid activityWindowAndroid,
+            TopActivityScopedObjects topActivityScopedObjects,
             @Nullable Rect futureBoundsInDp,
             @Nullable Rect futureRestoredBoundsInDp) {
         // Initiate actions on a live Task.
@@ -944,7 +1088,7 @@ final class ChromeAndroidTaskImpl
             if (action == PendingAction.NONE) continue;
             switch (action) {
                 case PendingAction.SHOW:
-                    showInternal(activity, activityWindowAndroid);
+                    showInternal(topActivityScopedObjects);
                     break;
                 case PendingAction.SHOW_INACTIVE:
                 case PendingAction.DEACTIVATE:
@@ -956,50 +1100,40 @@ final class ChromeAndroidTaskImpl
                     mShouldDispatchPendingDeactivate = true;
                     break;
                 case PendingAction.CLOSE:
-                    closeInternal(activity);
+                    closeInternal(topActivityScopedObjects);
                     break;
                 case PendingAction.ACTIVATE:
-                    activateInternal(activity);
+                    activateInternal(topActivityScopedObjects);
                     break;
                 case PendingAction.MAXIMIZE:
-                    maximizeInternal(activity, activityWindowAndroid);
+                    maximizeInternal(topActivityScopedObjects);
                     break;
                 case PendingAction.MINIMIZE:
-                    minimizeInternal(activity);
+                    minimizeInternal(topActivityScopedObjects);
                     break;
                 case PendingAction.RESTORE:
                     // RESTORE should be ignored to fall back to default startup bounds if
                     // non-empty, non-default bounds are not requested in pending state.
                     if (futureRestoredBoundsInDp != null && !futureRestoredBoundsInDp.isEmpty()) {
+                        float dipScale =
+                                topActivityScopedObjects
+                                        .mActivityWindowAndroid
+                                        .getDisplay()
+                                        .getDipScale();
                         mRestoredBoundsInPx =
                                 DisplayUtil.scaleToEnclosingRect(
-                                        futureRestoredBoundsInDp,
-                                        activityWindowAndroid.getDisplay().getDipScale());
-                        restoreInternal(activity, activityWindowAndroid);
+                                        futureRestoredBoundsInDp, dipScale);
+                        restoreInternal(topActivityScopedObjects);
                     }
                     break;
                 case PendingAction.SET_BOUNDS:
                     assert futureBoundsInDp != null;
-                    setBoundsInDpInternal(activity, activityWindowAndroid, futureBoundsInDp);
+                    setBoundsInDpInternal(topActivityScopedObjects, futureBoundsInDp);
                     break;
                 default:
                     assert false : "Unsupported pending action.";
             }
         }
-    }
-
-    private @Nullable Pair<Activity, ActivityWindowAndroid> getTopActivityAndWindowAndroid() {
-        assertAlive();
-        var topActivityScopedObjects = mActivityScopedObjectsDeque.peekFirst();
-        var activityWindowAndroid =
-                topActivityScopedObjects == null
-                        ? null
-                        : topActivityScopedObjects.mActivityWindowAndroid;
-        var activity =
-                activityWindowAndroid == null ? null : activityWindowAndroid.getActivity().get();
-        return activityWindowAndroid == null || activity == null
-                ? null
-                : Pair.create(activity, activityWindowAndroid);
     }
 
     private void removeActivityScopedObjectsInternal(ActivityWindowAndroid activityWindowAndroid) {
@@ -1027,37 +1161,43 @@ final class ChromeAndroidTaskImpl
     }
 
     private void useActivity(ActivityUpdater updater) {
-        Pair<Activity, ActivityWindowAndroid> pair = getTopActivityAndWindowAndroid();
-        if (pair != null) {
-            updater.update(pair.first, pair.second);
+        var topActivityScopedObjects = TopActivityScopedObjects.obtain(this);
+        if (topActivityScopedObjects != null) {
+            updater.update(topActivityScopedObjects);
         }
     }
 
     private <T> T useActivity(ActivityReader<T> reader, T defaultValue) {
-        Pair<Activity, ActivityWindowAndroid> pair = getTopActivityAndWindowAndroid();
-        return pair == null ? defaultValue : reader.read(pair.first, pair.second);
+        var topActivityScopedObjects = TopActivityScopedObjects.obtain(this);
+        return topActivityScopedObjects == null
+                ? defaultValue
+                : reader.read(topActivityScopedObjects);
     }
 
     private void destroyFeatures() {
         for (var feature : mFeatures.values()) {
-            feature.onTaskRemoved();
+            feature.onFeatureRemoved();
         }
         mFeatures.clear();
     }
 
-    private Rect getCurrentBoundsInDp(
-            Activity activity, ActivityWindowAndroid activityWindowAndroid) {
-        Rect boundsInPx = getCurrentBoundsInPx(activity);
-        return convertBoundsInPxToDp(boundsInPx, activityWindowAndroid.getDisplay());
+    private Rect getCurrentBoundsInDp(TopActivityScopedObjects topActivityScopedObjects) {
+        Rect boundsInPx = getCurrentBoundsInPx(topActivityScopedObjects);
+        return convertBoundsInPxToDp(
+                boundsInPx, topActivityScopedObjects.mActivityWindowAndroid.getDisplay());
     }
 
-    private static Rect getCurrentBoundsInPx(Activity activity) {
+    private static Rect getCurrentBoundsInPx(TopActivityScopedObjects topActivityScopedObjects) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             Log.w(TAG, "getBoundsInPx() requires Android R+; returning an empty Rect()");
             return new Rect();
         }
 
-        return activity.getWindowManager().getCurrentWindowMetrics().getBounds();
+        return topActivityScopedObjects
+                .mActivity
+                .getWindowManager()
+                .getCurrentWindowMetrics()
+                .getBounds();
     }
 
     private void assertAlive() {
@@ -1069,42 +1209,44 @@ final class ChromeAndroidTaskImpl
                 : "This Task is neither pending create nor idle.";
     }
 
-    private static boolean isActiveInternal(ActivityWindowAndroid activityWindowAndroid) {
-        return activityWindowAndroid.isTopResumedActivity();
+    private static boolean isActiveInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        return topActivityScopedObjects.mActivityWindowAndroid.isTopResumedActivity();
     }
 
     @RequiresApi(api = VERSION_CODES.R)
-    private static boolean isRestoredInternal(Activity activity) {
-        return !isMinimizedInternal(activity)
-                && !isMaximizedInternal(activity)
-                && !isFullscreenInternal(activity);
+    private static boolean isRestoredInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        return !isMinimizedInternal(topActivityScopedObjects)
+                && !isMaximizedInternal(topActivityScopedObjects)
+                && !isFullscreenInternal(topActivityScopedObjects);
     }
 
-    private static boolean isVisibleInternal(Activity activity) {
-        return ApplicationStatus.isTaskVisible(activity.getTaskId());
+    private static boolean isVisibleInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        return ApplicationStatus.isTaskVisible(topActivityScopedObjects.mActivity.getTaskId());
     }
 
     @RequiresApi(api = VERSION_CODES.R)
-    private static boolean isMaximizedInternal(Activity activity) {
+    private static boolean isMaximizedInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        var activity = topActivityScopedObjects.mActivity;
         if (activity.isInMultiWindowMode()) {
             // Desktop windowing mode is also a multi-window mode. This should return false
             // if the task is in split-screen mode.
             Rect maxBoundsInPx =
                     ChromeAndroidTaskBoundsConstraints.getMaxBoundsInPx(
                             activity.getWindowManager());
-            return getCurrentBoundsInPx(activity).equals(maxBoundsInPx);
+            return getCurrentBoundsInPx(topActivityScopedObjects).equals(maxBoundsInPx);
         } else {
             // In non-multi-window mode, Chrome is maximized by default.
             return true;
         }
     }
 
-    private static boolean isMinimizedInternal(Activity activity) {
-        return !isVisibleInternal(activity);
+    private static boolean isMinimizedInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        return !isVisibleInternal(topActivityScopedObjects);
     }
 
     @RequiresApi(api = VERSION_CODES.R)
-    private static boolean isFullscreenInternal(Activity activity) {
+    private static boolean isFullscreenInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        var activity = topActivityScopedObjects.mActivity;
         var window = activity.getWindow();
         var windowManager = activity.getWindowManager();
 
@@ -1118,22 +1260,17 @@ final class ChromeAndroidTaskImpl
                                 == WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
     }
 
-    private void setBoundsInPx(Activity activity, DisplayAndroid display, Rect boundsInPx) {
-        var aconfigFlaggedApiDelegate = AconfigFlaggedApiDelegate.getInstance();
-        if (aconfigFlaggedApiDelegate == null) {
-            Log.w(TAG, "Unable to set bounds: AconfigFlaggedApiDelegate isn't available");
-            return;
-        }
+    private void setBoundsInPx(TopActivityScopedObjects topActivityScopedObjects, Rect boundsInPx) {
+        var activity = topActivityScopedObjects.mActivity;
+        int displayId = topActivityScopedObjects.mActivityWindowAndroid.getDisplay().getDisplayId();
 
+        var aconfigFlaggedApiDelegate = AconfigFlaggedApiDelegate.getInstance();
         var appTask = AndroidTaskUtils.getAppTaskFromId(activity, activity.getTaskId());
-        if (appTask == null) return;
-        if (!isTaskMoveAllowedOnDisplay(activity)) {
-            Log.w(TAG, "Unable to set bounds: not allowed on display");
-            return;
-        }
+        assert aconfigFlaggedApiDelegate != null && appTask != null
+                : "use canSetBounds() to prevent null values";
 
         aconfigFlaggedApiDelegate
-                .moveTaskToWithPromise(appTask, display.getDisplayId(), boundsInPx)
+                .moveTaskToWithPromise(appTask, displayId, boundsInPx)
                 .then(
                         (pair) -> {
                             var actions =
@@ -1149,91 +1286,111 @@ final class ChromeAndroidTaskImpl
                         });
     }
 
-    private void showInternal(Activity activity, ActivityWindowAndroid activityWindowAndroid) {
+    private void showInternal(TopActivityScopedObjects topActivityScopedObjects) {
         // No-op if already active.
-        if (isActiveInternal(activityWindowAndroid)) return;
+        if (isActiveInternal(topActivityScopedObjects)) return;
 
         // Activate the Task if it's already visible.
-        if (isVisibleInternal(activity)) {
-            ActivityManager activityManager =
-                    (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+        if (isVisibleInternal(topActivityScopedObjects)) {
+            var activity = topActivityScopedObjects.mActivity;
             mPendingActionManager.requestAction(PendingAction.SHOW);
             mState = State.PENDING_UPDATE;
-            activityManager.moveTaskToFront(activity.getTaskId(), 0);
+            ApiCompatibilityUtils.moveTaskToFront(activity, activity.getTaskId(), 0);
         }
     }
 
-    private void closeInternal(Activity activity) {
-        activity.finishAndRemoveTask();
+    private void closeInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        topActivityScopedObjects.mActivity.finishAndRemoveTask();
     }
 
-    private void activateInternal(Activity activity) {
-        ActivityManager activityManager =
-                (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+    private void activateInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        var activity = topActivityScopedObjects.mActivity;
         mPendingActionManager.requestAction(PendingAction.ACTIVATE);
         mState = State.PENDING_UPDATE;
-        activityManager.moveTaskToFront(activity.getTaskId(), 0);
+        ApiCompatibilityUtils.moveTaskToFront(activity, activity.getTaskId(), 0);
     }
 
     @RequiresApi(api = VERSION_CODES.R)
-    private void maximizeInternal(Activity activity, ActivityWindowAndroid activityWindowAndroid) {
-        if (isRestoredInternal(activity)) {
-            mRestoredBoundsInPx = getCurrentBoundsInPx(activity);
+    private void maximizeInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        // Precondition: the Task (window) allows bounds change.
+        if (!canSetBounds(topActivityScopedObjects)) {
+            return;
         }
 
-        if (isMinimizedInternal(activity)) {
-            activateInternal(activity);
+        if (isRestoredInternal(topActivityScopedObjects)) {
+            mRestoredBoundsInPx = getCurrentBoundsInPx(topActivityScopedObjects);
+        }
+
+        if (isMinimizedInternal(topActivityScopedObjects)) {
+            activateInternal(topActivityScopedObjects);
         }
 
         Rect maxBoundsInPx =
-                ChromeAndroidTaskBoundsConstraints.getMaxBoundsInPx(activity.getWindowManager());
+                ChromeAndroidTaskBoundsConstraints.getMaxBoundsInPx(
+                        topActivityScopedObjects.mActivity.getWindowManager());
         mPendingActionManager.requestMaximize();
         mState = State.PENDING_UPDATE;
-        setBoundsInPx(activity, activityWindowAndroid.getDisplay(), maxBoundsInPx);
+        setBoundsInPx(topActivityScopedObjects, maxBoundsInPx);
     }
 
     @RequiresApi(api = VERSION_CODES.R)
-    private void minimizeInternal(Activity activity) {
-        if (isMinimizedInternal(activity)) {
+    private void minimizeInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        if (isMinimizedInternal(topActivityScopedObjects)) {
             return;
         }
-        if (isRestoredInternal(activity)) {
-            mRestoredBoundsInPx = getCurrentBoundsInPx(activity);
+
+        if (isRestoredInternal(topActivityScopedObjects)) {
+            mRestoredBoundsInPx = getCurrentBoundsInPx(topActivityScopedObjects);
         }
+
         mPendingActionManager.requestAction(PendingAction.MINIMIZE);
         mState = State.PENDING_UPDATE;
-        activity.moveTaskToBack(/* nonRoot= */ true);
+        topActivityScopedObjects.mActivity.moveTaskToBack(/* nonRoot= */ true);
     }
 
     @RequiresApi(api = VERSION_CODES.R)
-    private void restoreInternal(Activity activity, ActivityWindowAndroid activityWindowAndroid) {
+    private void restoreInternal(TopActivityScopedObjects topActivityScopedObjects) {
+        // Precondition 1: "restored" bounds is not null.
         if (mRestoredBoundsInPx == null) return;
-        var restoredBoundsInDp =
-                convertBoundsInPxToDp(mRestoredBoundsInPx, activityWindowAndroid.getDisplay());
+
+        // Precondition 2: "restored" bounds aren't the same as "future bounds".
+        // This is for the case where "restore()" is called when another bounds change is already in
+        // progress.
+        var display = topActivityScopedObjects.mActivityWindowAndroid.getDisplay();
+        var restoredBoundsInDp = convertBoundsInPxToDp(mRestoredBoundsInPx, display);
         var futureBounds = mPendingActionManager.getFutureBoundsInDp();
         if (restoredBoundsInDp.equals(futureBounds)) return;
 
-        if (isMinimizedInternal(activity)) {
-            activateInternal(activity);
+        // Precondition 3: the Task (window) allows bounds change.
+        if (!canSetBounds(topActivityScopedObjects)) return;
+
+        if (isMinimizedInternal(topActivityScopedObjects)) {
+            activateInternal(topActivityScopedObjects);
         }
 
-        mPendingActionManager.requestRestore(
-                convertBoundsInPxToDp(mRestoredBoundsInPx, activityWindowAndroid.getDisplay()));
+        mPendingActionManager.requestRestore(convertBoundsInPxToDp(mRestoredBoundsInPx, display));
         mState = State.PENDING_UPDATE;
-        setBoundsInPx(activity, activityWindowAndroid.getDisplay(), mRestoredBoundsInPx);
+        setBoundsInPx(topActivityScopedObjects, mRestoredBoundsInPx);
     }
 
     private void setBoundsInDpInternal(
-            Activity activity, ActivityWindowAndroid activityWindowAndroid, Rect boundsInDp) {
-        Rect boundsInPx =
-                DisplayUtil.scaleToEnclosingRect(
-                        boundsInDp, activityWindowAndroid.getDisplay().getDipScale());
+            TopActivityScopedObjects topActivityScopedObjects, Rect boundsInDp) {
+        // Precondition 1: new bounds are not the same as the current bounds.
+        if (getCurrentBoundsInDp(topActivityScopedObjects).equals(boundsInDp)) return;
+
+        // Precondition 2: the Task (window) allows bounds change.
+        if (!canSetBounds(topActivityScopedObjects)) return;
+
+        mPendingActionManager.requestSetBounds(boundsInDp);
+        mState = State.PENDING_UPDATE;
+
+        var activity = topActivityScopedObjects.mActivity;
+        var display = topActivityScopedObjects.mActivityWindowAndroid.getDisplay();
+        Rect boundsInPx = DisplayUtil.scaleToEnclosingRect(boundsInDp, display.getDipScale());
         Rect adjustedBoundsInPx =
                 ChromeAndroidTaskBoundsConstraints.apply(
-                        boundsInPx,
-                        activityWindowAndroid.getDisplay(),
-                        activity.getWindowManager());
-        setBoundsInPx(activity, activityWindowAndroid.getDisplay(), adjustedBoundsInPx);
+                        boundsInPx, display, activity.getWindowManager());
+        setBoundsInPx(topActivityScopedObjects, adjustedBoundsInPx);
     }
 
     private void maybeSetStateIdle(int[] actions) {
@@ -1243,6 +1400,12 @@ final class ChromeAndroidTaskImpl
             }
         }
         mState = State.IDLE;
+    }
+
+    private void onTabModelSelected(TabModel tabModel) {
+        for (var feature : mFeatures.values()) {
+            feature.onTabModelSelected(tabModel);
+        }
     }
 
     @VisibleForTesting
@@ -1257,5 +1420,9 @@ final class ChromeAndroidTaskImpl
 
     PendingActionManager getPendingActionManagerForTesting() {
         return mPendingActionManager;
+    }
+
+    @Nullable TabModelSelectorTabModelObserver getTabModelObserverForTesting() {
+        return mPreventAddTabToOtherModelObserver;
     }
 }

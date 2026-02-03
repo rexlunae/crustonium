@@ -14,20 +14,23 @@
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/extension_dialog_utils.h"
+#include "chrome/browser/ui/extensions/extension_installed_watcher.h"
 #include "chrome/browser/ui/extensions/extension_post_install_dialog_model.h"
-#include "chrome/browser/ui/extensions/extension_post_install_dialog_utils.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/referrer.h"
+#include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/window_open_disposition.h"
 
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/views/extensions/extension_post_install_dialog_delegate.h"
+#include "chrome/browser/ui/views/extensions/extension_post_install_dialog_view_utils.h"
 #endif
 
 namespace extensions {
@@ -104,8 +107,6 @@ class ExtensionPostInstallDialog : public ui::DialogModelDelegate {
   const std::unique_ptr<ExtensionPostInstallDialogModel> model_;
 };
 
-}  // namespace
-
 void ShowExtensionPostInstallDialog(
     Profile* profile,
     content::WebContents* web_contents,
@@ -132,12 +133,57 @@ void ShowExtensionPostInstallDialog(
   extensions::ConfigurePostInstallDialogModel(
       dialog_model_builder, weak_delegate->model(), manage_shortcuts_callback);
 
-  // TODO(crbug.com/450296898): Add a sync or sign in promo in the footer if it
-  // should be shown.
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+  // Add a sync or sign in promo in the footer if it should be shown.
+  extensions::ExtensionRegistry* registry =
+      extensions::ExtensionRegistry::Get(profile);
+  const extensions::Extension* extension =
+      registry->enabled_extensions().GetByID(
+          weak_delegate->model()->extension_id());
+
+  if (extension) {
+    extensions::MaybeAddSigninPromoFootnoteView(
+        profile, web_contents, *extension, dialog_model_builder);
+  }
+#endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 
   std::unique_ptr<ui::DialogModel> dialog_model = dialog_model_builder.Build();
   ShowDialog(native_window, weak_delegate->model()->extension_id(),
              std::move(dialog_model));
+}
+
+}  // namespace
+
+void TriggerPostInstallDialog(
+    Profile* profile,
+    scoped_refptr<const extensions::Extension> extension,
+    const SkBitmap& icon,
+    base::OnceCallback<content::WebContents*()> get_web_contents_callback) {
+  auto watcher = std::make_unique<ExtensionInstalledWatcher>(profile);
+  ExtensionInstalledWatcher* watcher_ptr = watcher.get();
+  watcher_ptr->WaitForInstall(
+      extension->id(),
+      base::BindOnce(
+          [](std::unique_ptr<ExtensionInstalledWatcher> watcher,
+             scoped_refptr<const extensions::Extension> ext, Profile* prof,
+             const SkBitmap& icon_val,
+             base::OnceCallback<content::WebContents*()> get_web_contents_cb,
+             bool installed) {
+            if (!installed) {
+              return;
+            }
+            content::WebContents* web_contents =
+                std::move(get_web_contents_cb).Run();
+            if (!web_contents) {
+              return;
+            }
+            auto model = std::make_unique<ExtensionPostInstallDialogModel>(
+                prof, ext.get(), icon_val);
+            extensions::ShowExtensionPostInstallDialog(prof, web_contents,
+                                                       std::move(model));
+          },
+          std::move(watcher), extension, profile, icon,
+          std::move(get_web_contents_callback)));
 }
 
 }  // namespace extensions

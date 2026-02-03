@@ -92,7 +92,6 @@
 #import "ios/chrome/browser/download/model/download_directory_util.h"
 #import "ios/chrome/browser/first_run/model/first_run.h"
 #import "ios/chrome/browser/first_run/public/first_run_util.h"
-#import "ios/chrome/browser/main/ui_bundled/browser_view_wrangler.h"
 #import "ios/chrome/browser/memory/model/memory_debugger_manager.h"
 #import "ios/chrome/browser/metrics/model/first_user_action_recorder.h"
 #import "ios/chrome/browser/metrics/model/incognito_usage_app_state_agent.h"
@@ -101,7 +100,7 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/omaha/model/omaha_service.h"
 #import "ios/chrome/browser/passwords/model/password_manager_util_ios.h"
-#import "ios/chrome/browser/policy/model/management_service_ios_factory.h"
+#import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_sync_service_factory.h"
 #import "ios/chrome/browser/screenshot/model/screenshot_metrics_recorder.h"
 #import "ios/chrome/browser/search_engines/model/search_engines_util.h"
@@ -1446,16 +1445,9 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
       setObject:@(IsShareDefaultBrowserStatusEnabled())
          forKey:app_group::kChromeSupportShareDefaultBrowserStatusCapability];
 
-  if (base::FeatureList::IsEnabled(kYoutubeIncognito) &&
-      base::FeatureList::IsEnabled(kChromeStartupParametersAsync)) {
-    [capabilities
-        setObject:@[ app_group::kYoutubeBundleID ]
-           forKey:app_group::kChromeSupportOpenLinksParametersFromCapability];
-  } else {
-    [capabilities
-        removeObjectForKey:app_group::
-                               kChromeSupportOpenLinksParametersFromCapability];
-  }
+  [capabilities
+      setObject:@[ app_group::kYoutubeBundleID ]
+         forKey:app_group::kChromeSupportOpenLinksParametersFromCapability];
 
   [sharedDefaults setObject:capabilities
                      forKey:app_group::kChromeCapabilitiesPreference];
@@ -1508,7 +1500,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 - (void)logIfEnterpriseManagedDevice {
   base::UmaHistogramBoolean(
       "EnterpriseCheck.IsManaged2",
-      policy::ManagementServiceIOSFactory::GetForPlatform()->IsManaged());
+      policy::BrowserManagementServiceFactory::GetForPlatform()->IsManaged());
 }
 
 - (void)startFreeMemoryMonitoring {
@@ -1968,8 +1960,8 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 // Update the kLastUsedProfile preference if needed.
 - (void)updateLastUsedProfilePref {
   PrefService* localState = GetApplicationContext()->GetLocalState();
-  if (base::Contains(_profileControllers,
-                     localState->GetString(prefs::kLastUsedProfile))) {
+  if (_profileControllers.contains(
+          localState->GetString(prefs::kLastUsedProfile))) {
     // The last used profile is still loaded, no need to update the pref.
     return;
   }

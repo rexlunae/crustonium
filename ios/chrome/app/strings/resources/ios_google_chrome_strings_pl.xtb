@@ -86,6 +86,9 @@ Odczekaj kilka minut, zanim się wylogujesz. Jeśli wylogujesz się teraz, te da
 <translation id="2767464022270041271">Brak zapisanych haseł. Menedżer haseł Google może sprawdzać Twoje hasła, gdy je zapiszesz.</translation>
 <translation id="2788811701191021538">Otwiera stronę ustawień form płatności w Chrome.</translation>
 <translation id="2876628302275096482">Dowiedz się więcej o tym, <ph name="BEGIN_LINK" />jak Chrome dba o prywatność Twoich danych<ph name="END_LINK" />.</translation>
+<translation id="288992067439702510">Osiągnięto limit <ph name="LIMIT" /> zakładek w Google Chrome, więc niektóre z Twoich zakładek nie zostały jeszcze zapisane na Twoim koncie Google.
+
+Dopóki nie usuniesz niektórych zakładek, nie będzie można zapisywać nowych na Twoim koncie. Jeśli wylogujesz się teraz, niezapisane zakładki zostaną usunięte.</translation>
 <translation id="2922914028977213693">Kliknij tutaj, aby w pełni wykorzystać możliwości Chrome na iPadzie.</translation>
 <translation id="292371311537977079">Ustawienia Chrome</translation>
 <translation id="2923827943290349720">Blokuj karty incognito po zamknięciu Chrome</translation>
@@ -304,11 +307,11 @@ W <ph name="BEGIN_LINK" />usługach Google<ph name="END_LINK" /> znajdziesz wi�
 <translation id="7787205077729386167">Otwórz Ustawienia Chrome na urządzeniu z iOS, kliknij „Domyślna przeglądarka” i wybierz Chrome.</translation>
 <translation id="778855399387580014">Rozpocznij wyszukiwanie na nowej karcie Chrome.</translation>
 <translation id="7792140019572081272">Chrome dba o bezpieczeństwo Twoich danych wrażliwych za pomocą Face ID.</translation>
+<translation id="7825648984449922731">Edytuj obraz za pomocą Gemini w Chrome</translation>
 <translation id="7855730255114109580">Masz aktualną wersję Google Chrome</translation>
 <translation id="787226752901403048">Zaloguj się w Chrome, aby udostępniać grupy kart i do nich dołączać oraz wspólnie pracować nad pomysłami</translation>
 <translation id="7897703007638178753">Zobacz ostatnie karty w Chrome</translation>
 <translation id="7948283758957877064">Nowości w Chrome</translation>
-<translation id="7996707498590516621">Utwórz obraz za pomocą Gemini w Chrome</translation>
 <translation id="8000174216052461231">Wskazówka dotycząca Chrome: korzystaj z najlepszych zabezpieczeń Chrome</translation>
 <translation id="8006014511203279255">Używaj Chrome zawsze wtedy, gdy klikasz linki w wiadomościach lub w innych aplikacjach.</translation>
 <translation id="8014670471808569312">Chrome zaproponuje zapisanie hasła.</translation>

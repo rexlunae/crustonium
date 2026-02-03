@@ -6,7 +6,6 @@
 
 #include "base/base64.h"
 #include "base/base64url.h"
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
@@ -263,7 +262,7 @@ bool MatchHasSideTypeAndRenderType(
     const omnibox::GroupConfigMap& suggestion_groups_map) {
   omnibox::GroupId group_id =
       match.suggestion_group_id.value_or(omnibox::GROUP_INVALID);
-  return base::Contains(suggestion_groups_map, group_id) &&
+  return suggestion_groups_map.contains(group_id) &&
          suggestion_groups_map.at(group_id).side_type() == side_type &&
          suggestion_groups_map.at(group_id).render_type() == render_type;
 }
@@ -380,6 +379,13 @@ void SearchboxHandler::SetupWebUIDataSource(content::WebUIDataSource* source,
       {"voiceDetails", IDS_NEW_TAB_VOICE_DETAILS},
       {"voiceListening", IDS_NEW_TAB_VOICE_LISTENING},
       {"voicePermissionError", IDS_NEW_TAB_VOICE_PERMISSION_ERROR},
+      {"composeboxContextMenuMostRecentTabs",
+       IDS_CONTEXTUAL_TASKS_CONTEXT_MENU_MOST_RECENT_TABS},
+      {"composeboxContextMenuGeminiModels",
+       IDS_CONTEXTUAL_TASKS_CONTEXT_MENU_GEMINI_MODELS},
+      {"canvas", IDS_NTP_COMPOSE_CANVAS},
+      {"geminiModelAuto", IDS_NTP_COMPOSE_AUTO_MODEL},
+      {"geminiModelThinking", IDS_NTP_COMPOSE_THINKING_3_PRO},
   };
   source->AddLocalizedStrings(kStrings);
   source->AddString("searchboxComposePlaceholder",
@@ -431,6 +437,8 @@ void SearchboxHandler::SetupWebUIDataSource(content::WebUIDataSource* source,
       profile->GetPrefs()->GetInteger(
           prefs::kNtpComposeButtonShownCountPrefName) <
           composebox_config.entry_point().num_page_load_animations());
+  source->AddBoolean("contextualMenuShowModelPicker",
+                     ntp_composebox::kShowModelPicker.Get());
 }
 
 std::string SearchboxHandler::AutocompleteIconToResourceName(
@@ -883,8 +891,7 @@ void SearchboxHandler::QueryAutocomplete(const std::u16string& input,
           controller_->client()->GetLensOverlaySuggestInputs()) {
     // Don't set lens params if in "Create Image" mode. This prevents the
     // contextual client from being used in this tool mode.
-    if (GetAimToolMode() !=
-        omnibox::ChromeAimToolsAndModels::TOOL_MODE_IMAGE_GEN_UPLOAD) {
+    if (GetAimToolMode() != omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD) {
       autocomplete_input.set_lens_overlay_suggest_inputs(*suggest_inputs);
     }
   }
@@ -1123,8 +1130,8 @@ const AutocompleteMatch* SearchboxHandler::GetMatchWithUrl(
   return &match;
 }
 
-omnibox::ChromeAimToolsAndModels SearchboxHandler::GetAimToolMode() const {
-  return omnibox::ChromeAimToolsAndModels::TOOL_MODE_UNSPECIFIED;
+omnibox::ToolMode SearchboxHandler::GetAimToolMode() const {
+  return omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
 }
 
 OmniboxController* SearchboxHandler::omnibox_controller() const {

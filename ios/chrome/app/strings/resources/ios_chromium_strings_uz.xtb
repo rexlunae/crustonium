@@ -41,6 +41,9 @@
 <translation id="1707458603865303524">Xabarlar yoki boshqa ilovalardagi havolalar bosilganda Chromium ochilsin.</translation>
 <translation id="1722370509450468186">Parolingiz hisobingizda (<ph name="EMAIL" />) saqlanadi.</translation>
 <translation id="1747088204252710672">Siz uchun maxsus tasma</translation>
+<translation id="1761196287436320018">Chromium brauzeridagi bukmarklar soni limitiga (<ph name="LIMIT" />) yetdi, shu sababli ayrim bukmarklar Google hisobingizga saqlanmadi.
+
+Ayrim bukmarklar hisobingizdan oʻchirilmaguncha yangilari saqlanmaydi. Hozir hisobdan chiqsangiz, saqlanmagan bukmarklar oʻchib ketadi.</translation>
 <translation id="1811860791247653035">Moslashtirish va boshqa funksiyalarni olish uchun <ph name="FEATURE_NAME_1" /> va ulangan <ph name="FEATURE_NAME_2" />da Chromiumni kiriting</translation>
 <translation id="1838412507805038478">Chromium ushbu veb-sayt haqiqiyligi <ph name="ISSUER" /> tomonidan tasdiqlanganini aniqladi.</translation>
 <translation id="1839447949248872139">Havolalarni doim Chromimumda oching</translation>
@@ -128,6 +131,7 @@ Hisoblarni almashtirishdan oldin bir necha daqiqa kuting. Hisoblarni hozir almas
 <translation id="3728124580182886854">Chromium va boshqa Google xizmatlarini moslashtirish kabi maqsadlarda ulang</translation>
 <translation id="377649297473651452">Chromium avtomatik kiritish panelining yoyilgan shakli</translation>
 <translation id="3780779443901618967">Standart himoyadan koʻra koʻproq saytlardan olingan maʼlumotlarni tahlil qilish orqali sizni xavfli saytlar, hatto Google ilgari bilmagan saytlar haqida ogohlantiradi. Chromium ogohlantirishlarini eʼtiborsiz qoldirishni tanlashingiz mumkin.</translation>
+<translation id="3793136096560888222">Chromium ichida Gemini bilan rasmni tahrirlash</translation>
 <translation id="3805899903892079518">Chromium rasm va videolaringizni ko‘ra olmayapti. “Sozlamalar &gt; Maxfiylik &gt; Rasmlar” oynasi orqali ruxsat bering.</translation>
 <translation id="3816686541346279443">Chromium parolingizni saqlashni taklif qiladi.</translation>
 <translation id="3827545470516145620">Bu qurilmada standart xavfsizlik sozlamasi amal qiladi</translation>
@@ -295,7 +299,6 @@ Shifrlangan maʼlumotlarni faqatgina kodli ibora yordamida oʻqish mumkin. Kodli
 <translation id="7554983317097061001">Chromium maslahati: Chromiumni ekranga mahkamlang</translation>
 <translation id="7576863740961052505">Chromium sozlamalarini boshqarish</translation>
 <translation id="7674213385180944843">Kameradan foydalanishga ruxsat berish uchun “Sozlamalar &gt; Maxfiylik &gt; Kamera &gt; Chromium” bandini oching.</translation>
-<translation id="7685160423563372998">Chromium ichida Gemini bilan rasm yaratish</translation>
 <translation id="7733418656985455268">Chromium maslahati: Lens bilan qidiring</translation>
 <translation id="7747820849741499258">Chromiumda qidirish</translation>
 <translation id="7753923083404296545">Chromium Inkognito rejimida ochildi</translation>

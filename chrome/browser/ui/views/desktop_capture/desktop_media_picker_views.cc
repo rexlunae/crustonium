@@ -10,7 +10,6 @@
 
 #include "audio_capture_permission_checker_mac.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -52,6 +51,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "media/audio/audio_features.h"
+#include "media/base/media_switches.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -76,8 +76,6 @@
 #include "ui/aura/window_tree_host.h"
 #endif
 
-BASE_FEATURE(kDesktopMediaPickerMultiLineTitle,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 using ::blink::mojom::MediaStreamRequestResult;
 using ::content::DesktopMediaID;
@@ -366,9 +364,13 @@ DesktopMediaID::AudioType GetWindowCaptureAudioType(
   }
 
   if (params.window_audio_preference ==
-          blink::mojom::WindowAudioPreference::kWindow &&
-      media::IsApplicationAudioCaptureSupported()) {
-    return DesktopMediaID::AudioType::kApplication;
+      blink::mojom::WindowAudioPreference::kWindow) {
+    if (media::IsApplicationLoopbackCaptureSupported()) {
+      return DesktopMediaID::AudioType::kApplication;
+    } else if (DesktopMediaPickerController::IsSystemAudioCaptureSupported(
+                   params.request_source)) {
+      return DesktopMediaID::AudioType::kSystem;
+    }
   }
 
   if (params.window_audio_preference ==
@@ -392,7 +394,7 @@ bool DesktopMediaPickerDialogView::AudioSupported(
     case DesktopMediaList::Type::kWindow:
       return DesktopMediaPickerController::IsSystemAudioCaptureSupported(
                  request_source_) ||
-             media::IsApplicationAudioCaptureSupported();
+             media::IsApplicationLoopbackCaptureSupported();
     case DesktopMediaList::Type::kWebContents:
       return true;
     case DesktopMediaList::Type::kNone:
@@ -1101,8 +1103,7 @@ void DesktopMediaPickerDialogView::AddedToWidget() {
   // TODO(420734141): Make DesktopMediaPickerDialogView always have a
   // BubbleFrameView.
   views::BubbleFrameView* bubble_frame_view = GetBubbleFrameView();
-  if (base::FeatureList::IsEnabled(kDesktopMediaPickerMultiLineTitle) &&
-      bubble_frame_view) {
+  if (bubble_frame_view) {
     bubble_frame_view->SetTitleView(CreateTitleOriginLabel(GetWindowTitle()));
   }
 }

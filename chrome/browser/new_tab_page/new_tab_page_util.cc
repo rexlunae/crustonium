@@ -385,7 +385,7 @@ void UpdateModulesStaleness(Profile* profile,
   }
 
   // (3) Do not update staleness if feature is disabled for all modules.
-  const base::Value::Dict& auto_removal_disabled_dict =
+  const base::DictValue& auto_removal_disabled_dict =
       profile->GetPrefs()->GetDict(
           ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
   const bool is_disabled_for_all_modules =
@@ -401,7 +401,7 @@ void UpdateModulesStaleness(Profile* profile,
                                module_load_time);
 
   // (4) Do not update staleness if feature is disabled for the module.
-  const base::Value::Dict& staleness_counts_dict =
+  const base::DictValue& staleness_counts_dict =
       profile->GetPrefs()->GetDict(ntp_prefs::kNtpModuleStalenessCountDict);
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               ntp_prefs::kNtpModuleStalenessCountDict);
@@ -424,4 +424,13 @@ void DisableModuleAutoRemoval(Profile* profile, const std::string& module_id) {
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
   update->Set(module_id, true);
+}
+
+void DisableModuleListAutoRemoval(Profile* profile,
+                                  const std::vector<std::string>& module_ids) {
+  ScopedDictPrefUpdate update(profile->GetPrefs(),
+                              ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
+  for (const auto& module_id : module_ids) {
+    update->Set(module_id, true);
+  }
 }

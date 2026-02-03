@@ -10,7 +10,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install/pending_install_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/iwa_permissions_policy_cache.h"
@@ -63,9 +63,11 @@ IsolatedWebAppThrottle::WillStartRequest() {
       const auto iwa_origin = IwaOrigin::Create(navigation_handle()->GetURL());
       // This is checked already in NeedsManifestFetch.
       CHECK(iwa_origin.has_value());
-      cache_->ObtainManifestAndCache(
-          *iwa_origin, base::BindOnce(&IsolatedWebAppThrottle::OnCachePopulated,
-                                      weak_ptr_factory_.GetWeakPtr()));
+      IwaPermissionsPolicyCacheFactory::GetForProfile(profile())
+          ->ObtainManifestAndCache(
+              *iwa_origin,
+              base::BindOnce(&IsolatedWebAppThrottle::OnCachePopulated,
+                             weak_ptr_factory_.GetWeakPtr()));
       return DEFER;
     }
     return PROCEED;
@@ -82,31 +84,27 @@ IsolatedWebAppThrottle::WillStartRequest() {
 
 void IsolatedWebAppThrottle::OnComponentsReady() {
   if (NeedsManifestFetch()) {
-    cache_->ObtainManifestAndCache(
-        *IwaOrigin::Create(navigation_handle()->GetURL()),
-        base::BindOnce(&IsolatedWebAppThrottle::OnCachePopulated,
-                       weak_ptr_factory_.GetWeakPtr()));
+    IwaPermissionsPolicyCacheFactory::GetForProfile(profile())
+        ->ObtainManifestAndCache(
+            *IwaOrigin::Create(navigation_handle()->GetURL()),
+            base::BindOnce(&IsolatedWebAppThrottle::OnCachePopulated,
+                           weak_ptr_factory_.GetWeakPtr()));
   } else {
     Resume();
   }
 }
 
-bool IsolatedWebAppThrottle::NeedsManifestFetch() {
-  // At this point other components that are initialized at the same time as
-  // this are already created, so the cache should be ready.
-  cache_ = IwaPermissionsPolicyCacheFactory::GetForProfile(profile());
-  CHECK(cache_);
+bool IsolatedWebAppThrottle::NeedsManifestFetch() const {
   const auto iwa_origin = IwaOrigin::Create(navigation_handle()->GetURL());
-  // There are navigations involved in installation of an IWA, caching the
-  // manifest then would not be a good idea. In particular, this is not a good
-  // place for catching manifest-related issues during the installation.
-  // TODO(crbug.com/470943369): get this in an immutable way.
+  // There are navigations involved in processing the bundle data for
+  // installations/updates/metadata reading, and caching the manifest then
+  // would not be a good idea. In particular, this is not a good place for
+  // catching manifest-related issues during the installation.
   return iwa_origin.has_value() &&
-         !IsolatedWebAppPendingInstallInfo::FromWebContents(
-              *navigation_handle()->GetWebContents())
-              .source()
-              .has_value() &&
-         !cache_->GetPolicy(*iwa_origin);
+         !NonInstalledBundleInspectionContext::FromWebContents(
+             navigation_handle()->GetWebContents()) &&
+         !IwaPermissionsPolicyCacheFactory::GetForProfile(profile())->GetPolicy(
+             *iwa_origin);
 }
 
 void IsolatedWebAppThrottle::OnCachePopulated(bool success) {
@@ -120,12 +118,12 @@ void IsolatedWebAppThrottle::OnCachePopulated(bool success) {
   }
 }
 
-Profile* IsolatedWebAppThrottle::profile() {
+Profile* IsolatedWebAppThrottle::profile() const {
   return Profile::FromBrowserContext(
       navigation_handle()->GetWebContents()->GetBrowserContext());
 }
 
-bool IsolatedWebAppThrottle::is_isolated_web_app_navigation() {
+bool IsolatedWebAppThrottle::is_isolated_web_app_navigation() const {
   return content::SiteIsolationPolicy::ShouldUrlUseApplicationIsolationLevel(
       profile(), navigation_handle()->GetURL());
 }

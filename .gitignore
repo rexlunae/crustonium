@@ -36,8 +36,10 @@
 !Android.mk
 .*.sw?
 .DS_Store
+/.agent
 .android
 .ccls-cache
+.checkstyle
 .cipd
 .classpath
 .code-coverage
@@ -56,7 +58,7 @@
 .project
 .projectile
 .pydevproject
-.checkstyle
+.siso_failed_targets
 *.class
 compile_commands.json
 cscope.*

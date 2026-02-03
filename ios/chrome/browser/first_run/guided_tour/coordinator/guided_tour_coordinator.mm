@@ -10,7 +10,7 @@
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
@@ -78,8 +78,8 @@ const CGFloat kNTPTabGridPageControlCornerRadius = 13.0f;
 // Returns the view to which the bubble view will be anchored.
 - (UIView*)anchorView {
   if (_step == GuidedTourStep::kNTP) {
-    ToolbarButton* tabSwitcherButton =
-        static_cast<ToolbarButton*>([LayoutGuideCenterForBrowser(self.browser)
+    LegacyToolbarButton* tabSwitcherButton = static_cast<LegacyToolbarButton*>(
+        [LayoutGuideCenterForBrowser(self.browser)
             referencedViewUnderName:kTabSwitcherGuide]);
     return tabSwitcherButton.spotlightView;
   } else if (_step == GuidedTourStep::kTabGridIncognito) {
@@ -162,8 +162,19 @@ const CGFloat kNTPTabGridPageControlCornerRadius = 13.0f;
 // YES if the bubble arrow should point down (e.g. the NTP step is pointing down
 // to the bottom toolbar).
 - (BOOL)shouldPointArrowDown {
-  return IsSplitToolbarMode(self.baseViewController) &&
-         _step == GuidedTourStep::kNTP;
+  if (_step == GuidedTourStep::kNTP) {
+    return IsSplitToolbarMode(self.baseViewController);
+  }
+  if (_step == GuidedTourStep::kTabGridLongPress) {
+    UIView* anchorView = [self anchorView];
+    CGRect anchorFrameInBaseViewController =
+        [anchorView convertRect:[anchorView bounds]
+                         toView:self.baseViewController.view];
+    // Point arrow down if anchor view is on the bottom half of the screen.
+    return CGRectGetMidY(anchorFrameInBaseViewController) >
+           CGRectGetMidY(self.baseViewController.view.bounds);
+  }
+  return NO;
 }
 
 // Returns the bubble alignment for each step.

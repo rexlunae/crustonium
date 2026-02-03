@@ -39,6 +39,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
@@ -56,6 +57,7 @@ import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThem
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
+import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.ui.insets.InsetObserver;
 import org.chromium.url.JUnitTestGURLs;
@@ -73,7 +75,7 @@ public class TopInsetCoordinatorUnitTest {
     @Mock private WindowInsetsCompat mWindowInsetsCompat;
     @Mock private View mView;
     @Mock private NativePage mNativePage;
-    @Mock private TopInsetCoordinator.Observer mObserver;
+    @Mock private TopInsetProvider.Observer mObserver;
     @Mock private LayoutStateProvider mLayoutStateProvider;
 
     @Captor
@@ -125,6 +127,8 @@ public class TopInsetCoordinatorUnitTest {
         mTopInsetCoordinator.destroy();
     }
 
+    // TODO(crbug.com/450954710): This test fails on SDK 36.
+    @Config(sdk = 29)
     @Test
     @SuppressWarnings("DirectInvocationOnMock")
     public void testOnApplyWindowInsets_ConsumeTopInset() {

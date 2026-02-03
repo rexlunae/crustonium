@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
@@ -22,6 +21,7 @@
 #include "build/buildflag.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
+#include "chrome/browser/web_applications/model/display_override.h"
 #include "chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -39,15 +39,14 @@
 #include "content/public/browser/web_contents.h"
 #include "services/network/public/cpp/permissions_policy/origin_with_possible_wildcards.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
-#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-data-view.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/common/safe_url_pattern.h"
-#include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
-#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-data-view.h"
+#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-shared.h"
 #include "third_party/liburlpattern/part.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -80,23 +79,14 @@ IconPurpose IconInfoPurposeToManifestPurpose(
   }
 }
 
-// Returns a simple `SafeUrlPattern` to match the given hostname.
-blink::SafeUrlPattern UrlPatternForHostname(std::string_view hostname) {
+// Returns a simple `SafeUrlPattern` for the "/foo" pathname.
+blink::SafeUrlPattern FooUrlPattern() {
   blink::SafeUrlPattern pattern;
-  pattern.hostname = {
+  pattern.pathname = {
       liburlpattern::Part(liburlpattern::PartType::kFixed,
-                          /*value=*/std::string(hostname),
-                          liburlpattern::Modifier::kNone),
+                          /*value=*/"/foo", liburlpattern::Modifier::kNone),
   };
   return pattern;
-}
-
-blink::SafeUrlPattern FooUrlPattern() {
-  return UrlPatternForHostname("foo.com");
-}
-
-blink::SafeUrlPattern BarUrlPattern() {
-  return UrlPatternForHostname("bar.com");
 }
 
 class ManifestToWebAppInstallInfoJobTest : public WebAppTest {
@@ -261,10 +251,11 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, BasicFieldsPopulated) {
   // Verify basic web app fields populated.
   EXPECT_EQ(u"Foo App", web_app_info->title);
   EXPECT_EQ(DisplayMode::kStandalone, web_app_info->display_mode);
-  ASSERT_EQ(3u, web_app_info->display_override.size());
-  EXPECT_EQ(DisplayMode::kMinimalUi, web_app_info->display_override[0]);
-  EXPECT_EQ(DisplayMode::kStandalone, web_app_info->display_override[1]);
-  EXPECT_EQ(DisplayMode::kBorderless, web_app_info->display_override[2]);
+  EXPECT_THAT(
+      web_app_info->display_override,
+      testing::ElementsAre(DisplayOverride::Create(DisplayMode::kMinimalUi),
+                           DisplayOverride::Create(DisplayMode::kStandalone),
+                           DisplayOverride::CreateUnframed({FooUrlPattern()})));
   EXPECT_EQ(start_url_, web_app_info->start_url());
   EXPECT_EQ(GenerateManifestIdFromStartUrlOnly(start_url_),
             web_app_info->manifest_id());
@@ -273,7 +264,7 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, BasicFieldsPopulated) {
   // Verify icon metadata and bitmaps populated correctly.
   EXPECT_EQ(1u, web_app_info->manifest_icons.size());
   EXPECT_EQ(icon_url_.spec(), web_app_info->manifest_icons[0].url);
-  EXPECT_TRUE(base::Contains(web_app_info->icon_bitmaps.any, kIconSize));
+  EXPECT_TRUE(web_app_info->icon_bitmaps.any.contains(kIconSize));
   EXPECT_THAT(web_app_info->icon_bitmaps.any[kIconSize],
               gfx::test::EqualsBitmap(GetBasicIconBitmap()));
 
@@ -321,10 +312,6 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, BasicFieldsPopulated) {
   EXPECT_EQ(u"platform", related_app.platform);
   EXPECT_EQ(GURL("http://www.example.com"), related_app.url);
   EXPECT_EQ(u"id", related_app.id);
-
-  // Check borderless URL patterns were set.
-  EXPECT_THAT(web_app_info->borderless_url_patterns,
-              testing::ElementsAre(FooUrlPattern()));
 }
 
 TEST_F(ManifestToWebAppInstallInfoJobTest, EmptyNameUsesShortName) {
@@ -392,14 +379,13 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, IconParsingCorrectly) {
   EXPECT_EQ(1, purpose_to_count[IconPurpose::MASKABLE]);
 
   // Verify icon bitmaps populated correctly.
-  EXPECT_TRUE(base::Contains(web_app_info->icon_bitmaps.maskable, kIconSize));
+  EXPECT_TRUE(web_app_info->icon_bitmaps.maskable.contains(kIconSize));
   EXPECT_THAT(web_app_info->icon_bitmaps.maskable[kIconSize],
               gfx::test::EqualsBitmap(GetBasicIconBitmap()));
-  EXPECT_TRUE(base::Contains(web_app_info->icon_bitmaps.any, kIconSize));
+  EXPECT_TRUE(web_app_info->icon_bitmaps.any.contains(kIconSize));
   EXPECT_THAT(web_app_info->icon_bitmaps.any[kIconSize],
               gfx::test::EqualsBitmap(GetBasicIconBitmap()));
-  EXPECT_TRUE(
-      base::Contains(web_app_info->icon_bitmaps.monochrome, monochrome_size));
+  EXPECT_TRUE(web_app_info->icon_bitmaps.monochrome.contains(monochrome_size));
   EXPECT_THAT(web_app_info->icon_bitmaps.monochrome[monochrome_size],
               gfx::test::EqualsBitmap(monochrome_icon));
 }
@@ -482,8 +468,8 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, ShortcutItems) {
   EXPECT_EQ(icon_url, web_app_shortcut_icon.url);
 
   EXPECT_FALSE(web_app_info->shortcuts_menu_icon_bitmaps.empty());
-  EXPECT_TRUE(base::Contains(web_app_info->shortcuts_menu_icon_bitmaps[0].any,
-                             shortcut_icon_size));
+  EXPECT_TRUE(web_app_info->shortcuts_menu_icon_bitmaps[0].any.contains(
+      shortcut_icon_size));
   EXPECT_THAT(
       web_app_info->shortcuts_menu_icon_bitmaps[0].any[shortcut_icon_size],
       gfx::test::EqualsBitmap(shortcut_bitmap));
@@ -624,10 +610,8 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, HomeTabAndFileHandlingIcons) {
   // Verify bitmaps are populated correctly.
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
   EXPECT_EQ(2u, web_app_info->other_icon_bitmaps.size());
-  EXPECT_TRUE(
-      base::Contains(web_app_info->other_icon_bitmaps, tab_strip_icon_url));
-  EXPECT_TRUE(
-      base::Contains(web_app_info->other_icon_bitmaps, file_handler_icon_url));
+  EXPECT_TRUE(web_app_info->other_icon_bitmaps.contains(tab_strip_icon_url));
+  EXPECT_TRUE(web_app_info->other_icon_bitmaps.contains(file_handler_icon_url));
   EXPECT_THAT(web_app_info->other_icon_bitmaps[tab_strip_icon_url][0],
               gfx::test::EqualsBitmap(tab_strip_icon));
   EXPECT_THAT(web_app_info->other_icon_bitmaps[file_handler_icon_url][0],
@@ -949,7 +933,7 @@ TEST_F(ManifestToWebAppInstallInfoJobTest, DeferIconFetching) {
   shortcut_icon_state.bitmaps = {shortcut_icon_bitmap};
 
   // Verify no icons are downloaded.
-  base::Value::Dict debug_data;
+  base::DictValue debug_data;
   base::test::TestFuture<std::unique_ptr<WebAppInstallInfo>> future;
   std::unique_ptr<WebAppDataRetriever> retriever =
       provider().web_contents_manager().CreateDataRetriever();
@@ -1390,32 +1374,13 @@ TEST_F(ManifestToWebAppInstallInfoTrustedIconTest,
               gfx::test::EqualsBitmap(largest_icon));
 }
 
-TEST_F(ManifestToWebAppInstallInfoJobTest, BorderlessUrlPatternsOverwrite) {
-  SetupBasicPageState();
-  auto& manifest = GetPageManifest();
-
-  manifest->display_override = {
-      blink::Manifest::DisplayOverride::CreateUnframed({FooUrlPattern()}),
-      blink::Manifest::DisplayOverride::CreateUnframed({BarUrlPattern()})};
-
-  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
-
-  // Expect only the patterns from the last "borderless" entry to be present
-  // because the current implementation overwrites `borderless_url_patterns`
-  // with every `url_patterns` entry in `display_override`. This is a temporary
-  // solution until `borderless_url_patterns` is replaced by `display_override`
-  // and `url_patterns`.
-  // TODO(crbug.com/467939520): Remove `borderless_url_patterns`.
-  EXPECT_THAT(web_app_info->borderless_url_patterns,
-              testing::ElementsAre(BarUrlPattern()));
-}
-
 class ManifestToWebAppInstallInfoLocalizationTest
     : public ManifestToWebAppInstallInfoJobTest {
  protected:
   void SetUp() override {
     ManifestToWebAppInstallInfoJobTest::SetUp();
-    feature_list_.InitAndEnableFeature(features::kWebAppManifestLocalization);
+    feature_list_.InitAndEnableFeature(
+        blink::features::kWebAppManifestLocalization);
   }
 
   std::pair<icu::Locale, blink::mojom::ManifestLocalizedTextObjectPtr>
@@ -1453,6 +1418,7 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, ExactLocaleMatchFound) {
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(
@@ -1461,6 +1427,13 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, ExactLocaleMatchFound) {
   manifest->name_localized->insert(
       AddLocalizedText("fr-FR", u"Nom Français", u"fr-FR",
                        blink::mojom::Manifest_TextDirection::kLTR));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("en-US", u"American English Description", u"en-US",
+                       blink::mojom::Manifest_TextDirection::kLTR));
+  manifest->description_localized->insert(
+      AddLocalizedText("fr-FR", u"Description Française", u"fr-FR",
+                       blink::mojom::Manifest_TextDirection::kLTR));
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
@@ -1468,6 +1441,10 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, ExactLocaleMatchFound) {
   EXPECT_EQ(u"en-US", web_app_info->title.lang());
   EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
             web_app_info->title.dir());
+  EXPECT_EQ(u"American English Description", web_app_info->description);
+  EXPECT_EQ(u"en-US", web_app_info->description.lang());
+  EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
+            web_app_info->description.dir());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
@@ -1477,10 +1454,15 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(
       AddLocalizedText("de-DE", u"Deutscher Name", u"de-DE",
+                       blink::mojom::Manifest_TextDirection::kLTR));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("de-DE", u"Deutsche Beschreibung", u"de-DE",
                        blink::mojom::Manifest_TextDirection::kLTR));
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
@@ -1488,6 +1470,9 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
   EXPECT_EQ(u"Default App Name", web_app_info->title);
   EXPECT_FALSE(web_app_info->title.lang().has_value());
   EXPECT_FALSE(web_app_info->title.dir().has_value());
+  EXPECT_EQ(u"Default Description", web_app_info->description);
+  EXPECT_FALSE(web_app_info->description.lang().has_value());
+  EXPECT_FALSE(web_app_info->description.dir().has_value());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
@@ -1497,10 +1482,15 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(
       AddLocalizedText("en", u"Generic English Name", u"en",
+                       blink::mojom::Manifest_TextDirection::kLTR));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("en", u"Generic English Description", u"en",
                        blink::mojom::Manifest_TextDirection::kLTR));
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
@@ -1509,6 +1499,10 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
   EXPECT_EQ(u"en", web_app_info->title.lang());
   EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
             web_app_info->title.dir());
+  EXPECT_EQ(u"Generic English Description", web_app_info->description);
+  EXPECT_EQ(u"en", web_app_info->description.lang());
+  EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
+            web_app_info->description.dir());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest, PriorityAndFallback) {
@@ -1549,21 +1543,80 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, PriorityAndFallback) {
   EXPECT_FALSE(web_app_info->title.dir().has_value());
 }
 
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       LocalizedNameWithDefaultDescription) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->name = u"Default Name";
+  manifest->description = u"Default Description";
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("fr-FR");
+
+  // Only localize name, not description
+  manifest->name_localized.emplace();
+  manifest->name_localized->insert(
+      AddLocalizedText("fr-FR", u"Nom Français", u"fr-FR",
+                       blink::mojom::Manifest_TextDirection::kLTR));
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+  EXPECT_EQ(u"Nom Français", web_app_info->title);
+  EXPECT_EQ(u"fr-FR", web_app_info->title.lang());
+  EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
+            web_app_info->title.dir());
+  EXPECT_EQ(u"Default Description", web_app_info->description);
+  EXPECT_FALSE(web_app_info->description.lang().has_value());
+  EXPECT_FALSE(web_app_info->description.dir().has_value());
+}
+
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       DefaultNameWithLocalizedDescription) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->name = u"Default Name";
+  manifest->description = u"Default Description";
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("fr-FR");
+
+  // Only localize description, not name
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("fr-FR", u"Description Française", u"fr-FR",
+                       blink::mojom::Manifest_TextDirection::kLTR));
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+  EXPECT_EQ(u"Default Name", web_app_info->title);
+  EXPECT_FALSE(web_app_info->title.lang().has_value());
+  EXPECT_FALSE(web_app_info->title.dir().has_value());
+  EXPECT_EQ(u"Description Française", web_app_info->description);
+  EXPECT_EQ(u"fr-FR", web_app_info->description.lang());
+  EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
+            web_app_info->description.dir());
+}
+
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest, LangAndDirBothOmitted) {
   base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
 
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(
       AddLocalizedText("en-US", u"Localized Name"));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("en-US", u"Localized Description"));
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
   EXPECT_EQ(u"Localized Name", web_app_info->title);
   EXPECT_FALSE(web_app_info->title.lang().has_value());
   EXPECT_FALSE(web_app_info->title.dir().has_value());
+  EXPECT_EQ(u"Localized Description", web_app_info->description);
+  EXPECT_FALSE(web_app_info->description.lang().has_value());
+  EXPECT_FALSE(web_app_info->description.dir().has_value());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest, LangAndDirBothSpecified) {
@@ -1572,17 +1625,26 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, LangAndDirBothSpecified) {
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(
       AddLocalizedText("en-US", u"Name With Metadata", u"en-US",
                        blink::mojom::Manifest_TextDirection::kLTR));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("en-US", u"Description With Metadata", u"en-US",
+                       blink::mojom::Manifest_TextDirection::kLTR));
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
   EXPECT_EQ(u"Name With Metadata", web_app_info->title);
   EXPECT_EQ(u"en-US", web_app_info->title.lang());
   EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
             web_app_info->title.dir());
+  EXPECT_EQ(u"Description With Metadata", web_app_info->description);
+  EXPECT_EQ(u"en-US", web_app_info->description.lang());
+  EXPECT_EQ(blink::mojom::Manifest_TextDirection::kLTR,
+            web_app_info->description.dir());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest, LangOnlySpecified) {
@@ -1591,15 +1653,22 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, LangOnlySpecified) {
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(AddLocalizedText(
       "en-US", u"Name With Lang Only", u"en-US", std::nullopt));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(AddLocalizedText(
+      "en-US", u"Description With Lang Only", u"en-US", std::nullopt));
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
   EXPECT_EQ(u"Name With Lang Only", web_app_info->title);
   EXPECT_EQ(u"en-US", web_app_info->title.lang());
   EXPECT_FALSE(web_app_info->title.dir().has_value());
+  EXPECT_EQ(u"Description With Lang Only", web_app_info->description);
+  EXPECT_EQ(u"en-US", web_app_info->description.lang());
+  EXPECT_FALSE(web_app_info->description.dir().has_value());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest, DirOnlySpecified) {
@@ -1608,17 +1677,26 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, DirOnlySpecified) {
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(
       AddLocalizedText("en-US", u"Name With Dir Only", std::nullopt,
                        blink::mojom::Manifest_TextDirection::kRTL));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(
+      AddLocalizedText("en-US", u"Description With Dir Only", std::nullopt,
+                       blink::mojom::Manifest_TextDirection::kRTL));
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
   EXPECT_EQ(u"Name With Dir Only", web_app_info->title);
   EXPECT_FALSE(web_app_info->title.lang().has_value());
   EXPECT_EQ(blink::mojom::Manifest_TextDirection::kRTL,
             web_app_info->title.dir());
+  EXPECT_EQ(u"Description With Dir Only", web_app_info->description);
+  EXPECT_FALSE(web_app_info->description.lang().has_value());
+  EXPECT_EQ(blink::mojom::Manifest_TextDirection::kRTL,
+            web_app_info->description.dir());
 }
 
 TEST_F(ManifestToWebAppInstallInfoLocalizationTest, EmptyValueIgnored) {
@@ -1627,15 +1705,203 @@ TEST_F(ManifestToWebAppInstallInfoLocalizationTest, EmptyValueIgnored) {
   SetupBasicPageState();
   auto& manifest = GetPageManifest();
   manifest->name = u"Default App Name";
+  manifest->description = u"Default Description";
   g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
 
   manifest->name_localized.emplace();
   manifest->name_localized->insert(AddLocalizedText(
       "en-US", u"", u"en-US", blink::mojom::Manifest_TextDirection::kLTR));
+  manifest->description_localized.emplace();
+  manifest->description_localized->insert(AddLocalizedText(
+      "en-US", u"", u"en-US", blink::mojom::Manifest_TextDirection::kLTR));
   auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
   EXPECT_EQ(u"Default App Name", web_app_info->title);
   EXPECT_FALSE(web_app_info->title.lang().has_value());
   EXPECT_FALSE(web_app_info->title.dir().has_value());
+  EXPECT_EQ(u"Default Description", web_app_info->description);
+  EXPECT_FALSE(web_app_info->description.lang().has_value());
+  EXPECT_FALSE(web_app_info->description.dir().has_value());
+}
+
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       LocalizedIconsEmptyVectorIgnored) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->icons_localized.emplace();
+
+  std::vector<blink::Manifest::ImageResource> empty_icons;
+  manifest->icons_localized->insert({icu::Locale("en_US"), empty_icons});
+
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+
+  // Should fall back to default icon from SetupBasicPageState() since the
+  // localized icons vector is empty.
+  ASSERT_EQ(1u, web_app_info->manifest_icons.size());
+  EXPECT_EQ(icon_url_, web_app_info->manifest_icons[0].url);
+
+  ASSERT_EQ(1u, web_app_info->trusted_icons.size());
+  EXPECT_EQ(icon_url_, web_app_info->trusted_icons[0].url);
+}
+
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       LocalizedIconsExactLocaleMatch) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->icons_localized.emplace();
+
+  const GURL en_us_icon_url("https://www.foo.bar/en_us_icon.png");
+  std::vector<blink::Manifest::ImageResource> en_us_icons;
+  blink::Manifest::ImageResource en_us_icon;
+  en_us_icon.src = en_us_icon_url;
+  en_us_icon.sizes = {gfx::Size(kIconSize, kIconSize)};
+  en_us_icon.purpose = {Purpose::ANY};
+  en_us_icons.push_back(en_us_icon);
+  manifest->icons_localized->insert({icu::Locale("en_US"), en_us_icons});
+  web_contents_manager().GetOrCreateIconState(en_us_icon_url).bitmaps = {
+      GetBasicIconBitmap()};
+
+  const GURL fr_fr_icon_url("https://www.foo.bar/fr_fr_icon.png");
+  std::vector<blink::Manifest::ImageResource> fr_fr_icons;
+  blink::Manifest::ImageResource fr_fr_icon;
+  fr_fr_icon.src = fr_fr_icon_url;
+  fr_fr_icon.sizes = {gfx::Size(kIconSize, kIconSize)};
+  fr_fr_icon.purpose = {Purpose::ANY};
+  fr_fr_icons.push_back(fr_fr_icon);
+  manifest->icons_localized->insert({icu::Locale("fr_FR"), fr_fr_icons});
+  web_contents_manager().GetOrCreateIconState(fr_fr_icon_url).bitmaps = {
+      GetBasicIconBitmap()};
+
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("fr-FR");
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+  ASSERT_EQ(1u, web_app_info->manifest_icons.size());
+  EXPECT_EQ(fr_fr_icon_url, web_app_info->manifest_icons[0].url);
+
+  ASSERT_EQ(1u, web_app_info->trusted_icons.size());
+  EXPECT_EQ(fr_fr_icon_url, web_app_info->trusted_icons[0].url);
+}
+
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       LocalizedIconsLanguageOnlyFallback) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->icons_localized.emplace();
+
+  const GURL en_icon_url("https://www.foo.bar/en_icon.png");
+  std::vector<blink::Manifest::ImageResource> en_icons;
+  blink::Manifest::ImageResource en_icon;
+  en_icon.src = en_icon_url;
+  en_icon.sizes = {gfx::Size(kIconSize, kIconSize)};
+  en_icon.purpose = {Purpose::ANY};
+  en_icons.push_back(en_icon);
+  manifest->icons_localized->insert({icu::Locale("en"), en_icons});
+  web_contents_manager().GetOrCreateIconState(en_icon_url).bitmaps = {
+      GetBasicIconBitmap()};
+
+  // Set application locale to "en-US", localized icon should fall back to "en"
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+  ASSERT_EQ(1u, web_app_info->manifest_icons.size());
+  EXPECT_EQ(en_icon_url, web_app_info->manifest_icons[0].url);
+
+  ASSERT_EQ(1u, web_app_info->trusted_icons.size());
+  EXPECT_EQ(en_icon_url, web_app_info->trusted_icons[0].url);
+}
+
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       LocalizedIconsFallbackToDefault) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->icons_localized.emplace();
+
+  const GURL de_de_icon_url("https://www.foo.bar/de_de_icon.png");
+  std::vector<blink::Manifest::ImageResource> de_de_icons;
+  blink::Manifest::ImageResource de_de_icon;
+  de_de_icon.src = de_de_icon_url;
+  de_de_icon.sizes = {gfx::Size(kIconSize, kIconSize)};
+  de_de_icon.purpose = {Purpose::ANY};
+  de_de_icons.push_back(de_de_icon);
+  manifest->icons_localized->insert({icu::Locale("de_DE"), de_de_icons});
+  web_contents_manager().GetOrCreateIconState(de_de_icon_url).bitmaps = {
+      GetBasicIconBitmap()};
+
+  // Set application locale to "en-US", which has no match in icons_localized
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+
+  // Should fall back to default icon from SetupBasicPageState()
+  ASSERT_EQ(1u, web_app_info->manifest_icons.size());
+  EXPECT_EQ(icon_url_, web_app_info->manifest_icons[0].url);
+
+  ASSERT_EQ(1u, web_app_info->trusted_icons.size());
+  EXPECT_EQ(icon_url_, web_app_info->trusted_icons[0].url);
+}
+
+TEST_F(ManifestToWebAppInstallInfoLocalizationTest,
+       LocalizedIconsMultipleIconsInLocale) {
+  base::ScopedClosureRunner reset_locale = SaveAndRestoreLocale();
+
+  SetupBasicPageState();
+  auto& manifest = GetPageManifest();
+  manifest->icons_localized.emplace();
+
+  SkBitmap icon_64_bitmap = gfx::test::CreateBitmap(64, SK_ColorRED);
+  SkBitmap icon_128_bitmap = gfx::test::CreateBitmap(128, SK_ColorBLUE);
+
+  const GURL en_us_icon_64_url("https://www.foo.bar/en_us_icon_64.png");
+  const GURL en_us_icon_128_url("https://www.foo.bar/en_us_icon_128.png");
+
+  std::vector<blink::Manifest::ImageResource> en_us_icons;
+  blink::Manifest::ImageResource en_us_icon_64;
+  en_us_icon_64.src = en_us_icon_64_url;
+  en_us_icon_64.sizes = {gfx::Size(64, 64)};
+  en_us_icon_64.purpose = {Purpose::ANY};
+  en_us_icons.push_back(en_us_icon_64);
+  web_contents_manager().GetOrCreateIconState(en_us_icon_64_url).bitmaps = {
+      icon_64_bitmap};
+
+  blink::Manifest::ImageResource en_us_icon_128;
+  en_us_icon_128.src = en_us_icon_128_url;
+  en_us_icon_128.sizes = {gfx::Size(128, 128)};
+  en_us_icon_128.purpose = {Purpose::ANY};
+  en_us_icons.push_back(en_us_icon_128);
+  web_contents_manager().GetOrCreateIconState(en_us_icon_128_url).bitmaps = {
+      icon_128_bitmap};
+
+  manifest->icons_localized->insert({icu::Locale("en_US"), en_us_icons});
+
+  g_browser_process->GetFeatures()->application_locale_storage()->Set("en-US");
+
+  auto web_app_info = GetWebAppInstallInfoFromJob(*manifest);
+  ASSERT_EQ(2u, web_app_info->manifest_icons.size());
+  EXPECT_EQ(en_us_icon_64_url, web_app_info->manifest_icons[0].url);
+  EXPECT_EQ(en_us_icon_128_url, web_app_info->manifest_icons[1].url);
+
+  ASSERT_EQ(1u, web_app_info->trusted_icons.size());
+  EXPECT_EQ(en_us_icon_128_url, web_app_info->trusted_icons[0].url);
+
+  // Verify expected bitmap chosen of proper size.
+  EXPECT_THAT(web_app_info->trusted_icon_bitmaps.any[128],
+              gfx::test::EqualsBitmap(icon_128_bitmap));
+
+  // Verify bitmaps populated properly for `any` icons.
+  for (const auto& icon_data : web_app_info->trusted_icon_bitmaps.any) {
+    const SkBitmap& bitmap = icon_data.second;
+    gfx::test::CheckColors(
+        bitmap.getColor(bitmap.width() / 2, bitmap.height() / 2), SK_ColorBLUE);
+  }
 }
 
 }  // namespace

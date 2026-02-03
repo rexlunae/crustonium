@@ -113,6 +113,13 @@ class ReadAnythingAppController
   void OnTreeAdded(ui::AXTree* tree) override;
   void OnTreeRemoved(ui::AXTree* tree) override;
 
+  // Returns whether the processing of accessibility updates should be paused.
+  bool IsUpdateProcessingPaused() const;
+
+  // If the update-processing system is not paused, applies pending updates and
+  // triggers necessary actions. If paused, does nothing.
+  void ProcessPendingUpdatesIfAllowed();
+
   // read_anything::mojom::UntrustedPage:
   void AccessibilityEventReceived(
       const ui::AXTreeID& tree_id,
@@ -127,6 +134,8 @@ class ReadAnythingAppController
   void OnActiveAXTreeIDChanged(const ui::AXTreeID& tree_id,
                                ukm::SourceId ukm_source_id,
                                bool is_pdf) override;
+  void SetDistillationState(
+      read_anything::mojom::ReadAnythingDistillationState state);
   void OnAXTreeDestroyed(const ui::AXTreeID& tree_id) override;
   void OnImageDataDownloaded(const ui::AXTreeID& tree_id,
                              ui::AXNodeID node_id,
@@ -140,8 +149,8 @@ class ReadAnythingAppController
       bool images_enabled,
       read_anything::mojom::Colors color,
       double speech_rate,
-      base::Value::Dict voices,
-      base::Value::List languages_enabled_in_pref,
+      base::DictValue voices,
+      base::ListValue languages_enabled_in_pref,
       read_anything::mojom::HighlightGranularity granularity,
       read_anything::mojom::LineFocus line_focus) override;
   void SetLanguageCode(const std::string& code) override;
@@ -155,6 +164,9 @@ class ReadAnythingAppController
   void OnReadingModeHidden(bool tab_active) override;
   void OnTabWillDetach() override;
   void OnTabMuteStateChange(bool muted) override;
+  void UpdateContent(const std::string& title,
+                     const std::string& content) override;
+
 #if BUILDFLAG(IS_CHROMEOS)
   void OnDeviceLocked() override;
 #else
@@ -229,12 +241,17 @@ class ReadAnythingAppController
   int ContentFinishedStopSource() const;
   int UnexpectedUpdateContentStopSource() const;
   int LineFocusOff() const;
-  int LineFocusOneLineWindow() const;
-  int LineFocusThreeLineWindow() const;
-  int LineFocusFiveLineWindow() const;
+  int LineFocusSmallStaticWindow() const;
+  int LineFocusMediumStaticWindow() const;
+  int LineFocusLargeStaticWindow() const;
+  int LineFocusSmallCursorWindow() const;
+  int LineFocusMediumCursorWindow() const;
+  int LineFocusLargeCursorWindow() const;
   int LineFocusStaticLine() const;
   int LineFocusCursorLine() const;
   int MaxLineWidth() const;
+  int InSidePanelPresentationState() const;
+  int InImmersiveOverlayPresentationState() const;
   std::string GetStoredVoice() const;
   std::vector<std::string> GetLanguagesEnabledInPref() const;
   std::vector<ui::AXNodeID> GetChildren(ui::AXNodeID ax_node_id) const;
@@ -246,10 +263,14 @@ class ReadAnythingAppController
   std::string GetTextDirection(ui::AXNodeID ax_node_id) const;
   std::string GetUrl(ui::AXNodeID ax_node_id) const;
   std::string GetAltText(ui::AXNodeID ax_node_id) const;
+  std::string GetDomDistillerTitle() const;
+  std::string GetDomDistillerContentHtml() const;
   // Will only return a state if IsImmersiveReadAnythingEnabled() is true.
   // Returns the presentation through the OnGetPresentationState callback.
   void SendGetPresentationStateRequest() const;
   // The results of these are sent back via UntrustedPage::OnGetVoicePackInfo.
+
+  void SendPinStateRequest();
   void SendGetVoicePackInfoRequest(const std::string& language) const;
   void SendInstallVoicePackRequest(const std::string& language) const;
   void SendUninstallVoiceRequest(const std::string& language) const;
@@ -258,6 +279,7 @@ class ReadAnythingAppController
   bool ShouldBold(ui::AXNodeID ax_node_id) const;
   bool IsOverline(ui::AXNodeID ax_node_id) const;
   bool IsLeafNode(ui::AXNodeID ax_node_id) const;
+  bool IsReadAnythingPinned() const;
   void OnConnected();
   void OnCopy() const;
   void OnScroll(bool on_selection) const;
@@ -304,6 +326,8 @@ class ReadAnythingAppController
   void LogEmptyState();
   void CloseUI();
   void TogglePresentation();
+  void TogglePinState();
+  void OnPinStatusReceived(bool pin_state) override;
 
   // The language code that should be used to determine which voices are
   // supported for speech.
@@ -403,7 +427,7 @@ class ReadAnythingAppController
 
   // Helper for forwarding various updates to the webui based on the latest
   // processed accessibility events.
-  void SendEventUpdates();
+  void ProcessModelUpdates();
 
   // Helper for forwarding reading mode hide events to the webui so we can
   // perform cleaning operations on it.
@@ -513,6 +537,12 @@ class ReadAnythingAppController
   // The number of times distillation completes successfully after a page
   // change. Used for logging.
   int distillationsCompleted_;
+
+  // The distilled title result of DOM distiller distillation.
+  std::string dom_distiller_title_;
+
+  // The distilled content result of DOM distiller distillation.
+  std::string dom_distiller_content_html_;
 
   // As a subclass of RenderFrameObserver, all objects of this class are stored
   // in data structure and should not get deallocated as long as the object is

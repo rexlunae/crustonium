@@ -20,7 +20,6 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
@@ -1309,6 +1308,15 @@ void View::ConvertRectToScreen(const View* src, gfx::Rect* rect) {
   rect->set_origin(new_origin);
 }
 
+// static
+gfx::Rect View::ConvertRectFromScreen(const View* dst, const gfx::Rect& rect) {
+  gfx::Point local_origin = rect.origin();
+  ConvertPointFromScreen(dst, &local_origin);
+  gfx::Rect local_rect = rect;
+  local_rect.set_origin(local_origin);
+  return local_rect;
+}
+
 gfx::Rect View::ConvertRectToParent(const gfx::Rect& rect) const {
   // This mapping returns the enclosing rect, which is good because pixels that
   // partially occupy in the parent should be included.
@@ -1855,7 +1863,7 @@ void View::AddAccelerator(const ui::Accelerator& accelerator) {
     accelerators_ = std::make_unique<std::vector<ui::Accelerator>>();
   }
 
-  if (!base::Contains(*accelerators_, accelerator)) {
+  if (!std::ranges::contains(*accelerators_, accelerator)) {
     accelerators_->push_back(accelerator);
   }
 
@@ -2642,7 +2650,8 @@ void View::AddLayerToRegionImpl(
     ui::Layer* new_layer,
     std::vector<raw_ptr<ui::Layer, VectorExperimental>>& layer_vector) {
   DCHECK(new_layer);
-  DCHECK(!base::Contains(layer_vector, new_layer)) << "Layer already added.";
+  DCHECK(!std::ranges::contains(layer_vector, new_layer))
+      << "Layer already added.";
 
   new_layer->AddObserver(this);
   new_layer->SetVisible(GetVisible());

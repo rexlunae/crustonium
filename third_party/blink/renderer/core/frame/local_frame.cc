@@ -86,6 +86,7 @@
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/public/web/web_autofill_client.h"
 #include "third_party/blink/public/web/web_content_capture_client.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_link_preview_triggerer.h"
@@ -265,15 +266,16 @@ namespace blink {
 namespace {
 
 #if BUILDFLAG(IS_ANDROID)
-std::vector<gfx::Range> ExtractMisspellingRangesFromDocumentMarkerVector(
-    const DocumentMarkerVector& markers) {
-  std::vector<gfx::Range> ranges;
+blink::DocumentMarkerVector ExtractSpellingMarkersFromDocumentMarkerVector(
+    const blink::DocumentMarkerVector& markers) {
+  blink::DocumentMarkerVector spelling_markers;
   for (auto& marker : markers) {
-    if (marker->GetType() == DocumentMarker::MarkerType::kSpelling) {
-      ranges.emplace_back(marker->StartOffset(), marker->EndOffset());
+    if (marker->GetType() == DocumentMarker::MarkerType::kSpelling ||
+        marker->GetType() == DocumentMarker::MarkerType::kGrammar) {
+      spelling_markers.push_back(marker);
     }
   }
-  return ranges;
+  return spelling_markers;
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -819,6 +821,9 @@ bool LocalFrame::DetachImpl(FrameDetachType type) {
   frame_visibility_observers_.clear();
 
   not_restored_reasons_.reset();
+  microtasks_pauser_.reset();
+  prescient_networking_.reset();
+  link_preview_triggerer_.reset();
 
   DCHECK(!view_->IsAttached());
   Client()->WillBeDetached();
@@ -965,7 +970,11 @@ void LocalFrame::PrintNavigationWarning(const String& message) {
 bool LocalFrame::ShouldClose() {
   // TODO(crbug.com/1407078): This should be fixed to dispatch beforeunload
   // events to both local and remote frames.
-  return loader_.ShouldClose();
+  base::TimeTicks before_unload_dialog_opened_time;
+  base::TimeTicks before_unload_dialog_closed_time;
+  return loader_.ShouldClose(/*is_reload=*/false,
+                             before_unload_dialog_opened_time,
+                             before_unload_dialog_closed_time);
 }
 
 bool LocalFrame::DetachChildren() {
@@ -1514,28 +1523,6 @@ void LocalFrame::StartPrinting(const WebPrintParams& print_params,
     }
   }
 
-  if (IsMainFrame() && RuntimeEnabledFeatures::CSSSafePrintableInsetEnabled()) {
-    float inset = 0;
-    // If there's more than one page per sheet, the unprintable area will be
-    // accounted for by the printing code, so that the collection of pages will
-    // be inset appropriately.
-    if (print_params.pages_per_sheet == 1) {
-      inset = print_params_.printable_area_in_css_pixels.x();
-      inset = std::max(inset, print_params_.printable_area_in_css_pixels.y());
-      inset = std::max(inset,
-                       print_params_.default_page_description.size.width() -
-                           print_params_.printable_area_in_css_pixels.right());
-      inset = std::max(inset,
-                       print_params_.default_page_description.size.height() -
-                           print_params_.printable_area_in_css_pixels.bottom());
-    }
-
-    DocumentStyleEnvironmentVariables& vars =
-        GetDocument()->GetStyleEngine().EnsureEnvironmentVariables();
-    vars.SetVariable(UADefinedVariable::kSafePrintableInset,
-                     StyleEnvironmentVariables::FormatFloatPx(inset));
-  }
-
   SetPrinting(true, maximum_shrink_ratio);
 }
 
@@ -1557,12 +1544,6 @@ void LocalFrame::StartPrintingSubLocalFrame() {
 void LocalFrame::EndPrinting() {
   RestoreScrollOffsets();
   SetPrinting(false, 0);
-
-  if (IsMainFrame()) {
-    DocumentStyleEnvironmentVariables& vars =
-        GetDocument()->GetStyleEngine().EnsureEnvironmentVariables();
-    vars.RemoveVariable(UADefinedVariable::kSafePrintableInset);
-  }
 }
 
 void LocalFrame::SetPrinting(bool printing, float maximum_shrink_ratio) {
@@ -1704,6 +1685,9 @@ void LocalFrame::SetLayoutZoomFactor(float factor) {
 }
 
 void LocalFrame::SetTextZoomFactor(float factor) {
+  if (GetDocument() && GetDocument()->TextScaleMetaTagPresent()) {
+    factor = 1.0f;
+  }
   SetZoomFactors(layout_zoom_factor_, factor, css_zoom_factor_);
 }
 
@@ -2072,7 +2056,7 @@ LocalFrame::LocalFrame(
   is_frame_created_by_ad_script_ =
       !IsMainFrame() && ad_tracker_ &&
       ad_tracker_->IsAdScriptInStack(
-          AdTracker::StackType::kBottomAndTop,
+          AdTracker::StackType::kTopOnly,
           /*ignore_monkey_patch=*/AdTracker::MonkeyPatchableApi::kNone,
           &ad_script_ancestry_);
 
@@ -2401,6 +2385,14 @@ WebContentSettingsClient* LocalFrame::GetContentSettingsClient() {
 const mojom::RendererContentSettingsPtr& LocalFrame::GetContentSettings()
     const {
   return Loader().GetDocumentLoader()->GetContentSettings();
+}
+
+WebAutofillClient* LocalFrame::GetAutofillClient() {
+  WebLocalFrameImpl* web_frame = WebLocalFrameImpl::FromFrame(this);
+  if (!web_frame) {
+    return nullptr;
+  }
+  return web_frame->AutofillClient();
 }
 
 PluginData* LocalFrame::GetPluginData() const {
@@ -2781,7 +2773,7 @@ void LocalFrame::SetAdEvidence(const FrameAdEvidence& ad_evidence) {
 
 bool LocalFrame::IsAdScriptInStack() const {
   return ad_tracker_ &&
-         ad_tracker_->IsAdScriptInStack(AdTracker::StackType::kBottomAndTop);
+         ad_tracker_->IsAdScriptInStack(AdTracker::StackType::kTopOnly);
 }
 
 std::optional<AdScriptIdentifier> LocalFrame::CreationAdScript() const {
@@ -4293,7 +4285,7 @@ void LocalFrame::PerformSpellCheck() {
                              Position::LastPositionInNode(*container_node));
   GetSpellChecker().GetSpellCheckRequester().RequestCheckingFor(
       range,
-      ExtractMisspellingRangesFromDocumentMarkerVector(
+      ExtractSpellingMarkersFromDocumentMarkerVector(
           GetDocument()->Markers().Markers()),
       /*request_num=*/0, /*should_force_refresh=*/false);
 }

@@ -59,6 +59,7 @@
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/tabs/window_finder.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/model/display_override.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -70,11 +71,11 @@
 #include "chromeos/ui/base/window_properties.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/prefs/pref_service.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/split_tab_data.h"
-#include "components/tabs/public/split_tab_id.h"
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
@@ -126,6 +127,7 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_installation.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller_chromeos.h"
@@ -452,7 +454,8 @@ std::string IDString(TabStripModel* model) {
 }
 
 TabStrip* GetTabStripForBrowser(BrowserWindowInterface* browser) {
-  return BrowserView::GetBrowserViewForBrowser(browser)->tabstrip();
+  return BrowserView::GetBrowserViewForBrowser(browser)
+      ->horizontal_tab_strip_for_testing();
 }
 
 TabDragController* GetTabDragController(TabStrip* tab_strip) {
@@ -3971,7 +3974,8 @@ class DetachToBrowserTabDragControllerTestWithTabbedWebApp
     web_app_info->title = u"A tabbed web app";
     web_app_info->user_display_mode =
         web_app::mojom::UserDisplayMode::kStandalone;
-    web_app_info->display_override = {blink::mojom::DisplayMode::kTabbed};
+    web_app_info->display_override = {
+        web_app::DisplayOverride::Create(blink::mojom::DisplayMode::kTabbed)};
     if (add_home_tab) {
       blink::Manifest::TabStrip manifest_tab_strip;
       manifest_tab_strip.home_tab = blink::Manifest::HomeTabParams();
@@ -4274,15 +4278,14 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTest,
   // Place the first browser directly below the second in such a way that
   // dragging a tab upwards will drag it directly into the second browser's
   // tabstrip.
-  const BrowserView* const browser_view2 =
+  BrowserView* const browser_view2 =
       BrowserView::GetBrowserViewForBrowser(browser2);
-  const gfx::Rect tabstrip_region2_bounds =
-      browser_view2->browser_widget()
-          ->GetFrameView()
-          ->GetBoundsForTabStripRegion(
-              browser_view2->tab_strip_view()->GetMinimumSize());
+  browser_view2->GetWidget()->LayoutRootViewIfNecessary();
+  auto* const tabstrip = browser_view2->tab_strip_view()->GetTabStripView();
+  gfx::Rect tabstrip_bounds = tabstrip->GetLocalBounds();
+  tabstrip_bounds = tabstrip->ConvertRectToWidget(tabstrip_bounds);
   gfx::Rect bounds = initial_bounds;
-  bounds.Offset(0, tabstrip_region2_bounds.bottom());
+  bounds.Offset(0, tabstrip_bounds.bottom());
   browser()->window()->SetBounds(bounds);
 
   // Ensure the first browser is on top so clicks go to it.
@@ -5869,7 +5872,8 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTestWithOnTaskLocked,
   EXPECT_EQ(Browser::Type::TYPE_APP, browser()->GetType());
 
   // Lock the app for OnTask and set up app for testing drag behavior.
-  browser()->SetLockedForOnTask(true);
+  ash::boca::OnTaskLockedController::From(browser())->set_locked_for_on_task(
+      true);
   AddTabsAndResetBrowser(browser(), /*additional_tabs=*/3, GetAppUrl());
   TabStripModel* const tab_strip_model = browser()->tab_strip_model();
   ASSERT_EQ("0 1 2 3", IDString(tab_strip_model));
@@ -5903,7 +5907,8 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTestWithOnTaskLocked,
   EXPECT_EQ(Browser::Type::TYPE_APP, browser()->GetType());
 
   // Lock the app for OnTask and set up app for testing drag behavior.
-  browser()->SetLockedForOnTask(true);
+  ash::boca::OnTaskLockedController::From(browser())->set_locked_for_on_task(
+      true);
   AddTabsAndResetBrowser(browser(), /*additional_tabs=*/3, GetAppUrl());
 
   // Drag tab away from tab strip and verify it is not detached.
@@ -5932,7 +5937,8 @@ IN_PROC_BROWSER_TEST_P(DetachToBrowserTabDragControllerTestWithOnTaskLocked,
   EXPECT_EQ(Browser::Type::TYPE_APP, browser()->GetType());
 
   // Lock the app for OnTask.
-  browser()->SetLockedForOnTask(true);
+  ash::boca::OnTaskLockedController::From(browser())->set_locked_for_on_task(
+      true);
   const gfx::Rect& initial_bounds =
       browser()->window()->GetNativeWindow()->bounds();
 
@@ -6029,9 +6035,6 @@ class SideBySideTabDragControllerTest
                                     ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
     }
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{features::kSideBySide};
 };
 
 // Flaky. https://crbug.com/40748225

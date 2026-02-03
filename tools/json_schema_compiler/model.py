@@ -449,7 +449,7 @@ class Property(object):
   """A property of a type OR a parameter to a function.
   Properties:
   - |name| name of the property as in the json. This shouldn't change since
-    it is the key used to access Value::Dict
+    it is the key used to access base::DictValue
   - |unix_name| the unix_style_name of the property. Used as variable name
   - |optional| a boolean representing whether the property is optional
   - |description| a description of the property (if provided)
@@ -489,7 +489,7 @@ class Property(object):
           json['type'] = 'integer'
         elif isinstance(self.value, float):
           json['type'] = 'double'
-        elif isinstance(self.value, basestring):
+        elif isinstance(self.value, str):
           json['type'] = 'string'
         else:
           # TODO(kalman): support more types as necessary.

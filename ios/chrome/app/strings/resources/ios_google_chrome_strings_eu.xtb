@@ -86,6 +86,9 @@ Saioa amaitu aurretik, itxaron minutu batzuk. Orain amaitzen baduzu saioa, datua
 <translation id="2767464022270041271">Ez dago pasahitzik gordeta. Gordetako pasahitzak egiaztatzeko gai da Google-ren Pasahitz-kudeatzailea.</translation>
 <translation id="2788811701191021538">Chrome-ko ordainketa-metodoen ezarpenen orria irekitzen du.</translation>
 <translation id="2876628302275096482">Lortu <ph name="BEGIN_LINK" />Chrome-k zure datuen pribatutasuna babesteko duen moduari<ph name="END_LINK" /> buruzko informazio gehiago</translation>
+<translation id="288992067439702510">Google Chrome-k onartzen dituen laster-marken mugara iritsi zara (<ph name="LIMIT" />). Beraz, laster-marka batzuk ez dira gorde Google-ko kontuan oraindik.
+
+Laster-marka batzuk ezabatu arte, ezingo da beste laster-markarik gorde kontuan. Orain saioa amaitzen baduzu, gorde gabeko laster-markak ezabatuko dira.</translation>
 <translation id="2922914028977213693">Sakatu hau Chrome-ri etekinik handiena ateratzeko iPad-ean.</translation>
 <translation id="292371311537977079">Chrome-ren ezarpenak</translation>
 <translation id="2923827943290349720">Blokeatu ezkutuko moduko fitxak Chrome ixten duzunean</translation>
@@ -304,11 +307,11 @@ Chrome-ren erabilera hobetzeko datuak erabiltzen dituzten ezarpen gehiago ikuste
 <translation id="7787205077729386167">Ireki Chrome-ren ezarpenak iOS-en, sakatu "Arakatzaile lehenetsia" eta hautatu Chrome.</translation>
 <translation id="778855399387580014">Hasi bilaketa Chrome-ren fitxa berri batean.</translation>
 <translation id="7792140019572081272">Chrome-k Face ID bidez babesten ditu zure kontuzko datuak.</translation>
+<translation id="7825648984449922731">Editatu irudia Chrome-ko Gemini-rekin</translation>
 <translation id="7855730255114109580">Eguneratuta dago Google Chrome</translation>
 <translation id="787226752901403048">Hasi saioa Chrome-n fitxa taldeak partekatzeko eta haietan sartzeko, eta ideien inguruan elkarlanean jarduteko</translation>
 <translation id="7897703007638178753">Ikusi Chrome-ren azkenaldiko fitxak</translation>
 <translation id="7948283758957877064">Chrome-ren berritasunak</translation>
-<translation id="7996707498590516621">Sortu irudi bat Chrome-ko Gemini-rekin</translation>
 <translation id="8000174216052461231">Chrome-rako aholkua: lortu Chrome-ren segurtasun sendoena</translation>
 <translation id="8006014511203279255">Erabili Chrome mezuetako edo beste aplikazioetako estekak sakatzen dituzunean.</translation>
 <translation id="8014670471808569312">Chrome-k pasahitza gorde nahi duzun galdetuko dizu.</translation>

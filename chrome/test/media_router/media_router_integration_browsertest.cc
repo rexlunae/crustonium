@@ -93,8 +93,6 @@ MediaRouterIntegrationBrowserTest::MediaRouterIntegrationBrowserTest(
           // MediaDialogView::AddedToWidget(), which is called indirectly
           // from MediaDialogView::ShowDialogForPresentationRequest().
           ash::features::kOnDeviceSpeechRecognition,
-#else
-          media::kGlobalMediaControlsUpdatedUI,
 #endif
       },
       {});
@@ -229,7 +227,7 @@ void MediaRouterIntegrationBrowserTest::ExecuteJavaScriptAPI(
       base::JSONReader::Read(result, base::JSON_ALLOW_TRAILING_COMMAS);
 
   // Convert to dictionary.
-  base::Value::Dict* dict_value = value->GetIfDict();
+  base::DictValue* dict_value = value->GetIfDict();
   ASSERT_TRUE(dict_value);
 
   // Extract the fields.

@@ -65,8 +65,8 @@ class GlicSidePanelCoordinatorTest : public InProcessBrowserTest {
         {
             features::kGlic,
             features::kGlicRollout,
-            features::kTabstripComboButton,
             features::kGlicMultiInstance,
+            features::kTabstripComboButton,
 #if BUILDFLAG(IS_CHROMEOS)
             chromeos::features::kFeatureManagementGlic,
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -260,6 +260,21 @@ IN_PROC_BROWSER_TEST_F(GlicSidePanelCoordinatorStateTest, ShowAndClose) {
 
   // Close the panel.
   coordinator().Close();
+  EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kClosed);
+  EXPECT_FALSE(coordinator().IsShowing());
+}
+
+IN_PROC_BROWSER_TEST_F(GlicSidePanelCoordinatorStateTest, CloseSuppressed) {
+  // Initial state should be kClosed.
+  EXPECT_EQ(coordinator().state(), GlicSidePanelCoordinator::State::kClosed);
+
+  // Show the panel.
+  coordinator().Show();
+  EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kShown);
+  EXPECT_TRUE(coordinator().IsShowing());
+
+  // Close the panel with animation suppression.
+  coordinator().Close({.suppress_animations = true});
   EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kClosed);
   EXPECT_FALSE(coordinator().IsShowing());
 }

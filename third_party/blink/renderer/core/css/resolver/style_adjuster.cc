@@ -664,7 +664,8 @@ void StyleAdjuster::AdjustOverflow(ComputedStyleBuilder& builder,
     } else if (builder.OverflowY() == EOverflow::kVisible) {
       builder.SetOverflowX(EOverflow::kVisible);
     }
-  } else if (!IsOverflowClipOrVisible(builder.OverflowY())) {
+  } else if (!RuntimeEnabledFeatures::SingleAxisScrollContainersEnabled() &&
+             !IsOverflowClipOrVisible(builder.OverflowY())) {
     // Values of 'clip' and 'visible' can only be used with 'clip' and
     // 'visible.' If they aren't, 'clip' and 'visible' is reset.
     if (builder.OverflowX() == EOverflow::kVisible) {
@@ -672,7 +673,8 @@ void StyleAdjuster::AdjustOverflow(ComputedStyleBuilder& builder,
     } else if (builder.OverflowX() == EOverflow::kClip) {
       builder.SetOverflowX(EOverflow::kHidden);
     }
-  } else if (!IsOverflowClipOrVisible(builder.OverflowX())) {
+  } else if (!RuntimeEnabledFeatures::SingleAxisScrollContainersEnabled() &&
+             !IsOverflowClipOrVisible(builder.OverflowX())) {
     // Values of 'clip' and 'visible' can only be used with 'clip' and
     // 'visible.' If they aren't, 'clip' and 'visible' is reset.
     if (builder.OverflowY() == EOverflow::kVisible) {
@@ -1097,7 +1099,8 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
     // Similarly, overscroll-position elements must be out of flow positioned
     // with a box.
     if (is_in_top_layer || builder.StyleType() == kPseudoIdBackdrop ||
-        builder.OverscrollPosition()) {
+        builder.InternalOverscrollPosition() ==
+            EInternalOverscrollPosition::kAuto) {
       if (!builder.HasOutOfFlowPosition()) {
         builder.SetPosition(EPosition::kAbsolute);
       }
@@ -1166,8 +1169,8 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
 
     if (is_transition_scope && !is_document_element) {
       builder.SetContain(builder.Contain() | kContainsLayout);
-    } else if (builder.OverscrollArea() &&
-               !builder.OverscrollArea()->GetNames().empty()) {
+    } else if (builder.InternalOverscrollArea() ==
+               EInternalOverscrollArea::kAuto) {
       // TODO(crbug.com/467112943): Layout containment is currently forced to
       // ensure that the container of the overscroll areas actually contains
       // the overscroll areas. However, requiring layout containment is
@@ -1197,8 +1200,7 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
       (element && IsA<SVGForeignObjectElement>(*element)) || is_in_top_layer ||
       builder.StyleType() == kPseudoIdBackdrop ||
       builder.StyleType() == kPseudoIdViewTransition ||
-      IsCanvasWithDrawElements(element) ||
-      (builder.Contain() & kContainsViewTransition) || is_transition_scope) {
+      IsCanvasWithDrawElements(element) || is_transition_scope) {
     builder.SetForcesStackingContext(true);
   }
 

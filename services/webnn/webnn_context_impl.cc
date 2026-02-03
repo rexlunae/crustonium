@@ -98,18 +98,17 @@ void WebNNContextImpl::OnDisconnect() {
 }
 
 #if BUILDFLAG(IS_WIN)
-void WebNNContextImpl::DestroyAllContextsAndKillGpuProcess(
-    const std::string& reason) {
+void WebNNContextImpl::DestroyAllContextsAndKillGpuProcess() {
   if (!main_task_runner_->RunsTasksInCurrentSequence()) {
     main_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(
             &WebNNContextProviderImpl::DestroyAllContextsAndKillGpuProcess,
-            context_provider_, reason));
+            context_provider_));
     return;
   }
 
-  context_provider_->DestroyAllContextsAndKillGpuProcess(reason);
+  context_provider_->DestroyAllContextsAndKillGpuProcess();
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -328,7 +327,7 @@ void WebNNContextImpl::CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
               return;
             }
 
-            if (!result.value()->ImportTensorOnMainThread()) {
+            if (!result.value()->ImportTensorInternal()) {
               std::move(callback).Run(ToError<mojom::CreateTensorResult>(
                   mojom::Error::Code::kUnknownError,
                   kWebNNCreateTensorErrorMessage));

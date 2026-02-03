@@ -105,6 +105,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/ui/signin/account_picker/ExistingAccountRowViewBinder.java",
     "java/src/org/chromium/chrome/browser/ui/signin/account_picker/OnClickListenerViewBinder.java",
     "java/src/org/chromium/chrome/browser/ui/signin/account_picker/SeamlessSigninCoordinator.java",
+    "java/src/org/chromium/chrome/browser/ui/signin/account_picker/SigninBottomSheetUiCoordinator.java",
     "java/src/org/chromium/chrome/browser/ui/signin/account_picker/WebSigninAccountPickerDelegate.java",
     "java/src/org/chromium/chrome/browser/ui/signin/fullscreen_signin/FreManagementNoticeDialogHelper.java",
     "java/src/org/chromium/chrome/browser/ui/signin/fullscreen_signin/FullscreenSigninConfig.java",
@@ -197,6 +198,7 @@ android_resources("java_resources") {
     "java/res/values/dimens.xml",
   ]
   deps = [
+    "//chrome/app:java_strings_grd",
     "//chrome/browser/ui/android/strings:ui_strings_grd",
     "//components/browser_ui/strings/android:browser_ui_strings_grd",
     "//components/browser_ui/styles/android:java_resources",
@@ -232,6 +234,7 @@ robolectric_library("junit") {
     "//chrome/browser/tab:java",
     "//chrome/browser/ui/messages/android:java",
     "//chrome/test/android:chrome_java_unit_test_support",
+    "//components/browser_ui/bottomsheet/android:java",
     "//components/browser_ui/device_lock/android:java",
     "//components/browser_ui/modaldialog/android:java",
     "//components/browser_ui/test/android:test_support_java",
@@ -288,6 +291,7 @@ android_library("javatests") {
     "//chrome/browser/sync/android:java",
     "//chrome/browser/ui/android/night_mode:night_mode_java_test_support",
     "//chrome/browser/ui/android/signin:java_resources",
+    "//chrome/browser/ui/messages/android:java",
     "//chrome/test/android:chrome_java_integration_test_support",
     "//chrome/test/android:chrome_java_transit",
     "//components/browser_ui/bottomsheet/android:java",

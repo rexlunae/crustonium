@@ -317,12 +317,15 @@ class CORE_EXPORT CSSSelector {
     kPseudoSearchText,
     kPseudoPickerIcon,
     kPseudoPicker,
+    kPseudoSelectHasSlottedButton,
     kPseudoSelection,
     kPseudoSelectorFragmentAnchor,
     kPseudoSingleButton,
     kPseudoStart,
     kPseudoState,
     kPseudoTarget,
+    kPseudoToolFormActive,
+    kPseudoToolSubmitActive,
     kPseudoUnknown,
     // Something that was unparsable, but contained either a nesting
     // selector (&), or a :scope pseudo-class, and must therefore be kept
@@ -676,6 +679,10 @@ class CORE_EXPORT CSSSelector {
     return Match() == kPseudoClass && GetPseudoType() == kPseudoParent;
   }
 
+  // Returns true if the provided pseudo-class supports invalidation and can be
+  // passed to Element::PseudoStateChanged, otherwise false.
+  static bool SupportsPseudoStateChange(PseudoType);
+
   void Trace(Visitor* visitor) const;
 
   static String FormatPseudoTypeForDebugging(PseudoType);
@@ -997,8 +1004,8 @@ inline CSSSelector::CSSSelector(CSSSelector&& o)
   // constructor (i.e., using similar code as in the copy constructor above)
   // after moving to Oilpan, copying the bits one by one. We already allow
   // memcpy + memset by traits, so we can do it by ourselves, too.
-  UNSAFE_TODO(memcpy(this, &o, sizeof(*this)));
-  UNSAFE_TODO(memset(&o, 0, sizeof(o)));
+  UNSAFE_BUFFERS(memcpy(this, &o, sizeof(*this)));
+  UNSAFE_BUFFERS(memset(&o, 0, sizeof(o)));
 }
 
 inline CSSSelector::~CSSSelector() {
@@ -1064,7 +1071,7 @@ inline bool CSSSelector::IsIdClassOrAttributeSelector() const {
 
 inline void swap(CSSSelector& a, CSSSelector& b) {
   char tmp[sizeof(CSSSelector)];
-  UNSAFE_TODO({
+  UNSAFE_BUFFERS({
     memcpy(tmp, &a, sizeof(CSSSelector));
     memcpy(&a, &b, sizeof(CSSSelector));
     memcpy(&b, tmp, sizeof(CSSSelector));

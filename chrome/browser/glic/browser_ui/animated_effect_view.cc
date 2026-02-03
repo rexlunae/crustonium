@@ -66,15 +66,13 @@ std::vector<float> GetParameterizedFloats() {
 
 }  // namespace
 
-AnimatedEffectView::AnimatedEffectView(Browser* browser,
+AnimatedEffectView::AnimatedEffectView(Profile* profile,
                                        std::unique_ptr<Tester> tester)
-    : browser_(browser),
-      creation_time_(base::TimeTicks::Now()),
+    : creation_time_(base::TimeTicks::Now()),
       tester_(std::move(tester)),
       colors_(GetEffectColors()),
       floats_(GetParameterizedFloats()),
-      theme_service_(
-          ThemeServiceFactory::GetForProfile(browser->GetProfile())) {
+      theme_service_(ThemeServiceFactory::GetForProfile(profile)) {
   auto* gpu_data_manager = content::GpuDataManager::GetInstance();
   has_hardware_acceleration_ =
       gpu_data_manager->IsGpuRasterizationForUIEnabled();
@@ -223,9 +221,7 @@ void AnimatedEffectView::OnGpuInfoUpdate() {
 }
 
 bool AnimatedEffectView::IsShowing() const {
-  // `compositor_` is set when the effect starts to show and is unset when the
-  // effect stops showing.
-  return !!compositor_;
+  return is_showing_;
 }
 
 float AnimatedEffectView::GetEffectTimeForTesting() const {
@@ -233,17 +229,16 @@ float AnimatedEffectView::GetEffectTimeForTesting() const {
 }
 
 void AnimatedEffectView::Show() {
-  if (compositor_) {
-    // The user can click on the glic icon after the window is shown. The
-    // animation is already playing at that time.
-    return;
-  }
-
   if (!parent()) {
     base::debug::DumpWithoutCrashing();
     return;
   }
 
+  if (compositor_) {
+    StopShowing();
+  }
+
+  is_showing_ = true;
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
   layer()->SetRoundedCornerRadius(corner_radius_);
@@ -271,6 +266,8 @@ void AnimatedEffectView::Show() {
 }
 
 void AnimatedEffectView::StopShowing() {
+  is_showing_ = false;
+
   if (!compositor_) {
     return;
   }
@@ -378,6 +375,8 @@ float AnimatedEffectView::GetOpacity(base::TimeTicks timestamp) {
 }
 
 void AnimatedEffectView::StartRampingDown() {
+  is_showing_ = false;
+
   if (!compositor_) {
     return;
   }

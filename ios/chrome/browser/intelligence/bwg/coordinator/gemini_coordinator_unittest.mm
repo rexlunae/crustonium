@@ -13,6 +13,7 @@
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/test/test_fullscreen_controller.h"
 #import "ios/chrome/browser/intelligence/bwg/coordinator/bwg_coordinator.h"
+#import "ios/chrome/browser/intelligence/bwg/model/bwg_browser_agent.h"
 #import "ios/chrome/browser/intelligence/bwg/utils/bwg_constants.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
@@ -23,10 +24,10 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -68,19 +69,19 @@ class GeminiCoordinatorTest : public PlatformTest {
     browser_list_ = BrowserListFactory::GetForProfile(profile);
     browser_list_->AddBrowser(browser_.get());
     TestFullscreenController::CreateForBrowser(browser_.get());
+    BwgBrowserAgent::CreateForBrowser(browser_.get());
 
     CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
     mock_bwg_command_handler_ = OCMProtocolMock(@protocol(BWGCommands));
     mock_help_command_handler_ = OCMProtocolMock(@protocol(HelpCommands));
-    id mock_application_commands_handler =
-        OCMProtocolMock(@protocol(ApplicationCommands));
+    id mock_scene_handler = OCMProtocolMock(@protocol(SceneCommands));
 
     [dispatcher startDispatchingToTarget:mock_bwg_command_handler_
                              forProtocol:@protocol(BWGCommands)];
     [dispatcher startDispatchingToTarget:mock_help_command_handler_
                              forProtocol:@protocol(HelpCommands)];
-    [dispatcher startDispatchingToTarget:mock_application_commands_handler
-                             forProtocol:@protocol(ApplicationCommands)];
+    [dispatcher startDispatchingToTarget:mock_scene_handler
+                             forProtocol:@protocol(SceneCommands)];
   }
 
   void StartCoordinatorWithEntryPoint(gemini::EntryPoint entryPoint) {

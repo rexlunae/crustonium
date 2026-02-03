@@ -9,11 +9,8 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/tabs/organization/tab_declutter_controller.h"
 #include "chrome/browser/ui/tabs/organization/tab_declutter_observer.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_observer.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -26,8 +23,12 @@ class BrowserWindowInterface;
 class TabStripNudgeButton;
 class TabOrganizationService;
 class TabSearchButton;
-class TabStripController;
 class TabStrip;
+class ScopedTabStripModalUI;
+
+namespace tabs {
+class TabDeclutterController;
+}  // namespace tabs
 
 enum class LockedExpansionMode {
   kNone = 0,
@@ -90,12 +91,8 @@ class TabSearchContainer : public views::View,
 
   // TODO(382097906): Pull tabslotcontroller out of tabstrip and pass
   // that instead.
-  TabSearchContainer(TabStripController* tab_strip_controller,
-                     TabStripModel* tab_strip_model,
-                     bool tab_search_before_chips,
+  TabSearchContainer(bool tab_search_before_chips,
                      View* locked_expansion_view,
-                     BrowserWindowInterface* browser_window_interface,
-                     tabs::TabDeclutterController* tab_declutter_controller,
                      TabStrip* tab_strip);
   TabSearchContainer(const TabSearchContainer&) = delete;
   TabSearchContainer& operator=(const TabSearchContainer&) = delete;
@@ -153,10 +150,8 @@ class TabSearchContainer : public views::View,
   void OnAnimationSessionEnded();
 
   std::unique_ptr<TabStripNudgeButton> CreateAutoTabGroupButton(
-      TabStripController* tab_strip_controller,
       bool tab_search_before_chips);
   std::unique_ptr<TabStripNudgeButton> CreateTabDeclutterButton(
-      TabStripController* tab_strip_controller,
       bool tab_search_before_chips);
   void SetupButtonProperties(TabStripNudgeButton* button,
                              bool tab_search_before_chips);
@@ -174,10 +169,8 @@ class TabSearchContainer : public views::View,
   raw_ptr<TabSearchButton, DanglingUntriaged> tab_search_button_ = nullptr;
   raw_ptr<TabOrganizationService, DanglingUntriaged> tab_organization_service_ =
       nullptr;
-  raw_ptr<tabs::TabDeclutterController> tab_declutter_controller_;
 
-  raw_ptr<const Browser> browser_;
-  const raw_ptr<TabStripModel> tab_strip_model_;
+  raw_ptr<BrowserWindowInterface> browser_window_interface_;
 
   // Timer for hiding tab_organization_button_ after show.
   base::OneShotTimer hide_tab_organization_timer_;

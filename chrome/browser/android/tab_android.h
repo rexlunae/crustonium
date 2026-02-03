@@ -25,9 +25,9 @@
 #include "chrome/browser/tab/web_contents_state.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "components/sessions/core/session_id.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/token_id.h"
-#include "components/tabs/public/split_tab_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
@@ -63,8 +63,10 @@ class TabAndroid : public tabs::TabInterface,
   };
 
   // Convenience method to retrieve the Tab associated with the passed
-  // WebContents.  Can return NULL.
-  static TabAndroid* FromWebContents(const content::WebContents* web_contents);
+  // WebContents. Can return nullptr.
+  static TabAndroid* FromWebContents(content::WebContents* web_contents);
+  static const TabAndroid* FromWebContents(
+      const content::WebContents* web_contents);
 
   // Returns the native TabAndroid associated with the given `handle`.
   // Returns nullptr if the `handle` is not associated with a TabAndroid.
@@ -81,7 +83,7 @@ class TabAndroid : public tabs::TabInterface,
       JNIEnv* env,
       const base::android::ScopedJavaLocalRef<jobjectArray>& obj_array);
 
-  // Function to attach helpers to the contentView.
+  // Function to attach helpers to the `web_contents`.
   static void AttachTabHelpers(content::WebContents* web_contents);
 
   TabAndroid(JNIEnv* env,
@@ -178,8 +180,8 @@ class TabAndroid : public tabs::TabInterface,
   bool HasParentCollection();
   void InitWebContents(
       JNIEnv* env,
-      jboolean incognito,
-      jboolean is_background_tab,
+      bool incognito,
+      bool is_background_tab,
       const base::android::JavaRef<jobject>& jweb_contents,
       const base::android::JavaRef<jobject>& jweb_contents_delegate,
       const base::android::JavaRef<jobject>& jcontext_menu_populator_factory);
@@ -188,24 +190,30 @@ class TabAndroid : public tabs::TabInterface,
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jweb_contents_delegate,
       const base::android::JavaRef<jobject>& jcontext_menu_populator_factory);
+  void SendDidActivateUpdate(JNIEnv* env);
+  void SendWillDeactivateUpdate(JNIEnv* env);
+  void SendWillDetachUpdate(JNIEnv* env, jint detach_reason);
+  void SendDidInsertUpdate(JNIEnv* env);
   void DestroyWebContents();
   void ReleaseWebContents();
   bool IsPhysicalBackingSizeEmpty(
       const base::android::JavaRef<jobject>& jweb_contents);
   void OnPhysicalBackingSizeChanged(
       const base::android::JavaRef<jobject>& jweb_contents,
-      jint width,
-      jint height);
+      int32_t width,
+      int32_t height);
   void SetActiveNavigationEntryTitleForUrl(std::string& jurl,
                                            std::u16string& jtitle);
   void LoadOriginalImage();
   void OnShow();
-  void NotifyPinnedStateChanged(jboolean is_pinned);
+  void NotifyPinnedStateChanged(bool is_pinned);
   void NotifyTabGroupChanged(std::optional<base::Token> tab_group_id);
   bool IsDragging() const;
-  void OnDraggingStateChanged(jboolean is_dragging);
+  void OnDraggingStateChanged(bool is_dragging);
+  using DraggingChangedCallback =
+      base::RepeatingCallback<void(TabInterface*, bool)>;
   base::CallbackListSubscription RegisterDraggingChanged(
-      base::RepeatingCallback<void(TabInterface*, bool)> callback);
+      DraggingChangedCallback callback);
 
   scoped_refptr<content::DevToolsAgentHost> GetDevToolsAgentHost();
 
@@ -248,6 +256,8 @@ class TabAndroid : public tabs::TabInterface,
   base::CallbackListSubscription RegisterModalUIChanged(
       TabInterfaceCallback callback) override;
   bool IsInNormalWindow() const override;
+  BrowserWindowInterface* GetBrowserWindowInterface() override;
+  const BrowserWindowInterface* GetBrowserWindowInterface() const override;
   tabs::TabFeatures* GetTabFeatures() override;
   const tabs::TabFeatures* GetTabFeatures() const override;
   bool IsPinned() const override;
@@ -298,13 +308,22 @@ class TabAndroid : public tabs::TabInterface,
 
   base::RepeatingCallbackList<void(TabInterface*, bool)>
       pinned_state_changed_callback_list_;
-
   base::RepeatingCallbackList<void(TabInterface*,
                                    std::optional<tab_groups::TabGroupId>)>
       group_changed_callback_list_;
-
   base::RepeatingCallbackList<void(TabInterface*, bool)>
       dragging_changed_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)> did_activate_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)>
+      will_deactivate_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)>
+      did_become_visible_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)>
+      will_become_hidden_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*,
+                                   tabs::TabInterface::DetachReason)>
+      will_detach_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)> did_insert_callback_list_;
 
   const base::WeakPtr<Profile> profile_;
   ui::UnownedUserDataHost unowned_user_data_host_;

@@ -479,7 +479,8 @@ void IdentityManager::RefreshAccountInfoIfStale(JNIEnv* env) {
 }
 
 base::android::ScopedJavaLocalRef<jobject>
-IdentityManager::GetPrimaryAccountInfo(JNIEnv* env, jint consent_level) const {
+IdentityManager::GetPrimaryAccountInfo(JNIEnv* env,
+                                       int32_t consent_level) const {
   CoreAccountInfo account_info =
       GetPrimaryAccountInfo(static_cast<ConsentLevel>(consent_level));
   if (account_info.IsEmpty()) {
@@ -517,27 +518,7 @@ IdentityManager::FindExtendedAccountInfoByEmailAddress(
   return ConvertToJavaAccountInfo(env, account_info);
 }
 
-base::android::ScopedJavaLocalRef<jobjectArray>
-IdentityManager::GetAccountsWithRefreshTokens(JNIEnv* env) const {
-  std::vector<CoreAccountInfo> accounts = GetAccountsWithRefreshTokens();
-
-  base::android::ScopedJavaLocalRef<jclass> coreaccountinfo_clazz =
-      base::android::GetClass(
-          env, "org/chromium/components/signin/base/CoreAccountInfo");
-  auto array = base::android::ScopedJavaLocalRef<jobjectArray>::Adopt(
-      env, env->NewObjectArray(accounts.size(), coreaccountinfo_clazz.obj(),
-                               nullptr));
-  base::android::CheckException(env);
-
-  for (size_t i = 0; i < accounts.size(); ++i) {
-    base::android::ScopedJavaLocalRef<jobject> item =
-        ConvertToJavaCoreAccountInfo(env, accounts[i]);
-    env->SetObjectArrayElement(array.obj(), i, item.obj());
-  }
-  return array;
-}
-
-jboolean IdentityManager::IsClearPrimaryAccountAllowed(JNIEnv* env) const {
+bool IdentityManager::IsClearPrimaryAccountAllowed(JNIEnv* env) const {
   return signin_client_->IsClearPrimaryAccountAllowed();
 }
 #endif

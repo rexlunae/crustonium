@@ -20,7 +20,7 @@ namespace glic::prefs {
 // Boolean pref that enables or disables the launcher.
 inline constexpr char kGlicLauncherEnabled[] = "glic.launcher_enabled";
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)  // NEEDS_ANDROID_IMPL
 // String pref that keeps track of the non-localized version of the registered
 // hotkey for Glic.
 inline constexpr char kGlicLauncherHotkey[] = "glic.launcher_hotkey";
@@ -129,6 +129,12 @@ inline constexpr char kGlicActuationOnWebBlockedForURLs[] =
 // Boolean pref for the user enabled actuation on web setting.
 inline constexpr char kGlicUserEnabledActuationOnWeb[] =
     "glic.user_enabled_actuation_on_web";
+
+inline constexpr char kGlicGuestUrlPresetAutopush[] =
+    "glic.guest_url_preset_autopush";
+inline constexpr char kGlicGuestUrlPresetPreprod[] =
+    "glic.guest_url_preset_preprod";
+inline constexpr char kGlicGuestUrlPresetProd[] = "glic.guest_url_preset_prod";
 
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry);

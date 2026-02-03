@@ -16,7 +16,7 @@
 #include "base/test/gmock_expected_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install/pending_install_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
@@ -113,7 +113,7 @@ MATCHER_P(IsHttpStatusCode, err, net::GetHttpReasonPhrase(err)) {
 }
 
 std::unique_ptr<WebApp> CreateWebApp(const GURL& start_url) {
-  webapps::ManifestId manifest_id = start_url.Resolve("/");
+  webapps::ManifestId manifest_id = webapps::ManifestId(start_url.Resolve("/"));
   GURL scope = start_url.Resolve("/");
   auto web_app = std::make_unique<WebApp>(manifest_id, start_url, scope);
   web_app->SetName("iwa name");
@@ -135,7 +135,9 @@ class ScopedUrlHandler {
       : interceptor_(base::BindRepeating(&ScopedUrlHandler::Intercept,
                                          base::Unretained(this))) {}
 
-  std::optional<network::ResourceRequest> request() const { return request_; }
+  const std::optional<network::ResourceRequest>& request() const {
+    return request_;
+  }
 
   std::optional<GURL> intercepted_url() const {
     if (request_.has_value()) {
@@ -143,6 +145,8 @@ class ScopedUrlHandler {
     }
     return std::nullopt;
   }
+
+  void Clear() { request_.reset(); }
 
  private:
   bool Intercept(content::URLLoaderInterceptor::RequestParams* params) {
@@ -202,7 +206,7 @@ class IsolatedWebAppURLLoaderFactoryTestBase : public WebAppTest {
     CHECK(new_storage_partition != nullptr);
   }
 
-  const ScopedUrlHandler& url_handler() {
+  ScopedUrlHandler& url_handler() {
     CHECK(url_handler_);
     return *url_handler_;
   }
@@ -402,9 +406,9 @@ TEST_F(
                              *IwaVersion::Create("1.0.0"))
           .Build()));
 
-  IsolatedWebAppPendingInstallInfo::FromWebContents(*web_contents())
-      .set_source(IwaSourceProxy{
-          url::Origin::Create(GURL("http://pending-install-proxy-url.com"))});
+  NonInstalledBundleInspectionContext::CreateForWebContents(
+      web_contents(), IwaSourceProxy{url::Origin::Create(
+                          GURL("http://pending-install-proxy-url.com"))});
 
   CreateFactoryForFrame();
 
@@ -664,9 +668,9 @@ TEST_F(IsolatedWebAppURLLoaderFactoryTest,
 
 TEST_F(IsolatedWebAppURLLoaderFactoryTest,
        ReturnGeneratedPageWhenInstallingApplication) {
-  IsolatedWebAppPendingInstallInfo::FromWebContents(*web_contents())
-      .set_source(IwaSourceProxy{
-          url::Origin::Create(GURL("http://some-proxy-url.com"))});
+  NonInstalledBundleInspectionContext::CreateForWebContents(
+      web_contents(),
+      IwaSourceProxy{url::Origin::Create(GURL("http://some-proxy-url.com"))});
   RegisterWebApp(CreateIsolatedWebApp(
       kDevAppStartUrl,
       IsolationData::Builder(
@@ -691,9 +695,9 @@ TEST_F(IsolatedWebAppURLLoaderFactoryTest,
 
 TEST_F(IsolatedWebAppURLLoaderFactoryTest,
        RequestsRedirectedToPendingInstallIsolationDataWhenAppIsInstalled) {
-  IsolatedWebAppPendingInstallInfo::FromWebContents(*web_contents())
-      .set_source(IwaSourceProxy{
-          url::Origin::Create(GURL("http://some-proxy-url.com"))});
+  NonInstalledBundleInspectionContext::CreateForWebContents(
+      web_contents(),
+      IwaSourceProxy{url::Origin::Create(GURL("http://some-proxy-url.com"))});
 
   RegisterWebApp(CreateIsolatedWebApp(
       kDevAppStartUrl,
@@ -720,9 +724,9 @@ TEST_F(IsolatedWebAppURLLoaderFactoryTest,
        RequestsRedirectedToPendingInstallIsolationDataWhenAppIsNotInstalled) {
   CreateStoragePartitionForUrl(GURL("isolated-app://" + kDevWebBundleId));
 
-  IsolatedWebAppPendingInstallInfo::FromWebContents(*web_contents())
-      .set_source(IwaSourceProxy{
-          url::Origin::Create(GURL("http://some-proxy-url.com"))});
+  NonInstalledBundleInspectionContext::CreateForWebContents(
+      web_contents(),
+      IwaSourceProxy{url::Origin::Create(GURL("http://some-proxy-url.com"))});
 
   CreateFactoryForFrame();
 
@@ -769,6 +773,8 @@ TEST_F(IsolatedWebAppURLLoaderFactoryTest,
                                               *IwaVersion::Create("1.0.0"))
                            .Build()));
   NavigateAndCommit(kDevAppStartUrl);
+  // Clear the interception of the manifest fetch triggered by navigation.
+  url_handler().Clear();
 
   CreateFactoryForFrame(url::Origin::Create(kDevAppStartUrl));
 

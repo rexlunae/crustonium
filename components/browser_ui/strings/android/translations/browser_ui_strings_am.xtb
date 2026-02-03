@@ -3,6 +3,7 @@
 <translationbundle lang="am">
 <translation id="1006017844123154345">መስመር ላይ ክፈት</translation>
 <translation id="1036348656032585052">አጥፋ</translation>
+<translation id="1046742265332833834">ሰማያዊ ገጽታ</translation>
 <translation id="1070329623210597193">ይህ ጣቢያ ማየት ወይም አርትዖት ማድረግ የሚችላቸው ፋይሎች</translation>
 <translation id="1073417869336441572">የሦስተኛ ወገን ኩኪዎችን ለምን እንደፈቀዱ ለእኛ በመንገር Chrome እንድናሻሽል ያግዙን። <ph name="BEGIN_LINK" />ግብረመልስ ይላኩ<ph name="END_LINK" /></translation>
 <translation id="1074758928858737435">የጣቢያዎችን የዴስክቶፕ ስሪት ለማየት መጠየቅ ይችላሉ</translation>
@@ -12,6 +13,7 @@
 <translation id="1178581264944972037">ለአፍታ አቁም</translation>
 <translation id="1181037720776840403">አስወግድ</translation>
 <translation id="1192844206376121885">ይህ በ<ph name="ORIGIN" /> የተከማቹ ሁሉንም ውሂብ እና ኩኪዎች ይሰርዛል።</translation>
+<translation id="1199963004393929848">አረንጓዴ ገጽታ</translation>
 <translation id="1201402288615127009">ቀጣይ</translation>
 <translation id="1240190568154816272">ጠቃሚ የChrome ምክሮች</translation>
 <translation id="1242008676835033345"><ph name="WEBSITE_URL" /> ላይ ተካትቷል</translation>
@@ -64,6 +66,7 @@
 <translation id="1717996979683942279">እንዲሁም ሲበራ ጣቢያዎች በሁሉም የእርስዎ ማሳያዎች ላይ መስኮቶችን ለማስተዳደር መጠየቅ ይችላሉ። ሲጠፋ ጣቢያዎች በሁሉም የእርስዎ ማሳያዎች ላይ መስኮቶችን ማስተዳደር አይችሉም።</translation>
 <translation id="1738912554587725807">የአዲስ ትር ገፅ መልክ ገጽታ ስብስቦች ግርጌ ሉህ</translation>
 <translation id="1743802530341753419">ጣቢያዎች ከአንድ መሣሪያ ጋር እንዲገናኙ ከመፍቀድ በፊት ጠይቅ (የሚመከር)</translation>
+<translation id="1766455884659449403">የChrome ጠቃሚ ምክሮች ማሳወቂያዎችን ያግኙ</translation>
 <translation id="1777815584158991902">የምግብ የግርጌ ሉህ ያግኙ</translation>
 <translation id="1779089405699405702">ስውር ምስል መፍቻ</translation>
 <translation id="1785415724048343560">ለምርጥ ተሞክሮ የሚመከር</translation>
@@ -188,11 +191,9 @@
 <translation id="2903493209154104877">አድራሻዎች</translation>
 <translation id="2910701580606108292">ጣቢያዎች ጥበቃ የሚደረግለትን ይዘትን እንዲያጫውቱ ከመፍቀድ በፊት ጠይቅ</translation>
 <translation id="2918484639460781603">ወደ ቅንብሮች ይሂዱ</translation>
-<translation id="293060180538644702">የChrome ጠቃሚ ምክሮች ማሳወቂያዎችን ያግኙ</translation>
 <translation id="2932883381142163287">የአላግባብ መጠቀምን ሪፖርት ያድርጉ</translation>
 <translation id="2939338015096024043">ሲበራ፣ ጣቢያዎች የካሜራዎን ቦታ ለመከታተል እና ስለ አካባቢዎ ለማወቅ መጠየቅ ይችላሉ። ሲጠፋ፣ ጣቢያዎች የካሜራዎን ቦታ መከታተል ወይም ስለ አካባቢዎ ማወቅ አይችሉም።</translation>
 <translation id="2968755619301702150">የእውቅና ማረጋገጫ መመልከቻ</translation>
-<translation id="2979365474350987274">የሦስተኛ ወገን ኩኪዎች የተገደቡ ናቸው</translation>
 <translation id="2990583317361835189">ጣቢያዎች የእንቅስቃሴ ዳሳሾችን እንዲጠቀሙ አይፍቀዱ</translation>
 <translation id="3004438526346162184">ጣቢያዎች በሁሉም የእርስዎ ማሳያዎች ላይ መስኮቶችን ለማስተዳደር ይህን ባህሪ መጠቀም ይችላሉ</translation>
 <translation id="3008272652534848354">ፈቃዶችን ዳግም ያቀናብሩ</translation>
@@ -216,11 +217,11 @@
 <translation id="3167868116600277716">ምግብ ያግኙ</translation>
 <translation id="3198916472715691905"><ph name="STORAGE_AMOUNT" /> የተከማቸ ውሂብ</translation>
 <translation id="3199078925536734975">በዚህ ጊዜ የተፈቀደ • ግምታዊ</translation>
+<translation id="3208584281581115441">አሁን ፈትሽ</translation>
 <translation id="321187648315454507"><ph name="APP_NAME" /> ማሳወቂያዎችን እንዲልክልዎት ለማድረግ፣ በተጨማሪ በ <ph name="BEGIN_LINK" />Android ቅንብሮች<ph name="END_LINK" /> ውስጥ ማሳወቂያዎችን ያብሩ።</translation>
 <translation id="3223425961342298674">አካባቢ አይፈቀድም</translation>
 <translation id="3227137524299004712">ማይክሮፎን</translation>
 <translation id="3232293466644486101">የአሰሳ ውሂብን ሰርዝ…</translation>
-<translation id="3241320538788585298">የምልልስ አውታረ መረብ</translation>
 <translation id="3242646949159196181">ሲበራ ጣቢያዎች ድምጽ ማጫወት ይችላሉ። ሲጠፋ፣ ጣቢያዎች ድምጽ ማጫወት አይችሉም።</translation>
 <translation id="3273479183583863618">ትሮች ላይ ያሉ የዋጋ ቅነሳዎች</translation>
 <translation id="3277252321222022663">ጣቢያዎች ዳሳሾችን እንዲደርሱ ይፍቀዱላቸው (የሚመከር)</translation>
@@ -266,6 +267,7 @@
 <translation id="3721953990244350188">ያሰናብቱ እና የሚገኘውን ቀጣይ ያሳዩ</translation>
 <translation id="3744111561329211289">የዳራ ስምረት</translation>
 <translation id="3746834924069123416">ይበልጥ የቅርብ ጊዜ ትሮችን አሳይ</translation>
+<translation id="3753618528540214374">ጠቆር ያለ አረንጓዴ ገጽታ</translation>
 <translation id="3763247130972274048">10 ሴ ለመዝለል ቪዲዮ ወደ ግራ ወይም ቀኝ ላይ ሁለቴ መታ ያድርጉ</translation>
 <translation id="3776508619697147021">ጣቢያዎች ብዙ ፋይሎችን በራስ-ሰር ለማውረድ መጠየቅ ይችላሉ</translation>
 <translation id="3779154269823594982">የይለፍ ቃላት ይለውጡ</translation>
@@ -275,6 +277,7 @@
 <translation id="381841723434055211">ስልክ ቁጥሮች</translation>
 <translation id="3823453485268218808">ቅርጸ-ቁምፊ ሞኖ</translation>
 <translation id="3826050100957962900">የሶስተኛ ወገን መግቢያ</translation>
+<translation id="3831065134033923230">የተቀመጡ ይለፍ ቃላትዎን ይፈትሹ</translation>
 <translation id="3835233591525155343">የእርስዎ መሣሪያ አጠቃቀም</translation>
 <translation id="3843916486309149084">Chrome ዛሬ እንደገና ኩኪዎችን ያግዳል</translation>
 <translation id="385051799172605136">ተመለስ</translation>
@@ -403,6 +406,7 @@
 <translation id="5246825184569358663">ይህ እርምጃ ኩኪዎችን ጨምሮ ሁሉንም የአካባቢ ውሂብ ይሰርዛል እና ሁሉንም ፈቃዶች ለ<ph name="DOMAIN" /> እና በእሱ ስር ላሉት ሁሉም ጣቢያዎች ዳግም ያስጀምራል</translation>
 <translation id="5264323282659631142">«<ph name="CHIP_LABEL" />»ን ያስወግዱ</translation>
 <translation id="528192093759286357">ከሙሉ ማያ ገፅ ለመውጣት ከላይ ይጎትቱ እና የተመለስ አዝራሩን ይንኩ።</translation>
+<translation id="5286194356314741248">በመቃኘት ላይ</translation>
 <translation id="5300589172476337783">አሳይ</translation>
 <translation id="5301954838959518834">እሺ፣ ገባኝ</translation>
 <translation id="5317780077021120954">አስቀምጥ</translation>
@@ -413,6 +417,7 @@
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(+ 1 ተጨማሪ)}one{(+ # ተጨማሪ)}other{(+ # ተጨማሪ)}}</translation>
 <translation id="5403592356182871684">ስሞች</translation>
 <translation id="5407203562970638234">ደኅንነትዎን ያሻሽሉ</translation>
+<translation id="5436307623797390637">በመሣሪያ ላይ ያሉ መተግበሪያዎች</translation>
 <translation id="5438097262470833822">ይህ ምርጫ ፈቃዶችን ለ<ph name="WEBSITE" /> ዳግም ያስጀምራል</translation>
 <translation id="5459413148890178711">ሲበራ፣ ጣቢያዎች አካባቢዎን ሊጠይቁ ይችላሉ። ሲጠፋ፣ ጣቢያዎች አካባቢዎን ማየት አይችሉም።</translation>
 <translation id="5489227211564503167">የጠፋው ጊዜ <ph name="ELAPSED_TIME" /> ከ<ph name="TOTAL_TIME" />።</translation>
@@ -475,6 +480,7 @@
 <translation id="5998071268779572583">ምግብ ያግኙን ያብሩ</translation>
 <translation id="6012967556075291653">ፒን የተደረገ አቋራጭ</translation>
 <translation id="6015775454662021376">ይህ ጣቢያ የሚኖረው የመሣሪያዎን መዳረሻ ይቆጣጠሩ</translation>
+<translation id="6022659036123304283">Chromeን የራስዎ ያድርጉት</translation>
 <translation id="6040143037577758943">ዝጋ</translation>
 <translation id="6042308850641462728">ተጨማሪ</translation>
 <translation id="6064125863973209585">የተጠናቀቁ ማውረዶች</translation>
@@ -492,13 +498,13 @@
 <translation id="6196640612572343990">የሦስተኛ ወገን ኩኪዎችን አግድ</translation>
 <translation id="6205314730813004066">የማስታወቂያ ግላዊነት</translation>
 <translation id="6207207788774442484">ውሂብ ሰርዝ እና ፈቃዶችን ዳግም አስጀምር</translation>
+<translation id="6218508144653756827">ትንሽ ሐምራዊ ያለበት ቀይ ገጽታ</translation>
 <translation id="6231752747840485235">«<ph name="APP_NAME" />» ይራገፍ?</translation>
 <translation id="6234351944623978659">የአሳሽ መተግበሪያ &gt; Chrome ላይ መታ ያድርጉ</translation>
 <translation id="6260830281887654268">የአዲስ ትር ገፅ መልክ ገጽታ ስብስቦች የግርጌ ሉህ በግማሽ ቁመት ተከፍቷል</translation>
 <translation id="6262191102408817757">በእርስዎ የመጨረሻ ትር ላይ በመመስረት</translation>
 <translation id="6262279340360821358"><ph name="PERMISSION_1" /> እና <ph name="PERMISSION_2" /> ታግደዋል</translation>
 <translation id="6270391203985052864">ጣቢያዎች ማሳወቂያዎችን ለመላክ መጠየቅ ይችላሉ</translation>
-<translation id="6278428485366576908">ገጽታ</translation>
 <translation id="6295158916970320988">ሁሉም ጣቢያዎች</translation>
 <translation id="6320088164292336938">ንዘር</translation>
 <translation id="6367753977865761591">ለአንድ የተወሰነ ጣቢያ የሦስተኛ ወገን መግባትን ያግዱ።</translation>
@@ -525,6 +531,7 @@
 <translation id="659938948789980540">{COUNT,plural, =1{ለ<ph name="RWS_MEMBERS_COUNT" /> <ph name="RWS_OWNER" /> ጣቢያ የተፈቀደ ኩኪ}one{ለ<ph name="RWS_MEMBERS_COUNT" /> <ph name="RWS_OWNER" /> ጣቢያ የተፈቀደ ኩኪ}other{ለ<ph name="RWS_MEMBERS_COUNT" /> <ph name="RWS_OWNER" /> ጣቢያዎች የተፈቀዱ ኩኪዎች}}</translation>
 <translation id="6608650720463149374"><ph name="GIGABYTES" /> ጊባ</translation>
 <translation id="6612358246767739896">ጥበቃ የሚደረግለት ይዘት</translation>
+<translation id="6619015782482868078">ውሃ ገጽታ</translation>
 <translation id="662080504995468778">ቆይ</translation>
 <translation id="6630443592285535486">እዚህ ሄክስ ይተይቡ</translation>
 <translation id="6635327442719709864">ሲበራ፣ ጣቢያዎች ተከታታይ ወደቦችን ለመጠቀም መጠየቅ ይችላሉ። ሲጠፋ፣ ጣቢያዎች ተከታታይ ወደቦችን መጠቀም አይችሉም።</translation>
@@ -553,6 +560,7 @@
 <translation id="6945221475159498467">ይምረጡ</translation>
 <translation id="6950072572526089586">እርስዎ የሚጎበኙት ጣቢያ እንደሚጠበቀው ለመስራት እርስዎ ስለሚያደርጉት ነገር መረጃ ሊያስቀምጥ ይችላል — ለምሳሌ፣ ወደ አንድ ጣቢያ ገብተው እንዲቆዩ ለማድረግ ወይም በእርስዎ የሸመታ ተሳቢ ውስጥ ንጥሎችን ለማስቀመጥ። ብዙ ጊዜ ጣቢያዎች ይህን መረጃ በመሣሪያዎ ላይ በጊዜያዊነት ያስቀመጣሉ።</translation>
 <translation id="6965382102122355670">እሺ</translation>
+<translation id="6980507581230208647">ጽጌሬዳ ገጽታ</translation>
 <translation id="6980861169612950611">የጣቢያ ውሂብ ይሰረዝ? <ph name="SITE_NAME" /></translation>
 <translation id="6981982820502123353">ተደራሽነት</translation>
 <translation id="6991142177939282156">የተፈቀደ • ግምታዊ በመጠቀም ላይ</translation>
@@ -581,6 +589,7 @@
 <translation id="7250468141469952378"><ph name="ITEM_COUNT" /> ተመርጠዋል</translation>
 <translation id="7260727271532453612"><ph name="PERMISSION_1" /> እና <ph name="PERMISSION_2" /> ተፈቅደዋል</translation>
 <translation id="7276071417425470385">ሲበራ፣ ጣቢያዎች የምናባዊ እውነታ መሳሪያዎችን ለመጠቀም መጠየቅ ይችላሉ። ሲጠፋ፣ ጣቢያዎች የምናባዊ እውነታ መሳሪያዎችን መጠቀም አይችሉም።</translation>
+<translation id="7282197670900591579">ፈዛዛ ቢጫ ገጽታ</translation>
 <translation id="728412880473384942">ጣቢያዎች ይበልጥ ፈጣን ነገር ግን ያነሰ ደህንነት ያላቸው ናቸው</translation>
 <translation id="7366415735885268578">አንድ ጣቢያ ያክሉ</translation>
 <translation id="7368695150573390554">ማንኛውም ከመስመር ውጭ ውሂብ ይሰረዛል</translation>
@@ -619,6 +628,7 @@
 <translation id="7688240020069572972">የChrome ጠቃሚ ምክሮች ካርድ</translation>
 <translation id="7719367874908701697">ገፅ አጉላ</translation>
 <translation id="775043444390799886">ፈቃድን ሻር</translation>
+<translation id="7758789811447313947">ሐምራዊ ገጽታ</translation>
 <translation id="7759147511335618829">የMIDI መሣሪያ ቁጥጥር እና ዳግም ፕሮግራም</translation>
 <translation id="7781829728241885113">ትናንት</translation>
 <translation id="7791543448312431591">ያክሉ</translation>
@@ -631,13 +641,13 @@
 <translation id="7835852323729233924">ሚዲያን በማጫወት ላይ</translation>
 <translation id="783819812427904514">የቪዲዮን ድምጸ-ከል አንሳ</translation>
 <translation id="7846076177841592234">ምርጫ ሰርዝ</translation>
-<translation id="7881140103901777395">Chrome አብዛኛዎቹን ጣቢያዎች የሦስተኛ ወገን ኩኪዎችን እንዳይጠቀሙ ይገድባል። ነገር ግን የሦስተኛ ወገን ኩኪዎች መሠረታዊ አገልግሎቶችን ለማቅረብ በእነሱ ላይ ስለሚተማመን በዚህ ጣቢያ ላይ ተፈቅዶላቸዋል።\n\n<ph name="BEGIN_LINK" />ለሦስተኛ ወገን ኩኪዎች መዳረሻ ለማስተዳደር<ph name="END_LINK" /> ቅንብሮችን ይጎብኙ።</translation>
 <translation id="7882806643839505685">ለተወሰነ ጣቢያ ድምፅ ፍቀድ።</translation>
 <translation id="7891547341794213004">በዚህ የትር ካርድ ቀጥል የሚለውን ደብቅ</translation>
 <translation id="789722939441020330">ጣቢያዎች ብዙ ፋይሎችን በራስ-ሰር እንዲያወርዱ አይፍቀዱ</translation>
 <translation id="7940722705963108451">አስታውሰኝ</translation>
 <translation id="7948081750384205628">ስለ <ph name="SETTING_TITLE" /> የበለጠ ይወቁ</translation>
 <translation id="7952708427581814389">ጣቢያዎች በቅንጥብ ሰሌዳዎ ላይ ጽሑፍን እና ምስሎችን ለማየት መጠየቅ ይችላሉ</translation>
+<translation id="798299424881500862">ብርቱካናማ ገጽታ</translation>
 <translation id="7986741934819883144">አንድ እውቂያ ይምረጡ</translation>
 <translation id="7990211076305263060">ሲበራ፣ ጣቢያዎች ማይክሮፎንዎን ለመጠቀም ሊጠይቁ ይችላሉ። ሲጠፋ፣ ጣቢያዎች ማይክሮፎንዎን መጠቀም አይችሉም።</translation>
 <translation id="8007176423574883786">ለዚህ መሣሪያ ጠፍቷል</translation>

@@ -196,6 +196,14 @@ const char kDisableLogging[]                = "disable-logging";
 // Disables using CODECAPI_AVLowLatencyMode when creating DXVA decoders.
 const char kDisableLowLatencyDxva[]         = "disable-low-latency-dxva";
 
+// Disables renaming the main browser thread to "CrBrowserMain" during browser
+// startup. The internally mapped thread name is being emitted to Perfetto
+// traces, which means that the main thread is identified as "CrBrowserMain"
+// instead of the process name. Enabling this switch will prevent the thread
+// from being named, which fixes the Perfetto trace issue.
+const char kDisableMainThreadNameOverride[] =
+    "disable-main-thread-name-override";
+
 // Disables Mojo broker capabilities in the browser during Mojo initialization.
 const char kDisableMojoBroker[] = "disable-mojo-broker";
 
@@ -395,11 +403,6 @@ const char kEnableSpatialNavigation[]       = "enable-spatial-navigation";
 // from overriding that decision.
 const char kEnableStrictMixedContentChecking[] =
     "enable-strict-mixed-content-checking";
-
-// Blocks insecure usage of a number of powerful features (device orientation,
-// for example) that we haven't yet deprecated for the web at large.
-const char kEnableStrictPowerfulFeatureRestrictions[] =
-    "enable-strict-powerful-feature-restrictions";
 
 // When specified along with a value in the range (0,1] will --enable-tracing
 // for (roughly) that percentage of tests being run. This is done in a stable
@@ -617,12 +620,6 @@ const char kRendererClientId[] = "renderer-client-id";
 // The contents of this flag are prepended to the renderer command line.
 // Useful values might be "valgrind" or "xterm -e gdb --args".
 const char kRendererCmdPrefix[]             = "renderer-cmd-prefix";
-
-#if !BUILDFLAG(IS_ANDROID)
-// Indicates that the renderer process was launched to host the initial WebUI
-// as part of WaaP (Webium-as-a-Product).
-const char kRendererForInitialWebUI[] = "renderer-for-initial-webui";
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Causes the process to run as renderer instead of as browser.
 const char kRendererProcess[]               = "renderer";

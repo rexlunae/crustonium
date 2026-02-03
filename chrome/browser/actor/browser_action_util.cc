@@ -46,6 +46,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/common/actor.mojom-shared.h"
 #include "chrome/common/actor/action_result.h"
 #include "chrome/common/actor/actor_constants.h"
 #include "chrome/common/actor/actor_logging.h"
@@ -96,12 +97,13 @@ using ::tabs::TabInterface;
 
 namespace {
 
-// Test only callback for overriding the TabObservationResult provided from
-// BuildActionsResultWithObservations.
-base::RepeatingCallback<apc::TabObservation::TabObservationResult()>&
+// Test only callback for mutating and returning the TabObservationResult
+// provided from BuildActionsResultWithObservations.
+base::RepeatingCallback<void(apc::TabObservation*,
+                             const FetchPageContextResult&)>&
 GetTabObservationResultOverrideForTesting() {
-  static base::NoDestructor<
-      base::RepeatingCallback<apc::TabObservation::TabObservationResult()>>
+  static base::NoDestructor<base::RepeatingCallback<void(
+      apc::TabObservation*, const FetchPageContextResult&)>>
       callback;
   return *callback;
 }
@@ -145,13 +147,13 @@ std::unique_ptr<ToolRequest> CreateClickRequest(const ClickAction& action) {
     return nullptr;
   }
 
-  MouseClickCount count;
+  mojom::ClickCount count;
   switch (action.click_count()) {
     case apc::ClickAction_ClickCount_SINGLE:
-      count = MouseClickCount::kSingle;
+      count = mojom::ClickCount::kSingle;
       break;
     case apc::ClickAction_ClickCount_DOUBLE:
-      count = MouseClickCount::kDouble;
+      count = mojom::ClickCount::kDouble;
       break;
     case apc::ClickAction_ClickCount_UNKNOWN_CLICK_COUNT:
     case apc::
@@ -159,17 +161,17 @@ std::unique_ptr<ToolRequest> CreateClickRequest(const ClickAction& action) {
     case apc::
         ClickAction_ClickCount_ClickAction_ClickCount_INT_MAX_SENTINEL_DO_NOT_USE_:
       // TODO(crbug.com/412700289): Revert once this is set.
-      count = MouseClickCount::kSingle;
+      count = mojom::ClickCount::kSingle;
       break;
   }
 
-  MouseClickType type;
+  mojom::ClickType type;
   switch (action.click_type()) {
     case apc::ClickAction_ClickType_LEFT:
-      type = MouseClickType::kLeft;
+      type = mojom::ClickType::kLeft;
       break;
     case apc::ClickAction_ClickType_RIGHT:
-      type = MouseClickType::kRight;
+      type = mojom::ClickType::kRight;
       break;
     case apc::
         ClickAction_ClickType_ClickAction_ClickType_INT_MIN_SENTINEL_DO_NOT_USE_:
@@ -177,7 +179,7 @@ std::unique_ptr<ToolRequest> CreateClickRequest(const ClickAction& action) {
         ClickAction_ClickType_ClickAction_ClickType_INT_MAX_SENTINEL_DO_NOT_USE_:
     case apc::ClickAction_ClickType_UNKNOWN_CLICK_TYPE:
       // TODO(crbug.com/412700289): Revert once this is set.
-      type = MouseClickType::kLeft;
+      type = mojom::ClickType::kLeft;
       break;
   }
 
@@ -550,21 +552,24 @@ std::unique_ptr<ToolRequest> CreateScriptToolRequest(
 
   // TODO(khushalsagar): Remove once the callers are setting up this ID
   // correctly.
-  std::string document_identifier;
+  std::optional<base::UnguessableToken> document_identifier;
   if (action.has_document_identifier()) {
-    document_identifier = action.document_identifier().serialized_token();
+    document_identifier = base::UnguessableToken::DeserializeFromString(
+        action.document_identifier().serialized_token());
   } else {
     auto* main_rfh = tab_handle.Get()->GetContents()->GetPrimaryMainFrame();
-    document_identifier = DocumentIdentifierUserData::GetDocumentIdentifier(
-                              main_rfh->GetGlobalFrameToken())
-                              .value_or("");
+    document_identifier = optimization_guide::DocumentIdentifierUserData::
+                              GetOrCreateForCurrentDocument(main_rfh)
+                                  ->token();
   }
 
-  return std::make_unique<ScriptToolRequest>(
-      tab_handle,
-      DomNode{.node_id = kRootElementDomNodeId,
-              .document_identifier = document_identifier},
-      action.tool_name(), action.input_arguments());
+  if (!document_identifier) {
+    return nullptr;
+  }
+
+  return std::make_unique<ScriptToolRequest>(tab_handle, *document_identifier,
+                                             action.tool_name(),
+                                             action.input_arguments());
 }
 
 std::unique_ptr<ToolRequest> CreateMediaControlRequest(
@@ -837,8 +842,9 @@ void FetchCallback(
   TabInterface* const tab = tab_handle.Get();
 
   if (!GetTabObservationResultOverrideForTesting().is_null()) {
-    tab_observation->set_result(
-        GetTabObservationResultOverrideForTesting().Run());
+    // TODO(bokan): result might not have a value in which case this CHECKs (but
+    // this is a test-only issue).
+    GetTabObservationResultOverrideForTesting().Run(tab_observation, **result);
     return;
   }
 
@@ -1095,9 +1101,9 @@ void BuildActionsResultWithObservations(
   base::RepeatingClosure barrier = base::BarrierClosure(
       tabs_to_fetch.size(),
       base::BindOnce(std::move(callback), actions_start_time, result_code,
-                     index_of_failed_action, std::move(action_results),
-                     task.id(), skip_async_observation_information,
-                     std::move(response), std::move(journal_entry)));
+                     index_of_failed_action, action_results, task.id(),
+                     skip_async_observation_information, std::move(response),
+                     std::move(journal_entry)));
   for (auto& [tab, tab_observation] : tabs_to_fetch) {
     // tab_observation can be Unretained because the underlying APC is owned
     // by the barrier which is ref-counted.
@@ -1111,9 +1117,9 @@ void BuildActionsResultWithObservations(
 }
 
 void SetTabObservationResultOverrideForTesting(
-    base::RepeatingCallback<
-        optimization_guide::proto::TabObservation::TabObservationResult()>
-        callback) {
+    base::RepeatingCallback<void(
+        optimization_guide::proto::TabObservation*,
+        const page_content_annotations::FetchPageContextResult&)> callback) {
   GetTabObservationResultOverrideForTesting() = callback;
 }
 
@@ -1147,6 +1153,16 @@ CreateActorJournalFetchPageProgressListener(
     TaskId task_id) {
   return std::make_unique<ActorJournalFetchPageProgressListener>(journal, url,
                                                                  task_id);
+}
+
+std::optional<mojom::ActionResultCode> MaybeGetErrorCodeForTab(
+    tabs::TabInterface* tab_interface) {
+  if (!tab_interface || tab_interface->GetContents()->IsBeingDestroyed()) {
+    return mojom::ActionResultCode::kTabWentAway;
+  } else if (tab_interface->GetContents()->IsCrashed()) {
+    return mojom::ActionResultCode::kRendererCrashed;
+  }
+  return std::nullopt;
 }
 
 }  // namespace actor

@@ -172,6 +172,12 @@ OmniboxPopupUI::OmniboxPopupUI(content::WebUI* web_ui)
               contextual_search::ContextualSearchSource::kOmnibox));
   source->AddBoolean("autoSubmitVoiceSearchQuery",
                      omnibox::kAutoSubmitVoiceSearchQuery.Get());
+  source->AddBoolean("caretColorAnimationDisabled",
+                     base::FeatureList::IsEnabled(
+                         omnibox::kWebUIOmniboxDisableCaretColorAnimation));
+  source->AddBoolean("composeboxAnimationDisabled",
+                     base::FeatureList::IsEnabled(
+                         omnibox::kWebUIOmniboxAimPopupDisableAnimation));
 
   webui::SetupWebUIDataSource(
       source, kOmniboxPopupResources,
@@ -227,7 +233,8 @@ OmniboxPopupUI::GetOrCreateContextualSessionHandle() {
     if (contextual_search_service) {
       shared_session_handle_ = contextual_search_service->CreateSession(
           omnibox::CreateQueryControllerConfigParams(),
-          contextual_search::ContextualSearchSource::kOmnibox);
+          contextual_search::ContextualSearchSource::kOmnibox,
+          lens::LensOverlayInvocationSource::kOmniboxContextualQuery);
       // TODO(crbug.com/469875271): Determine what to do with the return value
       // of this call, or move this call to a different location.
       shared_session_handle_->CheckSearchContentSharingSettings(

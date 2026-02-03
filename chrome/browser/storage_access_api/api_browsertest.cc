@@ -78,7 +78,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
-#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-forward.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/origin.h"
@@ -108,7 +107,6 @@ namespace {
 constexpr std::string_view kHostA = "a.test";
 constexpr std::string_view kOriginA = "https://a.test";
 constexpr std::string_view kOriginB = "https://b.test";
-constexpr std::string_view kUrlA = "https://a.test/random.path";
 constexpr std::string_view kHostASubdomain = "subdomain.a.test";
 constexpr std::string_view kHostB = "b.test";
 constexpr std::string_view kHostBSubdomain = "subdomain.b.test";
@@ -765,21 +763,19 @@ IN_PROC_BROWSER_TEST_F(StorageAccessAPIBrowserTest,
 
   devtools_client.SendCommandSync(
       "Browser.setPermission",
-      base::Value::Dict()
+      base::DictValue()
           .Set("setting", "granted")
-          .Set("permission",
-               base::Value::Dict().Set("name", "storage-access")));
+          .Set("permission", base::DictValue().Set("name", "storage-access")));
   test_storage_access(/*expected_for_frame=*/true,
                       /*expected_for_other_frame=*/true);
 
   devtools_client.SendCommandSync(
       "Browser.setPermission",
-      base::Value::Dict()
+      base::DictValue()
           .Set("setting", "granted")
           .Set("origin", kOriginA)
           .Set("embeddedOrigin", kOriginB)
-          .Set("permission",
-               base::Value::Dict().Set("name", "storage-access")));
+          .Set("permission", base::DictValue().Set("name", "storage-access")));
   test_storage_access(/*expected_for_frame=*/true,
                       /*expected_for_other_frame=*/false);
 
@@ -800,22 +796,20 @@ IN_PROC_BROWSER_TEST_F(StorageAccessAPIBrowserTest,
 
   devtools_client.SendCommandSync(
       "Browser.setPermission",
-      base::Value::Dict()
+      base::DictValue()
           .Set("setting", "granted")
           .Set("origin", kOriginA)
           .Set("embeddedOrigin", kOriginB)
-          .Set("permission",
-               base::Value::Dict().Set("name", "storage-access")));
+          .Set("permission", base::DictValue().Set("name", "storage-access")));
   ASSERT_EQ(QueryPermission(GetFrame()), "granted");
 
   devtools_client.SendCommandSync(
       "Browser.setPermission",
-      base::Value::Dict()
+      base::DictValue()
           .Set("setting", "denied")
           .Set("origin", kOriginA)
           .Set("embeddedOrigin", kOriginB)
-          .Set("permission",
-               base::Value::Dict().Set("name", "storage-access")));
+          .Set("permission", base::DictValue().Set("name", "storage-access")));
 
   // Ensure that the 'denied' status is masked as 'prompt'.
   EXPECT_EQ(QueryPermission(GetFrame()), "prompt");
@@ -2518,7 +2512,7 @@ IN_PROC_BROWSER_TEST_F(StorageAccessAPIWithFirstPartySetsBrowserTest,
 
   EXPECT_TRUE(storage::test::RequestAndCheckStorageAccessForFrame(GetFrame()));
 
-  auto matcher = [](const base::Value::Dict& params) {
+  auto matcher = [](const base::DictValue& params) {
     const std::string* maybe_issue_code =
         params.FindStringByDottedPath("issue.code");
     if (!maybe_issue_code || *maybe_issue_code != "DeprecationIssue") {
@@ -2529,7 +2523,7 @@ IN_PROC_BROWSER_TEST_F(StorageAccessAPIWithFirstPartySetsBrowserTest,
     return maybe_type && *maybe_type == "RelatedWebsiteSets";
   };
 
-  base::Value::Dict notification = devtools_client.WaitForMatchingNotification(
+  base::DictValue notification = devtools_client.WaitForMatchingNotification(
       "Audits.issueAdded", base::BindRepeating(matcher));
 
   // Verify that the issue is reported again when the permission is reused.
@@ -2819,101 +2813,6 @@ IN_PROC_BROWSER_TEST_F(StorageAccessAPIBrowserTest,
   EXPECT_TRUE(storage::test::RequestAndCheckStorageAccessForFrame(GetFrame()));
   EXPECT_EQ(ReadCookies(GetFrame(), kHostB),
             CookieBundle("cross-site=b.test; cross-site=b.test(partitioned)"));
-}
-
-class StorageAccessAPIEnterprisePolicyBrowserTest
-    : public StorageAccessAPIBaseBrowserTest,
-      public testing::WithParamInterface<
-          /* (origin, content_setting, is_storage_partitioned) */
-          std::tuple<std::string_view, ContentSetting, bool>> {
- public:
-  std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures() override {
-    return GetEnabledFeaturesForStorage(IsStoragePartitioned());
-  }
-
-  std::vector<base::test::FeatureRef> GetDisabledFeatures() override {
-    return GetDisabledFeaturesForStorage(IsStoragePartitioned());
-  }
-
-  void SetUpInProcessBrowserTestFixture() override {
-    policy::PolicyTest::SetUpInProcessBrowserTestFixture();
-    policy::PolicyMap policies;
-    SetPolicy(&policies,
-              policy::key::kDefaultThirdPartyStoragePartitioningSetting,
-              base::Value(GetContentSetting()));
-    base::Value::List origins;
-    origins.Append(base::Value(GetContentOrigin()));
-    SetPolicy(&policies,
-              policy::key::kThirdPartyStoragePartitioningBlockedForOrigins,
-              base::Value(std::move(origins)));
-    UpdateProviderPolicy(policies);
-  }
-
-  bool ExpectPartitionedStorage() const {
-    // We only expect storage to be partitioned if the base::Feature is enabled
-    // and the default content setting isn't BLOCK and the origin block list
-    // doesn't match a.test (paths are ignored)
-    return IsStoragePartitioned() &&
-           GetContentSetting() != CONTENT_SETTING_BLOCK &&
-           GetContentOrigin() != kHostA && GetContentOrigin() != kOriginA &&
-           GetContentOrigin() != kUrlA;
-  }
-
-  // Derive a test name from parameter information.
-  static std::string TestName(const ::testing::TestParamInfo<ParamType>& info) {
-    std::string_view origin = std::get<0>(info.param);
-    ContentSetting content_setting = std::get<1>(info.param);
-    bool is_storage_partitioned = std::get<2>(info.param);
-    return base::JoinString(
-        {
-            origin == kHostA            ? "kHostA"
-            : origin == kOriginA        ? "kOriginA"
-            : origin == kUrlA           ? "kUrlA"
-            : origin == kHostASubdomain ? "kHostASubdomain"
-            : origin == kHostB          ? "kHostB"
-                                        : "empty",
-            content_setting == CONTENT_SETTING_DEFAULT ? "DEFAULT"
-            : content_setting == CONTENT_SETTING_ALLOW ? "ALLOW"
-                                                       : "BLOCK",
-            is_storage_partitioned ? "Partitioned" : "Unpartitioned",
-        },
-        "_");
-  }
-
- private:
-  ContentSetting GetContentSetting() const { return std::get<1>(GetParam()); }
-  std::string_view GetContentOrigin() const { return std::get<0>(GetParam()); }
-  bool IsStoragePartitioned() const { return std::get<2>(GetParam()); }
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    /*no prefix*/,
-    StorageAccessAPIEnterprisePolicyBrowserTest,
-    testing::Combine(
-        testing::Values(kHostA, kOriginA, kUrlA, kHostASubdomain, kHostB, ""),
-        testing::Values(CONTENT_SETTING_DEFAULT,
-                        CONTENT_SETTING_ALLOW,
-                        CONTENT_SETTING_BLOCK),
-        testing::Bool()),
-    StorageAccessAPIEnterprisePolicyBrowserTest::TestName);
-
-IN_PROC_BROWSER_TEST_P(StorageAccessAPIEnterprisePolicyBrowserTest,
-                       PartitionedStorage) {
-  // Navigate to Origin B, setup storage, and expect storage.
-  NavigateToPage(kHostB, "/browsing_data/site_data.html");
-  CookieSettingsFactory::GetForProfile(browser()->profile())
-      ->SetCookieSetting(GetURL(kHostB), CONTENT_SETTING_ALLOW);
-  storage::test::ExpectStorageForFrame(GetPrimaryMainFrame(),
-                                       /*expected=*/false);
-  storage::test::SetStorageForFrame(GetPrimaryMainFrame(),
-                                    /*include_cookies=*/false);
-  storage::test::ExpectStorageForFrame(GetPrimaryMainFrame(),
-                                       /*expected=*/true);
-
-  // Navigate to Origin A w/ Frame B and expect storage if not partitioned.
-  NavigateToPageWithFrame(kHostA);
-  NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
-  storage::test::ExpectStorageForFrame(GetFrame(), !ExpectPartitionedStorage());
 }
 
 IN_PROC_BROWSER_TEST_F(StorageAccessAPIBrowserTest,

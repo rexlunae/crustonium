@@ -345,8 +345,9 @@ void PaintLayer::DirtyVisibleContentStatus() {
   MarkAncestorChainForFlagsUpdate();
   // Non-self-painting layers paint into their ancestor layer, and count as part
   // of the "visible contents" of the parent, so we need to dirty it.
-  if (!IsSelfPaintingLayer())
+  if (!IsSelfPaintingLayer() && Parent()) {
     Parent()->DirtyVisibleContentStatus();
+  }
 }
 
 void PaintLayer::MarkAncestorChainForFlagsUpdate(
@@ -488,11 +489,18 @@ void PaintLayer::UpdateDescendantDependentFlags() {
     needs_descendant_dependent_flags_update_ = false;
 
     if (IsSelfPaintingLayer() && needs_visual_overflow_recalc_) {
-      PhysicalRect old_visual_rect =
-          PhysicalVisualOverflowRectAllowingUnset(GetLayoutObject());
-      GetLayoutObject().RecalcVisualOverflow();
-      if (old_visual_rect != GetLayoutObject().VisualOverflowRect()) {
-        MarkAncestorChainForFlagsUpdate(kDoesNotNeedDescendantDependentUpdate);
+      if (GetLayoutObject().ChildPrePaintBlockedByDisplayLock()) {
+        GetLayoutObject()
+            .GetDisplayLockContext()
+            ->NotifyVisualOverflowRecalcWasBlocked();
+      } else {
+        PhysicalRect old_visual_rect =
+            PhysicalVisualOverflowRectAllowingUnset(GetLayoutObject());
+        GetLayoutObject().RecalcVisualOverflow();
+        if (old_visual_rect != GetLayoutObject().VisualOverflowRect()) {
+          MarkAncestorChainForFlagsUpdate(
+              kDoesNotNeedDescendantDependentUpdate);
+        }
       }
     }
     needs_visual_overflow_recalc_ = false;
@@ -788,7 +796,7 @@ void PaintLayer::RemoveOnlyThisLayerAfterStyleChange(
     }
   }
 
-  if (IsSelfPaintingLayer()) {
+  if (parent_ && IsSelfPaintingLayer()) {
     if (PaintLayer* enclosing_self_painting_layer =
             parent_->EnclosingSelfPaintingLayer())
       enclosing_self_painting_layer->MergeNeedsPaintPhaseFlagsFrom(*this);
@@ -822,11 +830,12 @@ void PaintLayer::InsertOnlyThisLayerAfterStyleChange() {
   if (!parent_ && GetLayoutObject().Parent()) {
     // We need to connect ourselves when our layoutObject() has a parent.
     // Find our enclosingLayer and add ourselves.
-    PaintLayer* parent_layer = GetLayoutObject().Parent()->EnclosingLayer();
-    DCHECK(parent_layer);
-    PaintLayer* before_child = GetLayoutObject().Parent()->FindNextLayer(
-        parent_layer, &GetLayoutObject());
-    parent_layer->AddChild(this, before_child);
+    if (PaintLayer* parent_layer =
+            GetLayoutObject().Parent()->EnclosingLayer()) {
+      PaintLayer* before_child = GetLayoutObject().Parent()->FindNextLayer(
+          parent_layer, &GetLayoutObject());
+      parent_layer->AddChild(this, before_child);
+    }
   }
 
   // Remove all descendant layers from the hierarchy and add them to the new
@@ -872,7 +881,8 @@ bool PaintLayer::RequiresScrollableArea() const {
   if (!box) {
     return false;
   }
-  if (box->Style()->HasOverscrollArea() || box->IsScrollContainer()) {
+  if (box->Style()->IsInternalOverscrollAreaAuto() ||
+      box->IsScrollContainer()) {
     return true;
   }
   // Iframes with the resize property can be resized. This requires
@@ -2348,8 +2358,14 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
     // changes. However, we do need to repaint the containing stacking
     // context, in order to generate new paint chunks in the correct order.
     // Raster invalidation will be issued if needed during paint.
-    if (auto* stacking_context = AncestorStackingContext())
+    if (auto* stacking_context = AncestorStackingContext()) {
       stacking_context->SetNeedsRepaint();
+    }
+    // We also need to invalidate intersection observer, which can be affected
+    // by z-index changes.
+    if (LocalFrameView* frame_view = GetLayoutObject().GetFrameView()) {
+      frame_view->SetIntersectionObservationState(LocalFrameView::kDesired);
+    }
   }
 
   if (old_style) {

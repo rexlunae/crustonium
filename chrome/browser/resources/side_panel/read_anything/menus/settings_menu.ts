@@ -12,14 +12,23 @@ import type {CrActionMenuElement} from '//resources/cr_elements/cr_action_menu/c
 import type {CrLazyRenderLitElement} from '//resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
 import {WebUiListenerMixinLit} from '//resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
-import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
-import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement, type PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {SettingsOption} from '../content/read_anything_types.js';
+import type {SettingsPrefs} from '../content/read_anything_types.js';
+import {DEFAULT_SETTINGS, SettingsOption, ToolbarEvent} from '../content/read_anything_types.js';
 import {openMenu} from '../shared/common.js';
+import {isActivationKey, isBackwardArrow, isForwardArrow, isVerticalArrow} from '../shared/keyboard_util.js';
 
 import {getCss} from './settings_menu.css.js';
 import {getHtml} from './settings_menu.html.js';
+
+// Delay, in ms, between when menus are selected or moused over and the menu
+// appears. It mirrors the value in ui/views/controls/menu/menu_config.h
+export const MENU_SHOW_DELAY_MS = 400;
+// Delay, in ms, between when a submenu is shown and when hovering should
+// trigger opening another submenu. This is used to prevent accidental
+// opens of submenus.
+export const SUBMENU_SHOW_DELAY_MS = 800;
 
 export enum SettingsItemType {
   MENU = 1,
@@ -29,8 +38,12 @@ export enum SettingsItemType {
 interface SettingsItem {
   id: SettingsOption;
   icon: string;
-  ariaLabel: string;
+  title: string;
   itemType: SettingsItemType;
+  // Whether the toggle is checked. Only used when itemType is TOGGLE
+  enabled?: boolean;
+  // Needed when the aria label should be different from the title
+  ariaLabel?: string;
   className?: string;
 }
 
@@ -38,71 +51,73 @@ const MENU_ITEM_DATA: Record<SettingsOption, SettingsItem> = {
   [SettingsOption.COLOR]: {
     id: SettingsOption.COLOR,
     icon: 'read-anything:color',
-    ariaLabel: 'themeTitle',
+    title: 'themeTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.FONT]: {
     id: SettingsOption.FONT,
     icon: 'read-anything:font',
-    ariaLabel: 'fontNameTitle',
+    title: 'fontNameTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.FONT_SIZE]: {
     id: SettingsOption.FONT_SIZE,
     icon: 'read-anything:font-size',
-    ariaLabel: 'fontSizeTitle',
+    title: 'fontSizeTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.IMAGES]: {
     id: SettingsOption.IMAGES,
     icon: 'read-anything:images-enabled',
-    ariaLabel: 'imagesLabel',
+    title: 'imagesLabel',
     itemType: SettingsItemType.TOGGLE,
   },
   [SettingsOption.LINKS]: {
     id: SettingsOption.LINKS,
     icon: 'read-anything:links-enabled',
-    ariaLabel: 'linksLabel',
+    title: 'linksLabel',
     itemType: SettingsItemType.TOGGLE,
     className: 'hr',
   },
   [SettingsOption.LINE_SPACING]: {
     id: SettingsOption.LINE_SPACING,
     icon: 'read-anything:line-spacing',
-    ariaLabel: 'lineSpacingTitle',
+    title: 'lineSpacingTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.LETTER_SPACING]: {
     id: SettingsOption.LETTER_SPACING,
     icon: 'read-anything:letter-spacing',
-    ariaLabel: 'letterSpacingTitle',
+    title: 'letterSpacingTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.LINE_FOCUS]: {
     id: SettingsOption.LINE_FOCUS,
     icon: 'read-anything:line-focus',
-    ariaLabel: 'lineFocusLabel',
+    title: 'lineFocusLabel',
+    itemType: SettingsItemType.MENU,
+  },
+  [SettingsOption.PRESENTATION]: {
+    id: SettingsOption.PRESENTATION,
+    icon: 'read-anything:view',
+    title: 'viewLabel',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.VOICE_SELECTION]: {
     id: SettingsOption.VOICE_SELECTION,
     icon: 'read-anything:voice-selection',
-    ariaLabel: 'voiceSelectionLabel',
+    title: 'voiceSelectionLabel',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.VOICE_HIGHLIGHT]: {
     id: SettingsOption.VOICE_HIGHLIGHT,
     icon: 'read-anything:highlight-on',
-    ariaLabel: 'voiceHighlightLabel',
-    itemType: SettingsItemType.MENU,
-  },
-  [SettingsOption.VIEW]: {
-    id: SettingsOption.VIEW,
-    icon: 'read-anything:view',
-    ariaLabel: 'viewLabel',
+    title: 'voiceHighlightLabel',
     itemType: SettingsItemType.MENU,
   },
 };
+
+export const KEYBOARD_NAV_CLASS = 'keyboard-nav';
 
 export interface SettingsMenuElement {
   $: {
@@ -127,51 +142,36 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
 
   static override get properties() {
     return {
-      presentationState: {type: Number},
+      settingsPrefs: {type: Object},
     };
   }
 
-  accessor presentationState: number = 0;
+  accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
 
   protected options_: SettingsItem[] = [];
-  private blockedEvents_: string[] = ['click', 'pointerdown'];
+  private currentOpenId_: string|null = null;
+  private interceptedEvents_: string[] =
+      ['click', 'pointerdown', 'pointermove'];
+  private openTimer_: number|null = null;
+  private closeTimer_: number|null = null;
+  // Used to prevent accidental triggers of other submenus after a submenu
+  // has recently been opened.
+  private lastMenuOpenTime_: number = 0;
   private pointerEventCallback_: (e: Event) => void = () => {};
+  private keyDownCallback_: (e: KeyboardEvent) => void = () => {};
 
   override connectedCallback() {
     super.connectedCallback();
     this.pointerEventCallback_ = this.onPointerEvent_.bind(this);
+    this.keyDownCallback_ = this.onKeyDown_.bind(this);
   }
 
-  constructor() {
-    super();
-    // TODO (crbug.com/470379596): Add keyboard navigation to settings menu
-    this.initializeMenuOptions_();
-  }
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
 
-  override updated(changedProperties: PropertyValues<this>) {
-    super.updated(changedProperties);
-    // TODO(crbug.com/471212662): Add a designated toggle menu and delete this
-    if (changedProperties.has('presentationState')) {
+    if (changedProperties.has('settingsPrefs')) {
       this.initializeMenuOptions_();
     }
-  }
-
-  // TODO(crbug.com/471212662): Remove this method when we add the final menu
-  // buttons that don't use these strings.
-  private getTogglePresentationLabel_(): string {
-    // The kInImmersiveOverlay enum value is 3 and the kInSidePanel enum value
-    // is 2 in ReadAnythingPresentationState. See
-    // chrome/common/read_anything/read_anything.mojom.
-
-    // kInSidePanel = 2
-    if (this.presentationState === 2) {
-      return 'View: Show in Immersive';
-    }
-    // kInImmersiveOverlay = 3
-    if (this.presentationState === 3) {
-      return 'View: Show in Side Panel';
-    }
-    return 'View: Toggle';
   }
 
   private initializeMenuOptions_() {
@@ -188,55 +188,206 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       optionIDs.push(SettingsOption.LINE_FOCUS);
     }
 
-    optionIDs = optionIDs.concat([SettingsOption.VIEW, SettingsOption.LINKS]);
+    optionIDs =
+        optionIDs.concat([SettingsOption.PRESENTATION, SettingsOption.LINKS]);
 
-    if (chrome.readingMode.imagesEnabled) {
+    if (chrome.readingMode.imagesFeatureEnabled) {
       optionIDs.push(SettingsOption.IMAGES);
     }
 
-    // TODO (crbug.com/470379647): Add the toggle elements to settings menu
     this.options_ = optionIDs.map(id => {
       const original = MENU_ITEM_DATA[id];
-      let ariaLabel = loadTimeData.getString(original.ariaLabel);
+      const title = loadTimeData.getString(original.title);
+      let ariaLabel = title;
+      let enabled = false;
 
-      if (id === SettingsOption.VIEW) {
-        ariaLabel = this.getTogglePresentationLabel_();
+      if (id === SettingsOption.IMAGES) {
+        enabled = this.settingsPrefs.imagesEnabled;
+        ariaLabel = this.getImageItemLabels();
+      }
+
+      if (id === SettingsOption.LINKS) {
+        enabled = this.settingsPrefs.linksEnabled;
+        ariaLabel = this.getLinkItemLabels();
       }
 
       return {
         ...original,
-        id: id,
+        id,
+        title,
         ariaLabel,
+        enabled,
       };
     });
   }
 
+  private getLinkItemLabels() {
+    if (chrome.readingMode.linksEnabled) {
+      return loadTimeData.getString('disableLinksLabel');
+    }
+
+    return loadTimeData.getString('enableLinksLabel');
+  }
+
+  private getImageItemLabels() {
+    if (chrome.readingMode.imagesEnabled) {
+      return loadTimeData.getString('disableImagesLabel');
+    }
+
+    return loadTimeData.getString('enableImagesLabel');
+  }
+
   protected onMenuItemClick_(e: Event) {
+    e.stopImmediatePropagation();
     const currentTarget = e.currentTarget as HTMLElement;
     const index = Number.parseInt(currentTarget.dataset['index']!);
     const item = this.options_[index];
+    if (!item) {
+      return;
+    }
 
-    if (item && item.id === SettingsOption.VIEW) {
-      chrome.readingMode.togglePresentation();
-      this.close();
+    if (item.itemType === SettingsItemType.TOGGLE) {
+      this.onToggleMenuItemClick_(item);
+      return;
+    }
+
+    this.clearTimers_();
+
+    const newMenuId = item.id;
+    if (this.currentOpenId_ === newMenuId) {
+      return;
+    }
+
+    this.fire(ToolbarEvent.OPEN_SETTINGS_SUBMENU, {
+      id: newMenuId,
+      previousId: this.currentOpenId_,
+      target: currentTarget,
+    });
+    this.currentOpenId_ = newMenuId;
+    this.lastMenuOpenTime_ = Date.now();
+  }
+
+  private onToggleMenuItemClick_(item: SettingsItem) {
+    if (item.itemType !== SettingsItemType.TOGGLE) {
+      return;
+    }
+
+    if (item.id === SettingsOption.LINKS) {
+      chrome.readingMode.onLinksEnabledToggled();
+      this.fire(ToolbarEvent.LINKS);
+      item.ariaLabel = this.getLinkItemLabels();
+      item.enabled = chrome.readingMode.linksEnabled;
+    } else if (item.id === SettingsOption.IMAGES) {
+      chrome.readingMode.onImagesEnabledToggled();
+      this.fire(ToolbarEvent.IMAGES);
+      item.ariaLabel = this.getImageItemLabels();
+      item.enabled = chrome.readingMode.imagesEnabled;
+    }
+
+    this.requestUpdate();
+  }
+
+  protected onMenuItemHover_(e: PointerEvent) {
+    this.clearTimers_();
+
+    const currentTarget = e.currentTarget as HTMLElement;
+    if (!currentTarget) {
+      return;
+    }
+
+    const index = Number.parseInt(currentTarget.dataset['index']!);
+    const item = this.options_[index];
+    if (!item || item.itemType === SettingsItemType.TOGGLE) {
+      return;
+    }
+
+    const newMenuId = item.id;
+    if (this.currentOpenId_ === newMenuId) {
+      return;
+    }
+
+    // If the menu was just opened, add a delay to prevent accidental switching.
+    const timeSinceLastOpen = Date.now() - this.lastMenuOpenTime_;
+    const delay = timeSinceLastOpen < SUBMENU_SHOW_DELAY_MS ?
+        SUBMENU_SHOW_DELAY_MS :
+        MENU_SHOW_DELAY_MS;
+
+    this.openTimer_ = window.setTimeout(() => {
+      this.fire(ToolbarEvent.OPEN_SETTINGS_SUBMENU, {
+        id: newMenuId,
+        previousId: this.currentOpenId_,
+        target: currentTarget,
+      });
+      this.currentOpenId_ = newMenuId;
+      this.lastMenuOpenTime_ = Date.now();
+    }, delay);
+  }
+
+  protected onMenuItemLeave_(e: PointerEvent) {
+    // Clear the open timer so that submenus aren't opened after the cursor
+    // stops hovering.
+    this.clearOpenTimer_();
+
+    const currentTarget = e.currentTarget as HTMLElement;
+    if (currentTarget) {
+      currentTarget.classList.remove('active');
+    this.startCloseTimer_();
+  }
+}
+
+  private startCloseTimer_() {
+    if (this.closeTimer_) {
+      return;
+    }
+
+    this.closeTimer_ = window.setTimeout(() => {
+      this.fire(
+          ToolbarEvent.OPEN_SETTINGS_SUBMENU,
+          {id: null, previousId: this.currentOpenId_, target: null});
+      this.closeTimer_ = null;
+      this.currentOpenId_ = null;
+    }, MENU_SHOW_DELAY_MS);
+  }
+
+  private clearTimers_() {
+    this.clearOpenTimer_();
+    this.clearCloseTimer_();
+  }
+
+  private clearOpenTimer_() {
+    if (this.openTimer_) {
+      clearTimeout(this.openTimer_);
+      this.openTimer_ = null;
+    }
+  }
+
+  private clearCloseTimer_() {
+    if (this.closeTimer_) {
+      clearTimeout(this.closeTimer_);
+      this.closeTimer_ = null;
     }
   }
 
   open(anchor: HTMLElement) {
     openMenu(this.$.lazyMenu.get(), anchor);
-    this.blockedEvents_.forEach(eventType => {
+    window.addEventListener('keydown', this.keyDownCallback_, {capture: true});
+    this.interceptedEvents_.forEach(eventType => {
       window.addEventListener(
           eventType, this.pointerEventCallback_, {capture: true});
     });
   }
 
   close() {
+    this.clearTimers_();
     this.$.lazyMenu.get().close();
     document.body.classList.remove('read-anything-menu-open');
-    this.blockedEvents_.forEach(eventType => {
+    window.removeEventListener(
+        'keydown', this.keyDownCallback_, {capture: true});
+    this.interceptedEvents_.forEach(eventType => {
       window.removeEventListener(
           eventType, this.pointerEventCallback_, {capture: true});
     });
+    this.currentOpenId_ = null;
   }
 
   // Immersive design uses non-modal menus to support submenus. Since non-modal
@@ -245,13 +396,39 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   // 1. Prevent interactions with elements outside the menu.
   // 2. Close the menu when clicking outside (simulating modal behavior).
   private onPointerEvent_(e: Event) {
-    // TODO (crbug.com/470381025): Fix cursor style when settings menu is open
-    const path = e.composedPath();
-    const isInsideMenu = path.some(
-        target =>
-            target instanceof Element && (target.tagName === 'CR-ACTION-MENU'));
+    if (e.type === 'pointermove') {
+      const menu = this.$.lazyMenu.get();
+      if (menu.classList.contains(KEYBOARD_NAV_CLASS)) {
+        menu.classList.remove(KEYBOARD_NAV_CLASS);
+      }
+    }
 
-    if (isInsideMenu) {
+    // TODO (crbug.com/470381025): Fix cursor style when settings menu is open
+    let isInsideSubmenu = false;
+    let isInsideMain = false;
+    const path = e.composedPath();
+    for (const el of path) {
+      if (!(el instanceof HTMLElement)) {
+        continue;
+      }
+
+      isInsideSubmenu = el.classList.contains('settings-submenu');
+      isInsideMain = el.id === 'settingsMenu';
+
+      if (isInsideSubmenu || isInsideMain) {
+        break;
+      }
+    }
+
+    // When the user moves out of an item, we start a close timer that
+    // closes any opened submenu. If the user moves from an item into a submenu
+    // we should cancel the close timer, as the user intentionally moved into
+    // the submenu.
+    if (e.type === 'pointermove' && isInsideSubmenu) {
+      this.clearCloseTimer_();
+    }
+
+    if (isInsideSubmenu || isInsideMain) {
       return;
     }
 
@@ -267,7 +444,51 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     }
 
     if (e.type === 'click') {
-      this.close();
+      this.fire(
+          ToolbarEvent.CLOSE_ALL_MENUS, {previousId: this.currentOpenId_});
+    }
+  }
+
+  private onKeyDown_(e: KeyboardEvent) {
+    const key = e.key;
+    if (isVerticalArrow(key) || isForwardArrow(key) || isActivationKey(key)) {
+      this.clearOpenTimer_();
+
+      const menu = this.$.lazyMenu.get();
+      if (!menu.classList.contains(KEYBOARD_NAV_CLASS)) {
+        menu.classList.add(KEYBOARD_NAV_CLASS);
+      }
+    }
+
+    // Handle Escape or horizontal backward navigation to close the currently
+    // open submenu. We consume the event to stop further propagation.
+    if (this.currentOpenId_ &&
+        (key === 'Escape' || (isBackwardArrow(key) && !isVerticalArrow(key)))) {
+      e.stopPropagation();
+      e.preventDefault();
+      this.fire(
+          ToolbarEvent.CLOSE_SUBMENU_REQUESTED,
+          {previousId: this.currentOpenId_});
+      this.currentOpenId_ = null;
+      return;
+    }
+
+    if (isForwardArrow(key) && !isVerticalArrow(key)) {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const focused = this.shadowRoot.activeElement as HTMLElement;
+      if (!focused || !focused.classList.contains('menu-row')) {
+        return;
+      }
+
+      const index = Number.parseInt(focused.dataset['index']!);
+      const item = this.options_[index];
+      if (!item || item.itemType === SettingsItemType.TOGGLE) {
+        return;
+      }
+
+      focused.click();
     }
   }
 }

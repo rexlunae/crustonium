@@ -373,6 +373,11 @@ interface AuthenticatorResponse
     attribute @@toStringTag
     getter clientDataJSON
     method constructor
+interface AutofillEvent : Event
+    attribute @@toStringTag
+    getter autofillValues
+    getter refill
+    method constructor
 interface BackForwardCacheRestoration : PerformanceEntry
     attribute @@toStringTag
     getter pageshowEventEnd
@@ -417,6 +422,7 @@ interface BaseAudioContext : EventTarget
     getter destination
     getter listener
     getter onstatechange
+    getter renderQuantumSize
     getter sampleRate
     getter state
     method constructor
@@ -1431,11 +1437,18 @@ interface ChildNodePart : Part
     method replaceChildren
 interface Clipboard : EventTarget
     attribute @@toStringTag
+    getter onclipboardchange
     method constructor
     method read
     method readText
     method write
     method writeText
+    setter onclipboardchange
+interface ClipboardChangeEvent : Event
+    attribute @@toStringTag
+    getter changeId
+    getter types
+    method constructor
 interface ClipboardEvent : Event
     attribute @@toStringTag
     getter clipboardData
@@ -1534,11 +1547,11 @@ interface CountQueuingStrategy
     getter highWaterMark
     getter size
     method constructor
-interface CrashReportStorage
+interface CrashReportContext
     attribute @@toStringTag
     method constructor
+    method delete
     method initialize
-    method remove
     method set
 interface CreateMonitor : EventTarget
     attribute @@toStringTag
@@ -2437,6 +2450,7 @@ interface EditContext : EventTarget
 interface Element : Node
     attribute @@toStringTag
     attribute @@unscopables
+    getter activeViewTransition
     getter anchorElement
     getter ariaActiveDescendantElement
     getter ariaAtomic
@@ -3415,6 +3429,7 @@ interface GPUTexture
     getter label
     getter mipLevelCount
     getter sampleCount
+    getter textureBindingViewDimension
     getter usage
     getter width
     method constructor
@@ -4780,12 +4795,14 @@ interface HTMLMenuItemElement : HTMLElement
     getter commandForElement
     getter defaultChecked
     getter disabled
+    getter interestForElement
     method constructor
     setter checked
     setter command
     setter commandForElement
     setter defaultChecked
     setter disabled
+    setter interestForElement
 interface HTMLMenuListElement : HTMLElement
     attribute @@toStringTag
     method constructor
@@ -5892,6 +5909,24 @@ interface LanguageModelParams
     getter defaultTopK
     getter maxTemperature
     getter maxTopK
+    method constructor
+interface LanguageModelToolCall
+    attribute @@toStringTag
+    getter arguments
+    getter callID
+    getter name
+    method constructor
+interface LanguageModelToolError
+    attribute @@toStringTag
+    getter callID
+    getter errorMessage
+    getter name
+    method constructor
+interface LanguageModelToolSuccess
+    attribute @@toStringTag
+    getter callID
+    getter name
+    getter result
     method constructor
 interface LargestContentfulPaint : PerformanceEntry
     attribute @@toStringTag
@@ -10184,8 +10219,10 @@ interface StyleSheetList
     method item
 interface SubmitEvent : Event
     attribute @@toStringTag
+    getter agentInvoked
     getter submitter
     method constructor
+    method respondWith
 interface Subscriber
     attribute @@toStringTag
     getter active
@@ -10411,12 +10448,26 @@ interface TimeRanges
     method start
 interface TimelineTrigger : AnimationTrigger
     attribute @@toStringTag
-    getter exitRangeEnd
-    getter exitRangeStart
-    getter rangeEnd
-    getter rangeStart
+    getter ranges
+    method constructor
+interface TimelineTriggerRange
+    attribute @@toStringTag
+    getter activeRangeEnd
+    getter activeRangeStart
+    getter entryRangeEnd
+    getter entryRangeStart
     getter timeline
     method constructor
+interface TimelineTriggerRangeList
+    attribute @@toStringTag
+    getter length
+    method @@iterator
+    method constructor
+    method entries
+    method forEach
+    method item
+    method keys
+    method values
 interface TimestampTrigger
     attribute @@toStringTag
     getter timestamp
@@ -12906,6 +12957,7 @@ interface XRSession : EventTarget
     getter inputSources
     getter interactionMode
     getter isSystemKeyboardSupported
+    getter maxRenderLayers
     getter onend
     getter onframeratechange
     getter oninputsourceschange
@@ -13333,6 +13385,7 @@ namespace GPUTextureUsage
     attribute RENDER_ATTACHMENT
     attribute STORAGE_BINDING
     attribute TEXTURE_BINDING
+    attribute TRANSIENT_ATTACHMENT
 namespace Temporal
     attribute @@toStringTag
     attribute Now

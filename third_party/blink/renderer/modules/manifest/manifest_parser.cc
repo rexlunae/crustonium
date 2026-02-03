@@ -102,7 +102,7 @@ bool VerifyFiles(const Vector<mojom::blink::ManifestFileFilterPtr>& files) {
 // Determines whether |url| is within scope of |scope|.
 bool URLIsWithinScope(const KURL& url, const KURL& scope) {
   return SecurityOrigin::AreSameOrigin(url, scope) &&
-         url.GetPath().ToString().StartsWith(scope.GetPath());
+         url.GetPath().starts_with(scope.GetPath());
 }
 
 bool IsHostValidForScopeExtension(String host) {
@@ -424,8 +424,7 @@ bool ManifestParser::Parse() {
     }
   }
 
-  if (base::FeatureList::IsEnabled(blink::features::kWebAppBorderless) ||
-      base::FeatureList::IsEnabled(blink::features::kUnframedIwa)) {
+  if (base::FeatureList::IsEnabled(blink::features::kWebAppBorderless)) {
     manifest_->borderless_url_patterns =
         ParseUrlPatterns(root_object.get(), "borderless_url_patterns");
   }
@@ -435,11 +434,13 @@ bool ManifestParser::Parse() {
   if (!manifest_->icons.empty()) {
     UseCounter::Count(execution_context_, WebFeature::kWebAppManifestIcons);
   }
-  auto icons_localized = ParseIconsLocalized(root_object.get());
-  if (!icons_localized.empty()) {
-    manifest_->icons_localized = std::move(icons_localized);
-    UseCounter::Count(execution_context_,
-                      WebFeature::kWebAppManifestIconsLocalized);
+  if (base::FeatureList::IsEnabled(features::kWebAppManifestLocalization)) {
+    auto icons_localized = ParseIconsLocalized(root_object.get());
+    if (!icons_localized.empty()) {
+      manifest_->icons_localized = std::move(icons_localized);
+      UseCounter::Count(execution_context_,
+                        WebFeature::kWebAppManifestIconsLocalized);
+    }
   }
   manifest_->screenshots = ParseScreenshots(root_object.get());
   if (!manifest_->screenshots.empty()) {
@@ -461,8 +462,10 @@ bool ManifestParser::Parse() {
                       WebFeature::kWebAppManifestProtocolHandlers);
   }
 
-  if (!(execution_context_ && execution_context_->IsIsolatedContext())) {
-    // TODO(crbug.com/383094092): Scope Extensions for IWAs are not defined yet.
+  bool is_iwa = execution_context_ && execution_context_->IsIsolatedContext();
+  if (!is_iwa ||
+      base::FeatureList::IsEnabled(
+          blink::features::kWebAppEnableScopeExtensionsForIsolatedWebApps)) {
     manifest_->scope_extensions = ParseScopeExtensions(root_object.get());
     if (!manifest_->scope_extensions.empty()) {
       UseCounter::Count(execution_context_,
@@ -557,25 +560,27 @@ bool ManifestParser::Parse() {
     UseCounter::Count(execution_context_, WebFeature::kWebAppManifestVersion);
   }
 
-  auto name_localized = ParseNameLocalized(root_object.get());
-  if (!name_localized.empty()) {
-    manifest_->name_localized = std::move(name_localized);
-    UseCounter::Count(execution_context_,
-                      WebFeature::kWebAppManifestNameLocalized);
-  }
+  if (base::FeatureList::IsEnabled(features::kWebAppManifestLocalization)) {
+    auto name_localized = ParseNameLocalized(root_object.get());
+    if (!name_localized.empty()) {
+      manifest_->name_localized = std::move(name_localized);
+      UseCounter::Count(execution_context_,
+                        WebFeature::kWebAppManifestNameLocalized);
+    }
 
-  auto short_name_localized = ParseShortNameLocalized(root_object.get());
-  if (!short_name_localized.empty()) {
-    manifest_->short_name_localized = std::move(short_name_localized);
-    UseCounter::Count(execution_context_,
-                      WebFeature::kWebAppManifestShortNameLocalized);
-  }
+    auto short_name_localized = ParseShortNameLocalized(root_object.get());
+    if (!short_name_localized.empty()) {
+      manifest_->short_name_localized = std::move(short_name_localized);
+      UseCounter::Count(execution_context_,
+                        WebFeature::kWebAppManifestShortNameLocalized);
+    }
 
-  auto description_localized = ParseDescriptionLocalized(root_object.get());
-  if (!description_localized.empty()) {
-    manifest_->description_localized = std::move(description_localized);
-    UseCounter::Count(execution_context_,
-                      WebFeature::kWebAppManifestDescriptionLocalized);
+    auto description_localized = ParseDescriptionLocalized(root_object.get());
+    if (!description_localized.empty()) {
+      manifest_->description_localized = std::move(description_localized);
+      UseCounter::Count(execution_context_,
+                        WebFeature::kWebAppManifestDescriptionLocalized);
+    }
   }
 
   ParseSucceeded(manifest_, document_url_);
@@ -1362,17 +1367,19 @@ Vector<mojom::blink::ManifestShortcutItemPtr> ManifestParser::ParseShortcuts(
     shortcut->description = ParseShortcutDescription(shortcut_object);
 
     // Parse localized text fields
-    auto name_localized = ParseNameLocalized(shortcut_object);
-    if (!name_localized.empty()) {
-      shortcut->name_localized = std::move(name_localized);
-    }
-    auto short_name_localized = ParseShortNameLocalized(shortcut_object);
-    if (!short_name_localized.empty()) {
-      shortcut->short_name_localized = std::move(short_name_localized);
-    }
-    auto description_localized = ParseDescriptionLocalized(shortcut_object);
-    if (!description_localized.empty()) {
-      shortcut->description_localized = std::move(description_localized);
+    if (base::FeatureList::IsEnabled(features::kWebAppManifestLocalization)) {
+      auto name_localized = ParseNameLocalized(shortcut_object);
+      if (!name_localized.empty()) {
+        shortcut->name_localized = std::move(name_localized);
+      }
+      auto short_name_localized = ParseShortNameLocalized(shortcut_object);
+      if (!short_name_localized.empty()) {
+        shortcut->short_name_localized = std::move(short_name_localized);
+      }
+      auto description_localized = ParseDescriptionLocalized(shortcut_object);
+      if (!description_localized.empty()) {
+        shortcut->description_localized = std::move(description_localized);
+      }
     }
 
     auto icons = ParseIcons(shortcut_object);
@@ -1380,9 +1387,11 @@ Vector<mojom::blink::ManifestShortcutItemPtr> ManifestParser::ParseShortcuts(
       shortcut->icons = std::move(icons);
     }
 
-    auto icons_localized = ParseIconsLocalized(shortcut_object);
-    if (!icons_localized.empty()) {
-      shortcut->icons_localized = std::move(icons_localized);
+    if (base::FeatureList::IsEnabled(features::kWebAppManifestLocalization)) {
+      auto icons_localized = ParseIconsLocalized(shortcut_object);
+      if (!icons_localized.empty()) {
+        shortcut->icons_localized = std::move(icons_localized);
+      }
     }
 
     shortcuts.push_back(std::move(shortcut));
@@ -2396,7 +2405,7 @@ ManifestParser::ParseIsolatedAppPermissions(const JSONObject* object) {
       "Error with permissions_policy manifest field: ");
   network::ParsedPermissionsPolicy parsed_policy =
       PermissionsPolicyParser::ParsePolicyFromNode(
-          policy, SecurityOrigin::Create(manifest_url_), logger,
+          policy, *SecurityOrigin::Create(manifest_url_), logger,
           execution_context_);
 
   Vector<network::ParsedPermissionsPolicyDeclaration> out;
