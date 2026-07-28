@@ -674,7 +674,11 @@ mod tests {
             let root = self.temp_dir.path().canonicalize().unwrap();
             let make_relative = |path: &Path| -> String {
                 let canon_path = path.canonicalize().unwrap();
-                canon_path.strip_prefix(&root).unwrap().to_str().unwrap().to_string()
+                let relative =
+                    canon_path.strip_prefix(&root).unwrap().to_str().unwrap().to_string();
+                // Windows produces backslash separators here; GN paths always
+                // use forward slashes, so normalize for the assertions below.
+                relative.replace('\\', "/")
             };
 
             let sources = crate_files.sources.iter().map(|p| make_relative(p)).collect();
