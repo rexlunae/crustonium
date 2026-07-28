@@ -17,7 +17,9 @@ path = "symphonia_glue.rs"
 cxx = { workspace = true }
 
 # Audio decoding with Symphonia
-symphonia = "0.5"
+# symphonia_glue.rs is written against the 0.6 API (codecs::audio::well_known,
+# GenericAudioBufferRef); 0.5 does not compile it.
+symphonia = "0.6"
 
 [build-dependencies]
 cxx-build = { workspace = true }

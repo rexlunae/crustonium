@@ -52,6 +52,7 @@ We have successfully migrated **8 components** to the Cargo workspace:
 **Current Status**: Phase 2 Tier 2 execution in progress - Two complex FFI components added to workspace
 
 For migration progress and strategy:
+- **Full Migration Plan (`cargo run` / `cargo install`)**: [docs/cargo_full_migration_plan.md](docs/cargo_full_migration_plan.md)
 - **Migration Status**: [docs/rust/MIGRATION_STATUS.md](docs/rust/MIGRATION_STATUS.md)
 - **Tier 2 Planning**: [docs/rust/phase2/TIER_2_PLANNING.md](docs/rust/phase2/TIER_2_PLANNING.md)
 - **Overall Strategy**: [docs/rust_adoption_plan.md](docs/rust_adoption_plan.md)

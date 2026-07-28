@@ -4,7 +4,8 @@
 [package]
 name = "user-data-importer-parsing-ffi"
 version.workspace = true
-edition.workspace = true
+# lib.rs uses let-chains, which require edition 2024 (workspace default is 2021).
+edition = "2024"
 license.workspace = true
 
 [lib]
