@@ -16,18 +16,24 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/queue.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/concurrent_closures.h"
 #include "base/logging.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split_win.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/version.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/hstring_reference.h"
 #include "base/win/scoped_co_mem.h"
@@ -49,6 +55,13 @@ using EnsureReadyAsyncOp =
     __FIAsyncOperationWithProgress_2_Microsoft__CWindows__CAI__CMachineLearning__CExecutionProviderReadyResult_double;
 using EnsureReadyCompletedHandler =
     __FIAsyncOperationWithProgressCompletedHandler_2_Microsoft__CWindows__CAI__CMachineLearning__CExecutionProviderReadyResult_double;
+
+// Allows overriding the minimum required package version for each execution
+// provider. When enabled, field trial params with the EP name as the
+// key (e.g., "OpenVINOExecutionProvider") and a version string
+// "Major.Minor.Build.Revision" as the value will override the pre-defined
+// minimum version in `kKnownEPs`.
+BASE_FEATURE(kWebNNOrtEpMinVersionOverride, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // A flat map with execution provider (EP) name as the key and package info as
 // the value.
@@ -95,6 +108,81 @@ std::string VersionToString(const PACKAGE_VERSION& version) {
   constexpr std::string_view kPackageVersionFormat = "%u.%u.%u.%u";
   return base::StringPrintf(kPackageVersionFormat, version.Major, version.Minor,
                             version.Build, version.Revision);
+}
+
+// Returns the effective minimum required package version for the specified EP.
+// If the `kWebNNOrtEpMinVersionOverride` feature is enabled and a valid version
+// param is set for the given EP name, that version is returned. Otherwise,
+// returns the pre-defined version in `kKnownEPs`.
+PACKAGE_VERSION GetMinPackageVersion(const std::string& ep_name) {
+  const PACKAGE_VERSION& predefined_version =
+      kKnownEPs.at(ep_name).min_package_version;
+
+  if (!base::FeatureList::IsEnabled(kWebNNOrtEpMinVersionOverride)) {
+    return predefined_version;
+  }
+
+  std::string version_str = base::GetFieldTrialParamValueByFeature(
+      kWebNNOrtEpMinVersionOverride, ep_name);
+  if (version_str.empty()) {
+    return predefined_version;
+  }
+
+  base::Version override_version(version_str);
+  if (!override_version.IsValid() ||
+      override_version.components().size() != 4) {
+    LOG(WARNING) << "[WebNN] Invalid minimum version override for [" << ep_name
+                 << "]: " << version_str
+                 << ". Falling back to pre-defined version: "
+                 << VersionToString(predefined_version);
+    return predefined_version;
+  }
+
+  const std::vector<uint32_t>& components = override_version.components();
+  return PACKAGE_VERSION{
+      .Major = base::checked_cast<USHORT>(components[0]),
+      .Minor = base::checked_cast<USHORT>(components[1]),
+      .Build = base::checked_cast<USHORT>(components[2]),
+      .Revision = base::checked_cast<USHORT>(components[3]),
+  };
+}
+
+// Parses the `kWebNNOrtEpLibraryPathForTesting` command-line switch and returns
+// the EP name and a fabricated `EpPackageInfo` with an empty `family_name` (so
+// that `Environment::Create()` skips `InitializePackageDependency` for it).
+// Returns nullopt if the switch is absent or its value is invalid.
+std::optional<std::pair<std::string, mojom::EpPackageInfoPtr>>
+ParseTestingEpLibraryPathSwitch() {
+  std::wstring value =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueNative(
+          switches::kWebNNOrtEpLibraryPathForTesting);
+  if (value.empty()) {
+    return std::nullopt;
+  }
+
+  std::vector<std::wstring> parts = base::SplitString(
+      value, L"?", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  if (parts.size() != 2) {
+    LOG(WARNING) << "[WebNN] Invalid value of the switch "
+                 << switches::kWebNNOrtEpLibraryPathForTesting
+                 << ": Invalid format. It should be in the format of "
+                    "<ep_name>?<ep_library_path>. The switch will be ignored.";
+    return std::nullopt;
+  }
+  std::string ep_name = base::WideToUTF8(parts[0]);
+  if (!kKnownEPs.contains(ep_name)) {
+    LOG(WARNING) << "[WebNN] Invalid value of the switch "
+                 << switches::kWebNNOrtEpLibraryPathForTesting
+                 << ": The specified EP name is not recognized. "
+                    "The switch will be ignored.";
+    return std::nullopt;
+  }
+
+  return std::make_pair(std::move(ep_name),
+                        mojom::EpPackageInfo::New(
+                            /*family_name=*/std::wstring(),
+                            /*version=*/PACKAGE_VERSION{},
+                            /*library_path=*/base::FilePath(parts[1])));
 }
 
 auto CloneMap(const EpPackageInfoMap& map) {
@@ -243,8 +331,7 @@ QueryPackageInfoFromProvider(abi_winml::IExecutionProvider* provider,
           .Revision = abi_package_version.Revision,
       };
 
-      const PACKAGE_VERSION& min_package_version =
-          kKnownEPs.find(ep_name)->second.min_package_version;
+      const PACKAGE_VERSION min_package_version = GetMinPackageVersion(ep_name);
       if (package_version < min_package_version) {
         RecordEpStatus(ep_name, ExecutionProviderStatusUma::kEpVersionTooLow);
         LOG(WARNING) << "[WebNN] Found [" << ep_name << "] package version: "
@@ -367,6 +454,13 @@ class ExecutionProviderInitializer {
   bool TryActivateEPCatalog() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+    // Versions checks should have happened in the GPU process before we
+    // bounce here to the host. To avoid a compromised GPU process crashing
+    // the browser process, return the GPU process an empty set of EPs.
+    if (base::win::GetVersion() < kWinAppRuntimeSupportedMinVersion) {
+      return false;
+    }
+
     // Initialize the dependency on the runtime package to ensure the EP
     // Catalog can be used.
     if (InitializePackageDependencyForProcess(kWinAppRuntimePackageFamilyName,
@@ -377,7 +471,7 @@ class ExecutionProviderInitializer {
 
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE,
-        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+        {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
          base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
         base::BindOnce(&ActivateCatalogAndGetAvailableEps),
         base::BindOnce(&ExecutionProviderInitializer::Initialize,
@@ -468,6 +562,14 @@ class ExecutionProviderInitializer {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     state_ = State::kEpsEnsured;
+
+    // If `kWebNNOrtEpLibraryPathForTesting` switch exists, inject the testing
+    // EP into the map (overriding any real EP with the same name).
+    auto testing_ep = ParseTestingEpLibraryPathSwitch();
+    if (testing_ep.has_value()) {
+      ep_package_info_map_.insert_or_assign(std::move(testing_ep->first),
+                                            std::move(testing_ep->second));
+    }
 
     while (!pending_callbacks_.empty()) {
       std::move(pending_callbacks_.front()).Run(CloneMap(ep_package_info_map_));

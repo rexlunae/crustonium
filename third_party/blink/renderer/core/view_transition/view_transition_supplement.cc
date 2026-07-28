@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 
+#include <algorithm>
+
 #include "cc/trees/layer_tree_host.h"
 #include "cc/view_transition/view_transition_request.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
@@ -20,6 +22,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/route_matching/route_map.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/view_transition/dom_view_transition.h"
 #include "third_party/blink/renderer/core/view_transition/page_swap_event.h"
@@ -109,7 +112,7 @@ DOMViewTransition* ViewTransitionSupplement::StartTransition(
   // Disallow script initiated transitions during a navigation initiated
   // transition.
   if (document_transition_ && !document_transition_->IsCreatedViaScriptAPI()) {
-    return ViewTransition::CreateSkipped(&element, callback)
+    return ViewTransition::CreateSkipped(&element, callback, types)
         ->GetScriptDelegate();
   }
 
@@ -132,7 +135,8 @@ DOMViewTransition* ViewTransitionSupplement::StartTransition(
 
   // We need to be connected to a view to have a transition.
   if (!document.View()) {
-    return nullptr;
+    return ViewTransition::CreateSkipped(&element, callback, types)
+        ->GetScriptDelegate();
   }
 
   ViewTransition* transition = ViewTransition::CreateFromScript(
@@ -196,21 +200,54 @@ void ViewTransitionSupplement::SnapshotDocumentForNavigation(
       document, navigation_id, std::move(params), std::move(callback));
 }
 
+void ViewTransitionSupplement::StartNavigationPreviewIfNeeded() {
+  if (!preview_types_) {
+    return;
+  }
+
+  CHECK(RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled());
+
+  if (document_transition_) {
+    document_transition_->SkipTransition();
+  }
+
+  CHECK(!document_transition_);
+  document_transition_ =
+      ViewTransition::CreatePreview(document_, *preview_types_, this);
+}
+
+void ViewTransitionSupplement::AbortNavigationPreview() {
+  if (document_transition_ && document_transition_->IsPreview()) {
+    CHECK(RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled());
+    document_transition_->SkipTransition();
+  }
+}
+
 void ViewTransitionSupplement::StartTransition(
     Document& document,
     const blink::ViewTransitionToken& navigation_id,
     mojom::blink::PageSwapEventParamsPtr params,
     ViewTransition::ViewTransitionStateCallback callback) {
+  if (RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled()) {
+    callback = blink::BindOnce(
+        [](Document* document,
+           ViewTransition::ViewTransitionStateCallback callback,
+           const ViewTransitionState& state) {
+          if (document) {
+            if (RouteMap* route_map = RouteMap::Get(document)) {
+              route_map->OnPreviewFinished();
+            }
+          }
+          std::move(callback).Run(state);
+        },
+        WrapWeakPersistent(&document), std::move(callback));
+  }
   // TODO(khushalsagar): Per spec, we should be checking the opt-in at this
   // point. See step 2 in
   // https://drafts.csswg.org/css-view-transitions-2/#setup-outbound-transition.
-
   if (document_transition_) {
-    // TODO(nrosenthal): limit eligible animations to those that started after
-    // navigation was initiated and have a short while before they are scheduled
-    // to end.
-    if (RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled() &&
-        document_transition_->HasActiveAnimations()) {
+    if (document_transition_->IsPreview()) {
+      CHECK(RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled());
       pending_navigation_transition_.emplace(PendingNavigationTransition{
           navigation_id, std::move(params), std::move(callback)});
       return;
@@ -260,11 +297,18 @@ void ViewTransitionSupplement::OnTransitionFinished(
     ViewTransition* transition) {
   CHECK(transition);
 
-  // Clear the transition so it can be garbage collected if needed (and to
-  // prevent callers of GetTransition thinking there's an ongoing transition).
+  auto it = std::find(captured_transitions_.begin(),
+                      captured_transitions_.end(), transition);
+  if (it != captured_transitions_.end()) {
+    captured_transitions_.erase(it);
+  }
+
+  // Clear the ongoing transition. Proceed with cross-document transition if
+  // this was a preview.
   if (transition == document_transition_) {
+    CHECK(transition->IsPreview() || !pending_navigation_transition_);
     document_transition_ = nullptr;
-    if (pending_navigation_transition_) {
+    if (pending_navigation_transition_ && document_->View()) {
       CHECK(RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled());
       document_->GetTaskRunner(TaskType::kDOMManipulation)
           ->PostTask(
@@ -283,9 +327,12 @@ void ViewTransitionSupplement::OnTransitionFinished(
                   std::move(*pending_navigation_transition_)));
       pending_navigation_transition_.reset();
     }
-  } else {
-    Element* scope = transition->Scope();
+  } else if (Element* scope = transition->Scope()) {
     element_transitions_.erase(scope);
+  }
+
+  if (!captured_transitions_.empty() && !HasActiveCaptures()) {
+    AdvanceCapturedTransitions();
   }
 
   // Notify the animator if the set of active view transitions is empty.
@@ -294,32 +341,111 @@ void ViewTransitionSupplement::OnTransitionFinished(
       page->Animator().SetHasViewTransition(false);
     }
   }
+
+  if (RouteMap* route_map = RouteMap::Get(document_)) {
+    // This view transition, which is now finished, may be the one reason why
+    // there's still a "current navigation state". Therefore, notify the route
+    // map, so that the current navigation (if any) can finish.
+    route_map->OnNavigationDone();
+  }
 }
 
 void ViewTransitionSupplement::OnSkipTransitionWithPendingCallback(
     ViewTransition* transition) {
   CHECK(transition);
-  skipped_with_pending_dom_callback_.insert(transition->Scope(), transition);
+  if (transition->Scope()) {
+    skipped_with_pending_dom_callback_.insert(transition->Scope(), transition);
+  }
 }
 
 void ViewTransitionSupplement::OnSkippedTransitionDOMCallback(
     ViewTransition* transition) {
   CHECK(transition);
-  skipped_with_pending_dom_callback_.erase(transition->Scope());
+  if (transition->Scope()) {
+    skipped_with_pending_dom_callback_.erase(transition->Scope());
+  }
+}
+
+bool ViewTransitionSupplement::HasNonScriptTransitions() const {
+  if (document_transition_ && !document_transition_->IsCreatedViaScriptAPI()) {
+    return true;
+  }
+  for (auto& element_transition : element_transitions_.Values()) {
+    if (!element_transition->IsCreatedViaScriptAPI()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ViewTransitionSupplement::IsEarlyCallbackEnabled() const {
+  if (!RuntimeEnabledFeatures::ViewTransitionDOMCallbackAfterCommitEnabled()) {
+    return false;
+  }
+  if (HasNonScriptTransitions()) {
+    return false;
+  }
+  return true;
+}
+
+bool ViewTransitionSupplement::HasActiveCaptures() const {
+  auto is_capturing_and_not_ready = [this](ViewTransition* t) {
+    return t && t->IsCapturing() && !captured_transitions_.Contains(t);
+  };
+  if (is_capturing_and_not_ready(document_transition_)) {
+    return true;
+  }
+  for (const auto& entry : element_transitions_) {
+    if (is_capturing_and_not_ready(entry.value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ViewTransitionSupplement::AdvanceCapturedTransitions() {
+  std::sort(captured_transitions_.begin(), captured_transitions_.end(),
+            CompareTransitions);
+  HeapVector<Member<ViewTransition>> local_copy(captured_transitions_);
+  captured_transitions_.clear();
+  for (auto captured_transition : local_copy) {
+    if (IsEarlyCallbackEnabled()) {
+      captured_transition->OnCaptureCommitted();
+    } else {
+      captured_transition->OnCapturePhaseComplete();
+    }
+  }
+}
+
+void ViewTransitionSupplement::OnDOMCallbackReadyToRun(
+    ViewTransition* transition) {
+  CHECK(transition);
+  if (!transition->IsCapturing()) {
+    return;
+  }
+  captured_transitions_.push_back(transition);
+  if (!HasActiveCaptures()) {
+    AdvanceCapturedTransitions();
+  }
 }
 
 void ViewTransitionSupplement::OnTransitionCaptured(
     ViewTransition* transition) {
   CHECK(transition);
-  captured_transitions_.push_back(transition);
-  if (--in_flight_capture_requests_ == 0) {
-    std::sort(captured_transitions_.begin(), captured_transitions_.end(),
-              CompareTransitions);
-    for (auto captured_transition : captured_transitions_) {
-      captured_transition->OnCapturePhaseComplete();
-    }
-    captured_transitions_.clear();
+  if (!IsEarlyCallbackEnabled()) {
+    OnDOMCallbackReadyToRun(transition);
+  } else {
+    // In early DOM callbacks mode, OnTransitionCaptured is called when
+    // capture rects are received. We just notify the waiting state machine!
+    transition->OnCaptureRectsReceived();
   }
+}
+
+void ViewTransitionSupplement::OnCaptureCommitted(ViewTransition* transition) {
+  CHECK(transition);
+  CHECK(IsEarlyCallbackEnabled());
+
+  OnDOMCallbackReadyToRun(transition);
 }
 
 ViewTransition* ViewTransitionSupplement::GetTransition() {
@@ -347,8 +473,6 @@ void ViewTransitionSupplement::ForEachTransition(
     }
     return;
   }
-
-  DCHECK(RuntimeEnabledFeatures::ScopedViewTransitionsEnabled());
 
   // Local copy of the list, since the function may modify the transition map.
   HeapVector<Member<ViewTransition>> transitions;
@@ -406,9 +530,6 @@ void ViewTransitionSupplement::Trace(Visitor* visitor) const {
 
 void ViewTransitionSupplement::AddPendingRequest(
     std::unique_ptr<ViewTransitionRequest> request) {
-  if (request->type() == ViewTransitionRequest::Type::kSave) {
-    in_flight_capture_requests_++;
-  }
   pending_requests_.push_back(std::move(request));
 
   if (!document_ || !document_->GetPage() || !document_->View()) {
@@ -418,8 +539,8 @@ void ViewTransitionSupplement::AddPendingRequest(
   // Schedule a new frame.
   document_->View()->ScheduleAnimation();
 
-  // Ensure paint artifact compositor does an update, since that's the mechanism
-  // we use to pass transition requests to the compositor.
+  // Ensure paint artifact compositor does an update, since that's the
+  // mechanism we use to pass transition requests to the compositor.
   document_->View()->SetPaintArtifactCompositorNeedsUpdate();
 }
 
@@ -430,12 +551,14 @@ ViewTransitionSupplement::TakePendingRequests() {
 
 void ViewTransitionSupplement::OnViewTransitionsStyleUpdated(
     bool cross_document_enabled,
-    const Vector<String>& types) {
+    const Vector<String>& types,
+    const std::optional<Vector<String>>& preview_types) {
   SetCrossDocumentOptIn(
       cross_document_enabled
           ? mojom::blink::ViewTransitionSameOriginOptIn::kEnabled
           : mojom::blink::ViewTransitionSameOriginOptIn::kDisabled);
   cross_document_types_ = types;
+  preview_types_ = preview_types;
 }
 
 void ViewTransitionSupplement::WillInsertBody() {

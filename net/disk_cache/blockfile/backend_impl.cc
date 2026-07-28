@@ -10,6 +10,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/containers/heap_array.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
@@ -26,6 +27,7 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -729,6 +731,14 @@ bool BackendImpl::SetMaxSize(int64_t max_bytes) {
   user_flags_ |= kMaxSize;
   max_size_ = max_bytes;
   return true;
+}
+
+void BackendImpl::SetMaxBytes(base::ByteSize max_bytes) {
+  // Not implemented for the blockfile backend. Safe to ignore.
+}
+
+base::ByteSize BackendImpl::GetMaxBytesForTesting() const {
+  return base::ByteSize(base::checked_cast<uint64_t>(max_size_));
 }
 
 base::FilePath BackendImpl::GetFileName(Addr address) const {
@@ -2092,8 +2102,8 @@ int BackendImpl::MaxBuffersSize() {
   // then cache the result.
   static const int max_buffers_size = ([]() {
     constexpr uint64_t kMaxMaxBuffersSize = 30 * 1024 * 1024;
-    const base::ByteCount total_memory =
-        base::SysInfo::AmountOfPhysicalMemory();
+    const base::ByteSize total_memory =
+        base::SysInfo::AmountOfTotalPhysicalMemory();
     if (total_memory.is_zero()) {
       return int{kMaxMaxBuffersSize};
     }

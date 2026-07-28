@@ -62,7 +62,7 @@ class StartupBrowserCreatorImpl {
   // launch another instance. `restore_tabbed_browser` should only be
   // flipped false by Ash full restore code path, suppressing restoring a normal
   // browser when there were only PWAs open in previous session. See
-  // crbug.com/1463906.
+  // crbug.com/40275406.
   void Launch(Profile* profile,
               chrome::startup::IsProcessStartup process_startup,
               bool restore_tabbed_browser);
@@ -83,6 +83,8 @@ class StartupBrowserCreatorImpl {
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, AppIdSwitch);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest, DetermineStartupTabs);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
+                           DetermineStartupTabs_DeduplicatePinnedTabs);
+  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_Incognito);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_Crash);
@@ -90,8 +92,6 @@ class StartupBrowserCreatorImpl {
                            DetermineStartupTabs_InitialPrefs);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_CommandLine);
-  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
-                           DetermineStartupTabs_Crosapi);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_NewTabPage);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
@@ -106,8 +106,6 @@ class StartupBrowserCreatorImpl {
                            DetermineBrowserOpenBehavior_NotStartup);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineStartupTabs_NewFeaturesPage);
-  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
-                           DetermineStartupTabs_PrivacySandbox);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorImplTest,
                            DetermineNonMilestoneUpdate);
 
@@ -166,7 +164,7 @@ class StartupBrowserCreatorImpl {
   // is necessary, and opens the URLs in a new or restored browser accordingly.
   // `restore_tabbed_browser` should only be flipped false by Ash full
   // restore code path, suppressing restoring a normal browser when there were
-  // only PWAs open in previous session. See crbug.com/1463906.
+  // only PWAs open in previous session. See crbug.com/40275406.
   void DetermineURLsAndLaunch(chrome::startup::IsProcessStartup process_startup,
                               bool restore_tabbed_browser);
 
@@ -181,8 +179,7 @@ class StartupBrowserCreatorImpl {
       bool is_ephemeral_profile,
       bool is_post_crash_launch,
       bool promotional_tabs_enabled,
-      bool whats_new_enabled,
-      bool privacy_sandbox_confirmation_required);
+      bool whats_new_enabled);
 
   // Begins an asynchronous session restore if current state allows it (e.g.,
   // this is not process startup) and SessionService indicates that one is
@@ -211,7 +208,7 @@ class StartupBrowserCreatorImpl {
   // Returns the relevant bitmask options which must be passed when restoring a
   // session. `restore_tabbed_browser` should only be flipped false by Ash
   // full restore code path, suppressing restoring a normal browser when there
-  // were only PWAs open in previous session. See crbug.com/1463906.
+  // were only PWAs open in previous session. See crbug.com/40275406.
   static SessionRestore::BehaviorBitmask DetermineSynchronousRestoreOptions(
       bool has_create_browser_default,
       bool has_create_browser_switch,

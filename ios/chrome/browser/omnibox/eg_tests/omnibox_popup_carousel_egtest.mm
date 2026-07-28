@@ -7,7 +7,6 @@
 #import "base/ios/ios_util.h"
 #import "base/strings/string_number_conversions.h"
 #import "components/omnibox/common/omnibox_features.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/omnibox/eg_tests/omnibox_app_interface.h"
 #import "ios/chrome/browser/omnibox/eg_tests/omnibox_test_util.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_popup_accessibility_identifier_constants.h"
@@ -66,7 +65,6 @@ id<GREYMatcher> CarouselMatcher() {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_enabled.push_back(kMostVisitedTilesCustomizationIOS);
   // Disable AutocompleteProvider types: TYPE_SEARCH and TYPE_ON_DEVICE_HEAD.
   omnibox::DisableAutocompleteProviders(config, 1056);
 
@@ -189,13 +187,8 @@ id<GREYMatcher> CarouselMatcher() {
 }
 
 // Tests the "Copy URL" action of carousel context menu.
-// TODO(crbug.com/435096812): Reenable this test.
 - (void)testMostVisitedTileCopyURL {
-  if ([ChromeEarlGrey isIPhoneIdiom]) {
-    if (!@available(iOS 18, *)) {
-      EARL_GREY_TEST_DISABLED(@"Failing on iPhone Simulator iOS 17");
-    }
-  }
+
   [self addNumberOfMostVisitedTiles:1];
   Page page1 = Page(1);
   id<GREYMatcher> tile1 = TileWithTitle(PageTitle(page1));
@@ -209,13 +202,8 @@ id<GREYMatcher> CarouselMatcher() {
 }
 
 // Tests the "Share" action of the carousel context menu.
-// TODO(crbug.com/435093465): Reenable this test.
 - (void)testMostVisitedShare {
-  if (![ChromeEarlGrey isIPadIdiom]) {
-    if (!@available(iOS 18, *)) {
-      EARL_GREY_TEST_DISABLED(@"Failing on iPhone Simulator iOS 17");
-    }
-  }
+
   [self addNumberOfMostVisitedTiles:1];
   Page page1 = Page(1);
   id<GREYMatcher> tile1 = TileWithTitle(PageTitle(page1));

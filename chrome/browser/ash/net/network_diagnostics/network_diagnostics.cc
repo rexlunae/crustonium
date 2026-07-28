@@ -26,6 +26,7 @@
 #include "chrome/browser/ash/net/network_diagnostics/signal_strength_routine.h"
 #include "chrome/browser/ash/net/network_diagnostics/video_conferencing_routine.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
+#include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
 #include "chromeos/ash/components/mojo_service_manager/connection.h"
 #include "components/device_event_log/device_event_log.h"
 #include "third_party/cros_system_api/mojo/service_constants.h"
@@ -58,8 +59,8 @@ void NetworkDiagnostics::BindReceiver(
 void NetworkDiagnostics::GetResult(mojom::RoutineType type,
                                    GetResultCallback callback) {
   mojom::RoutineResultPtr result;
-  if (results_.count(type)) {
-    result = results_[type].Clone();
+  if (auto it = results_.find(type); it != results_.end()) {
+    result = it->second.Clone();
   }
   std::move(callback).Run(std::move(result));
 }
@@ -268,7 +269,7 @@ void NetworkDiagnostics::RunGoogleServicesConnectivity(
     src = source.value();
   }
   auto routine = std::make_unique<GoogleServicesConnectivityRoutine>(
-      src, debug_daemon_client_);
+      src, ShillManagerClient::Get());
   RunRoutine(std::move(routine), std::move(callback));
 }
 

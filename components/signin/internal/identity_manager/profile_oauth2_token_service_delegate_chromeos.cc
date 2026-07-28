@@ -276,7 +276,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::LoadCredentialsInternal(
 void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateCredentialsInternal(
     const CoreAccountId& account_id,
     const std::string& refresh_token,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+    const signin::TokenBindingInfo& token_binding_info) {
   // UpdateCredentials should not be called on Chrome OS. Credentials should be
   // updated through Chrome OS Account Manager.
   NOTREACHED();
@@ -497,8 +497,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateAuthError(
                                                      fire_auth_error_changed);
   if (!RefreshTokenIsAvailable(account_id)) {
     // Account has been removed.
-    DCHECK_EQ(error, GoogleServiceAuthError(
-                         GoogleServiceAuthError::ACCOUNT_NOT_FOUND));
+    DCHECK_EQ(error, GoogleServiceAuthError::CreateAccountNotFound());
     return;
   }
 
@@ -510,7 +509,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateAuthError(
 }
 
 void ProfileOAuth2TokenServiceDelegateChromeOS::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   ResetBackOffEntry();
 }
 

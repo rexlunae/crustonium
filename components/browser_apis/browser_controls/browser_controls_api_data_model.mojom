@@ -4,30 +4,16 @@
 
 module browser_controls_api.mojom;
 
-// The event flags for the click that might affect disposition of a
-// button's behavior.
-enum ClickDispositionFlag {
+// The event flags for an event such as a click or key down that might affect
+// behavior. Note: mouse button flags are only set on clicks.
+enum EventDispositionFlag {
   kUnspecified = 0,
   kMiddleMouseButton = 1,
   kAltKeyDown = 2,
-  kMetaKeyDown = 3,
-};
-
-// The context menu types that can be opened with BrowserControlsService's
-// ShowContextMenu.
-enum ContextMenuType {
-  kUnspecified = 0,
-  kReload = 1,
-};
-
-enum DevToolsState {
-  kUnspecified = 0,
-  kConnected = 1,
-  kDisconnected = 2,
-};
-
-enum NavigationState {
-  kUnspecified = 0,
-  kLoading = 1,
-  kNotLoading = 2,
+  kMetaKeyDown = 3,  // AKA Command (⌘) on Mac.
+  kShiftKeyDown = 4,
+  kControlKeyDown = 5,
+  // "Alternate Graphic" key; exists in place of the right alt key in some
+  // keyboard layouts.
+  kAltGrKeyDown = 6,
 };

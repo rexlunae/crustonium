@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/win/video_capture_device_factory_win.h"
 
 #include <objbase.h>
@@ -28,6 +23,7 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -130,38 +126,48 @@ static_assert(std::size(kBlockedCameraNames) == BLOCKED_CAMERA_MAX + 1,
 
 // Use this list only for USB webcams.
 constexpr auto kModelIdsBlockedForMediaFoundation =
-    base::MakeFixedFlatSet<std::string_view>(
-        {// Devices using Empia 2860 or 2820 chips, see
-         // https://crbug.com/849636.
-         "eb1a:2860", "eb1a:2820", "1ce6:2820",
-         // Elgato HD60 Pro
-         "12ab:0380",
-         // Sensoray 2253
-         "1943:2253",
-         // Dell E5440
-         "0c45:64d0", "0c45:64d2",
-         // Dell E7440
-         "1bcf:2985",
-         // Lenovo Thinkpad Model 20CG0006FMZ front and rear cameras, see
-         // also https://crbug.com/924528.
-         "04ca:7047", "04ca:7048",
-         // HP Elitebook 840 G1
-         "04f2:b3ed", "04f2:b3ca", "05c8:035d", "05c8:0369",
-         // HP HD Camera. See https://crbug.com/1011888.
-         "04ca:7095",
-         // RBG/IR camera for Windows Hello Face Auth. See
-         // https://crbug.com/984864.
-         "13d3:5257",
-         // Acer Aspire f5-573g. See https://crbug.com/1034644.
-         "0bda:57f2",
-         // Elgato Camlink 4k
-         "0fd9:0066",
-         // ACER Aspire VN7-571G. See https://crbug.com/1327948.
-         "04f2:b469",
-         // Hauppauge USB-Live2. See https://crbug.com/1447113.
-         "2040:c200",
-         // TOSHIBA Web Camera - HD. See https://crbug.com/420284824.
-         "04f2:b7a3"});
+    base::MakeFixedFlatSet<std::string_view>({
+        // Devices using Empia 2860 or 2820 chips, see
+        // https://crbug.com/849636.
+        "eb1a:2860",
+        "eb1a:2820",
+        "1ce6:2820",
+        // Elgato HD60 Pro
+        "12ab:0380",
+        // Sensoray 2253
+        "1943:2253",
+        // Dell E5440
+        "0c45:64d0",
+        "0c45:64d2",
+        // Dell E7440
+        "1bcf:2985",
+        // Lenovo Thinkpad Model 20CG0006FMZ front and rear cameras, see
+        // also https://crbug.com/924528.
+        "04ca:7047",
+        "04ca:7048",
+        // HP Elitebook 840 G1
+        "04f2:b3ed",
+        "04f2:b3ca",
+        "05c8:035d",
+        "05c8:0369",
+        // HP HD Camera. See https://crbug.com/1011888.
+        "04ca:7095",
+        // RBG/IR camera for Windows Hello Face Auth. See
+        // https://crbug.com/984864.
+        "13d3:5257",
+        // Acer Aspire f5-573g. See https://crbug.com/1034644.
+        "0bda:57f2",
+        // Elgato Camlink 4k
+        "0fd9:0066",
+        // ACER Aspire VN7-571G. See https://crbug.com/1327948.
+        "04f2:b469",
+        // Hauppauge USB-Live2. See https://crbug.com/1447113.
+        "2040:c200",
+        // TOSHIBA Web Camera - HD. See https://crbug.com/420284824.
+        "04f2:b7a3",
+        // Microsoft LifeCam Studio. See https://crbug.com/535635412
+        "045e:0772",
+    });
 
 // Use this list only for USB webcams.
 constexpr auto kModelIdsBlockedForMediaFoundationD3D11VideoCapture =
@@ -282,8 +288,8 @@ bool PrepareVideoCaptureAttributesMediaFoundation(
 bool IsDeviceBlocked(const std::string& name) {
   DCHECK_EQ(BLOCKED_CAMERA_MAX + 1,
             static_cast<int>(std::size(kBlockedCameraNames)));
-  for (size_t i = 0; i < std::size(kBlockedCameraNames); ++i) {
-    if (base::StartsWith(name, kBlockedCameraNames[i],
+  for (const char* blocked_camera_name : kBlockedCameraNames) {
+    if (base::StartsWith(name, blocked_camera_name,
                          base::CompareCase::INSENSITIVE_ASCII)) {
       DVLOG(1) << "Enumerated blocked device: " << name;
       return true;
@@ -576,7 +582,8 @@ VideoCaptureDeviceFactoryWin::VideoCaptureDeviceFactoryWin()
       use_d3d11_with_media_foundation_(
           media::IsMediaFoundationD3D11VideoCaptureEnabled() &&
           switches::IsVideoCaptureUseGpuMemoryBufferEnabled()),
-      com_thread_("Windows Video Capture COM Thread") {
+      com_thread_("Windows Video Capture COM Thread",
+                  base::Thread::Restartable{}) {
   if (use_media_foundation_ && !PlatformSupportsMediaFoundation()) {
     use_media_foundation_ = false;
   }
@@ -821,8 +828,10 @@ void VideoCaptureDeviceFactoryWin::GetDevicesInfo(
     devices_info = GetDevicesInfoDirectShow(devices_info);
   }
 
-  com_thread_.init_com_with_mta(true);
-  com_thread_.Start();
+  if (!com_thread_.IsRunning()) {
+    com_thread_.init_com_with_mta(true);
+    com_thread_.Start();
+  }
   com_thread_data_ =
       base::MakeRefCounted<VideoCaptureDeviceFactoryWin::ComThreadData>(
           weak_ptr_factory_.GetWeakPtr(), com_thread_.task_runner(),
@@ -987,10 +996,6 @@ void VideoCaptureDeviceFactoryWin::UpdateDevicesInfoAvailability(
 void VideoCaptureDeviceFactoryWin::DeviceInfoReady(
     std::vector<VideoCaptureDeviceInfo> devices_info,
     GetDevicesInfoCallback result_callback) {
-  if (com_thread_.IsRunning()) {
-    com_thread_.Stop();
-    com_thread_data_.reset();
-  }
   UpdateDevicesInfoAvailability(&devices_info);
 
   std::move(result_callback).Run(std::move(devices_info));
@@ -1026,14 +1031,17 @@ DevicesInfo VideoCaptureDeviceFactoryWin::GetDevicesInfoMediaFoundation() {
     for (UINT32 i = 0; i < count; ++i) {
       ScopedCoMem<wchar_t> name;
       UINT32 name_size;
-      HRESULT hr = devices[i]->GetAllocatedString(
-          MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &name, &name_size);
+      HRESULT hr =
+          UNSAFE_TODO(devices[i])
+              ->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &name,
+                                   &name_size);
       if (SUCCEEDED(hr)) {
         ScopedCoMem<wchar_t> id;
         UINT32 id_size;
-        hr = devices[i]->GetAllocatedString(
-            MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, &id,
-            &id_size);
+        hr = UNSAFE_TODO(devices[i])
+                 ->GetAllocatedString(
+                     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
+                     &id, &id_size);
         if (SUCCEEDED(hr)) {
           const std::string device_id =
               base::SysWideToUTF8(std::wstring(id, id_size));
@@ -1069,7 +1077,7 @@ DevicesInfo VideoCaptureDeviceFactoryWin::GetDevicesInfoMediaFoundation() {
       }
       DLOG_IF(ERROR, FAILED(hr)) << "GetAllocatedString failed: "
                                  << logging::SystemErrorCodeToString(hr);
-      devices[i]->Release();
+      UNSAFE_TODO(devices[i])->Release();
     }
   }
 

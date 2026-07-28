@@ -7,30 +7,43 @@
 
 #import <UIKit/UIKit.h>
 
-// Defines a color palette for tab groups derived from a seed color.
+namespace tab_groups {
+enum class TabGroupColorId;
+}  // namespace tab_groups
+
+// Defines a color palette for tab groups based on a specific color ID.
 @interface TabGroupColorPalette : NSObject
 
-// Initializes from a group color to generate a color palette for the grid cell
-// and group views.
-- (instancetype)initWithSeedColor:(UIColor*)groupColor
-    NS_DESIGNATED_INITIALIZER;
-- (instancetype)init NS_UNAVAILABLE;
-
-// The seed color used for generating the palette in the sRGB space.
-@property(nonatomic, readonly) UIColor* seedColor;
-
-// A variant of the seed color for the cells' background.
+// The tone used for the cells' background.
 @property(nonatomic, readonly) UIColor* backgroundColor;
 
-// A variant of the seed color for the group tab snapshot's background.
+// The tone used for the group tab snapshot's background.
 @property(nonatomic, readonly) UIColor* snapshotBackgroundColor;
 
-// A variant of the seed color for the empty snapshot bars' background.
+// The tone used for the empty snapshot bars' background.
 @property(nonatomic, readonly) UIColor* barColor;
 
-// A variant of the seed color for the dot, the borders, and the NTP button
-// which is the same in light and dark theme.
+// The tone used for the dot, the borders, and the NTP button.
+// This color remains consistent across light and dark themes.
 @property(nonatomic, readonly) UIColor* commonColor;
+
+// The `TabGroupColorId` associated with this palette.
+@property(nonatomic, readonly) tab_groups::TabGroupColorId tabGroupColorID;
+
+// Returns the static commonColor for a given color ID without instantiating the
+// palette.
++ (UIColor*)commonColor:(tab_groups::TabGroupColorId)tabGroupColorID;
+
+// Returns an array of tones for the gradient background in `TabGroupView`
+// and `CreateTabGroupView` based on the color ID.
++ (NSArray<UIColor*>*)gradientBackgroundColors:
+    (tab_groups::TabGroupColorId)tabGroupColorID;
+
+// Initializes the palette using a `TabGroupColorId` to retrieve the
+// corresponding tones.
+- (instancetype)initWithColorId:(tab_groups::TabGroupColorId)tabGroupColorID
+    NS_DESIGNATED_INITIALIZER;
+- (instancetype)init NS_UNAVAILABLE;
 
 @end
 

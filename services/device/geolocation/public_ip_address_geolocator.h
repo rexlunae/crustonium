@@ -5,7 +5,7 @@
 #ifndef SERVICES_DEVICE_GEOLOCATION_PUBLIC_IP_ADDRESS_GEOLOCATOR_H_
 #define SERVICES_DEVICE_GEOLOCATION_PUBLIC_IP_ADDRESS_GEOLOCATOR_H_
 
-#include <string>
+#include <string_view>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -25,7 +25,7 @@ class PublicIpAddressLocationNotifier;
 class PublicIpAddressGeolocator : public mojom::Geolocation {
  public:
   using BadMessageCallback =
-      base::RepeatingCallback<void(const std::string& message)>;
+      base::RepeatingCallback<void(std::string_view message)>;
 
   // Creates a PublicIpAddressGeolocatorsubscribed to the specified |notifier|.
   // This object will unbind and destroy itself if |notifier| is destroyed.
@@ -45,6 +45,7 @@ class PublicIpAddressGeolocator : public mojom::Geolocation {
  private:
   // mojom::Geolocation:
   void QueryNextPosition(QueryNextPositionCallback callback) override;
+  void QueryCachedPosition(QueryCachedPositionCallback callback) override;
   void SetHighAccuracyHint(bool high_accuracy) override;
 
   // Callback to register with PublicIpAddressLocationNotifier.

@@ -113,7 +113,7 @@ export class PrefsManager {
   /**
    * Migrates Select-to-Speak rate and pitch settings to global Text-to-Speech
    * settings. This is a one-time migration that happens on upgrade to M70.
-   * See http://crbug.com/866550.
+   * See http://crbug.com/41403286.
    */
   private migrateToGlobalTtsSettings_(rateStr: string, pitchStr: string): void {
     if (this.migrationInProgress_) {
@@ -177,7 +177,7 @@ export class PrefsManager {
                 setPrefsPromises.push(new Promise<void>((resolve, reject) => {
                   chrome.settingsPrivate.setPref(
                       'settings.tts.speech_rate', stsRate,
-                      '' /* unused, see crbug.com/866161 */, success => {
+                      '' /* unused, see crbug.com/40586037 */, success => {
                         if (success) {
                           resolve();
                         } else {
@@ -188,7 +188,7 @@ export class PrefsManager {
                 setPrefsPromises.push(new Promise<void>((resolve, reject) => {
                   chrome.settingsPrivate.setPref(
                       'settings.tts.speech_pitch', stsPitch,
-                      '' /* unused, see crbug.com/866161 */, success => {
+                      '' /* unused, see crbug.com/40586037 */, success => {
                         if (success) {
                           resolve();
                         } else {
@@ -527,9 +527,11 @@ export class PrefsManager {
    * @return True if enhanced TTS voices are enabled.
    */
   enhancedNetworkVoicesEnabled(): boolean {
-    return this.enhancedNetworkVoicesAllowed_ ?
-        this.enhancedNetworkVoicesEnabled_ :
-        false;
+    // TODO (crbug.com/535989327): Re-enable after migrating to new speech
+    // backend.
+    // return this.enhancedNetworkVoicesAllowed_ ?
+    //     this.enhancedNetworkVoicesEnabled_ : false;
+    return false;
   }
 
   /**
@@ -538,7 +540,10 @@ export class PrefsManager {
    * @return True if enhanced TTS voices are allowed.
    */
   enhancedNetworkVoicesAllowed(): boolean {
-    return this.enhancedNetworkVoicesAllowed_;
+    // TODO (crbug.com/535989327): Re-enable after migrating to new speech
+    // backend.
+    // return this.enhancedNetworkVoicesAllowed_;
+    return false;
   }
 
   /**
@@ -548,7 +553,10 @@ export class PrefsManager {
    * @returns True if the initial popup dialog has been shown already.
    */
   enhancedVoicesDialogShown(): boolean {
-    return this.enhancedVoicesDialogShown_;
+    // TODO (crbug.com/535989327): Re-enable after migrating to new speech
+    // backend.
+    // return this.enhancedVoicesDialogShown_;
+    return true;
   }
 
   /**

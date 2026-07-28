@@ -50,7 +50,7 @@
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 #if BUILDFLAG(IS_MAC)
-#include "media/base/mac/video_frame_mac.h"
+#include "ui/gfx/mac/io_surface.h"
 #endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_WIN)
@@ -283,12 +283,28 @@ bool VideoCaptureImpl::ProcessBuffer(
       // it is not sent cross-process the region does not need to be attached to
       // the frame. See also the case for kReadOnlyShmemRegion.
       if (video_frame_init_data.ready_buffer->info->strides) {
-        CHECK(
-            IsYuvPlanar(
-                video_frame_init_data.ready_buffer->info->pixel_format) &&
-            (media::VideoFrame::NumPlanes(
-                 video_frame_init_data.ready_buffer->info->pixel_format) == 3))
+        CHECK(IsYuvPlanar(
+                  video_frame_init_data.ready_buffer->info->pixel_format) &&
+              (media::VideoFrame::NumPlanes(
+                   video_frame_init_data.ready_buffer->info->pixel_format) ==
+               3) &&
+              IsOpaque(video_frame_init_data.ready_buffer->info->pixel_format))
             << "Currently, only YUV formats support custom strides.";
+        const auto pixel_format =
+            video_frame_init_data.ready_buffer->info->pixel_format;
+        const auto coded_width =
+            video_frame_init_data.ready_buffer->info->coded_size.width();
+        const auto& strides =
+            video_frame_init_data.ready_buffer->info->strides->stride_by_plane;
+        CHECK_GE(static_cast<size_t>(strides[0]),
+                 media::VideoFrame::RowBytes(media::VideoFrame::Plane::kY,
+                                             pixel_format, coded_width));
+        CHECK_GE(static_cast<size_t>(strides[1]),
+                 media::VideoFrame::RowBytes(media::VideoFrame::Plane::kU,
+                                             pixel_format, coded_width));
+        CHECK_GE(static_cast<size_t>(strides[2]),
+                 media::VideoFrame::RowBytes(media::VideoFrame::Plane::kV,
+                                             pixel_format, coded_width));
         const size_t y_size =
             (media::VideoFrame::Rows(
                  media::VideoFrame::Plane::kY,
@@ -308,6 +324,14 @@ bool VideoCaptureImpl::ProcessBuffer(
         base::span<const uint8_t> data = buffer_context->data();
         auto [y_data, uv_data] = data.split_at(y_size);
         auto [u_data, v_data] = uv_data.split_at(u_size);
+        CHECK_GE(v_data.size(),
+                 (media::VideoFrame::Rows(
+                      media::VideoFrame::Plane::kV,
+                      video_frame_init_data.ready_buffer->info->pixel_format,
+                      video_frame_init_data.ready_buffer->info->coded_size
+                          .height()) *
+                  video_frame_init_data.ready_buffer->info->strides
+                      ->stride_by_plane[2]));
         video_frame_init_data.frame = media::VideoFrame::WrapExternalYuvData(
             video_frame_init_data.ready_buffer->info->pixel_format,
             gfx::Size(video_frame_init_data.ready_buffer->info->coded_size),
@@ -348,14 +372,18 @@ bool VideoCaptureImpl::ProcessBuffer(
     }
     case VideoFrameBufferHandleType::kSharedImageHandle: {
       CHECK(buffer_context->shared_image());
+      if (buffer_context->shared_image()->size() !=
+          gfx::Size(video_frame_init_data.ready_buffer->info->coded_size)) {
+        DLOG(ERROR) << "SharedImage size does not match coded_size";
+        return false;
+      }
       video_frame_init_data.frame = media::VideoFrame::WrapSharedImage(
           video_frame_init_data.ready_buffer->info->pixel_format,
           buffer_context->shared_image(),
           buffer_context->shared_image_sync_token(),
           media::VideoFrame::ReleaseMailboxCB(),
-          gfx::Size(video_frame_init_data.ready_buffer->info->coded_size),
           gfx::Rect(video_frame_init_data.ready_buffer->info->visible_rect),
-          video_frame_init_data.ready_buffer->info->visible_rect.size(),
+          video_frame_init_data.ready_buffer->info->natural_size,
           video_frame_init_data.ready_buffer->info->timestamp);
       break;
     }
@@ -432,7 +460,8 @@ bool VideoCaptureImpl::ProcessBuffer(
           gmb_handle.native_pixmap_handle().supports_zero_copy_webgpu_import;
 #elif BUILDFLAG(IS_MAC)
       video_frame_init_data.is_webgpu_compatible =
-          media::IOSurfaceIsWebGPUCompatible(gmb_handle.io_surface().get());
+          gfx::IOSurfacePixelFormatIsWebGPUCompatible(
+              IOSurfaceGetPixelFormat(gmb_handle.io_surface().get()));
 #elif BUILDFLAG(IS_WIN)
       video_frame_init_data.is_webgpu_compatible =
           gmb_handle.type == gfx::GpuMemoryBufferType::DXGI_SHARED_HANDLE;
@@ -548,6 +577,7 @@ bool VideoCaptureImpl::BindVideoFrameOnMediaTaskRunner(
     should_recreate_shared_image = true;
   }
 
+  gpu::SyncToken sync_token;
   if (!shared_image || should_recreate_shared_image) {
     auto multiplanar_si_format = viz::MultiPlaneFormat::kNV12;
 #if BUILDFLAG(IS_OZONE)
@@ -574,12 +604,14 @@ bool VideoCaptureImpl::BindVideoFrameOnMediaTaskRunner(
         gpu::kNullSurfaceHandle, gfx::BufferUsage::SCANOUT_VEA_CPU_READ,
         std::move(gmb_handle));
     CHECK(shared_image);
+    sync_token = shared_image->creation_sync_token();
   } else {
-    sii->UpdateSharedImage(video_frame_init_data.buffer_context->gmb_resources()
-                               ->release_sync_token,
-                           video_frame_init_data.buffer_context->gmb_resources()
-                               ->shared_image->mailbox());
+    sync_token = video_frame_init_data.buffer_context->gmb_resources()
+                     ->shared_image->BackingWasExternallyUpdated(
+                         video_frame_init_data.buffer_context->gmb_resources()
+                             ->release_sync_token);
   }
+  sii->VerifySyncToken(sync_token);
 
 #if BUILDFLAG(IS_WIN)
   video_frame_init_data.buffer_context->gmb_resources()
@@ -587,7 +619,6 @@ bool VideoCaptureImpl::BindVideoFrameOnMediaTaskRunner(
           video_frame_init_data.ready_buffer->info->is_premapped);
 #endif
 
-  const gpu::SyncToken sync_token = sii->GenVerifiedSyncToken();
   CHECK(shared_image);
 
   auto frame = media::VideoFrame::WrapMappableSharedImage(
@@ -940,10 +971,9 @@ void VideoCaptureImpl::OnBufferReady(
   // TODO(qiangchen): Change the metric name to "reference_time" and
   // "timestamp", so that we have consistent naming everywhere.
   // Used by chrome/browser/media/cast_mirroring_performance_browsertest.cc
-  TRACE_EVENT_INSTANT2("cast_perf_test", "OnBufferReceived",
-                       TRACE_EVENT_SCOPE_THREAD, "timestamp",
-                       (reference_time - base::TimeTicks()).InMicroseconds(),
-                       "time_delta", buffer->info->timestamp.InMicroseconds());
+  TRACE_EVENT_INSTANT("cast_perf_test", "OnBufferReceived", "timestamp",
+                      (reference_time - base::TimeTicks()).InMicroseconds(),
+                      "time_delta", buffer->info->timestamp.InMicroseconds());
 
   const int buffer_id = buffer->buffer_id;
   // Process the `buffer` to convert it into a media::VideoFrame directly or via
@@ -1183,6 +1213,15 @@ void VideoCaptureImpl::RecordStartOutcomeUMA(
     base::UmaHistogramEnumeration("Media.VideoCapture.StartOutcome", outcome);
     base::UmaHistogramEnumeration("Media.VideoCapture.StartErrorCode",
                                   error_code);
+    if (params_.request_type ==
+        media::CaptureSourceRequestType::kGetUserMedia) {
+      base::UmaHistogramEnumeration(
+          "Media.VideoCapture.StartErrorCode.GetUserMedia", error_code);
+    } else if (params_.request_type ==
+               media::CaptureSourceRequestType::kGetDisplayMedia) {
+      base::UmaHistogramEnumeration(
+          "Media.VideoCapture.StartErrorCode.GetDisplayMedia", error_code);
+    }
     start_outcome_reported_ = true;
   }
 }

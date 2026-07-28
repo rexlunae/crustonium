@@ -4,15 +4,15 @@
 
 package org.chromium.content.browser;
 
+import android.os.Build;
 import android.os.Bundle;
 
-import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.JavalessRenderersFeatureList;
 
 /** Implementation of the interface {@link ChildProcessCreationParams}. */
 @NullMarked
@@ -35,6 +35,7 @@ public class ChildProcessCreationParamsImpl {
     // Use only the explicit WebContents.setImportance signal, and ignore other implicit
     // signals in content.
     private static boolean sIgnoreVisibilityForImportance;
+    private static @Nullable Boolean sForceNativeSandboxedService;
 
     private static boolean sInitialized;
 
@@ -47,14 +48,19 @@ public class ChildProcessCreationParamsImpl {
             boolean isExternalSandboxedService,
             int libraryProcessType,
             boolean bindToCallerCheck,
-            boolean ignoreVisibilityForImportance) {
+            boolean ignoreVisibilityForImportance,
+            boolean forceNativeSandboxedService) {
         assert !sInitialized;
+        if (forceNativeSandboxedService && !isNativeSandboxedServiceSupported()) {
+            throw new IllegalStateException("Native sandboxed service forced but not available");
+        }
         sPackageNameForPrivilegedService = privilegedPackageName;
         sPackageNameForSandboxedService = sandboxedPackageName;
         sIsSandboxedServiceExternal = isExternalSandboxedService;
         sLibraryProcessType = libraryProcessType;
         sBindToCallerCheck = bindToCallerCheck;
         sIgnoreVisibilityForImportance = ignoreVisibilityForImportance;
+        sForceNativeSandboxedService = forceNativeSandboxedService;
         sInitialized = true;
     }
 
@@ -98,27 +104,23 @@ public class ChildProcessCreationParamsImpl {
         return PRIVILEGED_SERVICES_NAME;
     }
 
-    public static String getSandboxedServicesName() {
-        AconfigFlaggedApiDelegate delegate = AconfigFlaggedApiDelegate.getInstance();
-        if (delegate != null && delegate.areNativeOnlyServicesEnabled()) {
-            if (BuildConfig.JAVALESS_RENDERERS_AVAILABLE
-                    // Incremental install disables isolated processes, which are required for
-                    // javaless renderers.
-                    && !BuildConfig.IS_INCREMENTAL_INSTALL
-                    && ContentFeatureList.sJavalessRenderers.isEnabled()) {
-                return NATIVE_SANDBOXED_SERVICES_NAME;
-            }
-        }
-        return SANDBOXED_SERVICES_NAME;
+    private static boolean isNativeSandboxedServiceSupported() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                // Incremental install disables isolated processes, which are required for
+                // javaless renderers.
+                && !BuildConfig.IS_INCREMENTAL_INSTALL;
     }
 
-    public static @Nullable String getBackupSandboxedServicesName() {
-        // We only have a backup for javaless services, and only temporarily while native services
-        // are stabilizing. We should get rid of this once UMA stats show a low incidence of
-        // Android.ChildProcessConnection.FallbackService.
-        if (getSandboxedServicesName().equals(SANDBOXED_SERVICES_NAME)) {
-            return null;
+    public static boolean isNativeSandboxedServiceEnabled() {
+        if (sForceNativeSandboxedService != null) {
+            return sForceNativeSandboxedService;
         }
-        return SANDBOXED_SERVICES_NAME;
+        return isNativeSandboxedServiceSupported() && JavalessRenderersFeatureList.isEnabled();
+    }
+
+    public static String getSandboxedServicesName() {
+        return isNativeSandboxedServiceEnabled()
+                ? NATIVE_SANDBOXED_SERVICES_NAME
+                : SANDBOXED_SERVICES_NAME;
     }
 }

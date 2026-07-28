@@ -38,7 +38,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/base/l10n/l10n_util_mac.h"
@@ -46,11 +45,11 @@
 using password_manager::PasswordCheckReferrer;
 
 @interface PasswordCheckupCoordinator () <
+    LocalReauthenticationCoordinatorDelegate,
+    NotificationsSettingsObserverDelegate,
     PasswordCheckupCommands,
     PasswordCheckupMediatorDelegate,
     PasswordIssuesCoordinatorDelegate,
-    NotificationsSettingsObserverDelegate,
-    LocalReauthenticationCoordinatorDelegate,
     UINavigationControllerDelegate>
 
 @end
@@ -64,9 +63,6 @@ using password_manager::PasswordCheckReferrer;
 
   // Coordinator for password issues.
   PasswordIssuesCoordinator* _passwordIssuesCoordinator;
-
-  // Reauthentication module used by password issues coordinator.
-  id<ReauthenticationProtocol> _reauthModule;
 
   // Coordinator for blocking Password Checkup until Local Authentication is
   // passed. Used for requiring authentication when opening Password Checkup
@@ -94,7 +90,6 @@ using password_manager::PasswordCheckReferrer;
     initWithBaseNavigationController:
         (UINavigationController*)navigationController
                              browser:(Browser*)browser
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
                             referrer:(PasswordCheckReferrer)referrer {
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
@@ -105,13 +100,11 @@ using password_manager::PasswordCheckReferrer;
     AuthenticationService* authenticationService =
         AuthenticationServiceFactory::GetForProfile(self.profile);
     CHECK(authenticationService);
-    if (!authenticationService->HasPrimaryIdentity(
-            signin::ConsentLevel::kSignin)) {
+    if (!authenticationService->HasPrimaryIdentity()) {
       base::debug::DumpWithoutCrashing();
     }
 
     _baseNavigationController = navigationController;
-    _reauthModule = reauthModule;
     _dispatcher =
         HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
     _referrer = referrer;
@@ -196,10 +189,6 @@ using password_manager::PasswordCheckReferrer;
 
   password_manager::LogOpenPasswordIssuesList(warningType);
 
-  // Prevent actions temporarily until the password issues VC takes over the
-  // stack.
-  [_viewController startCooldown];
-
   _passwordIssuesCoordinator = [[PasswordIssuesCoordinator alloc]
             initForWarningType:warningType
       baseNavigationController:self.baseNavigationController
@@ -208,7 +197,6 @@ using password_manager::PasswordCheckReferrer;
   // was already authenticated when opening the password manager.
   _passwordIssuesCoordinator.skipAuthenticationOnStart = YES;
   _passwordIssuesCoordinator.delegate = self;
-  _passwordIssuesCoordinator.reauthModule = _reauthModule;
   [_passwordIssuesCoordinator start];
 }
 
@@ -326,8 +314,7 @@ using password_manager::PasswordCheckReferrer;
     // coordinator was stopped and (2) the password checkup `_viewController` is
     // now visible at the top of the nav stack.
     _viewController.view.userInteractionEnabled = YES;
-    // Use the cooldown period just in case.
-    [_viewController startCooldown];
+
   } else if ([navigationController.viewControllers
                  containsObject:_viewController]) {
     // Disable user interactions on `_viewController` since there is a view on
@@ -405,9 +392,6 @@ using password_manager::PasswordCheckReferrer;
   if (authOnStart && base::FeatureList::IsEnabled(
                          password_manager::features::
                              kPasswordCheckupUIDoubleStartMitigation)) {
-    // Prevent actions temporarily in the case the auth view has to be
-    // pushed on the stack. You don't want actions when auth is required.
-    [_viewController startCooldown];
   }
 
   DCHECK(!_reauthCoordinator);
@@ -415,7 +399,6 @@ using password_manager::PasswordCheckReferrer;
   _reauthCoordinator = [[LocalReauthenticationCoordinator alloc]
       initWithBaseNavigationController:_baseNavigationController
                                browser:self.browser
-                reauthenticationModule:_reauthModule
                            authOnStart:authOnStart];
 
   _reauthCoordinator.delegate = self;

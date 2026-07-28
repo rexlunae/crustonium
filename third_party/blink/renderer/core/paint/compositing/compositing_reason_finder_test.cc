@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/paint/compositing/compositing_reason_finder.h"
-
 #include "base/test/scoped_feature_list.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/animation/animation_clock.h"
@@ -11,6 +10,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
@@ -662,6 +662,115 @@ TEST_P(CompositingReasonFinderTest, WillChangeScrollPosition) {
   EXPECT_REASONS(
       CompositingReason::kNone,
       CompositingReasonFinder::DirectReasonsForPaintProperties(*target));
+}
+
+TEST_P(CompositingReasonFinderTest, UnboundedElementCompositingReason) {
+  ScopedUnboundedElementForTest unbounded_element_enabled(true);
+  SetBodyInnerHTML(R"HTML(
+    <div id="target" style="width: 100px; height: 100px;"></div>
+  )HTML");
+
+  auto* element = GetDocument().getElementById(AtomicString("target"));
+  auto* html_element = To<HTMLElement>(element);
+
+  // 1. No attribute, inactive: kNone
+  EXPECT_REASONS(CompositingReason::kNone,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *GetLayoutObjectByElementId("target")));
+
+  // 2. With attribute, but inactive: kNone
+  html_element->setAttribute(html_names::kUnboundedAttr, g_empty_atom);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_REASONS(CompositingReason::kNone,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *GetLayoutObjectByElementId("target")));
+
+  // 3. With attribute AND active: kUnboundedElement
+  html_element->SetUnboundedElementActive(true);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_REASONS(CompositingReason::kUnboundedElement,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *GetLayoutObjectByElementId("target")));
+
+  // 4. Remove attribute, keep active: kNone
+  html_element->removeAttribute(html_names::kUnboundedAttr);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_REASONS(CompositingReason::kNone,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *GetLayoutObjectByElementId("target")));
+}
+
+TEST_P(CompositingReasonFinderTest, CanvasChild) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+  SetBodyInnerHTML(R"HTML(
+    <canvas id=canvas layoutsubtree>
+      <div id=child style="width: 10px; height: 10px;">
+       <div id=grandchild style="width: 10px; height: 10px;"
+       </div>
+      </div>
+    </canvas>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* canvas = GetElementById("canvas");
+  ASSERT_TRUE(canvas);
+  LayoutObject* canvas_layout_object = canvas->GetLayoutObject();
+  EXPECT_REASONS(CompositingReason::kNone,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *canvas_layout_object));
+
+  Element* child = GetElementById("child");
+  ASSERT_TRUE(child);
+  LayoutObject* child_layout_object = child->GetLayoutObject();
+  EXPECT_REASONS(CompositingReason::kCanvasChild,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *child_layout_object));
+
+  Element* grandchild = GetElementById("grandchild");
+  ASSERT_TRUE(grandchild);
+  LayoutObject* grandchild_layout_object = grandchild->GetLayoutObject();
+  EXPECT_REASONS(CompositingReason::kNone,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *grandchild_layout_object));
+}
+
+TEST_P(CompositingReasonFinderTest, CanvasChildSlotted) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"(
+    <div id=slotHost>
+      <template shadowrootmode=open>
+        <canvas layoutsubtree>
+          <slot name="slot1"></slot>
+        </canvas>
+      </template>
+      <div id=slotted slot="slot1">
+        <p id=slotchild>Hello</p>
+      </div>
+    </div>
+  )");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* slotted = GetElementById("slotted");
+  ASSERT_TRUE(slotted);
+  EXPECT_TRUE(slotted->IsInCanvasSubtree());
+  EXPECT_TRUE(slotted->IsCanvasOrInCanvasSubtree());
+  LayoutObject* layout_object = slotted->GetLayoutObject();
+  ASSERT_TRUE(layout_object);
+  EXPECT_REASONS(
+      CompositingReason::kCanvasChild,
+      CompositingReasonFinder::DirectReasonsForPaintProperties(*layout_object));
+
+  Element* slot_child = GetElementById("slotchild");
+  ASSERT_TRUE(slot_child);
+  EXPECT_TRUE(slot_child->IsInCanvasSubtree());
+  EXPECT_TRUE(slot_child->IsCanvasOrInCanvasSubtree());
+  LayoutObject* child_layout_object = slot_child->GetLayoutObject();
+  ASSERT_TRUE(child_layout_object);
+  EXPECT_REASONS(CompositingReason::kNone,
+                 CompositingReasonFinder::DirectReasonsForPaintProperties(
+                     *child_layout_object));
 }
 
 }  // namespace blink

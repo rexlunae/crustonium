@@ -31,9 +31,7 @@ class FeedSurfaceRendererBridge : public ::feed::SurfaceRenderer {
       const base::android::JavaRef<jobject>& j_this,
       Profile* profile,
       int32_t stream_kind,
-      std::string web_feed_id,
-      FeedReliabilityLoggingBridge* reliability_logging_bridge,
-      int32_t feed_entry_point);
+      FeedReliabilityLoggingBridge* reliability_logging_bridge);
   FeedSurfaceRendererBridge(const FeedSurfaceRendererBridge&) = delete;
   FeedSurfaceRendererBridge& operator=(const FeedSurfaceRendererBridge&) =
       delete;
@@ -52,11 +50,9 @@ class FeedSurfaceRendererBridge : public ::feed::SurfaceRenderer {
 
   void OnStreamUpdated(const feedui::StreamUpdate& stream_update);
 
-  void LoadMore(JNIEnv* env,
-                const base::android::JavaRef<jobject>& callback_obj);
+  void LoadMore(base::OnceCallback<void(bool)> callback);
 
-  void ManualRefresh(JNIEnv* env,
-                     const base::android::JavaRef<jobject>& callback_obj);
+  void ManualRefresh(base::OnceCallback<void(bool)> callback);
 
   void SurfaceOpened(JNIEnv* env);
   void SurfaceClosed(JNIEnv* env);

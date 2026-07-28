@@ -10,7 +10,8 @@
 #include "base/containers/lru_cache.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory_coordinator/async_memory_consumer_registration.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "gpu/command_buffer/service/decoder_context.h"
 #include "gpu/command_buffer/service/program_cache.h"
 #include "ui/gl/gl_bindings.h"
@@ -22,9 +23,8 @@ namespace gles2 {
 // Program cache that stores binaries in memory, with the ability to serialize
 // them for disk storage.  It also acts as generic blob cache for the underlying
 // implementation via the blob cache extension.
-class GPU_GLES2_EXPORT PassthroughProgramCache
-    : public ProgramCache,
-      public base::MemoryPressureListener {
+class GPU_GLES2_EXPORT PassthroughProgramCache : public ProgramCache,
+                                                 public base::MemoryConsumer {
  public:
   using Key = std::vector<uint8_t>;
   using Value = std::vector<uint8_t>;
@@ -58,9 +58,9 @@ class GPU_GLES2_EXPORT PassthroughProgramCache
 
   size_t Trim(size_t limit) override;
 
-  // base::MemoryPressureListener:
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
+  // base::MemoryConsumer:
+  void OnUpdateMemoryLimit() override;
+  void OnReleaseMemory() override;
 
   static void BlobCacheSet(const void* key,
                            EGLsizeiANDROID key_size,
@@ -94,9 +94,9 @@ class GPU_GLES2_EXPORT PassthroughProgramCache
    private:
     Value program_blob_;
 
-    // RAW_PTR_EXCLUSION: Performance (motionmark_ramp_composite_ganesh
-    // regression).
-    RAW_PTR_EXCLUSION PassthroughProgramCache* program_cache_;
+    // Uses UnprotectedInRelease for performance
+    // (motionmark_ramp_composite_ganesh regression).
+    raw_ptr<PassthroughProgramCache, UnprotectedInRelease> program_cache_;
   };
 
   void ClearBackend() override;
@@ -111,9 +111,11 @@ class GPU_GLES2_EXPORT PassthroughProgramCache
                         const void* value,
                         EGLsizeiANDROID value_size);
 
+  size_t TrimLocked(size_t limit) EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
   // Return the current max_size_bytes(), which changes depending on the memory
   // pressure level.
-  size_t GetCurrentMaxSizeBytes() const;
+  size_t GetCurrentMaxSizeBytes() const EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   friend class ProgramCacheValue;
 
@@ -123,8 +125,8 @@ class GPU_GLES2_EXPORT PassthroughProgramCache
   size_t curr_size_bytes_;
   ProgramLRUCache store_ GUARDED_BY(lock_);
 
-  base::AsyncMemoryPressureListenerRegistration
-      memory_pressure_listener_registration_;
+  base::AsyncMemoryConsumerRegistration memory_consumer_registration_;
+  size_t current_max_size_bytes_ GUARDED_BY(lock_);
 
   // TODO(syoussefi): take compression from memory_program_cache, see
   // compress_program_binaries_

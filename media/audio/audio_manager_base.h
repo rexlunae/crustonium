@@ -49,6 +49,8 @@ class MEDIA_EXPORT AudioManagerBase : public AudioManager {
       const AudioParameters& params,
       const std::string& device_id) override;
 
+  void LogAudioManagerStartup() override;
+
   // Listeners will be notified on the GetTaskRunner() task runner.
   void AddOutputDeviceChangeListener(AudioDeviceListener* listener) override;
   void RemoveOutputDeviceChangeListener(AudioDeviceListener* listener) override;
@@ -56,6 +58,9 @@ class MEDIA_EXPORT AudioManagerBase : public AudioManager {
   std::unique_ptr<AudioLog> CreateAudioLog(
       AudioLogFactory::AudioComponent component,
       int component_id) override;
+
+  std::string GetDeviceNameFromCache(const std::string& device_id,
+                                     bool is_input) override;
 
   // AudioManagerBase:
 
@@ -145,11 +150,11 @@ class MEDIA_EXPORT AudioManagerBase : public AudioManager {
 
   // Appends a list of available input devices to |device_names|,
   // which must initially be empty.
-  virtual void GetAudioInputDeviceNames(AudioDeviceNames* device_names);
+  virtual bool GetAudioInputDeviceNames(AudioDeviceNames* device_names);
 
   // Appends a list of available output devices to |device_names|,
   // which must initially be empty.
-  virtual void GetAudioOutputDeviceNames(AudioDeviceNames* device_names);
+  virtual bool GetAudioOutputDeviceNames(AudioDeviceNames* device_names);
 
   std::string GetDefaultInputDeviceID() override;
   std::string GetDefaultOutputDeviceID() override;
@@ -174,6 +179,10 @@ class MEDIA_EXPORT AudioManagerBase : public AudioManager {
   // Closes all currently open input streams.
   void CloseAllInputStreams();
 
+  // Returns a callback that can be used to log device enumeration events.
+  // The callback is lazily created on the first call.
+  const LogCallback& GetEnumerationLogCallback();
+
  private:
   FRIEND_TEST_ALL_PREFIXES(AudioManagerTest, AudioDebugRecording);
 
@@ -183,12 +192,19 @@ class MEDIA_EXPORT AudioManagerBase : public AudioManager {
   // AudioManager:
   void InitializeDebugRecording() final;
 
-  void GetAudioDeviceDescriptions(
+  bool GetAudioDeviceDescriptions(
       AudioDeviceDescriptions* descriptions,
-      void (AudioManagerBase::*get_device_names)(AudioDeviceNames*),
+      bool (AudioManagerBase::*get_device_names)(AudioDeviceNames*),
       std::string (AudioManagerBase::*get_default_device_id)(),
       std::string (AudioManagerBase::*get_communications_device_id)(),
       std::string (AudioManagerBase::*get_group_id)(const std::string&));
+
+  // Used for logging device enumeration events. Lazily initialized in
+  // GetEnumerationLogCallback() to avoid construction-order issues.
+  class DeviceLogHelper;
+
+  // Returns a pointer to the DeviceLogHelper, initializing it if necessary.
+  DeviceLogHelper* GetDeviceLogHelper();
 
   // Max number of open output streams, modified by
   // SetMaxOutputStreamsAllowed().
@@ -210,6 +226,10 @@ class MEDIA_EXPORT AudioManagerBase : public AudioManager {
 
   // Proxy for creating AudioLog objects.
   const raw_ptr<AudioLogFactory, DanglingUntriaged> audio_log_factory_;
+
+  // Used for logging device enumeration events. Lazily initialized in
+  // GetEnumerationLogCallback() to avoid construction-order issues.
+  std::unique_ptr<DeviceLogHelper> device_log_helper_;
 
   // Debug recording manager.
   std::unique_ptr<AudioDebugRecordingManager> debug_recording_manager_;

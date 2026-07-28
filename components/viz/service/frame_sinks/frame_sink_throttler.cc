@@ -55,6 +55,8 @@ void FrameSinkThrottler::UpdateBeginFrameInterval() {
     return;
   }
 
+  // Fall back to explicitly-requested throttle interval if simple cadence
+  // throttling is not possible.
   base::TimeDelta interval = throttle_interval_;
 
   if (IsThrottledBySimpleCadence()) {
@@ -69,7 +71,7 @@ void FrameSinkThrottler::UpdateBeginFrameInterval() {
 }
 
 bool FrameSinkThrottler::IsThrottledBySimpleCadence() const {
-  if (!throttling_allowed_ || !cadence_throttle_interval_.is_positive()) {
+  if (!cadence_throttle_interval_.is_positive()) {
     return false;
   }
 

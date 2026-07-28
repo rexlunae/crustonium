@@ -5,6 +5,7 @@
 #include "components/page_content_annotations/core/page_content_store.h"
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -40,7 +41,7 @@ class PageContentStoreTest : public testing::Test {
     base::RunLoop run_loop;
     os_crypt_async->GetInstance(base::BindOnce(
         [](PageContentStore* store, base::RunLoop* run_loop,
-           os_crypt_async::Encryptor encryptor) {
+           scoped_refptr<os_crypt_async::Encryptor> encryptor) {
           store->InitWithEncryptor(std::move(encryptor));
           run_loop->Quit();
         },
@@ -101,13 +102,12 @@ TEST_F(PageContentStoreTest, AddPageContent_SucceedsOnDuplicate) {
   const auto page_context2 = TestContent("test title 2");
   EXPECT_TRUE(store_->AddPageContent(url, page_context2, visit_timestamp,
                                      extraction_timestamp, kTabId));
-  std::optional<optimization_guide::PageContentResult> got_page_context =
+  std::optional<proto::PageContext> got_page_context =
       store_->GetPageContentForTab(kTabId);
   ASSERT_TRUE(got_page_context.has_value());
-  EXPECT_EQ(page_context2.annotated_page_content().main_frame_data().title(),
-            got_page_context->page_context.annotated_page_content()
-                .main_frame_data()
-                .title());
+  EXPECT_EQ(
+      page_context2.annotated_page_content().main_frame_data().title(),
+      got_page_context->annotated_page_content().main_frame_data().title());
 }
 
 TEST_F(PageContentStoreTest, AddPageContent_SucceedsAfterDelete) {
@@ -225,8 +225,7 @@ TEST_F(PageContentStoreTest, DeletePageContentOlderThan_RespectsMaxLimit) {
   EXPECT_TRUE(store_->DeletePageContentOlderThan(now - base::Days(4)));
 
   // The oldest one should be gone.
-  std::optional<optimization_guide::PageContentResult> got_apc =
-      store_->GetPageContentForTab(1);
+  std::optional<proto::PageContext> got_apc = store_->GetPageContentForTab(1);
   ASSERT_FALSE(got_apc.has_value());
 
   // The two newest should still be there.
@@ -291,12 +290,11 @@ TEST_F(PageContentStoreTest, GetPageContentForTab) {
                                      visit_timestamp, extraction_timestamp,
                                      kTabId));
 
-  std::optional<optimization_guide::PageContentResult> got_apc =
+  std::optional<proto::PageContext> got_apc =
       store_->GetPageContentForTab(kTabId);
   ASSERT_TRUE(got_apc.has_value());
-  EXPECT_EQ(
-      apc.annotated_page_content().main_frame_data().title(),
-      got_apc->page_context.annotated_page_content().main_frame_data().title());
+  EXPECT_EQ(apc.annotated_page_content().main_frame_data().title(),
+            got_apc->annotated_page_content().main_frame_data().title());
 }
 
 TEST_F(PageContentStoreTest, DeleteAllEntries) {
@@ -371,7 +369,7 @@ TEST_F(PageContentStoreNoEncryptorTest, GetPageContentFails) {
 }
 
 TEST_F(PageContentStoreNoEncryptorTest, GetPageContentForNonExistentTabId) {
-  std::optional<optimization_guide::PageContentResult> got_apc =
+  std::optional<proto::PageContext> got_apc =
       store_->GetPageContentForTab(kTabId);
   ASSERT_FALSE(got_apc.has_value());
 }

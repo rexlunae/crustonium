@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/ui_base_types.h"
@@ -56,7 +57,11 @@ bool WaylandPopup::CreateShellPopup() {
       parent_window()->applied_state().window_scale) {
     // If scale changed while this was hidden (when WaylandPopup hides, parent
     // window's child is reset), update buffer scale accordingly.
+    auto weak_this = AsWeakPtr();
     UpdateWindowScale(true);
+    if (!weak_this) {
+      return false;
+    }
   }
 
   auto bounds_dip =
@@ -122,11 +127,19 @@ void WaylandPopup::Show(bool inactive) {
   // Map parent window as WaylandPopup cannot become a visible child of a
   // window that is not mapped.
   DCHECK(parent_window());
-  if (!parent_window()->IsVisible())
+  auto weak_this = AsWeakPtr();
+  if (!parent_window()->IsVisible()) {
     parent_window()->Show(false);
+  }
+  if (!weak_this) {
+    return;
+  }
 
-  if (!CreateShellPopup()) {
+  if (!CreateShellPopup() && weak_this) {
     Close();
+    return;
+  }
+  if (!weak_this) {
     return;
   }
 
@@ -179,7 +192,11 @@ void WaylandPopup::SetBoundsInDIP(const gfx::Rect& bounds_dip) {
   }
 
   auto old_bounds_dip = GetBoundsInDIP();
+  auto weak_this = AsWeakPtr();
   WaylandWindow::SetBoundsInDIP(bounds_dip);
+  if (!weak_this) {
+    return;
+  }
 
   // The shell popup can be null if bounds are being fixed during
   // the initialization. See WaylandPopup::CreateShellPopup.
@@ -245,7 +262,11 @@ void WaylandPopup::HandlePopupConfigure(const gfx::Rect& bounds_dip) {
 
 void WaylandPopup::HandleSurfaceConfigure(uint32_t serial) {
   if (schedule_redraw_) {
+    auto weak_this = AsWeakPtr();
     delegate()->OnDamageRect(gfx::Rect{applied_state().size_px});
+    if (!weak_this) {
+      return;
+    }
     schedule_redraw_ = false;
   }
   ProcessPendingConfigureState(serial);

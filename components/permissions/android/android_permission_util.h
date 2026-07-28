@@ -12,6 +12,8 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 
+class GURL;
+
 namespace content {
 class WebContents;
 }
@@ -24,10 +26,15 @@ namespace permissions {
 
 namespace internal {
 
-void ResolveNotificationsPermissionRequest(content::WebContents* web_contents,
+// Resolves an ongoing notification permission request, if there is one and its
+// requesting origin matches `requesting_origin`. Returns false if no ongoing
+// notification permission request was found or if the origin does not match.
+bool ResolveNotificationsPermissionRequest(content::WebContents* web_contents,
+                                           const GURL& requesting_origin,
                                            ContentSetting content_setting);
 
-void DismissNotificationsPermissionRequest(content::WebContents* web_contents);
+void DismissNotificationsPermissionRequest(content::WebContents* web_contents,
+                                           const GURL& requesting_origin);
 
 }  // namespace internal
 
@@ -115,6 +122,13 @@ void RequestLocationServices(content::WebContents* web_contents);
 
 // Called from tests to temporarily set system location settings enabled.
 base::AutoReset<bool> EnableSystemLocationSettingForTesting();
+
+// Resolves a permission request by first checking/requesting the Android
+// system permission. If granted, it accepts the request; otherwise, it
+// dismisses it.
+void ResolvePermissionWithOSPrompt(content::WebContents* web_contents,
+                                   ContentSettingsType content_settings_type,
+                                   const GURL& requesting_origin);
 
 }  // namespace permissions
 

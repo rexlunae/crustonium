@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.verify;
@@ -38,6 +39,7 @@ import org.robolectric.Robolectric;
 import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -45,6 +47,8 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils.IconSpecs;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinator;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinatorProvider;
 import org.chromium.chrome.browser.autofill.vcn.AutofillVcnEnrollBottomSheetProperties.IssuerIcon;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 import org.chromium.chrome.browser.layouts.LayoutType;
@@ -79,11 +83,13 @@ public final class AutofillVcnEnrollBottomSheetBridgeTest {
     @Mock private Profile.Natives mProfileNatives;
     @Mock private WebContents mWebContents;
     @Mock private ManagedBottomSheetController mBottomSheetController;
+    @Mock private AnchoredDialogCoordinator mAnchoredDialogCoordinator;
     @Mock private LayoutStateProvider mLayoutStateProvider;
-    @Mock private MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
     @Mock private Profile mProfile;
     @Mock private AutofillImageFetcher mImageFetcher;
 
+    private final MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier =
+            ObservableSuppliers.alwaysNull();
     private ShadowActivity mShadowActivity;
     private WindowAndroid mWindow;
     private AutofillVcnEnrollBottomSheetBridge mBridge;
@@ -99,7 +105,7 @@ public final class AutofillVcnEnrollBottomSheetBridgeTest {
         AutofillVcnEnrollBottomSheetBridgeJni.setInstanceForTesting(mBridgeNatives);
         Activity activity = Robolectric.buildActivity(Activity.class).create().get();
         mShadowActivity = shadowOf(activity);
-        mWindow = new WindowAndroid(activity, /* trackOcclusion= */ true);
+        mWindow = new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true);
         when(mImageFetcher.getImageIfAvailable(
                         ISSUER_ICON_URL,
                         IconSpecs.create(
@@ -112,7 +118,10 @@ public final class AutofillVcnEnrollBottomSheetBridgeTest {
                                 /* width= */ 2,
                                 /* height= */ 2,
                                 Config.ARGB_8888));
+
+        when(mBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
         BottomSheetControllerFactory.attach(mWindow, mBottomSheetController);
+        AnchoredDialogCoordinatorProvider.attach(mWindow, mAnchoredDialogCoordinator);
         mBridge = new AutofillVcnEnrollBottomSheetBridge();
 
         when(mLayoutStateProvider.isLayoutVisible(LayoutType.BROWSING)).thenReturn(true);
@@ -124,6 +133,7 @@ public final class AutofillVcnEnrollBottomSheetBridgeTest {
     @After
     public void tearDown() {
         BottomSheetControllerFactory.detach(mBottomSheetController);
+        AnchoredDialogCoordinatorProvider.detach(mAnchoredDialogCoordinator);
         mWindow.destroy();
     }
 

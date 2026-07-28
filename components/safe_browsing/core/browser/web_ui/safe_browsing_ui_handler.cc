@@ -4,6 +4,7 @@
 
 #include "components/safe_browsing/core/browser/web_ui/safe_browsing_ui_handler.h"
 
+#include "base/memory/scoped_refptr.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "components/password_manager/core/browser/hash_password_manager.h"
@@ -15,10 +16,40 @@
 #include "components/user_prefs/user_prefs.h"
 
 #if BUILDFLAG(SAFE_BROWSING_DB_LOCAL)
-#include "components/safe_browsing/core/browser/db/v4_local_database_manager.h"
+#include "components/safe_browsing/core/browser/db/sb_local_database_manager.h"
+#include "components/safe_browsing/core/common/features.h"
 #endif
 
 namespace safe_browsing {
+
+SafeBrowsingUIHandler::ObserverDelegate::ObserverDelegate(
+    SafeBrowsingUIHandler& handler)
+    : handler_(handler) {}
+
+SafeBrowsingUIHandler::ObserverDelegate::~ObserverDelegate() = default;
+
+base::DictValue
+SafeBrowsingUIHandler::ObserverDelegate::GetFormattedTailoredVerdictOverride() {
+  return handler_->GetFormattedTailoredVerdictOverride();
+}
+
+void SafeBrowsingUIHandler::ObserverDelegate::SendEventToHandler(
+    std::string_view event_name,
+    base::Value value) {
+  handler_->NotifyWebUIListener(event_name, value);
+}
+
+void SafeBrowsingUIHandler::ObserverDelegate::SendEventToHandler(
+    std::string_view event_name,
+    base::ListValue& list) {
+  handler_->NotifyWebUIListener(event_name, list);
+}
+
+void SafeBrowsingUIHandler::ObserverDelegate::SendEventToHandler(
+    std::string_view event_name,
+    base::DictValue dict) {
+  handler_->NotifyWebUIListener(event_name, dict);
+}
 
 SafeBrowsingUIHandler::SafeBrowsingUIHandler(
     std::unique_ptr<SafeBrowsingLocalStateDelegate> delegate,
@@ -87,7 +118,7 @@ void SafeBrowsingUIHandler::GetSavedPasswords(const base::ListValue& args) {
 
 void SafeBrowsingUIHandler::GetSavedPasswordsImpl(
     const std::string& callback_id,
-    os_crypt_async::Encryptor encryptor) {
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   password_manager::HashPasswordManager hash_manager(std::move(encryptor));
   hash_manager.set_prefs(user_prefs());
   hash_manager.set_local_prefs(delegate_->GetLocalState());
@@ -107,8 +138,8 @@ void SafeBrowsingUIHandler::GetDatabaseManagerInfo(
   base::ListValue database_manager_info;
 
 #if BUILDFLAG(SAFE_BROWSING_DB_LOCAL)
-  const V4LocalDatabaseManager* local_database_manager_instance =
-      V4LocalDatabaseManager::current_local_database_manager();
+  const SBLocalDatabaseManager* local_database_manager_instance =
+      SBLocalDatabaseManager::current_local_database_manager();
   if (local_database_manager_instance) {
     DatabaseManagerInfo database_manager_info_proto;
     FullHashCacheInfo full_hash_cache_info_proto;
@@ -125,8 +156,14 @@ void SafeBrowsingUIHandler::GetDatabaseManagerInfo(
                               database_manager_info);
     }
 
-    database_manager_info.Append(
-        web_ui::AddFullHashCacheInfo(full_hash_cache_info_proto));
+    if (base::FeatureList::IsEnabled(kLocalListsUseSBv5)) {
+      // Temporarily append an empty string to avoid JS errors.
+      // TODO(crbug.com/362791941): Support v5 local hit debugging.
+      database_manager_info.Append("");
+    } else {
+      database_manager_info.Append(
+          web_ui::AddFullHashCacheInfo(full_hash_cache_info_proto));
+    }
   }
 #endif
 
@@ -407,14 +444,13 @@ void SafeBrowsingUIHandler::GetLogMessages(const base::ListValue& args) {
 
 void SafeBrowsingUIHandler::GetDeepScans(const base::ListValue& args) {
   base::ListValue pings_sent;
-#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
   for (const auto& token_and_data :
        web_ui_info_singleton()->deep_scan_requests()) {
     pings_sent.Append(SerializeDeepScanDebugData(token_and_data.first,
                                                  token_and_data.second));
   }
-#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) &&
-        // !BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 
   DCHECK(!args.empty());
   const std::string& callback_id = args[0].GetString();
@@ -486,6 +522,102 @@ void SafeBrowsingUIHandler::ClearTailoredVerdictOverride(
 #endif
 
   ResolveTailoredVerdictOverrideCallback(args[0].GetString());
+}
+
+void SafeBrowsingUIHandler::RegisterMessages() {
+  RegisterMessage("getExperiments",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetExperiments,
+                                      base::Unretained(this)));
+  RegisterMessage("getPolicies",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetPolicies,
+                                      base::Unretained(this)));
+  RegisterMessage("getPrefs",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetPrefs,
+                                      base::Unretained(this)));
+  RegisterMessage("getCookie",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetCookie,
+                                      base::Unretained(this)));
+  RegisterMessage("getSavedPasswords",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetSavedPasswords,
+                                      base::Unretained(this)));
+  RegisterMessage(
+      "getDatabaseManagerInfo",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetDatabaseManagerInfo,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "getDownloadUrlsChecked",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetDownloadUrlsChecked,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "getSentClientDownloadRequests",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetSentClientDownloadRequests,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "getReceivedClientDownloadResponses",
+      base::BindRepeating(
+          &SafeBrowsingUIHandler::GetReceivedClientDownloadResponses,
+          base::Unretained(this)));
+  RegisterMessage(
+      "getSentClientPhishingRequests",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetSentClientPhishingRequests,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "getReceivedClientPhishingResponses",
+      base::BindRepeating(
+          &SafeBrowsingUIHandler::GetReceivedClientPhishingResponses,
+          base::Unretained(this)));
+  RegisterMessage("getSentCSBRRs",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetSentCSBRRs,
+                                      base::Unretained(this)));
+  RegisterMessage("getPGEvents",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetPGEvents,
+                                      base::Unretained(this)));
+  RegisterMessage("getSecurityEvents",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetSecurityEvents,
+                                      base::Unretained(this)));
+  RegisterMessage("getPGPings",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetPGPings,
+                                      base::Unretained(this)));
+  RegisterMessage("getPGResponses",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetPGResponses,
+                                      base::Unretained(this)));
+  RegisterMessage("getURTLookupPings",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetURTLookupPings,
+                                      base::Unretained(this)));
+  RegisterMessage(
+      "getURTLookupResponses",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetURTLookupResponses,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "getHPRTLookupPings",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetHPRTLookupPings,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "getHPRTLookupResponses",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetHPRTLookupResponses,
+                          base::Unretained(this)));
+  RegisterMessage("getLogMessages",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetLogMessages,
+                                      base::Unretained(this)));
+  RegisterMessage(
+      "getReportingEvents",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetReportingEvents,
+                          base::Unretained(this)));
+  RegisterMessage("getDeepScans",
+                  base::BindRepeating(&SafeBrowsingUIHandler::GetDeepScans,
+                                      base::Unretained(this)));
+  RegisterMessage(
+      "getTailoredVerdictOverride",
+      base::BindRepeating(&SafeBrowsingUIHandler::GetTailoredVerdictOverride,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "setTailoredVerdictOverride",
+      base::BindRepeating(&SafeBrowsingUIHandler::SetTailoredVerdictOverride,
+                          base::Unretained(this)));
+  RegisterMessage(
+      "clearTailoredVerdictOverride",
+      base::BindRepeating(&SafeBrowsingUIHandler::ClearTailoredVerdictOverride,
+                          base::Unretained(this)));
 }
 
 void SafeBrowsingUIHandler::ResolveTailoredVerdictOverrideCallback(

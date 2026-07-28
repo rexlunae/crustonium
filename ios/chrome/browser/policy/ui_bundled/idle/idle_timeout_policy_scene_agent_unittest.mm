@@ -4,7 +4,9 @@
 
 #import "ios/chrome/browser/policy/ui_bundled/idle/idle_timeout_policy_scene_agent.h"
 
+#import "components/enterprise/idle/action_type.h"
 #import "components/enterprise/idle/idle_pref_names.h"
+#import "components/prefs/pref_service.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
@@ -14,6 +16,7 @@
 #import "ios/chrome/browser/policy/ui_bundled/idle/idle_timeout_confirmation_coordinator_delegate.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_ui_provider.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -94,7 +97,7 @@ class IdleTimeoutPolicySceneAgentTest : public PlatformTest {
   }
 
   void TearDown() override {
-    [agent_ sceneStateDidDisableUI:scene_state_];
+    scene_state_.UIEnabled = NO;
     [scene_state_ shutdown];
     scene_state_ = nil;
     PlatformTest::TearDown();
@@ -102,8 +105,7 @@ class IdleTimeoutPolicySceneAgentTest : public PlatformTest {
 
   void InitSceneWithAgent() {
     CHECK(!scene_state_);
-    scene_state_ = [[FakeSceneState alloc] initWithAppState:app_state_
-                                                    profile:profile_.get()];
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
     scene_state_.scene = static_cast<UIWindowScene*>(
         [[[UIApplication sharedApplication] connectedScenes] anyObject]);
     scene_state_.profileState = profile_state_;
@@ -137,7 +139,7 @@ class IdleTimeoutPolicySceneAgentTest : public PlatformTest {
                     mainBrowser:browser];
 
     agent_.sceneState = scene_state_;
-    [agent_ sceneStateDidEnableUI:scene_state_];
+    scene_state_.UIEnabled = YES;
   }
 
  protected:
@@ -211,7 +213,7 @@ TEST_F(IdleTimeoutPolicySceneAgentTest,
        DialogDoesNotShowWhenSceneStateBlockedByOtherScene) {
   SetProfileStateInitStage(profile_state_, ProfileInitStage::kFinal);
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
-  scene_state_.presentingModalOverlay = true;
+  scene_state_.uiBlockerState.presentingModalOverlay = true;
   OCMReject([mock_application_handler_
       dismissModalDialogsWithCompletion:[OCMArg any]]);
   idle_service_->RunActionsForStateForTesting(

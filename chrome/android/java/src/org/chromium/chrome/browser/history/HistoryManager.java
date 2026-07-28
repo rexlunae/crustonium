@@ -104,6 +104,7 @@ public class HistoryManager
 
     private final PrefService mPrefService;
     private final Profile mProfile;
+    private final boolean mIsLargeFormFactorDevice;
 
     private boolean mIsSearching;
 
@@ -121,8 +122,8 @@ public class HistoryManager
      * @param isSeparateActivity Whether the history UI will be shown in a separate activity than
      *     the main Chrome activity.
      * @param snackbarManager The {@link SnackbarManager} used to display snackbars.
-     * @param bottomSheetController Supplier of {@link BottomSheetController} to show app filter
-     *     sheet in.
+     * @param bottomSheetControllerSupplier Supplier of {@link BottomSheetController} to show app
+     *     filter sheet in.
      * @param modalDialogManagerSupplier Supplies the {@link ModalDialogManager}.
      * @param activityResultTracker Tracker of activity results.
      * @param tabSupplier Supplies the current tab, null if the history UI will be shown in a
@@ -145,7 +146,7 @@ public class HistoryManager
             Activity activity,
             boolean isSeparateActivity,
             SnackbarManager snackbarManager,
-            Supplier<BottomSheetController> bottomSheetController,
+            Supplier<BottomSheetController> bottomSheetControllerSupplier,
             Supplier<ModalDialogManager> modalDialogManagerSupplier,
             ActivityResultTracker activityResultTracker,
             @Nullable Supplier<@Nullable Tab> tabSupplier,
@@ -155,6 +156,7 @@ public class HistoryManager
             boolean shouldShowClearData,
             boolean launchedForApp,
             boolean showAppFilter,
+            boolean shouldClusterByDomain,
             @Nullable Runnable openHistoryItemCallback,
             @Nullable Function<View, EdgeToEdgePadAdjuster> edgeToEdgePadAdjusterGenerator) {
         mProfile = profile;
@@ -178,6 +180,7 @@ public class HistoryManager
         mUmaRecorder.recordOpenHistory();
         // If incognito placeholder is shown, we don't need to create History UI elements.
         if (mIsIncognito) {
+            mIsLargeFormFactorDevice = false;
             mSelectableListLayout = null;
             mRootView = getIncognitoHistoryPlaceholderView();
             return;
@@ -205,7 +208,7 @@ public class HistoryManager
                         shouldShowInfoHeader,
                         shouldShowClearData,
                         mSelectionDelegate,
-                        bottomSheetController,
+                        bottomSheetControllerSupplier,
                         modalDialogManagerSupplier,
                         snackbarManager,
                         activityResultTracker,
@@ -216,6 +219,7 @@ public class HistoryManager
                         clientPackageName,
                         launchedForApp,
                         showAppFilter,
+                        shouldClusterByDomain,
                         openHistoryItemCallback,
                         new ChromeAsyncTabLauncher(/* incognito= */ false),
                         new ChromeAsyncTabLauncher(/* incognito= */ true));
@@ -223,10 +227,9 @@ public class HistoryManager
                 mContentManager.getAdapter(),
                 mContentManager.getRecyclerView(),
                 edgeToEdgePadAdjusterGenerator);
-        boolean isLargeScreenWithKeyboard =
-                DeviceInput.supportsKeyboard()
-                        && DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
-        if (mContentManager.showAppFilter() || isLargeScreenWithKeyboard) {
+
+        mIsLargeFormFactorDevice = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
+        if (mContentManager.showAppFilter() || mIsLargeFormFactorDevice) {
             // Now the search mode can have a header. Let the layout ignore it to
             // return the right item count.
             mSelectableListLayout.ignoreItemTypeForEmptyState(ItemViewType.STANDARD_HEADER);
@@ -265,15 +268,19 @@ public class HistoryManager
                     }
                 });
 
-        mToolbar.setIsLargeScreenWithKeyboard(isLargeScreenWithKeyboard);
-
         /* If the current device is LFF device w/ physical keyboard attached,
          * then initialize the search box only; Otherwise initialize the whole toolbar
          */
-        if (!isLargeScreenWithKeyboard) {
+        if (!mIsLargeFormFactorDevice) {
             mToolbar.initializeSearchView(
                     this, R.string.history_manager_search, R.id.search_menu_id);
-        } else mToolbar.initializeInlineSearchView(this, R.id.search_menu_id);
+        } else {
+            mToolbar.initializeInlineSearchView(this, R.id.search_menu_id);
+            ViewGroup searchBoxContainer =
+                    mToolbar.initializeSearchBoxContainer(
+                            mSelectableListLayout, R.string.history_manager_search);
+            mSelectableListLayout.addInlineSearchBox(searchBoxContainer);
+        }
 
         mToolbar.setInfoMenuItem(R.id.info_menu_id);
         mToolbar.updateInfoMenuItem(shouldShowInfoButton(), shouldShowInfoHeaderIfAvailable());
@@ -296,13 +303,12 @@ public class HistoryManager
         mRootView.addView(mContentView);
         mSelectableListLayout
                 .getHandleBackPressChangedSupplier()
-                .addObserver((x) -> onBackPressStateChanged());
+                .addSyncObserverAndPostIfNonNull((x) -> onBackPressStateChanged());
 
         onBackPressStateChanged(); // Initialize back press State.
         mContentManager.maybeQueryApps();
 
-        mContentManager.getAdapter().setIsLargeScreenWithKeyboard(isLargeScreenWithKeyboard);
-        mContentManager.getAdapter().setToolbar(mToolbar);
+        mContentManager.getAdapter().setIsLargeFormFactorDevice(mIsLargeFormFactorDevice);
     }
 
     private void initializeEmptyView() {
@@ -384,7 +390,7 @@ public class HistoryManager
 
             return true;
         } else if (item.getItemId() == R.id.search_menu_id) {
-            enterSearchMode();
+            enterSearchMode(true);
             return true;
         } else if (item.getItemId() == R.id.info_menu_id) {
             toggleInfoHeaderVisibility();
@@ -392,19 +398,31 @@ public class HistoryManager
         return false;
     }
 
-    private void enterSearchMode() {
+    private void enterSearchMode(boolean showKeyboard) {
         assumeNonNull(mContentManager);
         assumeNonNull(mToolbar);
         assumeNonNull(mSelectableListLayout);
 
         mContentManager.maybeResetAppFilterChip();
         mContentManager.getAdapter().onSearchStart();
-        mToolbar.showSearchView(true);
+        mToolbar.showSearchView(showKeyboard);
         String searchEmptyString = getSearchEmptyString();
         mSelectableListLayout.onStartSearch(
                 searchEmptyString, R.string.history_manager_empty_state_view_or_open_more_history);
         mUmaRecorder.recordSearchHistory();
         mIsSearching = true;
+    }
+
+    public void setQuery(String query) {
+        if (mToolbar == null) {
+            // In the Incognito mode, we don't have the query box.
+            return;
+        }
+
+        if (!mIsLargeFormFactorDevice && !mIsSearching) {
+            enterSearchMode(false);
+        }
+        mToolbar.setSearchText(query);
     }
 
     private void toggleInfoHeaderVisibility() {
@@ -431,6 +449,13 @@ public class HistoryManager
         return defaultSearchEngineName == null
                 ? mActivity.getString(R.string.history_manager_no_results_no_dse)
                 : mActivity.getString(R.string.history_manager_no_results, defaultSearchEngineName);
+    }
+
+    /** Reloads the history items. */
+    public void reload() {
+        if (mContentManager != null) {
+            mContentManager.startLoadingItems();
+        }
     }
 
     /**
@@ -504,6 +529,13 @@ public class HistoryManager
 
     @Override
     public void onSearchTextChanged(String query) {
+        assumeNonNull(mSelectionDelegate);
+        boolean isLargeScreenWithKeyboard =
+                DeviceInput.supportsKeyboard(mActivity)
+                        && DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
+        if (isLargeScreenWithKeyboard && mSelectionDelegate.isSelectionEnabled()) {
+            mSelectionDelegate.clearSelection();
+        }
         assumeNonNull(mContentManager).search(query);
     }
 
@@ -554,7 +586,7 @@ public class HistoryManager
         // Before the RecyclerView binds its items, LinearLayoutManager#firstVisibleItemPosition()
         // returns {@link RecyclerView#NO_POSITION}. If #findVisibleItemPosition() returns
         // NO_POSITION, the current adapter position should not prevent the info button from being
-        // displayed if all of the other criteria is met. See crbug.com/756249#c3.
+        // displayed if all of the other criteria is met. See crbug.com/41339744#comment4.
         boolean firstAdapterItemScrolledOff =
                 assumeNonNull(layoutManager).findFirstVisibleItemPosition() > 0;
 

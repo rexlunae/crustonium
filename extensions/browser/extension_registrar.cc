@@ -6,6 +6,7 @@
 
 #include "base/check_is_test.h"
 #include "base/check_op.h"
+#include "base/command_line.h"
 #include "base/debug/alias.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -14,6 +15,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/stl_util.h"
+#include "base/version_info/version_info.h"
 #include "build/chromeos_buildflags.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -22,6 +24,7 @@
 #include "extensions/browser/delayed_install_manager.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_host.h"
+#include "extensions/browser/extension_pref_names.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -31,6 +34,7 @@
 #include "extensions/browser/lazy_context_id.h"
 #include "extensions/browser/lazy_context_task_queue.h"
 #include "extensions/browser/management_policy.h"
+#include "extensions/browser/pref_types.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/renderer_startup_helper.h"
 #include "extensions/browser/service_worker/service_worker_task_queue.h"
@@ -39,6 +43,7 @@
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/switches.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 
 using content::DevToolsAgentHost;
@@ -53,7 +58,28 @@ BASE_FEATURE(kExtensionUpdatesImmediatelyUnregisterWorker,
 
 bool g_disable_lazy_context_spinup_for_test = false;
 
+// The browser version at the time a component extension was last added.
+// Component extensions are packaged with the browser, so their code can
+// change whenever the browser updates, even if the version in their manifest
+// does not.
+constexpr PrefMap kLastLoadedBrowserVersion = {"last_loaded_browser_version",
+                                               PrefType::kString,
+                                               PrefScope::kExtensionSpecific};
+
+// Overrides the browser version in CheckAndUpdateLastLoadedBrowserVersion() for
+// tests.
+const char* g_browser_version_for_testing = nullptr;
+
 }  // namespace
+
+// Returns an empty set to clear disable reasons when a new extension version
+// is installed. Override this method to preserve specific disable reasons
+// across extension updates.
+base::flat_set<int> ExtensionRegistrar::Delegate::GetDisableReasonsOnInstalled(
+    const Extension* extension,
+    int install_flags) {
+  return {};
+}
 
 ExtensionRegistrar::ExtensionRegistrar(content::BrowserContext* browser_context)
     : browser_context_(browser_context),
@@ -122,7 +148,12 @@ void ExtensionRegistrar::Shutdown() {
 
 void ExtensionRegistrar::OnDelayedInstallFinished(
     scoped_refptr<const Extension> extension) {
-  FinishInstallation(extension.get());
+  ExtensionPrefs::DelayedInstallInfo info =
+      extension_prefs_->GetDelayedInstallInfo(extension->id());
+
+  AddNewOrUpdatedExtension(extension.get(), info.install_flags,
+                           info.page_ordinal, info.install_parameter,
+                           std::move(info.ruleset_install_prefs));
 }
 
 void ExtensionRegistrar::AddExtension(
@@ -131,7 +162,7 @@ void ExtensionRegistrar::AddExtension(
 
   if (!Manifest::IsValidLocation(extension->location())) {
     // TODO(devlin): We should *never* add an extension with an invalid
-    // location, but some bugs (e.g. crbug.com/692069) seem to indicate we do.
+    // location, but some bugs (e.g. crbug.com/41301792) seem to indicate we do.
     // Track down the cases when this can happen, and remove this
     // DumpWithoutCrashing() (possibly replacing it with a CHECK).
     DEBUG_ALIAS_FOR_CSTR(extension_id_copy, extension->id().c_str(), 33);
@@ -240,12 +271,13 @@ void ExtensionRegistrar::AddNewExtension(
 
 void ExtensionRegistrar::AddNewOrUpdatedExtension(
     const Extension* extension,
-    const base::flat_set<int>& disable_reasons,
     int install_flags,
     const syncer::StringOrdinal& page_ordinal,
     const std::string& install_parameter,
     base::DictValue ruleset_install_prefs) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  base::flat_set<int> disable_reasons =
+      delegate_->GetDisableReasonsOnInstalled(extension, install_flags);
   extension_prefs_->OnExtensionInstalled(
       extension, disable_reasons, page_ordinal, install_flags,
       install_parameter, std::move(ruleset_install_prefs));
@@ -365,6 +397,14 @@ void ExtensionRegistrar::DisableExtensionWithRawReasons(
   scoped_refptr<const Extension> extension =
       registry_->GetExtensionById(extension_id, ExtensionRegistry::EVERYTHING);
 
+  // Since this can be called from WebUI, this disable request might race with
+  // an extension that has already been uninstalled (e.g. via a non-UI
+  // automated means). If so, we can just return early since the extension is
+  // already uninstalled.
+  if (!extension) {
+    return;
+  }
+
   CHECK(delegate_);
   bool is_controlled_extension =
       !delegate_->CanDisableExtension(extension.get());
@@ -407,11 +447,13 @@ void ExtensionRegistrar::DisableExtensionWithRawReasons(
   extension_prefs_->ReplaceRawDisableReasons(passkey, extension_id,
                                              disable_reasons);
 
-  int include_mask =
+  int include_all_but_disabled =
       ExtensionRegistry::EVERYTHING & ~ExtensionRegistry::DISABLED;
-  extension = registry_->GetExtensionById(extension_id, include_mask);
-  if (!extension)
+  extension =
+      registry_->GetExtensionById(extension_id, include_all_but_disabled);
+  if (!extension) {
     return;
+  }
 
   // The extension is either enabled or terminated.
   DCHECK(registry_->enabled_extensions().Contains(extension->id()) ||
@@ -527,6 +569,8 @@ void ExtensionRegistrar::AddComponentExtension(const Extension* extension) {
   const std::string old_version_string(
       extension_prefs_->GetVersionString(extension->id()));
   const base::Version old_version(old_version_string);
+  const bool browser_updated =
+      CheckAndUpdateLastLoadedBrowserVersion(extension->id());
 
   VLOG(1) << "AddComponentExtension " << extension->name();
   if (!old_version.IsValid() || old_version != extension->version()) {
@@ -543,13 +587,53 @@ void ExtensionRegistrar::AddComponentExtension(const Extension* extension) {
     }
     // TODO(crbug.com/40508457): If needed, add support for Declarative Net
     // Request to component extensions and pass the ruleset install prefs here.
-    AddNewOrUpdatedExtension(extension, {}, kInstallFlagNone,
+    AddNewOrUpdatedExtension(extension, kInstallFlagNone,
                              syncer::StringOrdinal(), std::string(),
                              /*ruleset_install_prefs=*/{});
     return;
   }
 
+  // A browser update may have changed the extension's code even though the
+  // extension version did not change. The service worker runs the script
+  // persisted by the //content layer at registration time, not the
+  // extension's files on disk, so a registered worker must be unregistered
+  // for the activation below to register it afresh from the updated files.
+  // See crbug.com/521490632.
+  bool sw_registered =
+      ServiceWorkerTaskQueue::Get(browser_context_)
+          ->RetrieveRegisteredServiceWorkerVersion(extension->id())
+          .IsValid();
+  bool force_refresh = base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kRefreshComponentExtensionServiceWorkers);
+  if ((browser_updated || force_refresh) && sw_registered) {
+    UnregisterServiceWorkerWithRootScope(extension);
+  }
+
   AddExtension(extension);
+}
+
+// static
+base::AutoReset<const char*>
+ExtensionRegistrar::OverrideBrowserVersionForTesting(const char* version) {
+  return base::AutoReset<const char*>(&g_browser_version_for_testing, version);
+}
+
+bool ExtensionRegistrar::CheckAndUpdateLastLoadedBrowserVersion(
+    const ExtensionId& extension_id) {
+  std::string current_version(version_info::GetVersionNumber());
+  if (g_browser_version_for_testing) {
+    current_version = g_browser_version_for_testing;
+  }
+
+  std::string last_version;
+  if (extension_prefs_->ReadPrefAsString(
+          extension_id, kLastLoadedBrowserVersion, &last_version) &&
+      last_version == current_version) {
+    return false;
+  }
+  extension_prefs_->SetStringPref(extension_id, kLastLoadedBrowserVersion,
+                                  current_version);
+  return true;
 }
 
 void ExtensionRegistrar::RemoveComponentExtension(
@@ -642,7 +726,7 @@ bool ExtensionRegistrar::UninstallExtension(
   // managed extensions.
   // Shared modules being uninstalled will also set |external_uninstall| to true
   // so that we can guarantee users don't uninstall a shared module.
-  // (crbug.com/273300)
+  // (crbug.com/40329049)
   // TODO(rdevlin.cronin): This is probably not right. We should do something
   // else, like include an enum IS_INTERNAL_UNINSTALL or IS_USER_UNINSTALL so
   // we don't do this.
@@ -1037,11 +1121,14 @@ void ExtensionRegistrar::ActivateExtension(const Extension* extension,
 
   // When an extension is activated, and it is either event page-based or
   // service worker-based, it may be necessary to spin up its context.
-  if (BackgroundInfo::HasLazyContext(extension))
+  bool extension_enabled =
+      registry_->enabled_extensions().Contains(extension->id());
+  if (extension_enabled && BackgroundInfo::HasLazyContext(extension)) {
     MaybeSpinUpLazyContext(extension, is_newly_added);
+  }
 
   registry_->AddReady(extension);
-  if (registry_->enabled_extensions().Contains(extension->id())) {
+  if (extension_enabled) {
     registry_->TriggerOnReady(extension);
   }
 }
@@ -1090,7 +1177,7 @@ void ExtensionRegistrar::DoReloadExtension(
   // Ignore attempts to reload a blocklisted or blocked extension. Sometimes
   // this can happen in a convoluted reload sequence triggered by the
   // termination of a blocklisted or blocked extension and a naive attempt to
-  // reload it. For an example see http://crbug.com/373842.
+  // reload it. For an example see http://crbug.com/41107702.
   if (registry_->blocklisted_extensions().Contains(extension_id) ||
       registry_->blocked_extensions().Contains(extension_id)) {
     return;
@@ -1159,9 +1246,17 @@ void ExtensionRegistrar::UnregisterServiceWorkerWithRootScope(
   content::ServiceWorkerContext* context =
       util::GetServiceWorkerContextForExtensionId(new_extension->id(),
                                                   browser_context_);
+  ServiceWorkerTaskQueue* task_queue =
+      ServiceWorkerTaskQueue::Get(browser_context_);
   bool worker_previously_registered =
-      ServiceWorkerTaskQueue::Get(browser_context_)
-          ->IsWorkerRegistered(new_extension->id());
+      task_queue->IsWorkerRegistered(new_extension->id());
+  // We clear the worker registration record immediately, rather than waiting
+  // for the async unregistration to finish. This ensures that if the extension
+  // is activated again quickly, it knows to register a new worker instead of
+  // relying on the one being removed. This is safe because the content layer
+  // queues registration jobs behind unregistration jobs for the same scope,
+  // guaranteeing the old worker is fully gone before the new one is registered.
+  task_queue->RemoveRegisteredServiceWorkerInfo(new_extension->id());
   // Even though the unregistration process for a service worker is
   // asynchronous, we begin the process before the new extension is added, so
   // the old worker will be unregistered before the new one is registered.
@@ -1269,18 +1364,32 @@ void ExtensionRegistrar::MaybeSpinUpLazyContext(const Extension* extension,
           mojom::APIPermissionID::kWebRequest) &&
       BackgroundInfo::IsServiceWorkerBased(extension);
 
+  // It's possible that the worker has been registered but hasn't fully run yet,
+  // as in the case where a service worker may have been interrupted during it's
+  // startup flow. In that case, start it to ensure that it runs at least once.
+  bool needs_spinup_because_hasnt_started = false;
+  if (BackgroundInfo::IsServiceWorkerBased(extension)) {
+    bool has_started = false;
+    extension_prefs_->ReadPrefAsBoolean(
+        extension->id(), kPrefHasStartedServiceWorker, &has_started);
+    needs_spinup_because_hasnt_started = !has_started;
+  }
+
   // If there aren't any special cases, we're done.
   if (!has_orphaned_dev_tools && !is_component_extension &&
-      !needs_spinup_for_web_request) {
+      !needs_spinup_for_web_request && !needs_spinup_because_hasnt_started) {
     return;
   }
 
-  // If the extension's not being reloaded (|is_newly_added| = true),
-  // only wake it up if it has the webRequest permission.
-  if (is_newly_added && !needs_spinup_for_web_request)
+  // If the extension's not being reloaded (`is_newly_added` == true),
+  // only wake it up if it has the webRequest permission or hasn't fully
+  // started.
+  if (is_newly_added && !needs_spinup_for_web_request &&
+      !needs_spinup_because_hasnt_started) {
     return;
+  }
 
-  // Wake up the extension by posting a dummy task. In the case of a service
+  // Wake up the extension by posting a no-op task. In the case of a service
   // worker-based extension with the webRequest permission that's being newly
   // installed, this will result in a no-op task that's not necessary, since
   // this is really only needed for a previously-installed extension. However,

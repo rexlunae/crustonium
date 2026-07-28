@@ -151,7 +151,7 @@ export class SettingsSearchEnginesPageElement extends
     return ['extensionsChanged_(extensions, showExtensionsList_)'];
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare defaultEngines: SearchEngine[];
   declare activeEngines: SearchEngine[];
   declare otherEngines: SearchEngine[];
@@ -228,7 +228,7 @@ export class SettingsSearchEnginesPageElement extends
 
     if (confirmed) {
       assert(this.dialogModel_);
-      this.browserProxy_.removeSearchEngine(this.dialogModel_.modelIndex);
+      this.browserProxy_.removeSearchEngine(this.dialogModel_.id);
       this.dialogAnchorElement_ = null;
     }
 
@@ -258,6 +258,8 @@ export class SettingsSearchEnginesPageElement extends
 
   private onAddSearchEngineClick_(e: Event) {
     e.preventDefault();
+    this.browserProxy_.recordSearchEnginesPageHistogram(
+        SearchEnginesInteractions.ADD_SEARCH_ENGINE);
     this.openEditDialog_(
         null, this.shadowRoot!.querySelector('#addSearchEngine')!);
   }

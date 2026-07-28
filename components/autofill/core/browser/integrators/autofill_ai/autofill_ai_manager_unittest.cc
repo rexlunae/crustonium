@@ -11,11 +11,14 @@
 #include "base/test/gmock_move_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/protobuf_matchers.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
+#include "components/autofill/core/browser/autofill_trigger_source.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
@@ -26,21 +29,36 @@
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_test_api.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/foundations/autofill_driver_test_api.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
+#include "components/autofill/core/browser/foundations/mock_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
+#include "components/autofill/core/browser/foundations/test_autofill_driver.h"
+#include "components/autofill/core/browser/foundations/with_test_autofill_client_driver_manager.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_manager_test_api.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/metrics/autofill_ai_metrics.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/metrics/personal_context_metrics.h"
+#include "components/autofill/core/browser/network/autofill_ai/autofill_ai_personal_context_access_manager.h"
+#include "components/autofill/core/browser/network/autofill_ai/mock_autofill_ai_personal_context_access_manager.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/browser/strike_databases/payments/test_strike_database.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_test_helper.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/autofill_prefs.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/consent_auditor/fake_consent_auditor.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/subscription_eligibility/subscription_eligibility_prefs.h"
+#include "components/sync/protocol/user_consent_types.pb.h"
 #include "components/sync/test/test_sync_service.h"
+#include "components/wallet/core/common/wallet_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -54,14 +72,20 @@ using enum SuggestionType;
 using AutofillAiPayload = Suggestion::AutofillAiPayload;
 using ::base::test::RunOnceCallback;
 using ::base::test::RunOnceCallbackRepeatedly;
+using test::GetPassportEntityInstance;
+using test::GetVehicleEntityInstance;
+using test::GetVehicleEntityInstanceWithRandomGuid;
+using test::MaskEntityInstance;
 using ::testing::_;
 using ::testing::AllOf;
+using ::testing::ByRef;
 using ::testing::DoAll;
 using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Field;
 using ::testing::InSequence;
 using ::testing::IsEmpty;
+using ::testing::Matcher;
 using ::testing::MockFunction;
 using ::testing::NiceMock;
 using ::testing::Optional;
@@ -73,12 +97,25 @@ using ::testing::SaveArg;
 using ::testing::SizeIs;
 using ::testing::Truly;
 using ::testing::VariantWith;
+using ::testing::WithArgs;
 
+// Note that the UI contexts are populated with non-existent dummy string IDs.
 constexpr auto kAcceptBubble =
     AutofillClient::AutofillAiBubbleResult::kAccepted;
+constexpr auto kAcceptEdits =
+    AutofillClient::AutofillAiBubbleResult::kEditAccepted;
+const AutofillClient::EntityImportUIContext kAcceptUIContext(
+    /*accepted_consent_string_id=*/123,
+    /*accept_button_string_id=*/234);
 constexpr auto kDeclineBubble = AutofillClient::AutofillAiBubbleResult::kClosed;
+const AutofillClient::EntityImportUIContext kDeclineUIContext(
+    /*accepted_consent_string_id=*/123,
+    /*accept_button_string_id=*/345);
 constexpr auto kIgnoreBubble =
     AutofillClient::AutofillAiBubbleResult::kNotInteracted;
+const AutofillClient::EntityImportUIContext kIgnoreUIContext(
+    /*accepted_consent_string_id=*/123,
+    /*accept_button_string_id=*/std::nullopt);
 
 auto FirstElementIs(auto&& matcher) {
   return ResultOf(
@@ -120,6 +157,19 @@ auto VehicleWithLicensePlate(std::u16string license_plate) {
       std::move(license_plate), /*app_locale=*/"");
 }
 
+Matcher<EntityInstance> HasRecordType(EntityInstance::RecordType record_type) {
+  return Property(&EntityInstance::record_type, record_type);
+}
+
+// Returns an action that mimics a successful response to a
+// WalletPassAccessManager save request.
+auto ReplyWithMaskedEntity() {
+  return [](const EntityInstance& entity_to_upload,
+            WalletPassAccessManager::UpsertEntityInstanceCallback callback) {
+    std::move(callback).Run(MaskEntityInstance(entity_to_upload));
+  };
+}
+
 class MockAutofillClient : public TestAutofillClient {
  public:
   MockAutofillClient() = default;
@@ -131,14 +181,13 @@ class MockAutofillClient : public TestAutofillClient {
               ShowEntityImportBubble,
               (EntityInstance entity,
                std::optional<EntityInstance> old_entity,
+               bool save_is_synchronous,
                EntityImportPromptResultCallback prompt_result_callback),
               (override));
-  MOCK_METHOD(void,
-              TriggerAutofillAiSavePromptSurvey,
-              (bool prompt_accepted,
-               EntityType entity_type,
-               const base::flat_set<EntityTypeName>& saved_entities),
-              (override));
+  MOCK_METHOD(void, CloseEntityImportBubble, (), (override));
+  MOCK_METHOD(void, ShowAutofillAiLocalSaveNotification, (), (override));
+  MOCK_METHOD(void, ShowAutofillAiPreFetchFailureNotification, (), (override));
+
   MOCK_METHOD(void,
               TriggerAutofillAiFillingJourneySurvey,
               (bool suggestion_accepted,
@@ -147,27 +196,37 @@ class MockAutofillClient : public TestAutofillClient {
                const FieldTypeSet& triggering_field_types),
               (override));
 };
-class AutofillAiManagerTest : public testing::Test {
+class AutofillAiManagerTest
+    : public testing::Test,
+      public WithTestAutofillClientDriverManager<NiceMock<MockAutofillClient>,
+                                                 TestAutofillDriver> {
  public:
   AutofillAiManagerTest() {
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kAutofillAiWithDataSchema,
                               features::kAutofillAiServerModel},
         /*disabled_features=*/{});
+    InitAutofillClient();
+    CreateAutofillDriver();
+    autofill_client().set_sync_service(&sync_service_);
+    autofill_client().GetSyncService()->GetUserSettings()->SetSelectedType(
+        syncer::UserSelectableType::kPayments, true);
     autofill_client().set_entity_data_manager(
         std::make_unique<EntityDataManager>(
             autofill_client().GetPrefs(),
             autofill_client().GetIdentityManager(),
             autofill_client().GetSyncService(),
             webdata_helper_.autofill_webdata_service(),
-            /*history_service=*/nullptr,
+            /*history_service=*/nullptr, &pcontext_manager_,
             /*strike_database=*/nullptr,
             /*variation_country_code=*/GeoIpCountryCode("US")));
     autofill_client().SetUpPrefsAndIdentityForAutofillAi();
-    autofill_client().set_sync_service(&sync_service_);
-    autofill_client().GetSyncService()->GetUserSettings()->SetSelectedType(
-        syncer::UserSelectableType::kPayments, true);
+    autofill_client().set_personal_context_access_manager(&pcontext_manager_);
+    autofill_client().GetEntityDataManager()->SetReauthAvailability(true);
+    manager_ = std::make_unique<AutofillAiManager>(&autofill_client(),
+                                                   &strike_database_);
   }
+  void TearDown() override { DestroyAutofillClient(); }
 
   std::u16string GetValueFromEntity(const EntityInstance entity,
                                     AttributeType attribute,
@@ -219,8 +278,10 @@ class AutofillAiManagerTest : public testing::Test {
   }
 
   void AddAutofillProfile() {
-    autofill_client_.GetPersonalDataManager().address_data_manager().AddProfile(
-        test::GetFullProfile());
+    autofill_client()
+        .GetPersonalDataManager()
+        .address_data_manager()
+        .AddProfile(test::GetFullProfile());
   }
 
   base::span<const EntityInstance> GetEntityInstances() {
@@ -228,21 +289,23 @@ class AutofillAiManagerTest : public testing::Test {
     return edm().GetEntityInstances();
   }
 
-  MockAutofillClient& autofill_client() { return autofill_client_; }
   EntityDataManager& edm() { return *autofill_client().GetEntityDataManager(); }
-  AutofillAiManager& manager() { return manager_; }
+  AutofillAiManager& manager() { return *manager_; }
   TestStrikeDatabase& strike_database() { return strike_database_; }
+  MockAutofillAiPersonalContextAccessManager& pcontext_manager() {
+    return pcontext_manager_;
+  }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-  base::test::SingleThreadTaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_;
   test::AutofillUnitTestEnvironment autofill_test_env_;
   AutofillWebDataServiceTestHelper webdata_helper_{
       std::make_unique<EntityTable>()};
   syncer::TestSyncService sync_service_;
-  NiceMock<MockAutofillClient> autofill_client_;
+  NiceMock<MockAutofillAiPersonalContextAccessManager> pcontext_manager_;
   TestStrikeDatabase strike_database_;
-  AutofillAiManager manager_{&autofill_client(), &strike_database_};
+  std::unique_ptr<AutofillAiManager> manager_;
 };
 
 // Tests that the user receives a filling suggestion when interacting with
@@ -255,16 +318,93 @@ TEST_F(AutofillAiManagerTest,
   FormStructure form_structure = FormStructure(form);
   AddPredictionsToFormStructure(form_structure, {{PASSPORT_NUMBER}});
 
-  AddOrUpdateEntityInstance(test::GetPassportEntityInstance());
+  AddOrUpdateEntityInstance(GetPassportEntityInstance());
   EXPECT_THAT(manager().GetSuggestions(form_structure, form.fields().front()),
               ElementsAre(HasType(kFillAutofillAi), HasType(kSeparator),
                           HasType(kManageAutofillAi)));
 }
 
+// Tests that PrefetchContext is executed.
+TEST_F(AutofillAiManagerTest, OnAfterLoadedServerPredictions_TriggersFetch) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      features::kAutofillAmbientAutofill,
+      {{"ambient_autofill_eligible_tiers", "1"}});
+  autofill_client().GetPrefs()->SetInteger(
+      subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+  auto form_structure = std::make_unique<FormStructure>(
+      test::GetFormData({.fields = {{.role = PASSPORT_NUMBER}}}));
+  AddPredictionsToFormStructure(*form_structure, {{PASSPORT_NUMBER}});
+  test_api(autofill_manager()).AddSeenFormStructure(std::move(form_structure));
+
+  EXPECT_CALL(
+      pcontext_manager(),
+      PrefetchContext(ElementsAre(EntityType(EntityTypeName::kPassport))));
+
+  manager().OnAfterLoadedServerPredictions(autofill_manager());
+}
+
+// Tests that PrefetchContext is not executed if the enablement state is
+// disabled.
+TEST_F(AutofillAiManagerTest,
+       OnAfterLoadedServerPredictions_EnablementDisabled_DoesNotTriggerFetch) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      features::kAutofillAmbientAutofill,
+      {{"ambient_autofill_eligible_tiers", "1"}});
+  autofill_client().GetPrefs()->SetInteger(
+      subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+  autofill_client().set_personal_context_eligibility_state(
+      personal_context::PersonalContextEligibilityState::kDisabledNotEligible);
+
+  auto form_structure = std::make_unique<FormStructure>(
+      test::GetFormData({.fields = {{.role = PASSPORT_NUMBER}}}));
+  AddPredictionsToFormStructure(*form_structure, {{PASSPORT_NUMBER}});
+  test_api(autofill_manager()).AddSeenFormStructure(std::move(form_structure));
+
+  EXPECT_CALL(pcontext_manager(), PrefetchContext).Times(0);
+  manager().OnAfterLoadedServerPredictions(autofill_manager());
+}
+
+// Tests that PrefetchContext only fetches non-SPII types if the client
+// doesn't support re-auth, and filters out SPII types.
+TEST_F(AutofillAiManagerTest,
+       OnAfterLoadedServerPredictions_NoReauth_FiltersOutSpiiKeepNonSpii) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/
+      {{features::kAutofillAmbientAutofill,
+        {{"ambient_autofill_eligible_tiers", "1"}}},
+       {features::debug::kAutofillAiForceOptIn, {}},
+       {features::kAutofillAiWithDataSchema, {}},
+       {features::kAutofillAiWalletFlightReservation, {}}},
+      /*disabled_features=*/{});
+  autofill_client().GetPrefs()->SetInteger(
+      subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+  autofill_client().GetEntityDataManager()->SetReauthAvailability(false);
+
+  // PASSPORT_NUMBER is a SPII type.
+  // FLIGHT_RESERVATION_FLIGHT_NUMBER is a non-SPII type.
+  auto form_structure = std::make_unique<FormStructure>(test::GetFormData(
+      {.fields = {{.role = PASSPORT_NUMBER},
+                  {.role = FLIGHT_RESERVATION_FLIGHT_NUMBER}}}));
+  AddPredictionsToFormStructure(
+      *form_structure, {{PASSPORT_NUMBER}, {FLIGHT_RESERVATION_FLIGHT_NUMBER}});
+  test_api(autofill_manager()).AddSeenFormStructure(std::move(form_structure));
+
+  EXPECT_CALL(pcontext_manager(), PrefetchContext(ElementsAre(EntityType(
+                                      EntityTypeName::kFlightReservation))));
+  manager().OnAfterLoadedServerPredictions(autofill_manager());
+}
+
 // Tests that IPH should be displayed if the user is opted out of the feature,
 // has an address, and form submission with filled out fields would lead to
 // entity import.
+// TODO(crbug.com/440488776): Remove this test when cleaning up
+// kAutofillAiAvailableByDefault. This feature deprecated the IPH.
 TEST_F(AutofillAiManagerTest, ShouldDisplayIph) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(features::kAutofillAiAvailableByDefault);
   test::FormDescription form_description = {.fields = {{}}};
   FormData form = test::GetFormData(form_description);
   FormStructure form_structure = FormStructure(form);
@@ -278,8 +418,12 @@ TEST_F(AutofillAiManagerTest, ShouldDisplayIph) {
 
 // Tests that IPH should be displayed when the user is opted out of the feature
 // and does not have address or payments data stored.
+// TODO(crbug.com/440488776): Remove this test when cleaning up
+// kAutofillAiAvailableByDefault. This feature deprecated the IPH.
 TEST_F(AutofillAiManagerTest,
        ShouldDisplayIphWhenUserHasNoAddressOrPaymentsData) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(features::kAutofillAiAvailableByDefault);
   test::FormDescription form_description = {.fields = {{}}};
   FormData form = test::GetFormData(form_description);
   FormStructure form_structure = FormStructure(form);
@@ -335,8 +479,9 @@ TEST_F(AutofillAiManagerTest, ShouldNotDisplayIphOnUnrelatedField) {
 
 TEST_F(AutofillAiManagerTest,
        FillingMomentSurvey_SuggestionAccepted_ShowSurvey) {
-  EntityInstance passport_entity = test::GetPassportEntityInstance();
-  AddOrUpdateEntityInstance(passport_entity);
+  EntityInstance passport_entity = test::GetPassportEntityInstance(
+      {.record_type = EntityInstance::RecordType::kPersonalContext});
+  edm().SetPersonalContextEntitiesForTesting({passport_entity});
 
   test::FormDescription form_description = {.fields = {{}, {}}};
   FormData form = test::GetFormData(form_description);
@@ -351,11 +496,12 @@ TEST_F(AutofillAiManagerTest,
   Suggestion passport_suggestion(SuggestionType::kFillAutofillAi);
   passport_suggestion.payload =
       Suggestion::AutofillAiPayload(passport_entity.guid());
-  manager().OnSuggestionsShown(form_structure, *form_structure.field(0),
-                               {passport_suggestion}, {});
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion}, {},
+      /*update_suggestions_callback=*/{});
   manager().OnDidFillSuggestion(passport_entity, form_structure,
                                 *form_structure.field(0),
-                                /*filled_fiekds*/ {}, {});
+                                /*filled_fields=*/{}, {});
 
   EXPECT_CALL(
       autofill_client(),
@@ -368,9 +514,12 @@ TEST_F(AutofillAiManagerTest,
   ASSERT_FALSE(manager().OnFormSubmitted(form_structure, /*ukm_source_id=*/{}));
 }
 
-TEST_F(AutofillAiManagerTest,
-       FillingMomentSurvey_SuggestionDeclined_ShowSurvey) {
-  EntityInstance passport_entity = test::GetPassportEntityInstance();
+// Tests that accepting a suggestion from a non-personal context entity (such as
+// `kLocal` or `kServerWallet`) does not trigger a filling moment survey.
+TEST_F(
+    AutofillAiManagerTest,
+    FillingMomentSurvey_SuggestionAccepted_NonPersonalContext_DoNotShowSurvey) {
+  EntityInstance passport_entity = GetPassportEntityInstance();
   AddOrUpdateEntityInstance(passport_entity);
 
   test::FormDescription form_description = {.fields = {{}, {}}};
@@ -386,26 +535,25 @@ TEST_F(AutofillAiManagerTest,
   Suggestion passport_suggestion(SuggestionType::kFillAutofillAi);
   passport_suggestion.payload =
       Suggestion::AutofillAiPayload(passport_entity.guid());
-  manager().OnSuggestionsShown(form_structure, *form_structure.field(0),
-                               {passport_suggestion}, {});
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion}, {},
+      /*update_suggestions_callback=*/{});
+  manager().OnDidFillSuggestion(passport_entity, form_structure,
+                                *form_structure.field(0),
+                                /*filled_fields=*/{}, {});
 
-  EXPECT_CALL(
-      autofill_client(),
-      TriggerAutofillAiFillingJourneySurvey(
-          /*suggestion_accepted=*/false, passport_entity.type(),
-          /*saved_entities=*/
-          base::flat_set<EntityTypeName>({EntityTypeName::kPassport}),
-          /*triggering_field_types=*/
-          FieldTypeSet({AutofillType(NAME_FULL).GetAutofillAiTypes()})));
+  EXPECT_CALL(autofill_client(), TriggerAutofillAiFillingJourneySurvey)
+      .Times(0);
   ASSERT_FALSE(manager().OnFormSubmitted(form_structure, /*ukm_source_id=*/{}));
 }
 
-// Tests that surveys are only shown if no save (or update) prompts are shown.
-TEST_F(
-    AutofillAiManagerTest,
-    FillingMomentSurvey_SuggestionAccepted_SavePromptShown_SurveyIsNotShown) {
-  EntityInstance passport_entity = test::GetPassportEntityInstance();
-  AddOrUpdateEntityInstance(passport_entity);
+// Tests that displaying a suggestion without the user accepting it does not
+// trigger a survey upon form submission.
+TEST_F(AutofillAiManagerTest,
+       FillingMomentSurvey_SuggestionDeclined_DoNotShowSurvey) {
+  EntityInstance passport_entity = test::GetPassportEntityInstance(
+      {.record_type = EntityInstance::RecordType::kPersonalContext});
+  edm().SetPersonalContextEntitiesForTesting({passport_entity});
 
   test::FormDescription form_description = {.fields = {{}, {}}};
   FormData form = test::GetFormData(form_description);
@@ -414,21 +562,60 @@ TEST_F(
                                 {{NAME_FULL}, {PASSPORT_NUMBER}});
   form_structure.field(0)->set_value(GetValueFromEntityForAttributeTypeName(
       passport_entity, AttributeTypeName::kPassportName, /*app_locale=*/""));
-  // Fill the passport number with a different value to trigger a save prompt
-  // survey.
+  form_structure.field(1)->set_value(GetValueFromEntityForAttributeTypeName(
+      passport_entity, AttributeTypeName::kPassportNumber, /*app_locale=*/""));
+
+  Suggestion passport_suggestion(SuggestionType::kFillAutofillAi);
+  passport_suggestion.payload =
+      Suggestion::AutofillAiPayload(passport_entity.guid());
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion}, {},
+      /*update_suggestions_callback=*/{});
+
+  EXPECT_CALL(autofill_client(), TriggerAutofillAiFillingJourneySurvey)
+      .Times(0);
+  ASSERT_FALSE(manager().OnFormSubmitted(form_structure, /*ukm_source_id=*/{}));
+}
+
+// Tests that filling moment surveys are triggered even when save or update
+// prompts are shown, ensuring users who correct autofilled forms are included.
+TEST_F(AutofillAiManagerTest,
+       FillingMomentSurvey_SuggestionAccepted_ImportPromptShown_SurveyIsShown) {
+  EntityInstance passport_entity = test::GetPassportEntityInstance(
+      {.record_type = EntityInstance::RecordType::kPersonalContext,
+       .are_attributes_read_only =
+           EntityInstance::AreAttributesReadOnly(true)});
+  edm().SetPersonalContextEntitiesForTesting({passport_entity});
+
+  test::FormDescription form_description = {.fields = {{}, {}}};
+  FormData form = test::GetFormData(form_description);
+  FormStructure form_structure = FormStructure(form);
+  AddPredictionsToFormStructure(form_structure,
+                                {{NAME_FULL}, {PASSPORT_NUMBER}});
+  form_structure.field(0)->set_value(GetValueFromEntityForAttributeTypeName(
+      passport_entity, AttributeTypeName::kPassportName, /*app_locale=*/""));
+  // Fill the passport number with a different value to trigger an import
+  // bubble.
   form_structure.field(1)->set_value(u"12345");
 
   Suggestion passport_suggestion(SuggestionType::kFillAutofillAi);
   passport_suggestion.payload =
       Suggestion::AutofillAiPayload(passport_entity.guid());
-  manager().OnSuggestionsShown(form_structure, *form_structure.field(0),
-                               {passport_suggestion}, {});
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion}, {},
+      /*update_suggestions_callback=*/{});
   manager().OnDidFillSuggestion(passport_entity, form_structure,
                                 *form_structure.field(0),
-                                /*filled_fiekds*/ {}, {});
+                                /*filled_fields=*/{}, {});
 
-  EXPECT_CALL(autofill_client(), TriggerAutofillAiFillingJourneySurvey)
-      .Times(0);
+  EXPECT_CALL(
+      autofill_client(),
+      TriggerAutofillAiFillingJourneySurvey(
+          /*suggestion_accepted=*/true, passport_entity.type(),
+          /*saved_entities=*/
+          base::flat_set<EntityTypeName>({EntityTypeName::kPassport}),
+          /*triggering_field_types=*/
+          FieldTypeSet({AutofillType(NAME_FULL).GetAutofillAiTypes()})));
   std::optional<EntityInstance> new_entity;
   std::optional<EntityInstance> old_entity;
   AutofillClient::EntityImportPromptResultCallback save_callback;
@@ -441,7 +628,11 @@ TEST_F(
 
 class AutofillAiManagerImportFormTest : public AutofillAiManagerTest {
  public:
-  AutofillAiManagerImportFormTest() = default;
+  AutofillAiManagerImportFormTest() {
+    autofill_client().set_wallet_pass_access_manager(
+        std::make_unique<NiceMock<MockWalletPassAccessManager>>());
+    edm().SetReauthAvailability(true);
+  }
 
   static constexpr char kDefaultUrl[] = "https://example.com";
   static constexpr char16_t kDefaultVehicleOwner[] = u"Jane Doe";
@@ -506,10 +697,72 @@ class AutofillAiManagerImportFormTest : public AutofillAiManagerTest {
                              /*format_string=*/std::nullopt);
   }
 
+  MockWalletPassAccessManager& wallet_manager() {
+    return static_cast<MockWalletPassAccessManager&>(
+        *autofill_client().GetWalletPassAccessManager());
+  }
+
+  consent_auditor::FakeConsentAuditor& consent_auditor() {
+    return static_cast<consent_auditor::FakeConsentAuditor&>(
+        *autofill_client().GetConsentAuditor());
+  }
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_{
       features::kAutofillAiWalletVehicleRegistration};
 };
+
+// Tests that Chrome prompts the user to save when they edit an entity filled
+// from read-only personal context data, but does NOT prompt if they submit it
+// without edits.
+TEST_F(AutofillAiManagerImportFormTest,
+       PromptToSaveEditedPersonalContextEntity) {
+  // 1. Create a read-only personal context passport entity.
+  EntityInstance pcontext_passport = test::GetPassportEntityInstance({
+      .name = u"Jon Doe",
+      .number = u"123",
+      .expiry_date = u"2026-01-01",
+      .record_type = EntityInstance::RecordType::kPersonalContext,
+      .are_attributes_read_only = EntityInstance::AreAttributesReadOnly(true),
+  });
+  edm().SetPersonalContextEntitiesForTesting({pcontext_passport});
+
+  // 2. Scenario A: The user submits the form with an edited expiration date.
+  // The observed entity has number "123" and expiry date "2030-01-01".
+  std::unique_ptr<FormStructure> form_edited = CreateFormStructure(
+      {NAME_FULL, PASSPORT_NUMBER, PASSPORT_EXPIRATION_DATE}, kDefaultUrl);
+  form_edited->field(0)->set_value(u"Jon Doe");
+  form_edited->field(1)->set_value(u"123");
+  form_edited->field(2)->set_value(u"2030-01-01");
+  form_edited->field(2)->set_format_string_unless_overruled(
+      AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
+      AutofillFormatStringSource::kServer);
+
+  // We expect ShowEntityImportBubble to be called to save the edited entity.
+  EXPECT_CALL(autofill_client(),
+              ShowEntityImportBubble(PassportWithNumber(u"123"), _, _, _))
+      .WillOnce(
+          RunOnceCallback<3>(kDeclineBubble, std::nullopt, kDeclineUIContext));
+
+  EXPECT_TRUE(manager().OnFormSubmitted(*form_edited, /*ukm_source_id=*/{}));
+
+  // 3. Scenario B: The user submits the form WITHOUT editing anything.
+  // The observed entity matches the personal context entity exactly (subset).
+  std::unique_ptr<FormStructure> form_not_edited = CreateFormStructure(
+      {NAME_FULL, PASSPORT_NUMBER, PASSPORT_EXPIRATION_DATE}, kDefaultUrl);
+  form_not_edited->field(0)->set_value(u"Jon Doe");
+  form_not_edited->field(1)->set_value(u"123");
+  form_not_edited->field(2)->set_value(u"2026-01-01");
+  form_not_edited->field(2)->set_format_string_unless_overruled(
+      AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
+      AutofillFormatStringSource::kServer);
+
+  // We expect ShowEntityImportBubble NOT to be called.
+  EXPECT_CALL(autofill_client(), ShowEntityImportBubble).Times(0);
+
+  EXPECT_FALSE(
+      manager().OnFormSubmitted(*form_not_edited, /*ukm_source_id=*/{}));
+}
 
 // Tests that save prompts are only shown three times per url and entity type.
 TEST_F(AutofillAiManagerImportFormTest, StrikesForSavePromptsPerUrl) {
@@ -520,22 +773,26 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForSavePromptsPerUrl) {
     InSequence s;
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber),
+                                       _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
     EXPECT_CALL(check, Call);
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
   }
 
   ASSERT_TRUE(
@@ -568,19 +825,22 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForSavePromptsPerAttribute) {
     InSequence s;
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kIgnoreBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kIgnoreBubble, std::nullopt, kIgnoreUIContext));
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
         .Times(3)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     EXPECT_CALL(check, Call);
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber),
+                                       _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
   }
 
   ASSERT_TRUE(
@@ -610,15 +870,14 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForSavePromptsPerAttribute) {
 TEST_F(AutofillAiManagerImportFormTest,
        StrikesForMigrationPromptsPerAttribute) {
   EntityInstance local_vehicle_entity_default_plate =
-      test::GetVehicleEntityInstanceWithRandomGuid(
+      GetVehicleEntityInstanceWithRandomGuid(
           {.name = kDefaultVehicleOwner, .plate = kDefaultLicensePlate});
   // A different vin number is also needed because it is part of the entity
   // strike keys.
   EntityInstance local_vehicle_entity_other_plate_and_vin =
-      test::GetVehicleEntityInstanceWithRandomGuid(
-          {.name = kDefaultVehicleOwner,
-           .plate = kOtherLicensePlate,
-           .number = u"123"});
+      GetVehicleEntityInstanceWithRandomGuid({.name = kDefaultVehicleOwner,
+                                              .plate = kOtherLicensePlate,
+                                              .number = u"123"});
   AddOrUpdateEntityInstance(local_vehicle_entity_default_plate);
   AddOrUpdateEntityInstance(local_vehicle_entity_other_plate_and_vin);
 
@@ -627,19 +886,22 @@ TEST_F(AutofillAiManagerImportFormTest,
     InSequence s;
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kIgnoreBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kIgnoreBubble, std::nullopt, kIgnoreUIContext));
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(3)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     EXPECT_CALL(check, Call);
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kOtherLicensePlate), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
+                    VehicleWithLicensePlate(kOtherLicensePlate), _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
   }
 
   std::unique_ptr<FormStructure> form = CreateVehicleForm();
@@ -674,34 +936,39 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForUpdates) {
     // Accept the first prompt.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kAcceptBubble));
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
 
     // Accept the third prompt.
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber), _, _))
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber),
+                                       _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kAcceptBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber),
+                                       _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
 
     // If the user just ignores the prompt, no strikes are recorded.
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber2), _, _))
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    PassportWithNumber(kOtherPassportNumber2), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kIgnoreBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kIgnoreBubble, std::nullopt, kIgnoreUIContext));
 
     // Only three more prompts will be shown for the next update because the
     // user declines explicitly.
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber2), _, _))
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    PassportWithNumber(kOtherPassportNumber2), _, _, _))
         .Times(3)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
   }
 
   ASSERT_TRUE(
@@ -745,34 +1012,39 @@ TEST_F(AutofillAiManagerImportFormTest, AcceptingResetsStrikesPerUrl) {
     // attempts for a vehicle.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     EXPECT_CALL(check, Call);
 
     // We accept the next save prompt for a passport form.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kAcceptBubble));
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
 
     // We now only get one more vehicle save prompt (despite submitting a form
     // twice), but two more passport prompts because passport strikes were
     // reset.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kOtherLicensePlate), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
-    EXPECT_CALL(
-        autofill_client(),
-        ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber), _, _))
+                    VehicleWithLicensePlate(kOtherLicensePlate), _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(PassportWithNumber(kOtherPassportNumber),
+                                       _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
   }
 
   ASSERT_TRUE(
@@ -809,23 +1081,75 @@ TEST_F(AutofillAiManagerImportFormTest, AcceptingResetsStrikesPerAttribute) {
     // First, we expect to see two save attempts for a passport.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     // We accept the next save prompt for a passport form.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
-        .WillOnce(RunOnceCallback<2>(kAcceptBubble));
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
 
     // (User now deletes the passport.)
 
     // We now get more prompts for the same passport number again.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    PassportWithNumber(kDefaultPassportNumber), _, _))
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
+  }
+
+  ASSERT_TRUE(
+      manager().OnFormSubmitted(*CreatePassportForm(), /*ukm_source_id=*/{}));
+  ASSERT_TRUE(
+      manager().OnFormSubmitted(*CreatePassportForm(), /*ukm_source_id=*/{}));
+  // This one will be accepted.
+  ASSERT_TRUE(
+      manager().OnFormSubmitted(*CreatePassportForm(), /*ukm_source_id=*/{}));
+
+  // User deletes the passport.
+  ASSERT_THAT(GetEntityInstances(), SizeIs(1));
+  RemoveEntityInstance(GetEntityInstances()[0].guid());
+
+  EXPECT_TRUE(
+      manager().OnFormSubmitted(*CreatePassportForm(), /*ukm_source_id=*/{}));
+  EXPECT_TRUE(
+      manager().OnFormSubmitted(*CreatePassportForm(), /*ukm_source_id=*/{}));
+}
+
+// Same as above, but the user now accepts the prompt by pressing the "Done"
+// button in the editor.
+TEST_F(AutofillAiManagerImportFormTest,
+       AcceptingEditsResetsStrikesPerAttribute) {
+  {
+    InSequence s;
+    // First, we expect to see two save attempts for a passport.
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .Times(2)
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
+    // We accept the next save prompt for a passport form.
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptEdits, std::nullopt, kAcceptUIContext));
+
+    // (User now deletes the passport.)
+
+    // We now get more prompts for the same passport number again.
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    PassportWithNumber(kDefaultPassportNumber), _, _, _))
+        .Times(2)
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
   }
 
   ASSERT_TRUE(
@@ -853,10 +1177,9 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForMigrationPromptsPerUrl) {
   // strike keys. Otherwise the strike logic would stop showing the prompt but
   // not due to the url, rather the attributes.
   EntityInstance local_vehicle_entity =
-      test::GetVehicleEntityInstanceWithRandomGuid(
-          {.name = kDefaultVehicleOwner,
-           .plate = kDefaultLicensePlate,
-           .number = u"123"});
+      GetVehicleEntityInstanceWithRandomGuid({.name = kDefaultVehicleOwner,
+                                              .plate = kDefaultLicensePlate,
+                                              .number = u"123"});
   AddOrUpdateEntityInstance(local_vehicle_entity);
 
   MockFunction<void()> check;
@@ -864,18 +1187,21 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForMigrationPromptsPerUrl) {
     InSequence s;
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kOtherLicensePlate), _, _))
-        .WillOnce(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+                    VehicleWithLicensePlate(kOtherLicensePlate), _, _, _))
+        .WillOnce(RunOnceCallbackRepeatedly<3>(kDeclineBubble, std::nullopt,
+                                               kDeclineUIContext));
     EXPECT_CALL(check, Call);
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
-        .WillOnce(RunOnceCallback<2>(kDeclineBubble));
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
+        .WillOnce(RunOnceCallback<3>(kDeclineBubble, std::nullopt,
+                                     kDeclineUIContext));
   }
 
   std::unique_ptr<FormStructure> submitted_form_entity_with_default_plate =
@@ -907,10 +1233,10 @@ TEST_F(AutofillAiManagerImportFormTest, StrikesForMigrationPromptsPerUrl) {
 // counter for that entity type.
 TEST_F(AutofillAiManagerImportFormTest, AcceptingMigrationResetsStrikesPerUrl) {
   EntityInstance local_vehicle_entity_default_plate =
-      test::GetVehicleEntityInstanceWithRandomGuid(
+      GetVehicleEntityInstanceWithRandomGuid(
           {.name = kDefaultVehicleOwner, .plate = kDefaultLicensePlate});
   EntityInstance local_vehicle_entity_other_plate =
-      test::GetVehicleEntityInstanceWithRandomGuid(
+      GetVehicleEntityInstanceWithRandomGuid(
           {.name = kDefaultVehicleOwner, .plate = kOtherLicensePlate});
   AddOrUpdateEntityInstance(local_vehicle_entity_default_plate);
   AddOrUpdateEntityInstance(local_vehicle_entity_other_plate);
@@ -920,24 +1246,27 @@ TEST_F(AutofillAiManagerImportFormTest, AcceptingMigrationResetsStrikesPerUrl) {
     // First, we expect to see two migration attempts for a vehicle.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     EXPECT_CALL(check, Call);
 
     // We accept the next migration prompt for a vehicle form.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
-        .WillOnce(RunOnceCallback<2>(kAcceptBubble));
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
 
     // We now get two more vehicle migration prompts because vehicle strikes
     // were reset.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kOtherLicensePlate), _, _))
+                    VehicleWithLicensePlate(kOtherLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
   }
 
   std::unique_ptr<FormStructure> form = CreateVehicleForm();
@@ -962,7 +1291,7 @@ TEST_F(AutofillAiManagerImportFormTest, AcceptingMigrationResetsStrikesPerUrl) {
 TEST_F(AutofillAiManagerImportFormTest,
        AcceptingMigrationResetsStrikesPerAttribute) {
   EntityInstance local_vehicle_entity_default_plate =
-      test::GetVehicleEntityInstanceWithRandomGuid(
+      GetVehicleEntityInstanceWithRandomGuid(
           {.name = kDefaultVehicleOwner, .plate = kDefaultLicensePlate});
   AddOrUpdateEntityInstance(local_vehicle_entity_default_plate);
   {
@@ -970,21 +1299,24 @@ TEST_F(AutofillAiManagerImportFormTest,
     // First, we expect to see two migration attempts for a vehicle.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
     // We accept the next migration prompt for a vehicle form.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
-        .WillOnce(RunOnceCallback<2>(kAcceptBubble));
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
 
     // We now get more prompts for the same vehicle license plate again.
     EXPECT_CALL(autofill_client(),
                 ShowEntityImportBubble(
-                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _))
+                    VehicleWithLicensePlate(kDefaultLicensePlate), _, _, _))
         .Times(2)
-        .WillRepeatedly(RunOnceCallbackRepeatedly<2>(kDeclineBubble));
+        .WillRepeatedly(RunOnceCallbackRepeatedly<3>(
+            kDeclineBubble, std::nullopt, kDeclineUIContext));
   }
 
   std::unique_ptr<FormStructure> form = CreateVehicleForm();
@@ -1040,14 +1372,8 @@ TEST_F(AutofillAiManagerImportFormTest,
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&new_entity), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&save_callback)));
-  // Save prompts lead to a hats survey being triggered.
-  EXPECT_CALL(autofill_client(),
-              TriggerAutofillAiSavePromptSurvey(
-                  /*prompt_accepted=*/true,
-                  /*entity_type*/
-                  EntityType(EntityTypeName::kPassport),
-                  /*saved_entities=*/base::flat_set<EntityTypeName>({})));
+                      MoveArg<3>(&save_callback)));
+
   EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
   // This is a save bubble, `old_entity` should not exist.
   EXPECT_FALSE(old_entity.has_value());
@@ -1055,7 +1381,7 @@ TEST_F(AutofillAiManagerImportFormTest,
   EXPECT_EQ(new_entity->record_type(), EntityInstance::RecordType::kLocal);
 
   // Accept the bubble.
-  std::move(save_callback).Run(kAcceptBubble);
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
   // Tests that the expected entity was saved.
   base::span<const EntityInstance> saved_entities = GetEntityInstances();
   ASSERT_EQ(saved_entities.size(), 1u);
@@ -1081,17 +1407,12 @@ TEST_F(AutofillAiManagerImportFormTest,
 
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
-      .WillOnce(MoveArg<2>(&save_callback));
-  // Save prompts lead to a hats survey being triggered.
-  EXPECT_CALL(
-      autofill_client(),
-      TriggerAutofillAiSavePromptSurvey(
-          /*prompt_accepted=*/false, EntityType(EntityTypeName::kPassport),
-          /*saved_entities=*/base::flat_set<EntityTypeName>({})));
+      .WillOnce(MoveArg<3>(&save_callback));
+
   EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
 
   // Decline the bubble.
-  std::move(save_callback).Run(kDeclineBubble);
+  std::move(save_callback).Run(kDeclineBubble, std::nullopt, kDeclineUIContext);
   // Tests that the no entity was saved.
   base::span<const EntityInstance> saved_entities = GetEntityInstances();
   EXPECT_EQ(saved_entities.size(), 0u);
@@ -1138,7 +1459,7 @@ TEST_F(AutofillAiManagerImportFormTest, EntityAlreadyStored_DoNotShowPrompt) {
 TEST_F(AutofillAiManagerImportFormTest, NewEntity_ShowPromptAndAccept) {
   std::unique_ptr<FormStructure> form = CreateFormStructure(
       {NAME_FULL, PASSPORT_NUMBER, PHONE_HOME_WHOLE_NUMBER});
-  EntityInstance existing_entity = test::GetPassportEntityInstance();
+  EntityInstance existing_entity = GetPassportEntityInstance();
   AddOrUpdateEntityInstance(existing_entity);
   // Set the filled values to be different to the ones already stored.
   form->field(0)->set_value(u"Jon Doe");
@@ -1149,14 +1470,14 @@ TEST_F(AutofillAiManagerImportFormTest, NewEntity_ShowPromptAndAccept) {
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&entity), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&save_callback)));
+                      MoveArg<3>(&save_callback)));
 
   EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
   // This is a save bubble, `old_entity` should not exist.
   EXPECT_FALSE(old_entity.has_value());
 
   // Accept the bubble.
-  std::move(save_callback).Run(kAcceptBubble);
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
   // Tests that the expected entity was saved.
   base::span<const EntityInstance> saved_entities = GetEntityInstances();
   ASSERT_EQ(saved_entities.size(), 2u);
@@ -1175,6 +1496,36 @@ TEST_F(AutofillAiManagerImportFormTest, NewEntity_ShowPromptAndAccept) {
       u"1234321");
 }
 
+TEST_F(AutofillAiManagerImportFormTest, NewEntity_ShowPromptAndAcceptEdits) {
+  std::unique_ptr<FormStructure> form = CreateFormStructure(
+      {NAME_FULL, PASSPORT_NUMBER, PHONE_HOME_WHOLE_NUMBER});
+  form->field(0)->set_value(u"Jon Doe");
+  form->field(1)->set_value(u"1234321");
+
+  std::optional<EntityInstance> entity;
+  std::optional<EntityInstance> old_entity;
+  AutofillClient::EntityImportPromptResultCallback save_callback;
+  EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
+      .WillOnce(DoAll(SaveArg<0>(&entity), SaveArg<1>(&old_entity),
+                      MoveArg<3>(&save_callback)));
+
+  EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  // This is a save bubble, `old_entity` should not exist.
+  EXPECT_FALSE(old_entity.has_value());
+
+  // Pass an entity updated by the user from the save/update prompt.
+  EntityInstance edited_entity =
+      GetPassportEntityInstance({.name = u"Bob Doe", .number = u"09876543"});
+
+  // Accept the bubble.
+  std::move(save_callback).Run(kAcceptBubble, edited_entity, kAcceptUIContext);
+  // Tests that the expected entity was saved.
+  base::span<const EntityInstance> saved_entities = GetEntityInstances();
+  ASSERT_EQ(saved_entities.size(), 1u);
+  EntityInstance saved_entity = *saved_entities.begin();
+  EXPECT_EQ(saved_entity, edited_entity);
+}
+
 // If the new entity to be saved is a walletable entity type, it should lead to
 // an entity that is stored in the server.
 TEST_F(AutofillAiManagerImportFormTest,
@@ -1189,12 +1540,183 @@ TEST_F(AutofillAiManagerImportFormTest,
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&new_entity), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&save_callback)));
+                      MoveArg<3>(&save_callback)));
   EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
   // This is a save bubble, `old_entity` should not exist.
   EXPECT_FALSE(old_entity.has_value());
   EXPECT_EQ(new_entity->record_type(),
             EntityInstance::RecordType::kServerWallet);
+}
+
+// Tests that a passport can be saved to the Wallet.
+TEST_F(AutofillAiManagerImportFormTest, PassportSaveToWallet) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillAiWalletPrivatePasses};
+  std::unique_ptr<FormStructure> form = CreatePassportForm();
+
+  //  Keep the entity outside the scope to ensure that its lifetime is long
+  //  enough for the duration of the test.
+  std::optional<EntityInstance> entity_to_save;
+  {
+    InSequence s;
+
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    HasRecordType(EntityInstance::RecordType::kServerWallet),
+                    Eq(std::nullopt), false, _))
+        .WillOnce(DoAll(
+            SaveArg<0>(&entity_to_save),
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext)));
+    EXPECT_CALL(wallet_manager(),
+                SaveWalletEntityInstance(Eq(ByRef(entity_to_save)), _, _))
+        .WillOnce(WithArgs<0, 2>(ReplyWithMaskedEntity()));
+    EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+  }
+
+  EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  ASSERT_TRUE(entity_to_save.has_value());
+  EXPECT_THAT(GetEntityInstances(),
+              ElementsAre(MaskEntityInstance(*entity_to_save)));
+}
+
+// Tests that consent is logged when saving a private pass to Wallet.
+TEST_F(AutofillAiManagerImportFormTest, PassportSaveToWalletConsent) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {features::kAutofillAiWalletPrivatePasses,
+       wallet::features::kWalletApiPrivatePassesConsent},
+      {});
+
+  // Capture details of the consent that are logged.
+  consent_auditor::ConsentAuditor::SessionId session_id_consent_auditor;
+  consent_auditor::ConsentAuditor::SessionId session_id_api_call;
+  sync_pb::UserConsentTypes::WalletPrivatePassConsent consent;
+
+  {
+    InSequence s;
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    HasRecordType(EntityInstance::RecordType::kServerWallet),
+                    Eq(std::nullopt), false, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
+    EXPECT_CALL(consent_auditor(), RecordWalletPrivatePassConsent)
+        .WillOnce(DoAll(SaveArg<1>(&session_id_consent_auditor),
+                        SaveArg<2>(&consent)));
+    EXPECT_CALL(wallet_manager(), SaveWalletEntityInstance)
+        .WillOnce(DoAll(SaveArg<1>(&session_id_api_call),
+                        WithArgs<0, 2>(ReplyWithMaskedEntity())));
+    EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+  }
+
+  std::unique_ptr<FormStructure> form = CreatePassportForm();
+  EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+
+  // Expect that the consent details are populated correctly and that the same
+  // session ID passed to the ConsentAuditor is passed to the Upsert call.
+  EXPECT_EQ(session_id_consent_auditor, session_id_api_call);
+  sync_pb::UserConsentTypes::WalletPrivatePassConsent expected_consent;
+  expected_consent.mutable_description_grd_ids()->Add(
+      *kAcceptUIContext.accepted_consent_string_id);
+  expected_consent.set_confirmation_grd_id(
+      *kAcceptUIContext.accept_button_string_id);
+  EXPECT_THAT(consent, base::test::EqualsProto(expected_consent));
+}
+
+// Tests that when consent logging is disabled, saving still works.
+TEST_F(AutofillAiManagerImportFormTest, PassportSaveToWalletConsentDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {features::kAutofillAiWalletPrivatePasses},
+      {wallet::features::kWalletApiPrivatePassesConsent});
+  {
+    InSequence s;
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    HasRecordType(EntityInstance::RecordType::kServerWallet),
+                    Eq(std::nullopt), false, _))
+        .WillOnce(
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext));
+    EXPECT_CALL(consent_auditor(), RecordWalletPrivatePassConsent).Times(0);
+    EXPECT_CALL(wallet_manager(), SaveWalletEntityInstance)
+        .WillOnce(WithArgs<0, 2>(ReplyWithMaskedEntity()));
+    EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+  }
+  std::unique_ptr<FormStructure> form = CreatePassportForm();
+  EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+}
+
+// Tests that if saving a passport to the Wallet fails, it is saved locally
+// instead.
+TEST_F(AutofillAiManagerImportFormTest, PassportSaveToWalletFails) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillAiWalletPrivatePasses};
+  std::unique_ptr<FormStructure> form = CreatePassportForm();
+
+  //  Keep the entity outside the scope to ensure that its lifetime is long
+  //  enough for the duration of the test.
+  std::optional<EntityInstance> entity_to_save;
+  {
+    InSequence s;
+
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    HasRecordType(EntityInstance::RecordType::kServerWallet),
+                    Eq(std::nullopt), false, _))
+        .WillOnce(DoAll(
+            SaveArg<0>(&entity_to_save),
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext)));
+    EXPECT_CALL(wallet_manager(),
+                SaveWalletEntityInstance(Eq(ByRef(entity_to_save)), _, _))
+        .WillOnce(RunOnceCallback<2>(std::nullopt));
+    EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+    EXPECT_CALL(autofill_client(), ShowAutofillAiLocalSaveNotification());
+  }
+
+  EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  ASSERT_TRUE(entity_to_save.has_value());
+  EXPECT_THAT(GetEntityInstances(),
+              ElementsAre(entity_to_save->CopyWithNewRecordType(
+                  EntityInstance::RecordType::kLocal)));
+}
+
+// Tests that a passport can be updated to the Wallet.
+TEST_F(AutofillAiManagerImportFormTest, PassportUpdateToWallet) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillAiWalletPrivatePasses};
+  EntityInstance existing_entity = MaskEntityInstance(GetPassportEntityInstance(
+      {.name = u"Sophie",
+       .number = u"5678",
+       .record_type = EntityInstance::RecordType::kServerWallet}));
+  AddOrUpdateEntityInstance(existing_entity);
+
+  std::unique_ptr<FormStructure> form =
+      CreatePassportForm(/*passport_number=*/u"12345678");
+  form->field(0)->set_value(u"Linus");
+
+  //  Keep the entity outside the scope to ensure that its lifetime is long
+  //  enough for the duration of the test.
+  std::optional<EntityInstance> entity_to_update;
+  {
+    InSequence s;
+
+    EXPECT_CALL(autofill_client(),
+                ShowEntityImportBubble(
+                    HasRecordType(EntityInstance::RecordType::kServerWallet),
+                    Eq(existing_entity), false, _))
+        .WillOnce(DoAll(
+            SaveArg<0>(&entity_to_update),
+            RunOnceCallback<3>(kAcceptBubble, std::nullopt, kAcceptUIContext)));
+    EXPECT_CALL(wallet_manager(),
+                UpdateWalletEntityInstance(Eq(ByRef(entity_to_update)), _))
+        .WillOnce(WithArgs<0, 1>(ReplyWithMaskedEntity()));
+    EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+  }
+
+  EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  ASSERT_TRUE(entity_to_update.has_value());
+  EXPECT_THAT(GetEntityInstances(),
+              ElementsAre(MaskEntityInstance(*entity_to_update)));
 }
 
 // This test ensures that no save prompt is shown for an entity type
@@ -1242,7 +1764,7 @@ TEST_F(AutofillAiManagerImportFormTest, UpdateEntity_NewInfo) {
 
   // The current entity however does not.
   EntityInstance existing_entity_without_expiry_dates =
-      test::GetPassportEntityInstance({.expiry_date = nullptr});
+      GetPassportEntityInstance({.expiry_date = nullptr});
   AddOrUpdateEntityInstance(existing_entity_without_expiry_dates);
 
   // Set the filled values to be the same as the ones already stored in the
@@ -1259,7 +1781,7 @@ TEST_F(AutofillAiManagerImportFormTest, UpdateEntity_NewInfo) {
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&new_entity), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&save_callback)));
+                      MoveArg<3>(&save_callback)));
 
   // An update bubble should be shown.
   ASSERT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
@@ -1267,7 +1789,7 @@ TEST_F(AutofillAiManagerImportFormTest, UpdateEntity_NewInfo) {
   // Passport entities are stored locally.
   ASSERT_EQ(new_entity->record_type(), EntityInstance::RecordType::kLocal);
   // Accept the bubble.
-  std::move(save_callback).Run(kAcceptBubble);
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
 
   // Only one entity should exist, as it was updated.
   base::span<const EntityInstance> saved_entities = GetEntityInstances();
@@ -1286,9 +1808,12 @@ TEST_F(AutofillAiManagerImportFormTest, UpdateEntity_NewInfo) {
 
 // If the entity to be updated is a walletable entity type, it should lead to an
 // entity that is stored in the server, even if the original entity is stored
-// locally.
+// locally. Prior to private passes support, expect an update prompt.
+// TODO(crbug.com/449694495): Remove once private passes are launched.
 TEST_F(AutofillAiManagerImportFormTest,
-       WalletableEntity_Update_RecordType_Server) {
+       WalletableEntity_UpdateAndMigrateLegacy) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kAutofillAiWalletPrivatePasses);
   using enum AttributeTypeName;
   // The submitted form will have license plate info.
   std::unique_ptr<FormStructure> form =
@@ -1296,7 +1821,7 @@ TEST_F(AutofillAiManagerImportFormTest,
 
   // The current entity however does not.
   EntityInstance existing_entity_without_license_plate =
-      test::GetVehicleEntityInstance({.plate = nullptr});
+      GetVehicleEntityInstance({.plate = nullptr});
   AddOrUpdateEntityInstance(existing_entity_without_license_plate);
 
   // Set the filled values to be the same as the ones already stored in the
@@ -1310,7 +1835,7 @@ TEST_F(AutofillAiManagerImportFormTest,
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&new_entity), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&save_callback)));
+                      MoveArg<3>(&save_callback)));
 
   // An update bubble should be shown.
   ASSERT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
@@ -1320,7 +1845,46 @@ TEST_F(AutofillAiManagerImportFormTest,
   EXPECT_EQ(new_entity->record_type(),
             EntityInstance::RecordType::kServerWallet);
   // Accept the bubble.
-  std::move(save_callback).Run(kAcceptBubble);
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
+  EXPECT_THAT(GetEntityInstances(), testing::UnorderedElementsAre(new_entity));
+}
+
+// If the entity to be updated is a walletable entity type, it should lead to a
+// entity that is stored in the server, even if the original entity is stored
+// locally. When private passes support is enabled, expect a migration prompt.
+TEST_F(AutofillAiManagerImportFormTest, WalletableEntity_UpdateAndMigrate) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillAiWalletPrivatePasses};
+  using enum AttributeTypeName;
+  // The submitted form will have license plate info.
+  std::unique_ptr<FormStructure> form =
+      CreateFormStructure({VEHICLE_VIN, VEHICLE_LICENSE_PLATE});
+
+  // The current entity however does not.
+  EntityInstance existing_entity_without_license_plate =
+      GetVehicleEntityInstance({.plate = nullptr});
+  AddOrUpdateEntityInstance(existing_entity_without_license_plate);
+
+  // Set the filled values to be the same as the ones already stored in the
+  // existing entity, and also fill the expiry date.
+  form->field(0)->set_value(GetValueFromEntity(
+      existing_entity_without_license_plate, AttributeType(kVehicleVin)));
+  form->field(1)->set_value(u"12345");
+
+  std::optional<EntityInstance> new_entity;
+  std::optional<EntityInstance> old_entity;
+  AutofillClient::EntityImportPromptResultCallback save_callback;
+  EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
+      .WillOnce(DoAll(SaveArg<0>(&new_entity), SaveArg<1>(&old_entity),
+                      MoveArg<3>(&save_callback)));
+
+  // A migration bubble should be shown.
+  ASSERT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  ASSERT_FALSE(old_entity.has_value());
+  EXPECT_EQ(new_entity->record_type(),
+            EntityInstance::RecordType::kServerWallet);
+  // Accept the bubble.
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
   EXPECT_THAT(GetEntityInstances(), testing::UnorderedElementsAre(new_entity));
 }
 
@@ -1338,7 +1902,7 @@ TEST_F(AutofillAiManagerImportFormTest,
 
   // The current entity however does not.
   EntityInstance existing_entity_without_license_plate =
-      test::GetVehicleEntityInstance(
+      GetVehicleEntityInstance(
           {.plate = nullptr,
            .record_type = EntityInstance::RecordType::kServerWallet});
   AddOrUpdateEntityInstance(existing_entity_without_license_plate);
@@ -1362,7 +1926,7 @@ TEST_F(AutofillAiManagerImportFormTest, UpdateEntity_UpdateInfo) {
   std::unique_ptr<FormStructure> form =
       CreateFormStructure({PASSPORT_NUMBER, PASSPORT_EXPIRATION_DATE});
   EntityInstance existing_entity =
-      test::GetPassportEntityInstance({.expiry_date = u"2019-01-02"});
+      GetPassportEntityInstance({.expiry_date = u"2019-01-02"});
   AddOrUpdateEntityInstance(existing_entity);
 
   // Set the filled values to be the same as the ones already stored in the
@@ -1380,13 +1944,13 @@ TEST_F(AutofillAiManagerImportFormTest, UpdateEntity_UpdateInfo) {
   AutofillClient::EntityImportPromptResultCallback save_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&new_entity), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&save_callback)));
+                      MoveArg<3>(&save_callback)));
 
   // An update bubble should be shown.
   ASSERT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
   ASSERT_TRUE(old_entity.has_value());
   // Accept the bubble.
-  std::move(save_callback).Run(kAcceptBubble);
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
 
   // Only one entity should exist, as it was updated.
   base::span<const EntityInstance> saved_entities = GetEntityInstances();
@@ -1411,7 +1975,7 @@ TEST_F(AutofillAiManagerImportFormTest,
 
   // The current entity however does not, but is read only.
   EntityInstance existing_entity_without_issue_date =
-      test::GetPassportEntityInstance({
+      GetPassportEntityInstance({
           .issue_date = nullptr,
           .are_attributes_read_only =
               EntityInstance::AreAttributesReadOnly(true),
@@ -1442,7 +2006,7 @@ TEST_F(AutofillAiManagerImportFormTest, PromptSuppressionMetric) {
       CreateFormStructure({DRIVERS_LICENSE_NUMBER, VEHICLE_VIN, VEHICLE_YEAR});
 
   EntityInstance vehicle =
-      test::GetVehicleEntityInstance({.number = u"987654", .year = u""});
+      GetVehicleEntityInstance({.number = u"987654", .year = u""});
   // Clear vehicle year information so that we can simulate an update prompt
   // later at submission time.
   AddOrUpdateEntityInstance(vehicle);
@@ -1465,6 +2029,75 @@ TEST_F(AutofillAiManagerImportFormTest, PromptSuppressionMetric) {
       "Autofill.Ai.PromptSuppression.SavePrompt.DriversLicense", 0, 1);
   histogram_tester.ExpectUniqueSample(
       "Autofill.Ai.PromptSuppression.UpdatePrompt.Vehicle", 1, 1);
+}
+
+TEST_F(AutofillAiManagerImportFormTest,
+       SavePublicPassToWalletFallbackToLocalIfIneligible) {
+  std::unique_ptr<FormStructure> form = CreateVehicleForm();
+  std::optional<EntityInstance> entity_to_save;
+  AutofillClient::EntityImportPromptResultCallback save_callback;
+
+  EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
+      .WillOnce(DoAll(SaveArg<0>(&entity_to_save), MoveArg<3>(&save_callback)));
+
+  ASSERT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  ASSERT_EQ(entity_to_save->record_type(),
+            EntityInstance::RecordType::kServerWallet);
+
+  // Simulate toggling off Payments Sync while bubble is open.
+  autofill_client().GetSyncService()->GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kPayments, false);
+
+  EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+  EXPECT_CALL(autofill_client(), ShowAutofillAiLocalSaveNotification());
+  EXPECT_CALL(wallet_manager(), SaveWalletEntityInstance).Times(0);
+
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return GetEntityInstances().size() == 1u; }));
+
+  // Verify it fell back to local storage.
+  base::span<const EntityInstance> saved_entities = GetEntityInstances();
+  ASSERT_EQ(saved_entities.size(), 1u);
+  EXPECT_EQ(saved_entities[0].record_type(),
+            EntityInstance::RecordType::kLocal);
+}
+
+TEST_F(AutofillAiManagerImportFormTest,
+       SavePrivatePassToWalletFallbackToLocalIfIneligible) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillAiWalletPrivatePasses};
+
+  std::unique_ptr<FormStructure> form = CreatePassportForm();
+  std::optional<EntityInstance> entity_to_save;
+  AutofillClient::EntityImportPromptResultCallback save_callback;
+
+  EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
+      .WillOnce(DoAll(SaveArg<0>(&entity_to_save), MoveArg<3>(&save_callback)));
+
+  ASSERT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
+  ASSERT_EQ(entity_to_save->record_type(),
+            EntityInstance::RecordType::kServerWallet);
+
+  // Simulate toggling off Payments Sync while bubble is open.
+  autofill_client().GetSyncService()->GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kPayments, false);
+
+  EXPECT_CALL(autofill_client(), CloseEntityImportBubble());
+  EXPECT_CALL(autofill_client(), ShowAutofillAiLocalSaveNotification());
+  EXPECT_CALL(wallet_manager(), SaveWalletEntityInstance).Times(0);
+
+  std::move(save_callback).Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return GetEntityInstances().size() == 1u; }));
+
+  // Verify it fell back to local storage.
+  base::span<const EntityInstance> saved_entities = GetEntityInstances();
+  ASSERT_EQ(saved_entities.size(), 1u);
+  EXPECT_EQ(saved_entities[0].record_type(),
+            EntityInstance::RecordType::kLocal);
 }
 
 class AutofillAiManagerUpstreamTest : public AutofillAiManagerTest {
@@ -1491,7 +2124,7 @@ class AutofillAiManagerUpstreamTest : public AutofillAiManagerTest {
 // that is a subset of some local entity.
 TEST_F(AutofillAiManagerUpstreamTest, LocalEntity_ShowsMigrationPrompt) {
   std::unique_ptr<FormStructure> form = CreateTestForm();
-  EntityInstance local_entity = test::GetVehicleEntityInstance();
+  EntityInstance local_entity = GetVehicleEntityInstance();
   AddOrUpdateEntityInstance(local_entity);
 
   form->field(0)->set_value(
@@ -1512,7 +2145,7 @@ TEST_F(AutofillAiManagerUpstreamTest, LocalEntity_ShowsMigrationPrompt) {
 TEST_F(AutofillAiManagerUpstreamTest,
        TestGetEntityUpstreamCandidateTimingMetric) {
   std::unique_ptr<FormStructure> form = CreateTestForm();
-  EntityInstance local_entity = test::GetVehicleEntityInstance();
+  EntityInstance local_entity = GetVehicleEntityInstance();
   AddOrUpdateEntityInstance(local_entity);
 
   form->field(0)->set_value(
@@ -1566,9 +2199,9 @@ TEST_F(AutofillAiManagerUpstreamTest,
   base::Time january_2017 = base::Time::FromSecondsSinceUnixEpoch(1484505871);
   base::Time june_2017 = base::Time::FromSecondsSinceUnixEpoch(1497552271);
   EntityInstance local_entity_1 =
-      test::GetVehicleEntityInstanceWithRandomGuid({.use_date = january_2017});
+      GetVehicleEntityInstanceWithRandomGuid({.use_date = january_2017});
   EntityInstance local_entity_2 =
-      test::GetVehicleEntityInstanceWithRandomGuid({.use_date = june_2017});
+      GetVehicleEntityInstanceWithRandomGuid({.use_date = june_2017});
   AddOrUpdateEntityInstance(local_entity_1);
   AddOrUpdateEntityInstance(local_entity_2);
 
@@ -1589,7 +2222,7 @@ TEST_F(AutofillAiManagerUpstreamTest,
   AutofillClient::EntityImportPromptResultCallback upstream_callback;
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble)
       .WillOnce(DoAll(SaveArg<0>(&entity_to_upstream), SaveArg<1>(&old_entity),
-                      MoveArg<2>(&upstream_callback)));
+                      MoveArg<3>(&upstream_callback)));
   EXPECT_TRUE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
   ASSERT_FALSE(old_entity);
   ASSERT_TRUE(entity_to_upstream);
@@ -1597,7 +2230,8 @@ TEST_F(AutofillAiManagerUpstreamTest,
   EXPECT_EQ(entity_to_upstream->guid(), local_entity_2.guid());
 
   // Accept the bubble.
-  std::move(upstream_callback).Run(kAcceptBubble);
+  std::move(upstream_callback)
+      .Run(kAcceptBubble, std::nullopt, kAcceptUIContext);
   EXPECT_THAT(GetEntityInstances(), testing::UnorderedElementsAre(
                                         local_entity_1, entity_to_upstream));
 }
@@ -1607,7 +2241,7 @@ TEST_F(AutofillAiManagerUpstreamTest, FeatureOff_DoNotShowMigrationPrompt) {
   feature_list.InitAndDisableFeature(
       features::kAutofillAiWalletVehicleRegistration);
   std::unique_ptr<FormStructure> form = CreateTestForm();
-  EntityInstance local_entity = test::GetVehicleEntityInstance();
+  EntityInstance local_entity = GetVehicleEntityInstance();
   AddOrUpdateEntityInstance(local_entity);
 
   form->field(0)->set_value(
@@ -1630,7 +2264,7 @@ TEST_F(AutofillAiManagerUpstreamTest, FeatureOff_DoNotShowMigrationPrompt) {
 TEST_F(AutofillAiManagerUpstreamTest,
        PrefForEntityGroupOff_DoNotShowMigrationPrompt) {
   std::unique_ptr<FormStructure> form = CreateTestForm();
-  EntityInstance local_entity = test::GetVehicleEntityInstance();
+  EntityInstance local_entity = GetVehicleEntityInstance();
   AddOrUpdateEntityInstance(local_entity);
 
   form->field(0)->set_value(
@@ -1668,7 +2302,7 @@ TEST_F(AutofillAiManagerUpstreamTest,
 // form that is a subset of a server entity.
 TEST_F(AutofillAiManagerUpstreamTest, ServerEntity_DoNotShowMigrationPrompt) {
   std::unique_ptr<FormStructure> form = CreateTestForm();
-  EntityInstance server_entity = test::GetVehicleEntityInstance(
+  EntityInstance server_entity = GetVehicleEntityInstance(
       {.record_type = EntityInstance::RecordType::kServerWallet});
   AddOrUpdateEntityInstance(server_entity);
 
@@ -1686,6 +2320,370 @@ TEST_F(AutofillAiManagerUpstreamTest, ServerEntity_DoNotShowMigrationPrompt) {
   EXPECT_CALL(autofill_client(), ShowEntityImportBubble).Times(0);
   EXPECT_FALSE(manager().OnFormSubmitted(*form, /*ukm_source_id=*/{}));
 }
+
+TEST_F(AutofillAiManagerTest, LoadedServerPredictionsToSuggestionsShownTiming) {
+  base::HistogramTester histogram_tester;
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  FormStructure form_structure = FormStructure(form);
+  AddPredictionsToFormStructure(form_structure, {{PASSPORT_NUMBER}});
+  form_structure.set_server_predictions_received_timestamp(
+      base::TimeTicks::Now() - base::Seconds(2));
+
+  AddOrUpdateEntityInstance(GetPassportEntityInstance());
+
+  ukm::SourceId ukm_source_id_1 =
+      ukm::ConvertToSourceId(1, ukm::SourceIdType::NAVIGATION_ID);
+  ukm::SourceId ukm_source_id_2 =
+      ukm::ConvertToSourceId(2, ukm::SourceIdType::NAVIGATION_ID);
+
+  Suggestion passport_suggestion(SuggestionType::kFillAutofillAi);
+  passport_suggestion.payload =
+      Suggestion::AutofillAiPayload(GetPassportEntityInstance().guid());
+
+  // First time showing suggestions on page 1 logs the metric.
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion},
+      ukm_source_id_1, /*update_suggestions_callback=*/{});
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToSuggestionsShown",
+      1);
+
+  // Second time showing suggestions on page 1 DOES NOT log.
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion},
+      ukm_source_id_1, /*update_suggestions_callback=*/{});
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToSuggestionsShown",
+      1);
+
+  // Showing suggestions on page 2 LOGS again.
+  manager().OnAutofillAiSuggestionsShown(
+      form_structure, *form_structure.field(0), {passport_suggestion},
+      ukm_source_id_2, /*update_suggestions_callback=*/{});
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToSuggestionsShown",
+      2);
+}
+
+TEST_F(AutofillAiManagerTest, LoadedServerPredictionsToFirstInteractionTiming) {
+  base::HistogramTester histogram_tester;
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  FormStructure form_structure = FormStructure(form);
+  AddPredictionsToFormStructure(form_structure, {{PASSPORT_NUMBER}});
+  form_structure.set_server_predictions_received_timestamp(
+      base::TimeTicks::Now() - base::Seconds(2));
+
+  ukm::SourceId ukm_source_id_1 =
+      ukm::ConvertToSourceId(1, ukm::SourceIdType::NAVIGATION_ID);
+  ukm::SourceId ukm_source_id_2 =
+      ukm::ConvertToSourceId(2, ukm::SourceIdType::NAVIGATION_ID);
+
+  // First interaction on page 1 logs the metric.
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id_1);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToFirstInteraction",
+      1);
+
+  // Second interaction on page 1 DOES NOT log.
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id_1);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToFirstInteraction",
+      1);
+
+  // Interaction on page 2 LOGS again.
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id_2);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToFirstInteraction",
+      2);
+}
+
+// Tests that the time elapsed between receiving server predictions and the
+// first interaction with an Autofill AI-relevant form is correctly recorded.
+// It also verifies that this metric is logged at most once per page by
+// checking that subsequent interactions on the same UKM source ID do not
+// trigger additional logs, while a new page (source ID) does.
+TEST_F(AutofillAiManagerTest,
+       LoadedServerPredictionsToFirstInteractionTiming_NonAiForm) {
+  base::HistogramTester histogram_tester;
+  test::FormDescription form_description = {.fields = {{.role = COMPANY_NAME}}};
+  FormData form = test::GetFormData(form_description);
+  FormStructure form_structure = FormStructure(form);
+  AddPredictionsToFormStructure(form_structure, {{COMPANY_NAME}});
+  form_structure.set_server_predictions_received_timestamp(
+      base::TimeTicks::Now() - base::Seconds(2));
+
+  ukm::SourceId ukm_source_id_1 =
+      ukm::ConvertToSourceId(1, ukm::SourceIdType::NAVIGATION_ID);
+
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id_1);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.TimingInterval.LoadedServerPredictionsToFirstInteraction",
+      0);
+}
+
+// Tests that the Autofill AI personal context cache readiness on first
+// interaction is logged at most once per page (deduplicated by UKM source ID).
+TEST_F(AutofillAiManagerTest,
+       PersonalContextCacheReadinessOnFirstInteraction_Deduplication) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      features::kAutofillAmbientAutofill,
+      {{"ambient_autofill_eligible_tiers", "1"}});
+  autofill_client().GetPrefs()->SetInteger(
+      subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+  autofill_client().GetPrefs()->SetBoolean(
+      prefs::kAutofillAiIdentityEntitiesEnabled, true);
+
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  FormStructure form_structure = FormStructure(form);
+  AddPredictionsToFormStructure(form_structure, {{PASSPORT_NUMBER}});
+
+  base::HistogramTester histogram_tester;
+  EXPECT_CALL(pcontext_manager(), GetPrefetchStatusByEntityType(
+                                      EntityType(EntityTypeName::kPassport)))
+      .WillRepeatedly(Return(
+          AutofillAiPersonalContextAccessManager::RequestStatus::kSuccess));
+  EXPECT_CALL(pcontext_manager(), ServerHasSpiiPresenceSignal(
+                                      EntityType(EntityTypeName::kPassport)))
+      .WillRepeatedly(Return(true));
+
+  ukm::SourceId ukm_source_id =
+      ukm::ConvertToSourceId(1, ukm::SourceIdType::NAVIGATION_ID);
+
+  // First interaction on page logs.
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id);
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.Ai.PersonalContext.Cache.ReadinessOnFirstInteraction",
+      PersonalContextCacheReadinessOnFirstInteraction::kResolvedWithData, 1);
+
+  // Second interaction on same page DOES NOT log.
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Ai.PersonalContext.Cache.ReadinessOnFirstInteraction", 1);
+}
+
+// Tests that the update callback is run with new suggestions when prefetch
+// completes successfully and the loading suggestion was shown.
+TEST_F(AutofillAiManagerTest, OnPrefetchContextComplete_RunCallback) {
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  autofill_manager().AddSeenForm(form, {PASSPORT_NUMBER});
+  const FormStructure* form_structure =
+      autofill_manager().FindCachedFormById(form.global_id());
+  ASSERT_TRUE(form_structure);
+  const AutofillField* field = form_structure->field(0);
+  ASSERT_TRUE(field);
+
+  Suggestion fetching_suggestion(SuggestionType::kFetchingAmbientData);
+  autofill_client().SetAutofillSuggestions({fetching_suggestion});
+
+  base::MockCallback<AutofillAiManager::UpdateSuggestionsCallback> callback;
+  manager().OnAutofillAiSuggestionsShown(*form_structure, *field,
+                                         {fetching_suggestion},
+                                         /*ukm_source_id=*/{}, callback.Get());
+
+  EXPECT_CALL(callback, Run);
+
+  manager().OnPrefetchContextComplete(pcontext_manager(),
+                                      base::span<const EntityInstance>());
+}
+
+// Tests that the update callback is not run if the loading suggestion was not
+// shown.
+TEST_F(AutofillAiManagerTest, OnPrefetchContextComplete_NoFetchingSuggestion) {
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  autofill_manager().AddSeenForm(form, {PASSPORT_NUMBER});
+  const FormStructure* form_structure =
+      autofill_manager().FindCachedFormById(form.global_id());
+  ASSERT_TRUE(form_structure);
+  const AutofillField* field = form_structure->field(0);
+  ASSERT_TRUE(field);
+
+  Suggestion other_suggestion(SuggestionType::kAddressEntry);
+  autofill_client().SetAutofillSuggestions({other_suggestion});
+
+  base::MockCallback<AutofillAiManager::UpdateSuggestionsCallback> callback;
+  manager().OnAutofillAiSuggestionsShown(*form_structure, *field,
+                                         {other_suggestion},
+                                         /*ukm_source_id=*/{}, callback.Get());
+
+  EXPECT_CALL(callback, Run).Times(0);
+
+  manager().OnPrefetchContextComplete(pcontext_manager(),
+                                      base::span<const EntityInstance>());
+}
+
+// Tests that the update callback is not run if the form that triggered
+// suggestions is no longer found.
+TEST_F(AutofillAiManagerTest, OnPrefetchContextComplete_FormNotFound) {
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  autofill_manager().AddSeenForm(form, {PASSPORT_NUMBER});
+  const FormStructure* form_structure =
+      autofill_manager().FindCachedFormById(form.global_id());
+  ASSERT_TRUE(form_structure);
+  const AutofillField* field = form_structure->field(0);
+  ASSERT_TRUE(field);
+
+  Suggestion fetching_suggestion(SuggestionType::kFetchingAmbientData);
+  autofill_client().SetAutofillSuggestions({fetching_suggestion});
+
+  base::MockCallback<AutofillAiManager::UpdateSuggestionsCallback> callback;
+  manager().OnAutofillAiSuggestionsShown(*form_structure, *field,
+                                         {fetching_suggestion},
+                                         /*ukm_source_id=*/{}, callback.Get());
+
+  DeleteAllAutofillDrivers();
+
+  EXPECT_CALL(callback, Run).Times(0);
+
+  manager().OnPrefetchContextComplete(pcontext_manager(),
+                                      base::span<const EntityInstance>());
+}
+
+TEST_F(AutofillAiManagerTest,
+       OnPrefetchContextComplete_Failure_NoFetchingSuggestion_DoNotShowToast) {
+  EXPECT_CALL(autofill_client(), ShowAutofillAiPreFetchFailureNotification())
+      .Times(0);
+  manager().OnPrefetchContextComplete(pcontext_manager(), std::nullopt);
+}
+
+TEST_F(AutofillAiManagerTest,
+       OnPrefetchContextComplete_Failure_WithLoadingSuggestion_RunsCallback) {
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  autofill_manager().AddSeenForm(form, {PASSPORT_NUMBER});
+  const FormStructure* form_structure =
+      autofill_manager().FindCachedFormById(form.global_id());
+  ASSERT_TRUE(form_structure);
+  const AutofillField* field = form_structure->field(0);
+  ASSERT_TRUE(field);
+
+  Suggestion fetching_suggestion(SuggestionType::kFetchingAmbientData);
+  autofill_client().SetAutofillSuggestions({fetching_suggestion});
+
+  base::MockCallback<AutofillAiManager::UpdateSuggestionsCallback> callback;
+  manager().OnAutofillAiSuggestionsShown(*form_structure, *field,
+                                         {fetching_suggestion},
+                                         /*ukm_source_id=*/{}, callback.Get());
+
+  EXPECT_CALL(callback, Run);
+  EXPECT_CALL(autofill_client(), ShowAutofillAiPreFetchFailureNotification());
+
+  manager().OnPrefetchContextComplete(pcontext_manager(), std::nullopt);
+}
+
+struct PersonalContextCacheReadinessTestCase {
+  AutofillAiPersonalContextAccessManager::RequestStatus prefetch_status;
+  bool server_has_spii_data;
+  bool has_entity_data;
+  PersonalContextCacheReadinessOnFirstInteraction expected_readiness;
+};
+
+class AutofillAiManagerCacheReadinessTest
+    : public AutofillAiManagerTest,
+      public ::testing::WithParamInterface<
+          PersonalContextCacheReadinessTestCase> {};
+
+TEST_P(AutofillAiManagerCacheReadinessTest,
+       PersonalContextCacheReadinessOnFirstInteraction) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      features::kAutofillAmbientAutofill,
+      {{"ambient_autofill_eligible_tiers", "1"}});
+  autofill_client().GetPrefs()->SetInteger(
+      subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+  autofill_client().GetPrefs()->SetBoolean(
+      prefs::kAutofillAiIdentityEntitiesEnabled, true);
+
+  const PersonalContextCacheReadinessTestCase& test_case = GetParam();
+
+  test::FormDescription form_description = {
+      .fields = {{.role = PASSPORT_NUMBER}}};
+  FormData form = test::GetFormData(form_description);
+  FormStructure form_structure = FormStructure(form);
+  AddPredictionsToFormStructure(form_structure, {{PASSPORT_NUMBER}});
+
+  base::HistogramTester histogram_tester;
+
+  EXPECT_CALL(pcontext_manager(), GetPrefetchStatusByEntityType(
+                                      EntityType(EntityTypeName::kPassport)))
+      .WillRepeatedly(Return(test_case.prefetch_status));
+  EXPECT_CALL(pcontext_manager(), ServerHasSpiiPresenceSignal(
+                                      EntityType(EntityTypeName::kPassport)))
+      .WillRepeatedly(Return(test_case.server_has_spii_data));
+
+  if (test_case.has_entity_data) {
+    AddOrUpdateEntityInstance(GetPassportEntityInstance());
+  } else {
+    std::vector<EntityInstance::EntityId> guids_to_remove;
+    for (const auto& entity : GetEntityInstances()) {
+      if (entity.type() == EntityType(EntityTypeName::kPassport)) {
+        guids_to_remove.push_back(entity.guid());
+      }
+    }
+    for (const auto& guid : guids_to_remove) {
+      RemoveEntityInstance(guid);
+    }
+  }
+
+  ukm::SourceId ukm_source_id =
+      ukm::ConvertToSourceId(1, ukm::SourceIdType::NAVIGATION_ID);
+
+  manager().OnFormInteracted(form_structure, *form_structure.field(0),
+                             ukm_source_id);
+
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.Ai.PersonalContext.Cache.ReadinessOnFirstInteraction",
+      test_case.expected_readiness, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AutofillAiManagerTest,
+    AutofillAiManagerCacheReadinessTest,
+    ::testing::Values(
+        PersonalContextCacheReadinessTestCase{
+            AutofillAiPersonalContextAccessManager::RequestStatus::kNotStarted,
+            false, false,
+            PersonalContextCacheReadinessOnFirstInteraction::kNotStarted},
+        PersonalContextCacheReadinessTestCase{
+            AutofillAiPersonalContextAccessManager::RequestStatus::kPending,
+            false, false,
+            PersonalContextCacheReadinessOnFirstInteraction::kPendingInFlight},
+        PersonalContextCacheReadinessTestCase{
+            AutofillAiPersonalContextAccessManager::RequestStatus::kFailure,
+            false, false,
+            PersonalContextCacheReadinessOnFirstInteraction::kFailed},
+        PersonalContextCacheReadinessTestCase{
+            AutofillAiPersonalContextAccessManager::RequestStatus::kSuccess,
+            false, false,
+            PersonalContextCacheReadinessOnFirstInteraction::kResolvedEmpty},
+        PersonalContextCacheReadinessTestCase{
+            AutofillAiPersonalContextAccessManager::RequestStatus::kSuccess,
+            true, false,
+            PersonalContextCacheReadinessOnFirstInteraction::kResolvedWithData},
+        PersonalContextCacheReadinessTestCase{
+            AutofillAiPersonalContextAccessManager::RequestStatus::kSuccess,
+            false, true,
+            PersonalContextCacheReadinessOnFirstInteraction::
+                kResolvedWithData}));
 
 }  // namespace
 }  // namespace autofill

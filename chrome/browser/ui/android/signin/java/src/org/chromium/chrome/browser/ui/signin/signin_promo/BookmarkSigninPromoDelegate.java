@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
@@ -24,9 +25,8 @@ import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.chrome.browser.ui.signin.SigninSurveyController;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.signin.SigninFeatureMap;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.sync.SyncService;
@@ -166,7 +166,7 @@ public class BookmarkSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    boolean refreshPromoState(@Nullable CoreAccountInfo visibleAccount) {
+    boolean refreshPromoState(@Nullable DisplayableProfileData visibleAccount) {
         @PromoState int newState = computePromoState();
         boolean wasStateChanged = mPromoState != newState;
         mPromoState = newState;
@@ -210,7 +210,7 @@ public class BookmarkSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    void onPrimaryButtonClicked(@Nullable CoreAccountInfo visibleAccount) {
+    void onPrimaryButtonClicked(@Nullable DisplayableProfileData visibleAccount) {
         switch (mPromoState) {
             case PromoState.SIGNIN:
                 super.onPrimaryButtonClicked(visibleAccount);
@@ -241,6 +241,12 @@ public class BookmarkSigninPromoDelegate extends SigninPromoDelegate {
         return !isSeamlessSigninAllowed() || mPromoState != PromoState.SIGNIN;
     }
 
+    @Override
+    @ColorInt
+    int getAccountPickerBackgroundColor() {
+        return SemanticColorUtils.getColorSurface(mContext);
+    }
+
     private @PromoState int computePromoState() {
         if (wasPromoDeclined() || !canManuallyEnableSyncTypes()) {
             return PromoState.NONE;
@@ -249,7 +255,7 @@ public class BookmarkSigninPromoDelegate extends SigninPromoDelegate {
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(mProfile);
         assumeNonNull(identityManager);
-        if (identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+        if (identityManager.hasPrimaryAccount()) {
             return PromoState.ACCOUNT_SETTINGS;
         }
 

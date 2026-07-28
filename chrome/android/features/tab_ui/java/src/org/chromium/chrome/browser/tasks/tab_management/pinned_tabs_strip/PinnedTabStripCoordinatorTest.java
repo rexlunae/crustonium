@@ -30,9 +30,10 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabListRecyclerView;
@@ -57,12 +58,15 @@ public class PinnedTabStripCoordinatorTest {
     @Mock private TabListRecyclerView mTabGridListRecyclerView;
     @Mock private GridLayoutManager mLayoutManager;
     @Mock private PinnedTabStripMediator mMediator;
-    @Mock private MonotonicObservableSupplier<TabGroupModelFilter> mTabGroupModelFilterSupplier;
     @Mock private ItemTouchHelper2 mItemTouchHelper;
-    @Mock private MonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
     @Mock private BottomSheetController mBottomSheetController;
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private Runnable mOnTabGroupCreation;
+
+    private final MonotonicObservableSupplier<TabModel> mTabModelSupplier =
+            ObservableSuppliers.alwaysNull();
+    private final MonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier =
+            ObservableSuppliers.alwaysNull();
 
     private PinnedTabStripCoordinator mCoordinator;
 
@@ -85,7 +89,7 @@ public class PinnedTabStripCoordinatorTest {
                         activity,
                         parentView,
                         mTabListCoordinator,
-                        mTabGroupModelFilterSupplier,
+                        mTabModelSupplier,
                         mTabBookmarkerSupplier,
                         mBottomSheetController,
                         mModalDialogManager,
@@ -98,8 +102,7 @@ public class PinnedTabStripCoordinatorTest {
                             TabListModel tabListModel,
                             TabListModel pinnedTabsModelList,
                             PropertyModel stripPropertyModel,
-                            MonotonicObservableSupplier<TabGroupModelFilter>
-                                    tabGroupModelFilterSupplier,
+                            MonotonicObservableSupplier<TabModel> tabModelSupplier,
                             MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
                             BottomSheetController bottomSheetController,
                             ModalDialogManager modalDialogManager,

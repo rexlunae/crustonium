@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/signin/android//web_signin_bridge.h"
+#include "chrome/browser/signin/android/web_signin_bridge.h"
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
@@ -43,7 +43,7 @@ WebSigninBridge::~WebSigninBridge() = default;
 static int64_t JNI_WebSigninBridge_CreateWithCoreAccountId(
     JNIEnv* env,
     Profile* profile,
-    CoreAccountId& account_id,
+    const CoreAccountId& account_id,
     const JavaRef<jobject>& j_listener) {
   CHECK(j_listener) << "Listener should be non-null";
 
@@ -63,7 +63,7 @@ static int64_t JNI_WebSigninBridge_CreateWithCoreAccountId(
 static int64_t JNI_WebSigninBridge_CreateWithEmail(
     JNIEnv* env,
     Profile* profile,
-    std::string& account_email,
+    const std::string& account_email,
     const JavaRef<jobject>& j_listener) {
   CHECK(j_listener) << "Listener should be non-null";
 

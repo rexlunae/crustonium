@@ -57,7 +57,7 @@ class BrowserUnitTest : public BrowserWithTestWindowTest {
   }
 };
 
-// Ensure crashed tabs are not reloaded when selected. crbug.com/232323
+// Ensure crashed tabs are not reloaded when selected. crbug.com/41007585
 TEST_F(BrowserUnitTest, ReloadCrashedTab) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
 
@@ -95,7 +95,7 @@ TEST_F(BrowserUnitTest, ReloadCrashedTab) {
 }
 
 // This tests a workaround which is not necessary on Mac.
-// https://crbug.com/719230
+// https://crbug.com/41317454
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_SetBackgroundColorForNewTab DISABLED_SetBackgroundColorForNewTab
 #else
@@ -305,15 +305,15 @@ class BrowserBookmarkBarTest : public BrowserWithTestWindowTest {
 
  protected:
   BookmarkBar::State window_bookmark_bar_state() const {
-    return static_cast<BookmarkBarStateTestBrowserWindow*>(browser()->window())
+    return static_cast<BookmarkBarStateTestBrowserWindow*>(window())
         ->bookmark_bar_state();
   }
 
   // BrowserWithTestWindowTest:
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    static_cast<BookmarkBarStateTestBrowserWindow*>(browser()->window())
-        ->set_browser(browser());
+    static_cast<BookmarkBarStateTestBrowserWindow*>(window())->set_browser(
+        browser());
   }
 
   std::unique_ptr<BrowserWindow> CreateBrowserWindow() override {
@@ -321,30 +321,43 @@ class BrowserBookmarkBarTest : public BrowserWithTestWindowTest {
   }
 
  private:
-  class BookmarkBarStateTestBrowserWindow : public TestBrowserWindow {
+  class BookmarkBarStateTestBrowserWindow
+      : public TestBrowserWindow,
+        public BookmarkBarController::Delegate {
    public:
-    BookmarkBarStateTestBrowserWindow() : browser_(nullptr) {}
+    BookmarkBarStateTestBrowserWindow() = default;
 
     BookmarkBarStateTestBrowserWindow(
         const BookmarkBarStateTestBrowserWindow&) = delete;
     BookmarkBarStateTestBrowserWindow& operator=(
         const BookmarkBarStateTestBrowserWindow&) = delete;
 
-    ~BookmarkBarStateTestBrowserWindow() override = default;
+    ~BookmarkBarStateTestBrowserWindow() override {
+      if (browser_) {
+        BookmarkBarController::From(browser_)->SetDelegate(nullptr);
+      }
+    }
 
-    void set_browser(Browser* browser) { browser_ = browser; }
+    void set_browser(Browser* browser) {
+      if (browser_) {
+        BookmarkBarController::From(browser_)->SetDelegate(nullptr);
+      }
+      browser_ = browser;
+      if (browser_) {
+        BookmarkBarController::From(browser_)->SetDelegate(this);
+      }
+    }
 
     BookmarkBar::State bookmark_bar_state() const {
       return bookmark_bar_state_;
     }
 
    private:
-    // TestBrowserWindow:
-    void BookmarkBarStateChanged(
+    // BookmarkBarController::Delegate:
+    void OnBookmarkBarStateChanged(
         BookmarkBar::AnimateChangeType change_type) override {
       bookmark_bar_state_ =
           BookmarkBarController::From(browser_)->bookmark_bar_state();
-      TestBrowserWindow::BookmarkBarStateChanged(change_type);
     }
 
     void OnActiveTabChanged(content::WebContents* old_contents,
@@ -357,7 +370,7 @@ class BrowserBookmarkBarTest : public BrowserWithTestWindowTest {
                                             reason);
     }
 
-    raw_ptr<Browser, DanglingUntriaged> browser_;  // Weak ptr.
+    raw_ptr<Browser> browser_ = nullptr;
     BookmarkBar::State bookmark_bar_state_ = BookmarkBar::HIDDEN;
   };
 };

@@ -14,6 +14,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/common/pref_names.h"
@@ -40,7 +41,8 @@ class BrowserRootViewBrowserTest : public InProcessBrowserTest {
       delete;
 
   BrowserRootView* browser_root_view() {
-    BrowserView* browser_view = static_cast<BrowserView*>(browser()->window());
+    BrowserView* browser_view =
+        BrowserView::GetBrowserViewForBrowser(browser());
     return static_cast<BrowserRootView*>(
         browser_view->GetWidget()->GetRootView());
   }
@@ -88,7 +90,7 @@ class BrowserRootViewBrowserTest : public InProcessBrowserTest {
   }
 };
 
-// Clear drop info after performing drop. http://crbug.com/838791
+// Clear drop info after performing drop. http://crbug.com/41386560
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropInfo) {
   ui::OSExchangeData data;
   data.SetURL(GURL("http://www.chromium.org/"), std::u16string());
@@ -104,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropInfo) {
   EXPECT_FALSE(browser_root_view()->drop_info_);
 }
 
-// Make sure plain string is droppable. http://crbug.com/838794
+// Make sure plain string is droppable. http://crbug.com/41386563
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, PlainString) {
   ui::OSExchangeData data;
   data.SetString(u"Plain string");
@@ -116,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, PlainString) {
 }
 
 // Clear drop target when the widget is being destroyed.
-// http://crbug.com/1001942
+// http://crbug.com/40050082
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropTarget) {
   ui::OSExchangeData data;
   data.SetURL(GURL("http://www.chromium.org/"), std::u16string());
@@ -205,8 +207,8 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewWithVerticalTabsBrowserTest,
         AddTabAtIndex(0, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_LINK));
   }
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kVerticalTabsEnabled,
-                                               true);
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(true);
   RunScheduledLayouts();
 
   model->ActivateTabAt(1);
@@ -218,8 +220,8 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewWithVerticalTabsBrowserTest,
   PerformMouseWheelOnTabStrip(kWheelUp);
   EXPECT_EQ(1, model->active_index());
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kVerticalTabsEnabled,
-                                               false);
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(false);
   RunScheduledLayouts();
 
   // When Vertical Tabs is disabled, the active tab should change.

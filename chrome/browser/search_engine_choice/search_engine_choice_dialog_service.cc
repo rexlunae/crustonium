@@ -15,6 +15,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
@@ -60,6 +61,14 @@ bool IsBrowserTypeSupported(const Browser& browser) {
       return false;
   }
 }
+
+// Helper for `SearchEngineChoiceDialogService::BrowserRegistry` checks.
+bool HasOpenDialog(
+    const std::pair<raw_ref<Browser>, base::OnceClosure>& registration) {
+  // If the OnceCallback is null, then the dialog has already been closed.
+  return !registration.second.is_null();
+}
+
 }  // namespace
 
 // --- SearchEngineChoiceDialogService::BrowserRegistry -----------------------
@@ -121,8 +130,11 @@ bool SearchEngineChoiceDialogService::BrowserRegistry::HasOpenDialog(
     return false;
   }
 
-  // If the OnceCallback is null, then the dialog has already been closed.
-  return !entry_iterator->second.is_null();
+  return ::HasOpenDialog(*entry_iterator);
+}
+
+bool SearchEngineChoiceDialogService::BrowserRegistry::HasOpenDialog() const {
+  return std::ranges::any_of(registered_browsers_, &::HasOpenDialog);
 }
 
 void SearchEngineChoiceDialogService::BrowserRegistry::CloseAllDialogs() {
@@ -179,7 +191,8 @@ void SearchEngineChoiceDialogService::NotifyChoiceMade(
       "ChoiceService", "pre_record_condition",
       static_cast<int>(
           search_engine_choice_service_->GetDynamicChoiceScreenConditions(
-              *template_url_service_)));
+              *template_url_service_, {.allow_unknown_current_location =
+                                           first_run::IsChromeFirstRun()})));
 
   TemplateURL* selected_engine = nullptr;
   int selected_engine_index = -1;
@@ -279,49 +292,82 @@ void SearchEngineChoiceDialogService::SetDialogDisabledForTests(
 }
 
 // static
-search_engines::ChoiceData
+std::optional<search_engines::ChoiceData>
 SearchEngineChoiceDialogService::GetChoiceDataFromProfile(Profile& profile) {
   PrefService* pref_service = profile.GetPrefs();
   TemplateURLService* template_url_service =
       TemplateURLServiceFactory::GetForProfile(&profile);
   CHECK(template_url_service);
+
+  switch (template_url_service->default_search_provider_source()) {
+    case DefaultSearchManager::FROM_FALLBACK:
+      base::UmaHistogramEnumeration(
+          "Search.ChoiceDebug.PropagatedDataOutcome",
+          CurrentDefaultPropagationOutcome::kSkippedIsFallback);
+      return std::nullopt;
+
+    case DefaultSearchManager::FROM_EXTENSION:
+      base::UmaHistogramEnumeration(
+          "Search.ChoiceDebug.PropagatedDataOutcome",
+          CurrentDefaultPropagationOutcome::kSkippedIsExtension);
+      return std::nullopt;
+
+    case DefaultSearchManager::FROM_POLICY:
+    case DefaultSearchManager::FROM_POLICY_RECOMMENDED:
+      base::UmaHistogramEnumeration(
+          "Search.ChoiceDebug.PropagatedDataOutcome",
+          CurrentDefaultPropagationOutcome::kSkippedDueToPolicies);
+      return std::nullopt;
+
+    case DefaultSearchManager::FROM_USER:
+      break;  // Current default eligible for propagation.
+  }
+
+  CHECK(template_url_service->GetDefaultSearchProvider());
   const TemplateURLData& default_search_engine =
       template_url_service->GetDefaultSearchProvider()->data();
 
-  return {.timestamp = pref_service->GetInt64(
-              prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp),
-          .chrome_version = pref_service->GetString(
-              prefs::kDefaultSearchProviderChoiceScreenCompletionVersion),
-          .default_search_engine = default_search_engine};
+  base::UmaHistogramEnumeration(
+      "Search.ChoiceDebug.PropagatedDataOutcome",
+      CurrentDefaultPropagationOutcome::kPropagatedCurrentDefault);
+
+  return search_engines::ChoiceData{
+      .timestamp = pref_service->GetInt64(
+          prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp),
+      .chrome_version = pref_service->GetString(
+          prefs::kDefaultSearchProviderChoiceScreenCompletionVersion),
+      .default_search_engine = default_search_engine};
 }
 
 // static
 void SearchEngineChoiceDialogService::UpdateProfileFromChoiceData(
     Profile& profile,
-    const search_engines::ChoiceData& choice_data) {
-  PrefService* pref_service = profile.GetPrefs();
-  if (choice_data.timestamp != 0) {
-    pref_service->SetInt64(
-        prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp,
-        choice_data.timestamp);
-  }
-
-  if (!choice_data.chrome_version.empty()) {
-    pref_service->SetString(
-        prefs::kDefaultSearchProviderChoiceScreenCompletionVersion,
-        choice_data.chrome_version);
+    const std::optional<search_engines::ChoiceData>& choice_data) {
+  if (!choice_data.has_value()) {
+    return;
   }
 
   const TemplateURLData& default_search_engine =
-      choice_data.default_search_engine;
-  if (!default_search_engine.keyword().empty() &&
-      !default_search_engine.url().empty()) {
-    TemplateURLService* template_url_service =
-        TemplateURLServiceFactory::GetForProfile(&profile);
-    CHECK(template_url_service);
-    TemplateURL template_url(default_search_engine);
-    template_url_service->SetUserSelectedDefaultSearchProvider(&template_url);
+      choice_data->default_search_engine;
+
+  PrefService* pref_service = profile.GetPrefs();
+  if (choice_data->timestamp != 0) {
+    pref_service->SetInt64(
+        prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp,
+        choice_data->timestamp);
   }
+
+  if (!choice_data->chrome_version.empty()) {
+    pref_service->SetString(
+        prefs::kDefaultSearchProviderChoiceScreenCompletionVersion,
+        choice_data->chrome_version);
+  }
+
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(&profile);
+  CHECK(template_url_service);
+  TemplateURL template_url(default_search_engine);
+  template_url_service->SetUserSelectedDefaultSearchProvider(&template_url);
 }
 
 TemplateURL::TemplateURLVector
@@ -336,6 +382,19 @@ SearchEngineChoiceDialogService::GetSearchEngines() {
   }
 
   return result;
+}
+
+SearchEngineChoiceScreenConditions
+SearchEngineChoiceDialogService::ComputeProfileManagementFlowConditions()
+    const {
+  // The profile management flow dialog is not supposed to be triggerable while
+  // there is any browser window open. Ineligibility conditions associated with
+  // browser windows are not relevant here.
+  CHECK(!browser_registry_.HasOpenDialog(), base::NotFatalUntil::M153);
+
+  return search_engine_choice_service_->GetDynamicChoiceScreenConditions(
+      *template_url_service_,
+      {.allow_unknown_current_location = first_run::IsChromeFirstRun()});
 }
 
 SearchEngineChoiceScreenConditions
@@ -389,7 +448,8 @@ SearchEngineChoiceDialogService::ComputeDialogConditions(
 
   // Respect common conditions with other platforms.
   return search_engine_choice_service_->GetDynamicChoiceScreenConditions(
-      *template_url_service_);
+      *template_url_service_,
+      {.allow_unknown_current_location = first_run::IsChromeFirstRun()});
 }
 
 bool SearchEngineChoiceDialogService::CanSuppressPrivacySandboxPromo() const {
@@ -406,7 +466,7 @@ bool SearchEngineChoiceDialogService::HasPendingDialog(Browser& browser) const {
 }
 
 bool SearchEngineChoiceDialogService::IsUrlSuitableForDialog(GURL url) {
-  if (url == chrome::kChromeUINewTabPageURL) {
+  if (url == chrome::ChromeUINewTabPageURLAsGURL()) {
     return true;  // NTP URL for regular profiles.
   }
 
@@ -466,4 +526,9 @@ void SearchEngineChoiceDialogService::NotifyMoreButtonClicked(
 void SearchEngineChoiceDialogService::RecordChoiceScreenEvent(
     SearchEngineChoiceScreenEvents event) {
   search_engine_choice_service_->RecordChoiceScreenEvent(event);
+}
+
+void SearchEngineChoiceDialogService::RecordTriggeringEligibility(
+    SearchEngineChoiceScreenConditions conditions) {
+  search_engine_choice_service_->RecordTriggeringEligibility(conditions);
 }

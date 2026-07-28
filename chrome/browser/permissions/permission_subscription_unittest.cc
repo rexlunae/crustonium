@@ -196,7 +196,7 @@ INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PermissionSubscriptionGeolocationTest);
 TEST_P(PermissionSubscriptionGeolocationTest,
        SubscriptionDestroyedCleanlyWithoutUnsubscribe) {
   // Test that the PermissionManager shuts down cleanly with subscriptions that
-  // haven't been removed, crbug.com/720071.
+  // haven't been removed, crbug.com/40519661.
   content::SubscribeToPermissionResultChange(
       GetPermissionController(),
       content::PermissionDescriptorUtil::
@@ -880,7 +880,7 @@ TEST_F(PermissionSubscriptionTest,
 #endif
 TEST_P(PermissionSubscriptionGeolocationTest,
        MAYBE_SubscribeUnsubscribeForNewTabPage) {
-  NavigateAndCommit(GURL(chrome::kChromeUINewTabURL));
+  NavigateAndCommit(chrome::ChromeUINewTabURLAsGURL());
   EXPECT_EQ(GURL(chrome::kChromeUINewTabPageThirdPartyURL),
             main_rfh()->GetLastCommittedOrigin().GetURL());
   content::PermissionController::SubscriptionId subscription_id =

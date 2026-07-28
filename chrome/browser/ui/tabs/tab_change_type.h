@@ -15,6 +15,12 @@ enum class TabChangeType {
 
   // Only the attention state changed.
   kAttentionOnly,
+
+  // Only the blocked status changed.
+  kBlockedOnly,
+
+  // Only the resource usage changed.
+  kResourceUsageOnly,
 };
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_CHANGE_TYPE_H_

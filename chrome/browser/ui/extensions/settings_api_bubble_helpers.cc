@@ -148,7 +148,7 @@ void MaybeShowExtensionControlledSearchNotification(
               return;
             }
             auto dialog = std::make_unique<ExtensionSettingsOverriddenDialog>(
-                std::move(*params), profile);
+                std::move(*params), *profile);
             if (!dialog->ShouldShow()) {
               return;
             }
@@ -189,7 +189,7 @@ void MaybeShowExtensionControlledNewTabPage(
   }
 
   // See if the current active URL matches a transformed NewTab URL.
-  GURL ntp_url(chrome::kChromeUINewTabURL);
+  GURL ntp_url = chrome::ChromeUINewTabURLAsGURL();
   content::BrowserURLHandler::GetInstance()->RewriteURLIfNecessary(
       &ntp_url, web_contents->GetBrowserContext());
   if (ntp_url != active_url) {
@@ -197,6 +197,7 @@ void MaybeShowExtensionControlledNewTabPage(
   }
 
   Profile* const profile = browser->GetProfile();
+  CHECK(profile);
 
   std::optional<ExtensionSettingsOverriddenDialog::Params> params =
       settings_overridden_params::GetNtpOverriddenParams(profile);
@@ -205,7 +206,7 @@ void MaybeShowExtensionControlledNewTabPage(
   }
 
   auto dialog = std::make_unique<ExtensionSettingsOverriddenDialog>(
-      std::move(*params), profile);
+      std::move(*params), *profile);
   if (!dialog->ShouldShow()) {
     return;
   }

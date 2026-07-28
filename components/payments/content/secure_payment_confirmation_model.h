@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app.h"
@@ -30,22 +31,17 @@ class SecurePaymentConfirmationModel {
 
   // Header logos.
   const std::vector<PaymentApp::PaymentEntityLogo*> header_logos() const {
-    return header_logos_;
+    return base::ToVector<PaymentApp::PaymentEntityLogo*>(header_logos_);
   }
   void set_header_logos(
       const std::vector<PaymentApp::PaymentEntityLogo*> header_logos) {
-    header_logos_ = header_logos;
+    header_logos_ =
+        base::ToVector<raw_ptr<PaymentApp::PaymentEntityLogo>>(header_logos);
   }
 
   // Title, e.g. "Use TouchID to verify and complete your purchase?"
   const std::u16string& title() const { return title_; }
   void set_title(const std::u16string& title) { title_ = title; }
-
-  // Label for the merchant row, e.g. "Store".
-  const std::u16string& merchant_label() const { return merchant_label_; }
-  void set_merchant_label(const std::u16string& merchant_label) {
-    merchant_label_ = merchant_label;
-  }
 
   // Label for the merchant name, e.g. "Merchant"
   const std::optional<std::u16string>& merchant_name() const {
@@ -62,12 +58,6 @@ class SecurePaymentConfirmationModel {
   void set_merchant_origin(
       const std::optional<std::u16string>& merchant_origin) {
     merchant_origin_ = merchant_origin;
-  }
-
-  // Label for the instrument row, e.g. "Payment".
-  const std::u16string& instrument_label() const { return instrument_label_; }
-  void set_instrument_label(const std::u16string& instrument_label) {
-    instrument_label_ = instrument_label;
   }
 
   // Label for the instrument row value, e.g. "Chase Card"
@@ -89,12 +79,6 @@ class SecurePaymentConfirmationModel {
   const SkBitmap* instrument_icon() const { return instrument_icon_; }
   void set_instrument_icon(const SkBitmap* instrument_icon) {
     instrument_icon_ = instrument_icon;
-  }
-
-  // Label for the total row, e.g. "Total".
-  const std::u16string& total_label() const { return total_label_; }
-  void set_total_label(const std::u16string& total_label) {
-    total_label_ = total_label;
   }
 
   // Label for the total row value, e.g. "$20.00 USD"
@@ -195,21 +179,18 @@ class SecurePaymentConfirmationModel {
   base::WeakPtr<SecurePaymentConfirmationModel> GetWeakPtr();
 
  private:
-  std::vector<PaymentApp::PaymentEntityLogo*> header_logos_;
+  std::vector<raw_ptr<PaymentApp::PaymentEntityLogo>> header_logos_;
 
   std::u16string title_;
   std::u16string description_;
 
-  std::u16string merchant_label_;
   std::optional<std::u16string> merchant_name_;
   std::optional<std::u16string> merchant_origin_;
 
-  std::u16string instrument_label_;
   std::u16string instrument_value_;
   std::u16string instrument_details_value_;
   raw_ptr<const SkBitmap> instrument_icon_ = nullptr;
 
-  std::u16string total_label_;
   std::u16string total_value_;
 
   std::u16string verify_button_label_;

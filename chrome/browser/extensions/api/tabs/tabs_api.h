@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/window_controller.h"
@@ -45,7 +46,6 @@ class GURL;
 class SessionID;
 class SkBitmap;
 class TabListInterface;
-class TabStripModel;
 
 namespace base {
 class TaskRunner;
@@ -57,10 +57,6 @@ class WebContents;
 
 namespace tabs {
 class TabInterface;
-}
-
-namespace ui {
-class ListSelectionModel;
 }
 
 namespace user_prefs {
@@ -196,15 +192,15 @@ class WindowsCreateFunction : public ExtensionFunction {
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("windows.create", WINDOWS_CREATE)
 
+  // Ensures the tab for the window is valid.
+  static base::expected<void, std::string> ValidateTab(
+      WindowController* source_window,
+      Profile* window_profile,
+      content::WebContents* web_contents,
+      bool is_locked_fullscreen = false);
+
  private:
   ~WindowsCreateFunction() override;
-
-  // Ensures the tab for the window is valid. Returns an error string, or the
-  // empty string if the tab is valid.
-  static std::string ValidateTab(WindowController* source_window,
-                                 Profile* window_profile,
-                                 content::WebContents* web_contents,
-                                 bool is_locked_fullscreen);
 
   // Uses `create_data` to set the window position and size in `window_bounds`.
   // Returns an error string, or the empty string if the bounds are valid.
@@ -346,11 +342,6 @@ class TabsDuplicateFunction : public ExtensionFunction {
 class TabsHighlightFunction : public ExtensionFunction {
   ~TabsHighlightFunction() override = default;
   ResponseAction Run() override;
-  bool HighlightTab(TabStripModel* tabstrip,
-                    ui::ListSelectionModel* selection,
-                    std::optional<size_t>* active_index,
-                    int index,
-                    std::string* error);
   DECLARE_EXTENSION_FUNCTION("tabs.highlight", TABS_HIGHLIGHT)
 };
 class TabsUpdateFunction : public ExtensionFunction {
@@ -377,19 +368,19 @@ class TabsUpdateFunction : public ExtensionFunction {
   // Updates the active or selected tab. Returns true on success or if there was
   // nothing to do. Returns false on failure with an error message.
   bool UpdateActiveTab(const api::tabs::Update::Params& params,
+                       Profile& profile,
+                       BrowserWindowInterface& browser,
                        TabListInterface& tab_list,
                        int tab_index,
                        std::string& error);
 
-  // TODO(https://crbug.com/447211263): Support on desktop android.
-#if !BUILDFLAG(IS_ANDROID)
   // Updates the highlight state of the given tab. Returns true on success or if
   // there was nothing to do. Returns false on failure with an error.
   bool UpdateHighlightedTab(const api::tabs::Update::Params& params,
-                            TabStripModel* tab_strip,
-                            int tab_index,
+                            Profile& profile,
+                            TabListInterface& tab_list,
+                            ::tabs::TabInterface& target_tab,
                             std::string& error);
-#endif
 
   DECLARE_EXTENSION_FUNCTION("tabs.update", TABS_UPDATE)
 };
@@ -498,7 +489,7 @@ class TabsCaptureVisibleTabFunction :
   content::WebContents* GetWebContentsForID(int window_id, std::string* error);
 
   // extensions::WebContentsCaptureClient:
-  ScreenshotAccess GetScreenshotAccess(
+  base::expected<void, extensions::ScreenshotAccessError> GetScreenshotAccess(
       content::WebContents* web_contents) const override;
   bool ClientAllowsTransparency() override;
   void OnCaptureSuccess(const SkBitmap& bitmap) override;

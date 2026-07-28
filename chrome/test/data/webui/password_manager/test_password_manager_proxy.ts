@@ -4,7 +4,8 @@
 
 /** @fileoverview Test implementation of PasswordManagerProxy. */
 
-import type {AccountStorageActiveStateChangedListener, BlockedSite, BlockedSitesListChangedListener, CredentialsChangedListener, PasswordCheckInteraction, PasswordCheckStatusChangedListener, PasswordManagerAuthTimeoutListener, PasswordManagerProxy, PasswordsFileExportProgressListener, PasswordViewPageInteractions, ShouldShowAccountStorageToggleChangedListener} from 'chrome://password-manager/password_manager.js';
+import {ExportPasswordsResult, ExportProgressStatus, ImportResultsStatus, PageCallbackRouter, PasswordManagerActionableError} from 'chrome://password-manager/password_manager.js';
+import type {AccountStorageActiveStateChangedListener, BlockedSite, BlockedSitesListChangedListener, CredentialsChangedListener, ImportResults, PasswordCheckInteraction, PasswordCheckStatusChangedListener, PasswordManagerActionableErrorChangedListener, PasswordManagerAuthTimeoutListener, PasswordManagerProxy, PasswordsFileExportProgressListener, PasswordViewPageInteractions, ShouldShowAccountStorageToggleChangedListener} from 'chrome://password-manager/password_manager.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 import type {ActorLoginPermission} from './password_manager.mojom-webui.js';
@@ -15,6 +16,8 @@ import {makeFamilyFetchResults, makePasswordCheckStatus} from './test_util.js';
  */
 export class TestPasswordManagerProxy extends TestBrowserProxy implements
     PasswordManagerProxy {
+  callbackRouter: PageCallbackRouter = new PageCallbackRouter();
+  callbackRouterRemote = this.callbackRouter.$.bindNewPipeAndPassRemote();
   data: {
     blockedSites: BlockedSite[],
     actorLoginPermissions: ActorLoginPermission[],
@@ -28,10 +31,11 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
     passwords: chrome.passwordsPrivate.PasswordUiEntry[],
     isPasswordManagerPinAvailable: boolean,
     isCloudAuthenticatorConnected: boolean,
-    changePasswordManagerPinSuccesful: boolean|null,
-    disconnectCloudAuthenticatorSuccessful: boolean|null,
-    isConnectedToCloudAuthenticator: boolean|null,
-    deleteAllPasswordManagerData: boolean|null,
+    changePasswordManagerPinSuccessful: boolean,
+    disconnectCloudAuthenticatorSuccessful: boolean,
+    isConnectedToCloudAuthenticator: boolean,
+    deleteAllPasswordManagerData: boolean,
+    getActionableError: PasswordManagerActionableError,
   };
 
   listeners: {
@@ -46,6 +50,8 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
     passwordsFileExportProgressListener: PasswordsFileExportProgressListener|
     null,
     passwordManagerAuthTimeoutListener: PasswordManagerAuthTimeoutListener|null,
+    passwordManagerActionableErrorChangedListener:
+        PasswordManagerActionableErrorChangedListener|null,
   };
 
   private requestCredentialsDetailsResponse_:
@@ -53,12 +59,15 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
 
   private switchBiometricAuthBeforeFillingStateResult_: boolean = false;
 
-  private importResults_: chrome.passwordsPrivate.ImportResults = {
-    status: chrome.passwordsPrivate.ImportResultsStatus.SUCCESS,
+  private importResults_: ImportResults = {
+    status: ImportResultsStatus.kSuccess,
     numberImported: 0,
     displayedEntries: [],
     fileName: '',
   };
+
+  private exportPasswordsResult_: ExportPasswordsResult =
+      ExportPasswordsResult.kSuccess;
 
   constructor() {
     super([
@@ -100,13 +109,16 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
       'requestPlaintextPassword',
       'resetImporter',
       'revokeActorLoginPermission',
+      'requestChangePassword',
+      'stopPasswordChange',
       'sharePassword',
       'showAddShortcutDialog',
-      'showExportedFileInShell',
+      'showLastExportedFileInShell',
       'startBulkPasswordCheck',
       'switchBiometricAuthBeforeFillingState',
       'undoRemoveSavedPasswordOrException',
       'unmuteInsecureCredential',
+      'getPasswordManagerActionableError',
     ]);
 
     // Set these to have non-empty data.
@@ -123,12 +135,12 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
       passwords: [],
       isPasswordManagerPinAvailable: false,
       isCloudAuthenticatorConnected: false,
-      changePasswordManagerPinSuccesful: null,
-      disconnectCloudAuthenticatorSuccessful: null,
-      isConnectedToCloudAuthenticator: null,
-      deleteAllPasswordManagerData: null,
+      changePasswordManagerPinSuccessful: false,
+      disconnectCloudAuthenticatorSuccessful: false,
+      isConnectedToCloudAuthenticator: true,
+      deleteAllPasswordManagerData: true,
+      getActionableError: PasswordManagerActionableError.kNoError,
     };
-
     // Holds listeners so they can be called when needed.
     this.listeners = {
       accountStorageActiveStateListener: null,
@@ -139,6 +151,7 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
       passwordsFileExportProgressListener: null,
       passwordManagerAuthTimeoutListener: null,
       savedPasswordListChangedListener: null,
+      passwordManagerActionableErrorChangedListener: null,
     };
   }
 
@@ -210,11 +223,6 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
 
   startBulkPasswordCheck() {
     this.methodCalled('startBulkPasswordCheck');
-    if (this.data.checkStatus.state ===
-        chrome.passwordsPrivate.PasswordCheckState.NO_PASSWORDS) {
-      return Promise.reject(new Error('error'));
-    }
-    return Promise.resolve();
   }
 
   recordPasswordCheckInteraction(interaction: PasswordCheckInteraction) {
@@ -288,13 +296,16 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
 
   requestExportProgressStatus() {
     this.methodCalled('requestExportProgressStatus');
-    return Promise.resolve(
-        chrome.passwordsPrivate.ExportProgressStatus.NOT_STARTED);
+    return Promise.resolve(ExportProgressStatus.kNotStarted);
   }
 
   exportPasswords() {
     this.methodCalled('exportPasswords');
-    return Promise.resolve();
+    return Promise.resolve(this.exportPasswordsResult_);
+  }
+
+  setExportPasswordsResult(result: ExportPasswordsResult) {
+    this.exportPasswordsResult_ = result;
   }
 
   addPasswordsFileExportProgressListener(
@@ -324,8 +335,8 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
     this.methodCalled('undoRemoveSavedPasswordOrException');
   }
 
-  showExportedFileInShell() {
-    this.methodCalled('showExportedFileInShell');
+  showLastExportedFileInShell() {
+    this.methodCalled('showLastExportedFileInShell');
   }
 
   getUrlCollection(url: string) {
@@ -349,6 +360,16 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
   removePasswordManagerAuthTimeoutListener(
       _listener: PasswordManagerAuthTimeoutListener) {
     this.listeners.passwordManagerAuthTimeoutListener = null;
+  }
+
+  addPasswordManagerActionableErrorChangedListener(
+      listener: PasswordManagerActionableErrorChangedListener) {
+    this.listeners.passwordManagerActionableErrorChangedListener = listener;
+  }
+
+  removePasswordManagerActionableErrorChangedListener(
+      _listener: PasswordManagerActionableErrorChangedListener) {
+    this.listeners.passwordManagerActionableErrorChangedListener = null;
   }
 
   extendAuthValidity() {
@@ -388,7 +409,7 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
   /**
    * Sets the value to be returned by importPasswords.
    */
-  setImportResults(results: chrome.passwordsPrivate.ImportResults) {
+  setImportResults(results: ImportResults) {
     this.importResults_ = results;
   }
 
@@ -433,10 +454,7 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
 
   changePasswordManagerPin() {
     this.methodCalled('changePasswordManagerPin');
-    if (this.data.changePasswordManagerPinSuccesful !== null) {
-      return Promise.resolve(this.data.changePasswordManagerPinSuccesful);
-    }
-    return Promise.reject(new Error());
+    return Promise.resolve(this.data.changePasswordManagerPinSuccessful);
   }
 
   isPasswordManagerPinAvailable(): Promise<boolean> {
@@ -446,29 +464,18 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
 
   disconnectCloudAuthenticator(): Promise<boolean> {
     this.methodCalled('disconnectCloudAuthenticator');
-    if (this.data.isConnectedToCloudAuthenticator !== null &&
-        this.data.disconnectCloudAuthenticatorSuccessful !== null) {
-      this.data.isConnectedToCloudAuthenticator = false;
-      return Promise.resolve(this.data.disconnectCloudAuthenticatorSuccessful);
-    }
-    return Promise.reject(new Error());
+    this.data.isConnectedToCloudAuthenticator = false;
+    return Promise.resolve(this.data.disconnectCloudAuthenticatorSuccessful);
   }
 
   deleteAllPasswordManagerData(): Promise<boolean> {
     this.methodCalled('deleteAllPasswordManagerData');
-    if (this.data.deleteAllPasswordManagerData !== null) {
-      return Promise.resolve(this.data.deleteAllPasswordManagerData);
-    }
-    return Promise.reject(new Error());
+    return Promise.resolve(this.data.deleteAllPasswordManagerData);
   }
 
   isConnectedToCloudAuthenticator(): Promise<boolean> {
     this.methodCalled('isConnectedToCloudAuthenticator');
-    if (this.data.isConnectedToCloudAuthenticator !== null) {
-      return Promise.resolve(this.data.isConnectedToCloudAuthenticator);
-    }
-
-    return Promise.reject(new Error());
+    return Promise.resolve(this.data.isConnectedToCloudAuthenticator);
   }
 
   getActorLoginPermissions() {
@@ -482,5 +489,18 @@ export class TestPasswordManagerProxy extends TestBrowserProxy implements
         s =>
             !(s.domainInfo.signonRealm === site.domainInfo.signonRealm &&
               s.username === site.username));
+  }
+
+  requestChangePassword(id: number): void {
+    this.methodCalled('requestChangePassword', id);
+  }
+
+  stopPasswordChange(): void {
+    this.methodCalled('stopPasswordChange');
+  }
+
+  getPasswordManagerActionableError(): Promise<PasswordManagerActionableError> {
+    this.methodCalled('getPasswordManagerActionableError');
+    return Promise.resolve(this.data.getActionableError);
   }
 }

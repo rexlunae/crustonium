@@ -26,7 +26,6 @@
 #import "components/feature_engagement/public/feature_activation.h"
 #import "components/password_manager/core/browser/sharing/fake_recipients_fetcher.h"
 #import "components/password_manager/ios/fake_bulk_leak_check_service.h"
-#import "components/plus_addresses/core/browser/fake_plus_address_service.h"
 #import "components/saved_tab_groups/delegate/tab_group_sync_delegate.h"
 #import "components/saved_tab_groups/internal/saved_tab_group_model.h"
 #import "components/saved_tab_groups/internal/tab_group_sync_coordinator.h"
@@ -44,7 +43,6 @@
 #import "ios/chrome/browser/flags/chrome_switches.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
-#import "ios/chrome/browser/plus_addresses/model/plus_address_setting_service_factory.h"
 #import "ios/chrome/browser/policy/model/test_platform_policy_provider.h"
 #import "ios/chrome/browser/saved_tab_groups/model/ios_tab_group_sync_delegate.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_local_update_observer.h"
@@ -60,6 +58,7 @@
 #import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/sync/model/data_type_store_service_factory.h"
 #import "ios/chrome/browser/sync/model/device_info_sync_service_factory.h"
+#import "ios/chrome/common/ui/reauthentication/mock_reauthentication_module.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 #import "ios/chrome/test/app/signin_test_util.h"
 #import "ios/chrome/test/earl_grey/test_switches.h"
@@ -319,11 +318,6 @@ GetOverriddenBulkLeakCheckService() {
   return std::make_unique<password_manager::FakeBulkLeakCheckService>();
 }
 
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService() {
-  return std::make_unique<plus_addresses::FakePlusAddressService>();
-}
-
 std::unique_ptr<password_manager::RecipientsFetcher>
 GetOverriddenRecipientsFetcher() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -454,6 +448,14 @@ std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
 std::unique_ptr<contextual_search::ContextualSearchService>
 CreateContextualSearchService(ProfileIOS* profile) {
   return MockIOSContextualSearchService::CreateTestingProfileService(profile);
+}
+
+void InjectFakeTabsInBrowser(Browser* browser) {
+  // No-op for internal EG2 tests.
+}
+
+id<ReauthenticationProtocol> GetFakeReauthenticationModule() {
+  return [[MockReauthenticationModule alloc] init];
 }
 
 }  // namespace tests_hook

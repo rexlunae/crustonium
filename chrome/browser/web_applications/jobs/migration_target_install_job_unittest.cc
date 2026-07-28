@@ -30,6 +30,7 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
+#include "third_party/blink/public/mojom/manifest/manifest_migration_behavior.mojom.h"
 
 namespace web_app {
 
@@ -43,7 +44,7 @@ class MigrationTargetInstallJobTest : public WebAppTest {
     fake_provider().SetWebContentsManager(
         std::make_unique<FakeWebContentsManager>());
     auto origin_association_manager =
-        std::make_unique<FakeWebAppOriginAssociationManager>();
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
     origin_association_manager->set_pass_through(true);
     fake_provider().SetOriginAssociationManager(
         std::move(origin_association_manager));
@@ -69,8 +70,8 @@ class MigrationTargetInstallJobTest : public WebAppTest {
     auto data_retriever = web_contents_manager().CreateDataRetriever();
     auto job = MigrationTargetInstallJob::CreateAndStart(
         std::move(manifest), web_contents()->GetWeakPtr(), profile(),
-        data_retriever.get(), base::DefaultClock::GetInstance(), &debug_value,
-        lock.get(), future.GetCallback());
+        data_retriever.get(), &debug_value, lock.get(), lock.get(),
+        future.GetCallback());
     return future.Get();
   }
 };
@@ -81,6 +82,7 @@ TEST_F(MigrationTargetInstallJobTest, InstallNewApp) {
   manifest->scope = GURL("https://example.com/");
   manifest->name = u"New App";
   manifest->id = GURL("https://example.com/start");
+  manifest->manifest_url = GURL("https://example.com/start");
 
   auto migrate_from = blink::mojom::ManifestMigrateFrom::New();
   migrate_from->id = GURL("https://example.com/old_app");
@@ -107,6 +109,7 @@ TEST_F(MigrationTargetInstallJobTest, UpdateInstalledApp) {
   manifest->scope = GURL("https://example.com/");
   manifest->name = u"Old App Name";
   manifest->id = GURL("https://example.com/start");
+  manifest->manifest_url = GURL("https://example.com/start");
 
   blink::Manifest::ImageResource icon_info;
   icon_info.src = GURL("https://example.com/icon.png");
@@ -135,7 +138,7 @@ TEST_F(MigrationTargetInstallJobTest, UpdateInstalledApp) {
   }
 
   EXPECT_EQ(RunJob(std::move(manifest)),
-            MigrationTargetInstallJobResult::kSuccessUpdated);
+            MigrationTargetInstallJobResult::kAlreadyInstalled);
 
   // The app name should NOT have been updated.
   EXPECT_EQ(fake_provider()
@@ -149,12 +152,13 @@ TEST_F(MigrationTargetInstallJobTest, UpdateInstalledApp) {
       app_id, WebAppFilter::IsAppSurfaceableToUser()));
 }
 
-TEST_F(MigrationTargetInstallJobTest, UpdateSuggestedApp) {
+TEST_F(MigrationTargetInstallJobTest, NoUpdateSuggestedApp) {
   auto manifest = blink::mojom::Manifest::New();
   manifest->start_url = GURL("https://example.com/start");
   manifest->scope = GURL("https://example.com/");
   manifest->name = u"Old App Name";
   manifest->id = GURL("https://example.com/start");
+  manifest->manifest_url = GURL("https://example.com/start");
 
   blink::Manifest::ImageResource icon_info;
   icon_info.src = GURL("https://example.com/icon.png");
@@ -188,14 +192,14 @@ TEST_F(MigrationTargetInstallJobTest, UpdateSuggestedApp) {
   }
 
   EXPECT_EQ(RunJob(std::move(manifest)),
-            MigrationTargetInstallJobResult::kSuccessUpdated);
+            MigrationTargetInstallJobResult::kAlreadyInstalled);
 
-  // The app name SHOULD have been updated.
+  // The app name SHOULD NOT have been updated.
   EXPECT_EQ(fake_provider()
                 .registrar_unsafe()
                 .GetAppById(app_id)
                 ->untranslated_name(),
-            "New App Name");
+            "Old App Name");
   EXPECT_TRUE(fake_provider().registrar_unsafe().AppMatches(
       app_id, WebAppFilter::IsAppSuggestedForMigration()));
   EXPECT_FALSE(fake_provider().registrar_unsafe().AppMatches(

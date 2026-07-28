@@ -17,32 +17,7 @@ enum class FeedSwipeIPHVariation {
   kAnimated,
 };
 
-// Represents the possible onboarding treatments of Lens Overlay.
-enum class NTPMIAEntrypointVariation {
-  // The default experience.
-  kDisabled = 0,
-  // The entrypoint is shown in the omnibox as a single button.
-  kOmniboxContainedSingleButton = 1,
-  // The entrypoint is shown in the omnibox as a button inline with Lens and
-  // Voice.
-  kOmniboxContainedInline = 2,
-  // The entrypoint is shown inside the enlarged fake omnibox.
-  kOmniboxContainedEnlargedFakebox = 3,
-  // The entrypoint is shown inside the enlarged fake omnibox without incognito
-  // shortcut.
-  kEnlargedFakeboxNoIncognito = 4,
-  // The entrypoint is shown as a quick actions button, with enlarged fake
-  // omnibox
-  kAIMInQuickAction = 5,
-  kMaxValue = kAIMInQuickAction,
-};
-
 #pragma mark - Feature declarations
-
-// Feature flag to fix the NTP view hierarchy if it is broken before applying
-// constraints.
-// TODO(crbug.com/40799579): Remove this when it is fixed.
-BASE_DECLARE_FEATURE(kEnableNTPViewHierarchyRepair);
 
 // Flag to modify the feed header through the server. Enabling this feature on
 // its own does nothing; relies on feature parameters.
@@ -52,6 +27,12 @@ BASE_DECLARE_FEATURE(kFeedHeaderSettings);
 // its own does nothing; relies on feature parameters.
 BASE_DECLARE_FEATURE(kOverrideFeedSettings);
 
+// Feature flag to enable transform-based animations for the NTP header.
+BASE_DECLARE_FEATURE(kNTPHeaderUseTransformsForAnimations);
+
+// Checks if transform-based animations are enabled for the NTP header.
+bool IsNTPHeaderTransformsForAnimationsEnabled();
+
 // Feature flag to enable in-product help for swipe action on the Feed.
 BASE_DECLARE_FEATURE(kFeedSwipeInProductHelp);
 
@@ -59,9 +40,8 @@ BASE_DECLARE_FEATURE(kFeedSwipeInProductHelp);
 // eligibility service instead of the new tab page mediator.
 BASE_DECLARE_FEATURE(kUseFeedEligibilityService);
 
-// iOS counterpart for `chrome::android::kMostVisitedTilesCustomization`;
-// enables customizable most visited tiles when enabled.
-BASE_DECLARE_FEATURE(kMostVisitedTilesCustomizationIOS);
+// Feature flag to enable the NTP background image cache.
+BASE_DECLARE_FEATURE(kEnableNTPBackgroundImageCache);
 
 // Feature flag to make the height of the NTP Logo and Doodle consistent.
 BASE_DECLARE_FEATURE(kConsistentLogoDoodleHeight);
@@ -91,9 +71,6 @@ extern const char kFeedSwipeInProductHelpArmParam[];
 
 #pragma mark - Helpers
 
-// Whether the NTP view hierarchy repair is enabled.
-bool IsNTPViewHierarchyRepairEnabled();
-
 // Whether the sync promo should be shown on top of the feed.
 bool IsDiscoverFeedTopSyncPromoEnabled();
 
@@ -107,22 +84,19 @@ FeedSwipeIPHVariation GetFeedSwipeIPHVariation();
 // the new tab page mediator.
 bool UseFeedEligibilityService();
 
-// Returns the enabled variation of feature kNTPMIAEntrypoint;
-NTPMIAEntrypointVariation GetNTPMIAEntrypointVariation();
+// Whether the AIM button is allowed in NTP.
+bool IsAimEnabledInNtp();
 
-// Whether to show only the MIA button in the fakebox.
-bool ShowOnlyMIAEntrypointInNTPFakebox();
-
-// Whether the quick actions row should be displayed.
-bool ShouldShowQuickActionsRow();
-
-// Whether a MIA variation should increase the size of the fakebox.
-bool ShouldEnlargeNTPFakeboxForMIA();
-
-// Whether customized most visited tiles is enabled on Chrome on iOS.
-bool IsContentSuggestionsCustomizable();
+// Whether the NTP background image cache is enabled.
+bool IsNTPBackgroundImageCacheEnabled();
 
 // Whether the NTP Logo and Doodle should have a consistent height.
 bool IsConsistentLogoDoodleHeightEnabled();
+
+// Feature flag to enable the New Tab Page Redesign.
+BASE_DECLARE_FEATURE(kNewTabPageRedesign);
+
+// Whether the New Tab Page Redesign is enabled.
+bool IsNTPRedesignEnabled();
 
 #endif  // IOS_CHROME_BROWSER_NTP_UI_BUNDLED_NEW_TAB_PAGE_FEATURE_H_

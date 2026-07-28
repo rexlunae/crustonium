@@ -12,20 +12,25 @@
 #include "base/functional/callback_forward.h"
 #include "build/buildflag.h"
 #include "chrome/browser/default_browser/default_browser_controller.h"
+#include "chrome/browser/default_browser/default_browser_features.h"
+#include "chrome/browser/default_browser/default_browser_monitor.h"
+#include "chrome/browser/default_browser/default_browser_time_after_setter_failure_tracker.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "url/gurl.h"
 
 class BrowserProcess;
+class Profile;
 
 namespace default_browser {
 
 class DefaultBrowserMonitor;
-class DefaultBrowserNotificationHandler;
+class DefaultBrowserNotificationObserver;
 
 using DefaultBrowserCheckCompletionCallback =
     base::OnceCallback<void(DefaultBrowserState)>;
 using DefaultBrowserChangedCallback =
     base::RepeatingCallback<void(DefaultBrowserState)>;
+using ProfileProviderCallback = base::RepeatingCallback<Profile*()>;
 
 // DefaultBrowserManager is the long-lived central coordinator and the public
 // API for the default browser framework. It is responsible for selecting the
@@ -34,6 +39,9 @@ using DefaultBrowserChangedCallback =
 class DefaultBrowserManager {
  public:
   DECLARE_USER_DATA(DefaultBrowserManager);
+
+  // The unique ID used to identify and manage this system notification.
+  static constexpr char kNotificationId[] = "default_browser_changed";
 
   // Delegate for performing shell-dependent operations.
   class ShellDelegate {
@@ -53,8 +61,11 @@ class DefaultBrowserManager {
 #endif  // BUILDFLAG(IS_WIN)
   };
 
-  explicit DefaultBrowserManager(BrowserProcess* browser_process,
-                                 std::unique_ptr<ShellDelegate> shell_delegate);
+  explicit DefaultBrowserManager(
+      BrowserProcess* browser_process,
+      std::unique_ptr<ShellDelegate> shell_delegate,
+      ProfileProviderCallback profile_provider_callback,
+      std::unique_ptr<DefaultBrowserMonitor> monitor = nullptr);
   ~DefaultBrowserManager();
 
   DefaultBrowserManager(const DefaultBrowserManager&) = delete;
@@ -67,6 +78,8 @@ class DefaultBrowserManager {
   // controller instance.
   static std::unique_ptr<DefaultBrowserController> CreateControllerFor(
       DefaultBrowserEntrypointType ui_entrypoint);
+
+  Profile& GetProfile();
 
   // Utility method to check the current default browser state asynchronously.
   void GetDefaultBrowserState(DefaultBrowserCheckCompletionCallback callback);
@@ -81,7 +94,14 @@ class DefaultBrowserManager {
   base::CallbackListSubscription RegisterDefaultBrowserChanged(
       DefaultBrowserChangedCallback callback);
 
+  // Starts tracking the asynchronous success of a default browser flow after
+  // failure.
+  void TrackTimeAfterSetterFailure(DefaultBrowserEntrypointType entrypoint,
+                                   DefaultBrowserSetterType setter);
+
  private:
+  void OnDefaultBrowserStateChangedForTracker(DefaultBrowserState state);
+
   void OnDefaultBrowserCheckResult(
       default_browser::DefaultBrowserCheckCompletionCallback callback,
       default_browser::DefaultBrowserState default_state);
@@ -107,7 +127,7 @@ class DefaultBrowserManager {
   std::unique_ptr<DefaultBrowserMonitor> monitor_;
 
   // The handler responsible for showing system notifications.
-  std::unique_ptr<DefaultBrowserNotificationHandler> notification_handler_;
+  std::unique_ptr<DefaultBrowserNotificationObserver> notification_observer_;
 
   // List of high-level observers (Notification, UI handlers, etc.)
   base::RepeatingCallbackList<void(DefaultBrowserState)> observers_;
@@ -115,7 +135,12 @@ class DefaultBrowserManager {
   // The subscription to signals from the low-level `monitor_`.
   base::CallbackListSubscription monitor_subscription_;
 
+  ProfileProviderCallback profile_provider_callback_;
+
   ui::ScopedUnownedUserData<DefaultBrowserManager> scoped_unowned_user_data_;
+
+  std::unique_ptr<TimeAfterSetterFailureTracker> tracker_;
+  base::CallbackListSubscription tracker_subscription_;
 };
 
 }  // namespace default_browser

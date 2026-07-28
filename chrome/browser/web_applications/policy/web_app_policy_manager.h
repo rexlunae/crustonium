@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/feature.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -26,8 +26,8 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate_map.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -42,6 +42,7 @@ namespace web_app {
 
 BASE_DECLARE_FEATURE(kDesktopPWAsForceUnregisterOSIntegration);
 
+class WebApp;
 class WebAppProvider;
 
 // Policy installation allows enterprise admins to control and manage

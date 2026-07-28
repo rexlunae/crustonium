@@ -12,19 +12,19 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/call_to_action/call_to_action_lock.h"
 #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
 #include "chrome/browser/ui/lens/lens_search_feature_flag_utils.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/common/buildflags.h"
-#include "chrome/grit/branded_strings.h"
 #include "components/lens/lens_features.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/focus/focus_manager.h"
 
 DEFINE_USER_DATA(LensOverlayHomeworkPageActionController);
@@ -57,16 +57,16 @@ void LensOverlayHomeworkPageActionController::UpdatePageActionIcon() {
   CHECK(tab_->GetContents());
 
   if (ShouldShow()) {
-    if (!scoped_window_call_to_action_ptr_) {
-      scoped_window_call_to_action_ptr_ =
-          tab_->GetBrowserWindowInterface()->ShowCallToAction();
-      lens::IncrementLensOverlayEduActionChipShownCount(
-          base::to_address(profile_));
+    if (!scoped_call_to_action_lock_) {
+      scoped_call_to_action_lock_ =
+          CallToActionLock::From(tab_->GetBrowserWindowInterface())
+              ->AcquireLock();
+      lens::RecordLensOverlayEduActionChipShown(base::to_address(profile_));
     }
     page_action_controller_->Show(kActionLensOverlayHomework);
     page_action_controller_->ShowSuggestionChip(kActionLensOverlayHomework);
   } else {
-    scoped_window_call_to_action_ptr_.reset();
+    scoped_call_to_action_lock_.reset();
     page_action_controller_->HideSuggestionChip(kActionLensOverlayHomework);
     page_action_controller_->Hide(kActionLensOverlayHomework);
   }
@@ -92,21 +92,8 @@ void LensOverlayHomeworkPageActionController::HandlePageActionEvent(
       LensSearchController::FromTabWebContents(tab_->GetContents());
   CHECK(controller);
 
-  if (lens::features::IsLensOverlayStraightToSrpEnabled()) {
-    std::string query_text =
-        lens::features::GetStraightToSrpQuery().empty()
-            ? l10n_util::GetStringUTF8(IDS_LENS_CONTEXTUAL_SEARCH_DEFAULT_QUERY)
-            : lens::features::GetStraightToSrpQuery();
-    controller->IssueTextSearchRequest(
-        lens::LensOverlayInvocationSource::kHomeworkActionChip, query_text,
-        /*additional_query_parameters=*/{},
-        AutocompleteMatchType::Type::SEARCH_SUGGEST,
-        /*is_zero_prefix_suggestion=*/false,
-        /*suppress_contextualization=*/false);
-  } else {
-    controller->OpenLensOverlay(
-        lens::LensOverlayInvocationSource::kHomeworkActionChip);
-  }
+  controller->OpenLensOverlay(
+      lens::LensOverlayInvocationSource::kHomeworkActionChip);
   UserEducationService::MaybeNotifyNewBadgeFeatureUsed(
       tab_->GetContents()->GetBrowserContext(), lens::features::kLensOverlay);
 
@@ -123,27 +110,31 @@ bool LensOverlayHomeworkPageActionController::ShouldShow() {
     return false;
   }
 
-#if BUILDFLAG(ENABLE_GLIC)
   if (lens::features::IsLensOverlayEduActionChipDisabledByGlic() &&
       glic::GlicEnabling::IsEligibleForGlicTieredRollout(
           base::to_address(profile_))) {
     return false;
   }
-#endif  // BUILDFLAG(ENABLE_GLIC)
 
   // Hide the homework chip if the broader lens feature is disabled.
   const auto* lens_overlay_entry_point_controller =
-      tab_->GetBrowserWindowInterface()
-          ->GetFeatures()
-          .lens_overlay_entry_point_controller();
+      lens::LensOverlayEntryPointController::From(
+          tab_->GetBrowserWindowInterface());
   if (!lens_overlay_entry_point_controller ||
       !lens_overlay_entry_point_controller->AreVisible()) {
     return false;
   }
 
-  views::View* const location_bar_view =
-      BrowserElementsViews::From(tab_->GetBrowserWindowInterface())
-          ->GetView(kLocationBarElementId);
+  views::View* location_bar_view = location_bar_view_tracker_.view();
+  if (!location_bar_view) {
+    location_bar_view =
+        BrowserElementsViews::From(tab_->GetBrowserWindowInterface())
+            ->GetView(kLocationBarElementId);
+    if (base::FeatureList::IsEnabled(
+            features::kLensOverlayHomeworkPageActionFocusOptimization)) {
+      location_bar_view_tracker_.SetView(location_bar_view);
+    }
+  }
   if (!location_bar_view) {
     return false;
   }
@@ -157,11 +148,12 @@ bool LensOverlayHomeworkPageActionController::ShouldShow() {
   }
 
   // Treat the chip as a window-level call to action UI; only one such UI is
-  // allowed to show at a time. Check if scoped_window_call_to_action_ptr_ is
+  // allowed to show at a time. Check if scoped_call_to_action_lock_ is
   // already set (we are already showing the chip) before checking
-  // CanShowCallToAction().
-  if (!scoped_window_call_to_action_ptr_ &&
-      !tab_->GetBrowserWindowInterface()->CanShowCallToAction()) {
+  // CanAcquireLock().
+  if (!scoped_call_to_action_lock_ &&
+      !CallToActionLock::From(tab_->GetBrowserWindowInterface())
+           ->CanAcquireLock()) {
     return false;
   }
 
@@ -177,5 +169,8 @@ bool LensOverlayHomeworkPageActionController::ShouldShow() {
 void LensOverlayHomeworkPageActionController::OnTabWillDetach(
     tabs::TabInterface* tab,
     tabs::TabInterface::DetachReason reason) {
-  scoped_window_call_to_action_ptr_.reset();
+  scoped_call_to_action_lock_.reset();
+  // Reset the cached location bar view. If this tab is moved to a new
+  // window, the pointer will be re-evaluated on the next active window.
+  location_bar_view_tracker_.SetView(nullptr);
 }

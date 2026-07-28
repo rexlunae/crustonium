@@ -5,14 +5,29 @@
 #include "components/autofill/core/browser/integrators/one_time_tokens/otp_manager_impl.h"
 
 #include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "base/containers/to_vector.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/integrators/one_time_tokens/otp_phish_guard_delegate.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "components/one_time_tokens/core/browser/one_time_token.h"
+#include "components/one_time_tokens/core/browser/one_time_token_retrieval_error.h"
+#include "components/one_time_tokens/core/browser/one_time_token_service.h"
+#include "components/one_time_tokens/core/browser/one_time_token_type.h"
+#include "components/one_time_tokens/core/browser/util/expiring_subscription.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 
 using one_time_tokens::ExpiringSubscriptionHandle;
@@ -68,21 +83,24 @@ void OtpManagerImpl::GetRecentOtpsAndRenewSubscription() {
   }
 
   subscription_ = one_time_token_services_->Subscribe(
+      OneTimeTokenSource::kOnDeviceSms,
       base::Time::Now() + kSubscriptionDuration,
       base::BindRepeating(&OtpManagerImpl::OnOneTimeTokenReceived,
-                          weak_ptr_factory_.GetWeakPtr()));
+                          weak_ptr_factory_.GetWeakPtr()),
+      /*expiration_callback=*/base::DoNothing());
 }
 
 void OtpManagerImpl::OnFieldTypesDetermined(
     AutofillManager& manager,
     FormGlobalId form_id,
-    AutofillManager::Observer::FieldTypeSource source) {
+    AutofillManager::Observer::FieldTypeSource source,
+    bool small_forms_were_parsed) {
   // On non-android platforms and in tests the backend may be not initialized.
   if (!one_time_token_services_) {
     return;
   }
 
-  const autofill::FormStructure* form = manager.FindCachedFormById(form_id);
+  const FormStructure* form = manager.FindCachedFormById(form_id);
   if (!form) {
     return;
   }
@@ -138,6 +156,9 @@ void OtpManagerImpl::OnOneTimeTokenReceived(
   }
 
   OneTimeToken& token = token_or_error.value();
+  if (!token.value().empty()) {
+    owner_->GetOtpFormEventLogger().OnOtpAvailable();
+  }
 
   // We run PhishGuard check to make sure OTPs are not shown to users on
   // potential phishing sites.
@@ -194,12 +215,21 @@ void OtpManagerImpl::MaybeShowOtpSuggestions(
     suggestions.clear();
   }
 
-  owner_->GetOtpFormEventLogger().OnOtpAvailable();
   std::move(last_pending_get_suggestions_callback_).Run(std::move(suggestions));
 }
 
 bool OtpManagerImpl::IsOtpDeliveryBlocked() {
   return owner_->client().DocumentUsedWebOTP();
+}
+
+std::optional<one_time_tokens::OneTimeToken>
+OtpManagerImpl::SelectMostRecentToken() const {
+  if (received_otps_.empty()) {
+    return std::nullopt;
+  }
+  return *std::ranges::max_element(
+      received_otps_, {},
+      &one_time_tokens::OneTimeToken::on_device_arrival_time);
 }
 
 }  // namespace autofill

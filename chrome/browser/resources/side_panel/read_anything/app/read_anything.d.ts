@@ -9,6 +9,16 @@ interface Element {
   scrollIntoViewIfNeeded: () => void;
 }
 
+interface AxTreeAnchorMetadata {
+  axId: number;
+  htmlId?: string;
+  target?: string;
+  title?: string;
+  name?: string;
+  textBefore?: string;
+  textAfter?: string;
+}
+
 declare namespace chrome {
   export namespace readingMode {
     /////////////////////////////////////////////////////////////////////
@@ -28,6 +38,11 @@ declare namespace chrome {
     let endNodeId: number;
     let endOffset: number;
 
+    // If the selection from the main content is considered "valid." It's
+    // possible to receive bad selection data from the accessibility tree in
+    // the renderer. If this happens, the selection should be ignored.
+    let hasValidSelection: boolean;
+
     // The current style theme values.
     let fontName: string;
     let fontSize: number;
@@ -44,8 +59,11 @@ declare namespace chrome {
     let speechRate: number;
     let highlightGranularity: number;
 
-    // Current line focus value.
-    let lineFocus: number;
+    // The last line focus value used when it was on.
+    let lastNonDisabledLineFocus: number;
+    // Whether line focus is currently on. i.e. it is in a mode other than off.
+    // The feature flag check is separate under isLineFocusEnabled.
+    let isLineFocusOn: boolean;
 
     // Enum values for various visual theme changes.
     let standardLineSpacing: number;
@@ -60,13 +78,8 @@ declare namespace chrome {
     let yellowTheme: number;
     let blueTheme: number;
     let highContrastTheme: number;
-    let lowContrastTheme: number;
-    let sepiaLightTheme: number;
-    let sepiaDarkTheme: number;
-    let undefinedPresentationState: number;
-    let hiddenPresentationState: number;
-    let inSidePanelPresentationState: number;
-    let inImmersiveOverlayPresentationState: number;
+    let lowContrastLightTheme: number;
+    let lowContrastDarkTheme: number;
     let autoHighlighting: number;
     let wordHighlighting: number;
     let phraseHighlighting: number;
@@ -95,17 +108,23 @@ declare namespace chrome {
     // Whether the Immersive Read Anything feature flag is enabled.
     let isImmersiveEnabled: boolean;
 
+    // Whether the Improved Read Aloud feature flag is enabled.
+    let isImprovedReadAloudEnabled: boolean;
+
+    // Whether the Read Anything Improved UI feature flag is enabled.
+    let isReadAnythingImprovedUiEnabled: boolean;
+
+    // Whether the Read Anything Translate Entry Point feature flag is enabled.
+    let isReadAnythingTranslateEntryPointEnabled: boolean;
+
     // Whether Read Anything is pinned to the toolbar.
     let isReadAnythingPinned: boolean;
 
-    // Whether the Read Aloud feature flag is enabled.
-    let isReadAloudEnabled: boolean;
-
-    // Whether the TS text segmentation feature flag is enabled.
-    let isTsTextSegmentationEnabled: boolean;
-
     // Whether Readability.js is used as the primary distillation method.
     let isReadabilityEnabled: boolean;
+
+    // Whether select text for readability distillation is enabled.
+    let isReadabilitySelectTextEnabled: boolean;
 
     // Whether the phrase highlighting feature flag is enabled.
     let isPhraseHighlightingEnabled: boolean;
@@ -115,6 +134,9 @@ declare namespace chrome {
 
     // Indicates if this page is a Google doc.
     let isGoogleDocs: boolean;
+
+    // Indicates if this page is a PDF.
+    let isPdf: boolean;
 
     // Fonts supported by the user's current language.
     let supportedFonts: string[];
@@ -146,6 +168,35 @@ declare namespace chrome {
 
     // Distiled html content from DOM distiller distillation.
     let htmlContent: string;
+
+    // The active URL of the main panel document.
+    let documentUrl: string;
+
+    let axTreeAnchors: Record<string, AxTreeAnchorMetadata[]>;
+
+    // The active distillation method currently showing in page content.
+    // Possible values are distillationTypeScreen2x or
+    // distillationTypeReadability.
+    let activeDistillationMethod: number;
+
+    // The constant value representing the Screen2x (AXTree) distillation
+    // method.
+    let distillationTypeScreen2x: number;
+
+    // The constant value representing the Readability (HTML string)
+    // distillation method.
+    let distillationTypeReadability: number;
+
+    // The active presentation state of Reading mode.
+    let activePresentationState: number;
+    let inHiddenPresentationState: number;
+    let inSidePanelPresentationState: number;
+    let inImmersiveOverlayPresentationState: number;
+
+    // Returns the AXTree mapping segments for the distilled block at the given
+    // index. A segment links a character range within the block to its AXnode.
+    function getAxMapping(index: number): Array<
+        {axNodeId: number, start: number, end: number, axNodeOffset: number}>;
 
     // Returns whether the reading highlight is currently on.
     function isHighlightOn(): boolean;
@@ -186,6 +237,9 @@ declare namespace chrome {
     // Returns the url of the AXNode for the provided AXNodeID.
     function getUrl(nodeId: number): string;
 
+    // Returns the HTML id of the AXNode for the provided AXNodeID.
+    function getHtmlId(nodeId: number): string;
+
     // Returns the alt text of the AXNode for the provided AXNodeID.
     function getAltText(nodeId: number): string;
 
@@ -197,6 +251,12 @@ declare namespace chrome {
 
     // Returns true if the element is a leaf node.
     function isLeafNode(nodeId: number): boolean;
+
+    // Returns true if the original page has a section with key points.
+    function maybeHasKeyPointsSection(): boolean;
+
+    // Returns a regex string of keywords used to identify a key points section.
+    function getKeyPointsRegex(): string;
 
     // Connects to the browser process. Called by ts when the read anything
     // element is added to the document.
@@ -230,6 +290,9 @@ declare namespace chrome {
     // Called when a user toggles links via the webui toolbar.
     function onLinksEnabledToggled(): void;
 
+    // Called when a user requests translation via the webui toolbar.
+    function onTranslationRequested(): void;
+
     // Called when a user toggles images via the webui toolbar.
     function onImagesEnabledToggled(): void;
 
@@ -248,6 +311,8 @@ declare namespace chrome {
     // Called when reading mode is closed.
     function readingModeWillClose(): void;
 
+    function onAnchorsReadyForReadability(): void;
+
     // Called when the speech rate is changed via the webui toolbar.
     function onSpeechRateChange(rate: number): void;
 
@@ -263,7 +328,8 @@ declare namespace chrome {
     function onHighlightGranularityChanged(value: number): void;
 
     // Called when the line focus mode is changed via the webui toolbar.
-    function onLineFocusChanged(value: number): void;
+    function onLineFocusChanged(
+        currentValue: number, lastNonDisabledLineFocus: number): void;
 
     // Called when a language is enabled/disabled for Read Aloud
     // via the webui language menu.
@@ -295,6 +361,14 @@ declare namespace chrome {
     // Called when distillation completes with the word count.
     function onDistilled(wordCount: number): void;
 
+    // Reports a user selection attempt. A metric is logged if text mapping is
+    // still in progress. (One time per-navigation).
+    function attemptLogEarlySelection(fromSidePanel: boolean): void;
+
+    // Called by the Read Anything app to provide the rendered text blocks from
+    // the distilled content for AXTree mapping.
+    function onRenderedTextBlocksAvailable(blocks: string[]): void;
+
     // Called when the number of words seen by a reading mode user changes.
     function updateWordsSeen(wordsSeen: number): void;
 
@@ -320,6 +394,10 @@ declare namespace chrome {
     //   };
     function setContentForTesting(
         snapshotLite: Object, contentNodeIds: number[]): void;
+    // Sets the same structure as setContentForTesting but forces
+    // the processing of the AX Tree Anchors.
+    function setAnchorsForTesting(
+        snapshotLite: Object, contentNodeIds: number[]): void;
 
     // Set the theme. Used by tests only.
     function setThemeForTesting(
@@ -342,6 +420,12 @@ declare namespace chrome {
 
     // Called by the Read Anything app to close the Read Anything UI.
     function close(): void;
+
+    // Called when the speech engine stalls for 10 seconds.
+    function onSpeechEngineFirstStall(): void;
+
+    // Called when the speech engine stalls.
+    function onSpeechEngineStalled(): void;
 
     // Called by the ReadAnything app to toggle the pin state.
     function togglePinState(): void;
@@ -414,6 +498,10 @@ declare namespace chrome {
 
     // Resets the granularity index.
     function resetGranularityIndex(): void;
+
+    // Called after the ReadAnythingAppController maps the readability text
+    // blocks to the AXTree.
+    function onRenderedTextMappingReady(): void;
 
     // Increments the processed_granularity_index_ in ReadAnythingAppModel,
     // effectively updating ReadAloud's state of the current granularity to
@@ -522,5 +610,12 @@ declare namespace chrome {
     // whereas the other returns a segment (word or phrase) within the sentence.
     function getCurrentTextSegments():
         Array<{nodeId: number, start: number, length: number}>;
+
+    // Called when the main frame undergoes a same document navigation (such as
+    // a fragment navigation).
+    let onMainFrameSameDocumentNavigation: (url: string) => void;
+
+    // Called to inform the web ui to play read aloud on open.
+    let setPlayOnOpen: (playOnOpen: boolean) => void;
   }
 }

@@ -39,9 +39,8 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
 
 #pragma mark - TableViewItem
 
-- (void)configureCell:(LegacyTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)cell {
+  [super configureCell:cell];
 
   TableViewCellContentConfiguration* configuration =
       [[TableViewCellContentConfiguration alloc] init];
@@ -68,8 +67,8 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
     case TableViewAccountDetailImage::kError: {
       ImageContentConfiguration* trailingImageConfiguration =
           [[ImageContentConfiguration alloc] init];
-      trailingImageConfiguration.image = DefaultSymbolWithPointSize(
-          kErrorCircleFillSymbol, kErrorIconImageSize);
+      trailingImageConfiguration.image =
+          SymbolWithPointSize(SymbolErrorCircleFill, kErrorIconImageSize);
       trailingImageConfiguration.imageSize =
           CGSizeMake(kTableViewIconImageSize, kTableViewIconImageSize);
       trailingImageConfiguration.imageTintColor =
@@ -78,17 +77,11 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
       break;
     }
     case TableViewAccountDetailImage::kManaged: {
-      if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-        // Hide the icon while the separate profile for managed accounts feature
-        // is not enabled.
-        break;
-      }
       ImageContentConfiguration* trailingImageConfiguration =
           [[ImageContentConfiguration alloc] init];
-      trailingImageConfiguration.image =
-          SymbolWithPalette(CustomSymbolWithPointSize(kEnterpriseSymbol,
-                                                      kEnterpriseIconPointSize),
-                            @[ [UIColor colorNamed:kStaticGrey600Color] ]);
+      trailingImageConfiguration.image = SymbolWithPalette(
+          SymbolWithPointSize(SymbolEnterprise, kEnterpriseIconPointSize),
+          @[ [UIColor colorNamed:kStaticGrey600Color] ]);
       configuration.trailingConfiguration = trailingImageConfiguration;
       break;
     }
@@ -112,7 +105,7 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
   // Add a custom accessibility label for managed accounts to append "managed by
   // your organization" so that the screen readers read this cell as "text,
   // detailText, managed by your organization".
-  if (AreSeparateProfilesForManagedAccountsEnabled() && isManaged) {
+  if (isManaged) {
     cell.accessibilityLabel =
         self.text && self.detailText
             ? l10n_util::GetNSStringF(

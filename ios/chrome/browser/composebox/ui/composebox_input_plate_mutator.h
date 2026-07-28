@@ -5,9 +5,15 @@
 #ifndef IOS_CHROME_BROWSER_COMPOSEBOX_UI_COMPOSEBOX_INPUT_PLATE_MUTATOR_H_
 #define IOS_CHROME_BROWSER_COMPOSEBOX_UI_COMPOSEBOX_INPUT_PLATE_MUTATOR_H_
 
+#import "ios/chrome/browser/composebox/public/composebox_input_item_source.h"
+
 @class ComposeboxInputItem;
 enum class ComposeboxModelOption;
 class GURL;
+
+namespace omnibox {
+class SearchboxConfig;
+}
 @class TabInfo;
 
 namespace web {
@@ -30,12 +36,24 @@ class WebStateID;
 /// Requests a refresh of UI.
 - (void)requestUIRefresh;
 
-/// Processes the given `PDFFileURL` for a file.
-- (void)processPDFFileURL:(GURL)PDFFileURL;
+/// Processes the given `fileURL` for a file.
+- (void)processFileURL:(GURL)fileURL
+                 isPDF:(BOOL)isPDF
+            completion:(void (^)(void))completion;
+
+/// Processes the given `fileURL` for a file.
+- (void)processFileURL:(GURL)fileURL isPDF:(BOOL)isPDF;
 
 /// Processes the given `itemProvider` for an image.
 - (void)processImageItemProvider:(NSItemProvider*)itemProvider
-                         assetID:(NSString*)assetID;
+                         assetID:(NSString*)assetID
+                          source:(ComposeboxInputItemSource)source;
+
+/// Processes the given `itemProvider` for an image.
+- (void)processImageItemProvider:(NSItemProvider*)itemProvider
+                         assetID:(NSString*)assetID
+                          source:(ComposeboxInputItemSource)source
+                      completion:(void (^)(void))completion;
 
 /// Processes a tab with the given `webState` and `webStateID`.
 - (void)processTab:(web::WebState*)webState
@@ -44,8 +62,13 @@ class WebStateID;
 /// Processes the given `text`.
 - (void)processText:(NSString*)text;
 
-/// Sets the model option to use in queries.
-- (void)setModelOption:(ComposeboxModelOption)modelOption;
+/// Sets the model option to use in queries, specifying whether the choice was
+/// caused by an explicitly user action (e.g.; picked from the menu).
+- (void)setModelOption:(ComposeboxModelOption)modelOption
+    explicitUserAction:(BOOL)explicitUserAction;
+
+/// Whether the omnibox is focused.
+- (void)setOmniboxFocused:(bool)focused;
 
 @end
 

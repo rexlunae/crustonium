@@ -4,8 +4,11 @@
 
 package org.chromium.android_webview;
 
+import androidx.annotation.IntDef;
+
 import org.chromium.android_webview.AwContents.VisualStateCallback;
 import org.chromium.android_webview.common.Lifetime;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.content_public.browser.GlobalRenderFrameHostId;
@@ -167,11 +170,49 @@ public class AwWebContentsObserver extends WebContentsObserver {
         }
     }
 
+    // Used to record the UMA histogram Android.WebView.Navigation.MainFrame. Since these
+    // values are persisted to logs, they should never be renumbered or reused.
+    @IntDef({
+        NavigationType.INITIAL,
+        NavigationType.SAME_DOCUMENT,
+        NavigationType.BROWSER_INITIATED_SAME_ORIGIN,
+        NavigationType.BROWSER_INITIATED_CROSS_ORIGIN,
+        NavigationType.RENDERER_INITIATED_SAME_ORIGIN,
+        NavigationType.RENDERER_INITIATED_CROSS_ORIGIN,
+    })
+    public @interface NavigationType {
+        int INITIAL = 0;
+        int SAME_DOCUMENT = 1;
+        int BROWSER_INITIATED_SAME_ORIGIN = 2;
+        int BROWSER_INITIATED_CROSS_ORIGIN = 3;
+        int RENDERER_INITIATED_SAME_ORIGIN = 4;
+        int RENDERER_INITIATED_CROSS_ORIGIN = 5;
+        int COUNT = 6;
+    }
+
+    private static void recordMainFrameNavigationType(@NavigationType int value) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.WebView.Navigation.MainFrame", value, NavigationType.COUNT);
+    }
+
     @Override
     public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
         String url = navigation.getUrl().getPossiblyInvalidSpec();
         if (navigation.errorCode() != NetError.OK && !navigation.isDownload()) {
             processFailedLoad(true, navigation.errorCode(), navigation.getUrl());
+        }
+        AwContentsClient client = mAwContentsClient.get();
+
+        // Invoke synthetic onPageFinished callbacks for duplicate navigations ignored by the
+        // IgnoreDuplicateNavs optimization. Without this optimization, a duplicate request would
+        // cancel the ongoing navigation (net::ERR_ABORTED) and start a new navigation. We mimic
+        // that signal here to maintain backward compatibility for apps that expect a callback for
+        // every attempt, consistent with `processFailedLoad()`.
+        if (client != null) {
+            int ignoredCount = navigation.getIgnoredDuplicateNavigationCount();
+            for (int i = 0; i < ignoredCount; i++) {
+                client.getCallbackHelper().postOnPageFinished(url);
+            }
         }
 
         if (navigation.isInPrimaryMainFrame()) {
@@ -183,11 +224,30 @@ public class AwWebContentsObserver extends WebContentsObserver {
 
         if (!navigation.hasCommitted()) return;
 
+        if (navigation.isInPrimaryMainFrame()) {
+            if (!mCommittedNavigation) {
+                recordMainFrameNavigationType(NavigationType.INITIAL);
+            } else if (navigation.isSameDocument()) {
+                recordMainFrameNavigationType(NavigationType.SAME_DOCUMENT);
+            } else if (navigation.isRendererInitiated()) {
+                if (navigation.isSameOrigin()) {
+                    recordMainFrameNavigationType(NavigationType.RENDERER_INITIATED_SAME_ORIGIN);
+                } else {
+                    recordMainFrameNavigationType(NavigationType.RENDERER_INITIATED_CROSS_ORIGIN);
+                }
+            } else {
+                if (navigation.isSameOrigin()) {
+                    recordMainFrameNavigationType(NavigationType.BROWSER_INITIATED_SAME_ORIGIN);
+                } else {
+                    recordMainFrameNavigationType(NavigationType.BROWSER_INITIATED_CROSS_ORIGIN);
+                }
+            }
+        }
+
         mCommittedNavigation = true;
 
         navigation.getCommittedPage().setUrl(navigation.getUrl());
 
-        AwContentsClient client = mAwContentsClient.get();
         if (client != null) {
             // OnPageStarted is not called for in-page navigations, which include fragment
             // navigations and navigation from history.push/replaceState.

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/plugin_vm/plugin_vm_installer_view.h"
 
+#include "ash/strings/grit/ash_strings.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -76,18 +77,17 @@ class PluginVmInstallerViewBrowserTest : public DialogBrowserTest {
         static_cast<ash::FakeVmPluginDispatcherClient*>(
             ash::VmPluginDispatcherClient::Get());
 
-    network_connection_tracker_ =
-        network::TestNetworkConnectionTracker::CreateInstance();
+    CHECK(network::TestNetworkConnectionTracker::HasInstance());
     content::SetNetworkConnectionTrackerForTesting(nullptr);
     content::SetNetworkConnectionTrackerForTesting(
-        network_connection_tracker_.get());
+        network::TestNetworkConnectionTracker::GetInstance());
     network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_WIFI);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   }
 
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
-    plugin_vm::ShowPluginVmInstallerView(browser()->profile());
+    plugin_vm::ShowPluginVmInstallerView(browser()->GetProfile());
     view_ = PluginVmInstallerView::GetActiveViewForTesting();
   }
 
@@ -126,8 +126,6 @@ class PluginVmInstallerViewBrowserTest : public DialogBrowserTest {
                                      IDS_PLUGIN_VM_INSTALLER_FINISHED_TITLE));
   }
 
-  std::unique_ptr<network::TestNetworkConnectionTracker>
-      network_connection_tracker_;
   raw_ptr<PluginVmInstallerView, DanglingUntriaged> view_;
   raw_ptr<ash::FakeConciergeClient, DanglingUntriaged> fake_concierge_client_;
   raw_ptr<ash::FakeVmPluginDispatcherClient, DanglingUntriaged>
@@ -159,7 +157,7 @@ class PluginVmInstallerViewBrowserTestWithFeatureEnabled
 
  protected:
   void SetPluginVmImagePref(std::string url, std::string hash) {
-    ScopedDictPrefUpdate update(browser()->profile()->GetPrefs(),
+    ScopedDictPrefUpdate update(browser()->GetProfile()->GetPrefs(),
                                 plugin_vm::prefs::kPluginVmImage);
     base::DictValue& plugin_vm_image = update.Get();
     plugin_vm_image.Set("url", url);
@@ -173,14 +171,14 @@ class PluginVmInstallerViewBrowserTestWithFeatureEnabled
     SetPluginVmImagePref(embedded_test_server()->GetURL(kZipFile).spec(),
                          kZipFileHash);
     auto* installer = plugin_vm::PluginVmInstallerFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
     installer->SetFreeDiskSpaceForTesting(installer->RequiredFreeDiskSpace());
     installer->SkipLicenseCheckForTesting();
   }
 
   void SetPluginVmPolicies() {
     // User policies.
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         plugin_vm::prefs::kPluginVmAllowed, true);
     // Device policies.
     policy::CachedDevicePolicyUpdater updater;

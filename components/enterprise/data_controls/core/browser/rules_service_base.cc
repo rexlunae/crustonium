@@ -21,6 +21,14 @@ RulesServiceBase::RulesServiceBase(PrefService* pref_service) {
 
 RulesServiceBase::~RulesServiceBase() = default;
 
+void RulesServiceBase::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void RulesServiceBase::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
+}
+
 Verdict RulesServiceBase::GetCopyRestrictedBySourceVerdict(
     const GURL& source) const {
   return GetVerdict(Rule::Restriction::kClipboard,
@@ -49,6 +57,23 @@ Verdict RulesServiceBase::GetCopyToOSClipboardVerdict(
                     });
 }
 
+Verdict RulesServiceBase::GetPasteFromGeminiInChromeVerdict(
+    const GURL& destination) const {
+  return GetVerdict(Rule::Restriction::kClipboard,
+                    {
+                        .source =
+                            {
+                                .incognito = incognito_profile(),
+                                .gemini_in_chrome = true,
+                            },
+                        .destination =
+                            {
+                                .url = destination,
+                                .incognito = incognito_profile(),
+                            },
+                    });
+}
+
 Verdict RulesServiceBase::GetDownloadVerdict(const GURL& download_url) const {
   return GetVerdict(Rule::Restriction::kFileDownload,
                     {
@@ -58,6 +83,29 @@ Verdict RulesServiceBase::GetDownloadVerdict(const GURL& download_url) const {
                                 .incognito = incognito_profile(),
                             },
                     });
+}
+
+bool RulesServiceBase::BlockScreenshots(const GURL& url) const {
+  return GetVerdict(Rule::Restriction::kScreenshot,
+                    {
+                        .source =
+                            {
+                                .url = url,
+                                .incognito = incognito_profile(),
+                            },
+                    })
+             .level() == Rule::Level::kBlock;
+}
+
+bool RulesServiceBase::HasBlockingScreenshotRule() const {
+  for (const auto& rule : rules_) {
+    // Check if the rule specifies any screenshot restriction (like kBlock).
+    // Note: 'kBlock' is the only level supported for screenshots.
+    if (rule.GetLevel(Rule::Restriction::kScreenshot) == Rule::Level::kBlock) {
+      return true;
+    }
+  }
+  return false;
 }
 
 Verdict RulesServiceBase::GetVerdict(Rule::Restriction restriction,
@@ -115,6 +163,10 @@ void RulesServiceBase::OnDataControlsRulesUpdate() {
     }
 
     rules_.push_back(std::move(*rule));
+  }
+
+  for (auto& observer : observers_) {
+    observer.OnRulesUpdated();
   }
 }
 

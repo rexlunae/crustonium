@@ -26,7 +26,6 @@
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/geometry_mapper.h"
 #include "third_party/blink/renderer/platform/graphics/paint/scoped_paint_chunk_properties.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -97,7 +96,8 @@ void ViewPainter::PaintBoxDecorationBackground(const PaintInfo& paint_info) {
 
   bool paints_element_tracking_id_or_region_capture_data =
       element &&
-      (element->GetRegionCaptureCropId() || element->GetTrackedElementRect()) &&
+      (element->GetRegionCaptureCropId() ||
+       element->GetTrackedElementSubRects()) &&
       // TODO(wangxianzhu): This is to avoid the side-effect of
       // HitTestOpaqueness on region capture data. Verify if the side-effect
       // really matters.

@@ -4,11 +4,13 @@
 
 package org.chromium.chrome.browser.media.document_picture_in_picture_header;
 
+import android.content.Context;
 import android.view.View;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
@@ -35,8 +37,11 @@ public class DocumentPictureInPictureHeaderCoordinator {
             View view,
             DesktopWindowStateManager desktopWindowStateManager,
             ThemeColorProvider themeColorProvider,
+            Context context,
             DocumentPictureInPictureHeaderDelegate delegate,
-            boolean isBackToTabShown) {
+            boolean isBackToTabShown,
+            WebContents openerWebContents,
+            WebContents webContents) {
         PropertyModel model =
                 new PropertyModel.Builder(DocumentPictureInPictureHeaderProperties.ALL_KEYS)
                         .build();
@@ -45,8 +50,11 @@ public class DocumentPictureInPictureHeaderCoordinator {
                         model,
                         desktopWindowStateManager,
                         themeColorProvider,
+                        context,
                         delegate,
-                        isBackToTabShown);
+                        isBackToTabShown,
+                        openerWebContents,
+                        webContents);
         mPropertyModelChangeProcessor =
                 PropertyModelChangeProcessor.create(
                         model, view, DocumentPictureInPictureHeaderViewBinder::bind);

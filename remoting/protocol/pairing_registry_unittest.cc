@@ -35,9 +35,9 @@ class MockPairingRegistryCallbacks {
 
   virtual ~MockPairingRegistryCallbacks() = default;
 
-  MOCK_METHOD1(DoneCallback, void(bool));
-  MOCK_METHOD1(GetAllPairingsCallback, void(base::ListValue));
-  MOCK_METHOD1(GetPairingCallback, void(PairingRegistry::Pairing));
+  MOCK_METHOD(void, DoneCallback, (bool));
+  MOCK_METHOD(void, GetAllPairingsCallback, (base::ListValue));
+  MOCK_METHOD(void, GetPairingCallback, (PairingRegistry::Pairing));
 };
 
 // Verify that a pairing Dictionary has correct entries, but doesn't include
@@ -46,10 +46,10 @@ void VerifyPairing(PairingRegistry::Pairing expected,
                    const base::DictValue& actual) {
   const std::string* value = actual.FindString(PairingRegistry::kClientNameKey);
   ASSERT_TRUE(value);
-  EXPECT_EQ(expected.client_name(), *value);
+  EXPECT_EQ(*value, expected.client_name());
   value = actual.FindString(PairingRegistry::kClientIdKey);
   ASSERT_TRUE(value);
-  EXPECT_EQ(expected.client_id(), *value);
+  EXPECT_EQ(*value, expected.client_id());
 
   EXPECT_FALSE(actual.Find(PairingRegistry::kSharedSecretKey));
 }
@@ -68,12 +68,22 @@ class PairingRegistryTest : public testing::Test {
 
   void ExpectSecret(const std::string& expected,
                     PairingRegistry::Pairing actual) {
-    EXPECT_EQ(expected, actual.shared_secret());
+    EXPECT_EQ(actual.shared_secret(), expected);
     ++callback_count_;
   }
 
   void ExpectSaveSuccess(bool success) {
     EXPECT_TRUE(success);
+    ++callback_count_;
+  }
+
+  void ExpectSaveResult(bool expected, bool success) {
+    EXPECT_EQ(success, expected);
+    ++callback_count_;
+  }
+
+  void ExpectInvalidPairing(PairingRegistry::Pairing actual) {
+    EXPECT_FALSE(actual.is_valid());
     ++callback_count_;
   }
 
@@ -97,14 +107,14 @@ TEST_F(PairingRegistryTest, CreateAndGetPairings) {
       pairing_1.client_id(),
       base::BindOnce(&PairingRegistryTest::ExpectSecret, base::Unretained(this),
                      pairing_1.shared_secret()));
-  EXPECT_EQ(1, callback_count_);
+  EXPECT_EQ(callback_count_, 1);
 
   // Check that the second client is paired with a different shared secret.
   registry->GetPairing(
       pairing_2.client_id(),
       base::BindOnce(&PairingRegistryTest::ExpectSecret, base::Unretained(this),
                      pairing_2.shared_secret()));
-  EXPECT_EQ(2, callback_count_);
+  EXPECT_EQ(callback_count_, 2);
 }
 
 TEST_F(PairingRegistryTest, GetAllPairings) {
@@ -116,7 +126,7 @@ TEST_F(PairingRegistryTest, GetAllPairings) {
   registry->GetAllPairings(base::BindOnce(&PairingRegistryTest::set_pairings,
                                           base::Unretained(this)));
 
-  ASSERT_EQ(2u, pairings_.size());
+  ASSERT_EQ(pairings_.size(), 2u);
   const base::Value& actual_pairing_1_value = pairings_[0];
   ASSERT_TRUE(actual_pairing_1_value.is_dict());
   const base::Value& actual_pairing_2_value = pairings_[1];
@@ -151,14 +161,30 @@ TEST_F(PairingRegistryTest, DeletePairing) {
   registry->GetAllPairings(base::BindOnce(&PairingRegistryTest::set_pairings,
                                           base::Unretained(this)));
 
-  ASSERT_EQ(1u, pairings_.size());
+  ASSERT_EQ(pairings_.size(), 1u);
   const base::Value& actual_pairing_2_value = pairings_[0];
   ASSERT_TRUE(actual_pairing_2_value.is_dict());
   const std::string* actual_client_id =
       actual_pairing_2_value.GetDict().FindString(
           PairingRegistry::kClientIdKey);
   ASSERT_TRUE(actual_client_id);
-  EXPECT_EQ(pairing_2.client_id(), *actual_client_id);
+  EXPECT_EQ(*actual_client_id, pairing_2.client_id());
+}
+
+TEST_F(PairingRegistryTest, InvalidClientId) {
+  scoped_refptr<PairingRegistry> registry = new SynchronousPairingRegistry(
+      std::make_unique<MockPairingRegistryDelegate>());
+
+  registry->DeletePairing("../tmp/target",
+                          base::BindOnce(&PairingRegistryTest::ExpectSaveResult,
+                                         base::Unretained(this), false));
+  EXPECT_EQ(callback_count_, 1);
+
+  registry->GetPairing(
+      "../tmp/target",
+      base::BindOnce(&PairingRegistryTest::ExpectInvalidPairing,
+                     base::Unretained(this)));
+  EXPECT_EQ(callback_count_, 2);
 }
 
 TEST_F(PairingRegistryTest, ClearAllPairings) {

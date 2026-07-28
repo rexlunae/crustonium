@@ -89,7 +89,6 @@ StartParams GetPopulatedStartParams() {
 UpgradeParams GetPopulatedUpgradeParams() {
   UpgradeParams params;
   params.account_id = "fee1dead";
-  params.skip_boot_completed_broadcast = true;
   params.packages_cache_mode = UpgradeParams::PackageCacheMode::COPY_ON_INIT;
   params.skip_gms_core_cache = true;
   params.management_transition = ArcManagementTransition::CHILD_TO_REGULAR;
@@ -2107,22 +2106,12 @@ TEST_F(ArcVmClientAdapterTest, ArcVmUseHugePagesEnabled) {
   EXPECT_TRUE(request.use_hugepages());
 }
 
-TEST_F(ArcVmClientAdapterTest, ArcVmLockGuestMemoryEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kLockGuestMemory);
-  StartParams start_params(GetPopulatedStartParams());
-  StartMiniArcWithParams(true, std::move(start_params));
-  const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  EXPECT_TRUE(request.lock_guest_memory());
-}
-
 TEST_F(ArcVmClientAdapterTest, ArcVmMemoryOptionsDisabled) {
   StartParams start_params(GetPopulatedStartParams());
   StartMiniArcWithParams(true, std::move(start_params));
   const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  // Verify that both options are disabled by default.
+  // Verify that options are disabled by default.
   EXPECT_FALSE(request.use_hugepages());
-  EXPECT_FALSE(request.lock_guest_memory());
 }
 
 // Test that StartArcVmRequest has no memory_mib field when kVmMemorySize is

@@ -10,14 +10,15 @@
 #include <utility>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/functional/callback.h"
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/optional_ref.h"
 #include "base/types/optional_util.h"
 #include "chrome/browser/autofill/android/autofill_ai_save_update_entity_prompt_view.h"
 #include "chrome/browser/autofill/android/autofill_fallback_surface_launcher.h"
+#include "chrome/browser/autofill/android/entity_instance_android.h"
 #include "chrome/browser/autofill/android/personal_data_manager_android.h"
 #include "chrome/browser/autofill/ui/ui_util.h"
 #include "chrome/browser/browser_process.h"
@@ -55,6 +56,12 @@ AutofillAiSaveUpdateEntityPromptController::
           base::android::AttachCurrentThread(),
           reinterpret_cast<intptr_t>(this))) {
   CHECK(prompt_view_);
+  ui_context_.accepted_consent_string_id =
+      IsWalletableEntity()
+          ? IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_IN_WALLET_SOURCE_NOTICE
+          : IDS_AUTOFILL_AI_SAVE_OR_UPDATE_LOCAL_ENTITY_SOURCE_NOTICE;
+  ui_context_.accept_button_string_id =
+      IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_SAVE_DIALOG_SAVE_BUTTON;
 }
 
 AutofillAiSaveUpdateEntityPromptController::
@@ -70,7 +77,9 @@ void AutofillAiSaveUpdateEntityPromptController::DisplayPrompt() {
 
 std::u16string AutofillAiSaveUpdateEntityPromptController::GetTitle() const {
   return GetPromptTitle(entity_instance_.type().name(),
-                        /*is_save_prompt=*/!old_entity_instance_.has_value());
+                        /*is_save_prompt=*/!old_entity_instance_.has_value(),
+                        /*is_banner_prompt=*/false,
+                        /*is_server_wallet=*/IsWalletableEntity());
 }
 
 std::u16string
@@ -103,12 +112,12 @@ std::u16string AutofillAiSaveUpdateEntityPromptController::GetSourceNotice()
   if (!account) {
     return std::u16string();
   }
-
   const std::u16string google_wallet_text =
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   return l10n_util::GetStringFUTF16(
       IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_IN_WALLET_SOURCE_NOTICE,
-      google_wallet_text, base::UTF8ToUTF16(account->email));
+      google_wallet_text, google_wallet_text,
+      base::UTF8ToUTF16(account->email));
 }
 
 bool AutofillAiSaveUpdateEntityPromptController::IsWalletableEntity() const {
@@ -116,18 +125,48 @@ bool AutofillAiSaveUpdateEntityPromptController::IsWalletableEntity() const {
          EntityInstance::RecordType::kServerWallet;
 }
 
+bool AutofillAiSaveUpdateEntityPromptController::IsUpdatePrompt() const {
+  return old_entity_instance_.has_value();
+}
+
+const EntityInstance&
+AutofillAiSaveUpdateEntityPromptController::entity_instance() const {
+  return entity_instance_;
+}
+
 base::android::ScopedJavaLocalRef<jobject>
 AutofillAiSaveUpdateEntityPromptController::GetJavaObject() const {
   return base::android::ScopedJavaLocalRef<jobject>(java_object_);
 }
 
-void AutofillAiSaveUpdateEntityPromptController::OpenManagePasses(JNIEnv* env) {
-  ShowGoogleWalletPassesPage(*web_contents_);
+void AutofillAiSaveUpdateEntityPromptController::OnWalletLinkClicked(
+    JNIEnv* env) {
+  switch (GetWalletPassType(entity_instance_.type(),
+                            entity_instance_.record_type())) {
+    case EntityInstance::WalletPassType::kUnsupported:
+      NOTREACHED();
+    case EntityInstance::WalletPassType::kPrivate:
+      ShowGoogleWallePrivatePassesHelpCenterPageInCct(*web_contents_);
+      break;
+    case EntityInstance::WalletPassType::kPublic:
+      ShowGoogleWalletPassesPage(*web_contents_);
+      break;
+  }
 }
 
 void AutofillAiSaveUpdateEntityPromptController::OnUserAccepted(JNIEnv* env) {
   had_user_interaction_ = true;
   RunPromptClosedCallback(AutofillClient::AutofillAiBubbleResult::kAccepted);
+}
+
+void AutofillAiSaveUpdateEntityPromptController::OnUserEdited(
+    JNIEnv* env,
+    const EntityInstanceAndroid& edited_entity_android) {
+  had_user_interaction_ = true;
+  EntityInstance edited_entity =
+      edited_entity_android.ToEntityInstance(entity_instance_);
+  RunPromptClosedCallback(AutofillClient::AutofillAiBubbleResult::kEditAccepted,
+                          std::move(edited_entity));
 }
 
 void AutofillAiSaveUpdateEntityPromptController::OnUserDeclined(JNIEnv* env) {
@@ -142,9 +181,14 @@ void AutofillAiSaveUpdateEntityPromptController::OnPromptDismissed(
 }
 
 void AutofillAiSaveUpdateEntityPromptController::RunPromptClosedCallback(
-    AutofillClient::AutofillAiBubbleResult result) {
+    AutofillClient::AutofillAiBubbleResult result,
+    std::optional<EntityInstance> edited_entity_instance) {
   if (prompt_result_callback_) {
-    std::move(prompt_result_callback_).Run(result);
+    std::move(prompt_result_callback_)
+        .Run(result, std::move(edited_entity_instance),
+             result == AutofillClient::AutofillAiBubbleResult::kAccepted
+                 ? ui_context_
+                 : AutofillClient::EntityImportUIContext{});
   }
 }
 

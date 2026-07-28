@@ -53,12 +53,8 @@ SVGLayoutResult LayoutSVGContainer::UpdateSVGLayout(
     const SVGLayoutInfo& layout_info) {
   NOT_DESTROYED();
   DCHECK(NeedsLayout());
-  // TODO: Inherit `LayoutSVGViewportContainer` from
-  // `LayoutSVGTransformableContainer` so below condition can be simplified.
   if (layout_info.viewport_changed && HasViewportDependence() &&
-      (IsSVGTransformableContainer() ||
-       (IsSVGViewportContainer() &&
-        RuntimeEnabledFeatures::SvgTransformOnNestedSvgElementEnabled()))) {
+      IsSVGTransformableContainer()) {
     // TODO: This will be called if any descendant has a viewport dependency,
     // not just if this container has one.
     SetNeedsTransformUpdate();
@@ -86,11 +82,13 @@ SVGLayoutResult LayoutSVGContainer::UpdateSVGLayout(
     bounds_changed = true;
   }
 
-  const bool has_viewport_dependence =
-      content_result.has_viewport_dependence ||
+  self_has_viewport_dependence_ =
       GetElement()->SelfHasRelativeLengths() ||
       (transform_uses_reference_box_ &&
        StyleRef().TransformBox() == ETransformBox::kViewBox);
+
+  const bool has_viewport_dependence =
+      content_result.has_viewport_dependence || self_has_viewport_dependence_;
 
   DCHECK(!needs_transform_update_);
   ClearNeedsLayout();
@@ -126,9 +124,7 @@ bool LayoutSVGContainer::UpdateAfterSVGLayout(
         SetTransformAffectsVectorEffect(true);
       if (child->StyleRef().HasCurrentTransformRelatedAnimation() ||
           child->SVGDescendantMayHaveTransformRelatedOperations() ||
-          (RuntimeEnabledFeatures::
-               SvgAvoidCullingElementsWithTransformOperationsEnabled() &&
-           child->StyleRef().HasNonIdentityTransformOperation())) {
+          child->StyleRef().HasNonIdentityTransformOperation()) {
         SetSVGDescendantMayHaveTransformRelatedOperations();
       }
     }
@@ -248,13 +244,19 @@ bool LayoutSVGContainer::NodeAtPoint(HitTestResult& result,
       content_.HitTest(result, *local_location, phase))
     return true;
 
-  // pointer-events: bounding-box makes it possible for containers to be direct
-  // targets.
-  if (StyleRef().UsedPointerEvents() == EPointerEvents::kBoundingBox) {
-    // Check for a valid bounding box because it will be invalid for empty
-    // containers.
-    if (IsObjectBoundingBoxValid() &&
-        local_location->Intersects(ObjectBoundingBox())) {
+  if (IsObjectBoundingBoxValid()) {
+    bool is_visual_overflow =
+        result.GetHitTestRequest().IsHitTestVisualOverflow();
+    gfx::RectF bounds = is_visual_overflow
+                            ? SVGLayoutSupport::ApplyFiltersToRect(
+                                  *this, DecoratedBoundingBox())
+                            : ObjectBoundingBox();
+
+    // pointer-events: bounding-box makes it possible for containers to be
+    // direct targets.
+    if ((is_visual_overflow ||
+         StyleRef().UsedPointerEvents() == EPointerEvents::kBoundingBox) &&
+        local_location->Intersects(bounds)) {
       UpdateHitTestResult(result, PhysicalOffset::FromPointFRound(
                                       local_location->TransformedPoint()));
       if (result.AddNodeToListBasedTestResult(GetElement(), *local_location) ==

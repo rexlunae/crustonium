@@ -51,8 +51,8 @@
 #include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/scheduler/web_scoped_virtual_time_pauser.h"
 #include "third_party/blink/public/platform/web_document_subresource_filter.h"
+#include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/frame/ad_tracker.h"
 #include "third_party/blink/renderer/core/frame/frame_owner.h"
 #include "third_party/blink/renderer/core/frame/frame_types.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -71,6 +71,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_info.h"
+#include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
@@ -85,6 +86,7 @@
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/reporting_disposition.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -106,6 +108,8 @@ class DummyFrameOwner final : public GarbageCollected<DummyFrameOwner>,
   void AddResourceTiming(mojom::blink::ResourceTimingInfoPtr) override {}
   void DispatchLoad() override {}
   void NaturalSizingInfoChanged() override {}
+  void ClearLastNaturalSizingInfo() override {}
+  void ClearAllNaturalSizingInfo() override {}
   void SetNeedsOcclusionTracking(bool) override {}
   AtomicString BrowsingContextContainerName() const override {
     return AtomicString();
@@ -118,6 +122,9 @@ class DummyFrameOwner final : public GarbageCollected<DummyFrameOwner>,
   bool AllowFullscreen() const override { return false; }
   bool AllowPaymentRequest() const override { return false; }
   bool IsDisplayNone() const override { return false; }
+  mojom::blink::FrameResponsiveSizing GetResponsiveSizing() const override {
+    return mojom::blink::FrameResponsiveSizing::kNone;
+  }
   mojom::blink::ColorScheme GetColorScheme() const override {
     return mojom::blink::ColorScheme::kLight;
   }
@@ -167,6 +174,21 @@ class FixedPolicySubresourceFilter : public WebDocumentSubresourceFilter {
   LoadPolicy GetLoadPolicyForWebTransportConnect(const WebURL&) override {
     return policy_;
   }
+
+  void GetDomainSelectors(
+      std::vector<std::string_view>& out_selectors) override {}
+  bool MaybeHasStyleRule(uint32_t hash) override { return false; }
+  void GetSelectorsByClass(
+      std::string_view class_name,
+      uint32_t hash,
+      std::vector<std::string_view>& out_selectors) override {}
+  void GetSelectorsById(std::string_view id_name,
+                        uint32_t hash,
+                        std::vector<std::string_view>& out_selectors) override {
+  }
+  bool IsDryRun() override { return false; }
+  uint64_t GetRulesetId() const override { return 0; }
+
   void ReportDisallowedLoad() override { ++*filtered_load_counter_; }
 
   bool ShouldLogToConsole() override { return false; }
@@ -297,11 +319,24 @@ class FrameFetchContextSubresourceFilterTest
         CanRequestInternal(ReportingDisposition::kReport);
     ResourceRequest request(KURL("http://example.com/"));
     FetchInitiatorInfo initiator_info;
-    EXPECT_EQ(expect_is_ad, GetFetchContext()->CalculateIfAdSubresource(
-                                request, std::nullopt /* alias_url */,
-                                ResourceType::kMock, initiator_info,
-                                /*scan_stack_for_ads=*/false,
-                                /*out_rule=*/nullptr));
+
+    std::optional<AdProvenance> ad_provenance =
+        GetFetchContext()
+            ->CalculateResourceAnnotations(
+                request, std::nullopt /* alias_url */, ResourceType::kMock,
+                initiator_info, /*scan_javascript_stack=*/false)
+            .ad_provenance;
+
+    if (expect_is_ad) {
+      EXPECT_TRUE(std::holds_alternative<subresource_filter::ScopedRule>(
+          *ad_provenance));
+      // Note: Since the mock subresource filter does not populate specific
+      // rules, we only verify the provenance type rather than checking the
+      // rule's exact contents.
+    } else {
+      EXPECT_FALSE(ad_provenance.has_value());
+    }
+
     return reason;
   }
 
@@ -803,49 +838,8 @@ TEST_P(FrameFetchContextHintsTest, MonitorDeviceMemoryHintsLocalContext) {
   ExpectHeader("http://localhost/1.gif", "Sec-CH-Viewport-Width", false, "");
 }
 
-TEST_P(FrameFetchContextHintsTest, MonitorDeviceMemoryHintsOld) {
-  // Test with old limits. See https://crbug.com/454354290
-  // TODO: remove this whole section when feature flag is retired.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kUpdatedDeviceMemoryLimitsFor2026);
-  ExpectHeader("https://www.example.com/1.gif", "Device-Memory", false, "");
-  ClientHintsPreferences preferences;
-  preferences.SetShouldSend(
-      network::mojom::WebClientHintsType::kDeviceMemory_DEPRECATED);
-  preferences.SetShouldSend(network::mojom::WebClientHintsType::kDeviceMemory);
-  document->GetFrame()->GetClientHintsPreferences().UpdateFrom(preferences);
-  ApproximatedDeviceMemory::SetPhysicalMemoryMBForTesting(4096);
-  ExpectHeader("https://www.example.com/1.gif", "Device-Memory", true, "4");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Device-Memory", true,
-               "4");
-  ApproximatedDeviceMemory::SetPhysicalMemoryMBForTesting(2048);
-  ExpectHeader("https://www.example.com/1.gif", "Device-Memory", true, "2");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Device-Memory", true,
-               "2");
-  ApproximatedDeviceMemory::SetPhysicalMemoryMBForTesting(64385);
-  ExpectHeader("https://www.example.com/1.gif", "Device-Memory", true, "8");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Device-Memory", true,
-               "8");
-  ApproximatedDeviceMemory::SetPhysicalMemoryMBForTesting(768);
-  ExpectHeader("https://www.example.com/1.gif", "Device-Memory", true, "0.5");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Device-Memory", true,
-               "0.5");
-  ExpectHeader("https://www.example.com/1.gif", "DPR", false, "");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-DPR", false, "");
-  ExpectHeader("https://www.example.com/1.gif", "Width", false, "");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Width", false, "");
-  ExpectHeader("https://www.example.com/1.gif", "Viewport-Width", false, "");
-  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Viewport-Width", false,
-               "");
-}
-
 TEST_P(FrameFetchContextHintsTest, MonitorDeviceMemoryHints) {
   // Test with new, 2026 limits - see https://crbug.com/454354290
-  // TODO Remove next two lines when ready to retire feature flag.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kUpdatedDeviceMemoryLimitsFor2026);
   ExpectHeader("https://www.example.com/1.gif", "Device-Memory", false, "");
   ClientHintsPreferences preferences;
   preferences.SetShouldSend(
@@ -871,9 +865,15 @@ TEST_P(FrameFetchContextHintsTest, MonitorDeviceMemoryHints) {
                "32");
 #endif
   ApproximatedDeviceMemory::SetPhysicalMemoryMBForTesting(768);
+#if BUILDFLAG(IS_ANDROID)
+  ExpectHeader("https://www.example.com/1.gif", "Device-Memory", true, "1");
+  ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Device-Memory", true,
+               "1");
+#else
   ExpectHeader("https://www.example.com/1.gif", "Device-Memory", true, "2");
   ExpectHeader("https://www.example.com/1.gif", "Sec-CH-Device-Memory", true,
                "2");
+#endif
   ExpectHeader("https://www.example.com/1.gif", "DPR", false, "");
   ExpectHeader("https://www.example.com/1.gif", "Sec-CH-DPR", false, "");
   ExpectHeader("https://www.example.com/1.gif", "Width", false, "");
@@ -1248,17 +1248,15 @@ TEST_P(FrameFetchContextHintsTest, MonitorAllHints) {
 
   // Value of network quality client hints may vary, so only check if the
   // header is present and the values are non-negative/non-empty.
-  bool conversion_ok = false;
-  int rtt_header_value = GetHeaderValue("https://www.example.com/1.gif", "rtt")
-                             .ToIntStrict(&conversion_ok);
-  EXPECT_TRUE(conversion_ok);
-  EXPECT_LE(0, rtt_header_value);
+  auto rtt_header_value =
+      StringToIntStrict(GetHeaderValue("https://www.example.com/1.gif", "rtt"));
+  EXPECT_TRUE(rtt_header_value.has_value());
+  EXPECT_LE(0, *rtt_header_value);
 
-  float downlink_header_value =
-      GetHeaderValue("https://www.example.com/1.gif", "downlink")
-          .ToFloat(&conversion_ok);
-  EXPECT_TRUE(conversion_ok);
-  EXPECT_LE(0, downlink_header_value);
+  auto downlink_header_value = StringToFloat(
+      GetHeaderValue("https://www.example.com/1.gif", "downlink"));
+  EXPECT_TRUE(downlink_header_value.has_value());
+  EXPECT_LE(0, *downlink_header_value);
 
   EXPECT_LT(
       0u,
@@ -1341,17 +1339,15 @@ TEST_P(FrameFetchContextHintsTest, MonitorAllHintsPermissionsPolicy) {
 
   // Value of network quality client hints may vary, so only check if the
   // header is present and the values are non-negative/non-empty.
-  bool conversion_ok = false;
-  int rtt_header_value = GetHeaderValue("https://www.example.com/1.gif", "rtt")
-                             .ToIntStrict(&conversion_ok);
-  EXPECT_TRUE(conversion_ok);
-  EXPECT_LE(0, rtt_header_value);
+  auto rtt_header_value =
+      StringToIntStrict(GetHeaderValue("https://www.example.com/1.gif", "rtt"));
+  EXPECT_TRUE(rtt_header_value.has_value());
+  EXPECT_LE(0, *rtt_header_value);
 
-  float downlink_header_value =
-      GetHeaderValue("https://www.example.com/1.gif", "downlink")
-          .ToFloat(&conversion_ok);
-  EXPECT_TRUE(conversion_ok);
-  EXPECT_LE(0, downlink_header_value);
+  auto downlink_header_value = StringToFloat(
+      GetHeaderValue("https://www.example.com/1.gif", "downlink"));
+  EXPECT_TRUE(downlink_header_value.has_value());
+  EXPECT_LE(0, *downlink_header_value);
 
   EXPECT_LT(
       0u,
@@ -1778,10 +1774,10 @@ TEST_P(FrameFetchContextSubresourceFilterTest,
   }
 }
 
-// Tests that CalculateIfAdSubresource with an alias URL will tag ads
+// Tests that CalculateResourceAnnotations with an alias URL will tag ads
 // correctly according to the SubresourceFilter mode.
 TEST_P(FrameFetchContextSubresourceFilterTest,
-       CalculateIfAdSubresourceWithAliasURL) {
+       CalculateResourceAnnotationsWithAliasURL) {
   const struct {
     WebDocumentSubresourceFilter::LoadPolicy policy;
     bool expected_to_be_tagged_ad;
@@ -1801,12 +1797,22 @@ TEST_P(FrameFetchContextSubresourceFilterTest,
 
     ResourceLoaderOptions options(nullptr /* world */);
 
-    EXPECT_EQ(test.expected_to_be_tagged_ad,
-              GetFetchContext()->CalculateIfAdSubresource(
-                  resource_request, alias_url, ResourceType::kScript,
-                  options.initiator_info,
-                  /*scan_stack_for_ads=*/false,
-                  /*out_rule=*/nullptr));
+    std::optional<AdProvenance> ad_provenance =
+        GetFetchContext()
+            ->CalculateResourceAnnotations(
+                resource_request, alias_url, ResourceType::kScript,
+                options.initiator_info, /*scan_javascript_stack=*/false)
+            .ad_provenance;
+
+    if (test.expected_to_be_tagged_ad) {
+      EXPECT_TRUE(std::holds_alternative<subresource_filter::ScopedRule>(
+          *ad_provenance));
+      // Note: Since the mock subresource filter does not populate specific
+      // rules, we only verify the provenance type rather than checking the
+      // rule's exact contents.
+    } else {
+      EXPECT_FALSE(ad_provenance.has_value());
+    }
   }
 }
 
@@ -1912,6 +1918,40 @@ class FrameFetchContextNetworkGuardrailsTest
     }
   };
 
+  class MockRawResourceClient final
+      : public GarbageCollected<MockRawResourceClient>,
+        public RawResourceClient {
+   public:
+    MockRawResourceClient() = default;
+    ~MockRawResourceClient() override = default;
+
+    MOCK_METHOD(void,
+                DataReceived,
+                (Resource * resource, base::span<const char> data),
+                (override));
+    MOCK_METHOD(void, NotifyFinished, (Resource * resource), (override));
+    MOCK_METHOD(void, DataSent, (Resource*, uint64_t, uint64_t), (override));
+    MOCK_METHOD(void,
+                ResponseReceived,
+                (Resource*, const ResourceResponse&),
+                (override));
+    MOCK_METHOD(void,
+                CachedMetadataReceived,
+                (Resource*, mojo_base::BigBuffer),
+                (override));
+    MOCK_METHOD(bool,
+                RedirectReceived,
+                (Resource*, const ResourceRequest&, const ResourceResponse&),
+                (override));
+    MOCK_METHOD(void, DataDownloaded, (Resource*, uint64_t), (override));
+
+    void Trace(Visitor* visitor) const override {
+      RawResourceClient::Trace(visitor);
+    }
+
+    String DebugName() const override { return "MockRawResourceClient"; }
+  };
+
   void ResetDocument(bool enable_policy = true) {
     RecreateFetchContext();
 
@@ -1935,8 +1975,8 @@ class FrameFetchContextNetworkGuardrailsTest
     // Use fresh document so histogram is reset
     ResetDocument();
 
-    const KURL url("https://www.example.test/resource");
-    const std::string histogram_name =
+    const KURL kUrl("https://www.example.test/resource");
+    const std::string kHistogramName =
         "Blink.UseCounter.DocumentPolicy.Enforced";
 
     base::HistogramTester histogram_tester;
@@ -1964,29 +2004,53 @@ class FrameFetchContextNetworkGuardrailsTest
     }
 
     GetFetchContext()->CheckGuardrailsPolicyForRequest(
-        test_case.resource_type, test_case.context_type, response, url);
+        test_case.resource_type, test_case.context_type, response, kUrl);
 
     histogram_tester.ExpectBucketCount(
-        histogram_name,
+        kHistogramName,
         mojom::blink::DocumentPolicyFeature::kNetworkEfficiencyGuardrails,
         expected_count);
   }
 
   void CheckImageLoadViolation(const size_t image_size,
                                bool expect_violation,
-                               bool enable_policy = true) {
+                               bool enable_policy = true,
+                               size_t chunk_size = 0) {
     // Use fresh document so histogram is reset
     ResetDocument(enable_policy);
 
-    const KURL image_url("https://www.example.com/image.png");
-    const std::string histogram_name =
+    const KURL kImageUrl("https://www.example.com/image.png");
+    const std::string kHistogramName =
         "Blink.UseCounter.DocumentPolicy.Enforced";
 
     base::HistogramTester histogram_tester;
     const int expected_count = expect_violation ? 1 : 0;
 
-    Vector<char> image_data(image_size);
-    std::fill(image_data.begin(), image_data.end(), 'x');
+    // Minimal 1x1 transparent PNG (67 bytes)
+    Vector<char>
+        base_png{
+            '\x89', 'P',    'N',    'G',    '\x0d', '\x0a',
+            '\x1a', '\x0a',                          // PNG signature
+            '\x00', '\x00', '\x00', '\x0d',          // IHDR chunk length
+            'I',    'H',    'D',    'R',             // IHDR
+            '\x00', '\x00', '\x00', '\x01',          // width: 1
+            '\x00', '\x00', '\x00', '\x01',          // height: 1
+            '\x08', '\x06', '\x00', '\x00', '\x00',  // bit depth, color type,
+                                                     // etc.
+            '\x1f', '\x15', '\xc4', '\x89',          // CRC
+            '\x00', '\x00', '\x00', '\x0a',          // IDAT chunk length
+            'I',    'D',    'A',    'T',             // IDAT
+            '\x78', '\x9c', '\x63', '\x00', '\x01', '\x00',
+            '\x00', '\x05', '\x00', '\x01',  // compressed data
+            '\x0d', '\x0a', '\x2d', '\xb4',  // CRC
+            '\x00', '\x00', '\x00', '\x00',  // IEND chunk length
+            'I',    'E',    'N',    'D',     // IEND
+            '\xae', '\x42', '\x60', '\x82'   // CRC
+        };
+
+    ASSERT_TRUE(image_size >= base_png.size());
+    Vector<char> image_data(base_png);
+    image_data.resize(static_cast<wtf_size_t>(image_size));
 
     base::ScopedTempDir temp_dir;
     ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -1995,19 +2059,17 @@ class FrameFetchContextNetworkGuardrailsTest
     ASSERT_TRUE(base::WriteFile(temp_file_path,
                                 base::as_bytes(base::span(image_data))));
 
-    WebURLResponse custom_response(image_url);
+    WebURLResponse custom_response(kImageUrl);
     custom_response.SetHttpStatusCode(200);
     custom_response.SetMimeType("image/png");
     custom_response.SetExpectedContentLength(image_size);
 
-    // TODO(crbug.com/475473963): mock resource load using chunks instead of
-    // URLLoaderMockFactory's single-span SharedBuffer.
     url_test_helpers::RegisterMockedURLLoadWithCustomResponse(
-        image_url, WebString::FromUTF8(temp_file_path.AsUTF8Unsafe()),
-        custom_response);
+        kImageUrl, WebString::FromUtf8(temp_file_path.AsUTF8Unsafe()),
+        custom_response, chunk_size);
 
     ResourceFetcher* fetcher = document->Fetcher();
-    ResourceRequest request(image_url);
+    ResourceRequest request(kImageUrl);
     request.SetRequestContext(mojom::blink::RequestContextType::IMAGE);
 
     const ResourceLoaderOptions options(nullptr);
@@ -2021,7 +2083,7 @@ class FrameFetchContextNetworkGuardrailsTest
 
     EXPECT_NE(resource, nullptr);
     histogram_tester.ExpectBucketCount(
-        histogram_name,
+        kHistogramName,
         static_cast<int>(
             mojom::blink::DocumentPolicyFeature::kNetworkEfficiencyGuardrails),
         expected_count);
@@ -2066,7 +2128,7 @@ TEST_F(FrameFetchContextNetworkGuardrailsTest, ResourceCompression) {
 }
 
 TEST_F(FrameFetchContextNetworkGuardrailsTest, ContentLength) {
-  const size_t large_image_size =
+  const size_t kLargeImageSize =
       LocalDOMWindow::kGuardrailsLargeImageThresholdBytes + 1;
   CheckViolation(TestCase(ResourceType::kImage).ExpectingViolation(false));
   CheckViolation(TestCase(ResourceType::kImage)
@@ -2077,7 +2139,7 @@ TEST_F(FrameFetchContextNetworkGuardrailsTest, ContentLength) {
                          LocalDOMWindow::kGuardrailsLargeImageThresholdBytes))
                      .ExpectingViolation(false));
   CheckViolation(TestCase(ResourceType::kImage)
-                     .WithLength(String::Number(large_image_size))
+                     .WithLength(String::Number(kLargeImageSize))
                      .ExpectingViolation());
 
   // Threshold should not apply to arbitrary resource types.
@@ -2085,19 +2147,73 @@ TEST_F(FrameFetchContextNetworkGuardrailsTest, ContentLength) {
                      .WithLength("200")
                      .ExpectingViolation(false));
   CheckViolation(TestCase(ResourceType::kAudio)
-                     .WithLength(String::Number(large_image_size))
+                     .WithLength(String::Number(kLargeImageSize))
                      .ExpectingViolation(false));
 }
 
 TEST_F(FrameFetchContextNetworkGuardrailsTest, LargeImageResourceSizeLimit) {
-  const size_t large_image_size =
+  const size_t kLargeImageSize =
       LocalDOMWindow::kGuardrailsLargeImageThresholdBytes + 1;
 
-  CheckImageLoadViolation(large_image_size, false, /*enable_policy=*/false);
+  CheckImageLoadViolation(kLargeImageSize, false, /*enable_policy=*/false);
   CheckImageLoadViolation(LocalDOMWindow::kGuardrailsLargeImageThresholdBytes,
                           false);
-  CheckImageLoadViolation(large_image_size, true);
+  CheckImageLoadViolation(kLargeImageSize, true);
   CheckImageLoadViolation(100 * 1024, false);
+}
+
+TEST_F(FrameFetchContextNetworkGuardrailsTest, ChunkedImageResourceSizeLimit) {
+  // Violations should be based on accumulated byte count. Use large resource
+  // with chunks under the resource size limit to verify this.
+  CheckImageLoadViolation(1024 * 1024, true, /*enable_policy=*/true,
+                          /*chunk_size=*/1024);
+
+  // Chunking responses should not change violation behavior for resources under
+  // the size limit.
+  CheckImageLoadViolation(100 * 1024, false, /*enable_policy=*/true,
+                          /*chunk_size=*/1024);
+}
+
+TEST_F(FrameFetchContextNetworkGuardrailsTest, ChunkedLoading) {
+  const size_t kTotalSize = 1000;
+  const size_t kChunkSize = 250;
+  const int kExpectedChunks = 4;
+
+  Vector<char> test_data(kTotalSize, 'A');
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath temp_file = temp_dir.GetPath().AppendASCII("test_file.txt");
+  ASSERT_TRUE(
+      base::WriteFile(temp_file, base::as_bytes(base::span(test_data))));
+
+  KURL test_url = url_test_helpers::ToKURL("http://example.com/test.txt");
+  WebURLResponse response(test_url);
+  response.SetMimeType("text/plain");
+  response.SetExpectedContentLength(kTotalSize);
+  url_test_helpers::RegisterMockedURLLoadWithCustomResponse(
+      test_url, WebString::FromUtf8(temp_file.AsUTF8Unsafe()), response,
+      kChunkSize);
+
+  auto* mock_client = MakeGarbageCollected<MockRawResourceClient>();
+  EXPECT_CALL(*mock_client, ResponseReceived(testing::_, testing::_)).Times(1);
+  EXPECT_CALL(*mock_client, DataReceived(testing::_, testing::_))
+      .Times(kExpectedChunks)
+      .WillRepeatedly(
+          [kChunkSize](Resource* resource, base::span<const char> data) {
+            EXPECT_EQ(kChunkSize, data.size());
+          });
+  EXPECT_CALL(*mock_client, NotifyFinished(testing::_)).Times(1);
+
+  ResourceFetcher* fetcher = document->Fetcher();
+  ResourceRequest request(test_url);
+  request.SetRequestContext(mojom::blink::RequestContextType::FAVICON);
+  FetchParameters fetch_params(std::move(request),
+                               ResourceLoaderOptions(nullptr));
+  RawResource* resource =
+      RawResource::Fetch(fetch_params, fetcher, mock_client);
+  EXPECT_NE(resource, nullptr);
+
+  url_test_helpers::ServeAsynchronousRequests();
 }
 
 class AssetSizeGuardrailsTest : public FrameFetchContextNetworkGuardrailsTest {
@@ -2109,7 +2225,7 @@ class AssetSizeGuardrailsTest : public FrameFetchContextNetworkGuardrailsTest {
                                 mojom::blink::RequestContextType::FAVICON) {
     ResetDocument(enable_policy);
 
-    const std::string histogram_name =
+    const std::string kHistogramName =
         "Blink.UseCounter.DocumentPolicy.Enforced";
     base::HistogramTester histogram_tester;
     const int expected_count = expect_violation ? 1 : 0;
@@ -2127,7 +2243,7 @@ class AssetSizeGuardrailsTest : public FrameFetchContextNetworkGuardrailsTest {
         MockResource::Fetch(fetch_params, fetcher, nullptr);
 
     histogram_tester.ExpectBucketCount(
-        histogram_name,
+        kHistogramName,
         mojom::blink::DocumentPolicyFeature::kNetworkEfficiencyGuardrails,
         expected_count);
 
@@ -2139,11 +2255,11 @@ class AssetSizeGuardrailsTest : public FrameFetchContextNetworkGuardrailsTest {
   size_t GetEncodedLength(size_t bytes) { return (bytes * 4) / 3; }
 
   String GetLargeDataURL() {
-    const size_t large_data_size =
+    const size_t kLargeDataSize =
         GetEncodedLength(LocalDOMWindow::kGuardrailsLargeDataThresholdBytes) +
         1;
     String large_data =
-        "data:text/plain," + String(std::string(large_data_size, 'x'));
+        "data:text/plain," + String(std::string(kLargeDataSize, 'x'));
     return large_data;
   }
 };

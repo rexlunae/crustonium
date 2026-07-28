@@ -468,6 +468,20 @@ ContentSetting HostContentSettingsMap::GetUserModifiableContentSetting(
   return content_settings::ValueToContentSetting(value);
 }
 
+PermissionSetting HostContentSettingsMap::GetUserModifiablePermissionSetting(
+    const GURL& primary_url,
+    const GURL& secondary_url,
+    ContentSettingsType content_type) const {
+  CheckPermissionTypeRegistration(content_type);
+  auto* permission_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_type);
+  const base::Value value =
+      GetWebsiteSettingInternal(primary_url, secondary_url, content_type,
+                                ProviderFilter::kUserModifiable, nullptr);
+  return content_settings::ValueToPermissionSetting(permission_info, value);
+}
+
 PermissionSetting HostContentSettingsMap::GetPermissionSetting(
     const GURL& primary_url,
     const GURL& secondary_url,
@@ -527,7 +541,7 @@ void HostContentSettingsMap::SetWebsiteSettingDefaultScope(
     const GURL& primary_url,
     const GURL& secondary_url,
     ContentSettingsType content_type,
-    base::Value value,
+    const base::Value& value,
     const content_settings::ContentSettingConstraints& constraints) {
   content_settings::PatternPair patterns = GetPatternsForContentSettingsType(
       primary_url, secondary_url, content_type);
@@ -538,14 +552,14 @@ void HostContentSettingsMap::SetWebsiteSettingDefaultScope(
   }
 
   SetWebsiteSettingCustomScope(primary_pattern, secondary_pattern, content_type,
-                               std::move(value), constraints);
+                               value, constraints);
 }
 
 void HostContentSettingsMap::SetWebsiteSettingCustomScope(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
-    base::Value value,
+    const base::Value& value,
     const content_settings::ContentSettingConstraints& constraints) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   CHECK(IsSecondaryPatternAllowed(primary_pattern, secondary_pattern,
@@ -554,31 +568,15 @@ void HostContentSettingsMap::SetWebsiteSettingCustomScope(
   // settings are met.
   UsedContentSettingsProviders();
 
-#if DCHECK_IS_ON()
-  base::Value clone = value.Clone();
-#endif
   for (const auto& provider_pair : content_settings_providers_) {
-    // The std::move(value) here just turns the value into an r-value reference.
-    // It doesn't actually move the value yet. The provider can decide to accept
-    // the value. If successful then ownership is passed to the provider.
-    if (provider_pair.second->SetWebsiteSetting(
-            primary_pattern, secondary_pattern, content_type, std::move(value),
-            constraints)) {
+    if (provider_pair.second->SetWebsiteSetting(primary_pattern,
+                                                secondary_pattern, content_type,
+                                                value, constraints)) {
       if (content_settings::ShouldTypeExpireActively(content_type)) {
         UpdateExpiryEnforcementTimer(content_type, constraints.expiration());
       }
-
       return;
     }
-
-    // Ensure that the value is unmodified until accepted by a provider.
-#if DCHECK_IS_ON()
-    if (!(value.is_none() &&
-          constraints.session_model() == SessionModel::ONE_TIME &&
-          provider_pair.first == ProviderType::kOneTimePermissionProvider)) {
-      DCHECK_EQ(value, clone) << provider_pair.first;
-    }
-#endif
   }
   NOTREACHED();
 }
@@ -886,13 +884,14 @@ void HostContentSettingsMap::UpdateLastUsedTime(const GURL& primary_url,
   }
 }
 
-void HostContentSettingsMap::ResetLastVisitedTime(
+void HostContentSettingsMap::SetAutorevocationBypassedByUser(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType type) {
   for (content_settings::UserModifiableProvider* provider :
        user_modifiable_providers_) {
-    provider->ResetLastVisitTime(primary_pattern, secondary_pattern, type);
+    provider->SetAutorevocationBypassedByUser(primary_pattern,
+                                              secondary_pattern, type);
   }
 }
 
@@ -1311,7 +1310,7 @@ void HostContentSettingsMap::
                                    base::Value());
       SetWebsiteSettingCustomScope(pattern.primary_pattern,
                                    ContentSettingsPattern::Wildcard(), type,
-                                   pattern.setting_value.Clone());
+                                   pattern.setting_value);
     }
   }
 }
@@ -1342,13 +1341,11 @@ void HostContentSettingsMap::UpdateExpiryEnforcementTimer(
 
   base::TimeDelta next_run = base::TimeDelta::Max();
 
-  if (!expiration_enforcement_timers_.contains(content_type)) {
-    expiration_enforcement_timers_[content_type] =
-        std::make_unique<base::OneShotTimer>();
-  }
-
   auto& expiration_enforcement_timer =
       expiration_enforcement_timers_[content_type];
+  if (expiration_enforcement_timer == nullptr) {
+    expiration_enforcement_timer = std::make_unique<base::OneShotTimer>();
+  }
 
   if (expiration_enforcement_timer->IsRunning()) {
     next_run = expiration_enforcement_timer->GetCurrentDelay();
@@ -1388,8 +1385,6 @@ void HostContentSettingsMap::DeleteNearlyExpiredSettingsAndMaybeScheduleNextRun(
 
     if (setting.metadata.expiration() <= (clock_->Now() + kEagerExpiryBuffer)) {
       expired_entries.emplace_back(setting);
-      content_settings_uma_util::RecordActiveExpiryEvent(setting.source,
-                                                         content_setting_type);
     } else {
       next_expiry = std::min(next_expiry, setting.metadata.expiration());
     }
@@ -1414,13 +1409,12 @@ void HostContentSettingsMap::DeleteNearlyExpiredSettingsAndMaybeScheduleNextRun(
     const base::TimeDelta next_run = std::max(
         base::Seconds(0), next_expiry - clock_->Now() - kEagerExpiryBuffer);
 
-    if (!expiration_enforcement_timers_.contains(content_setting_type)) {
-      expiration_enforcement_timers_[content_setting_type] =
-          std::make_unique<base::OneShotTimer>();
-    }
-
     auto& expiration_enforcement_timer =
         expiration_enforcement_timers_[content_setting_type];
+    if (expiration_enforcement_timer == nullptr) {
+      expiration_enforcement_timer = std::make_unique<base::OneShotTimer>();
+    }
+
     expiration_enforcement_timer->Start(
         FROM_HERE, next_run,
         base::BindOnce(&HostContentSettingsMap::

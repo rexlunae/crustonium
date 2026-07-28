@@ -11,7 +11,6 @@
 
 #include "base/feature_list.h"
 #include "base/time/time.h"
-#include "build/branding_buildflags.h"
 #include "components/compose/buildflags.h"
 #include "pdf/buildflags.h"
 
@@ -19,7 +18,6 @@
 // Trigger identifiers currently used; duplicates not allowed.
 extern const char kHatsSurveyTriggerAutofillAddress[];
 extern const char kHatsSurveyTriggerAutofillAddressUserPerception[];
-extern const char kHatsSurveyTriggerAutofillAiFilling[];
 extern const char kHatsSurveyTriggerAutofillAiSavePrompt[];
 extern const char kHatsSurveyTriggerAutofillAddressUserDeclinedSuggestion[];
 extern const char kHatsSurveyTriggerAutofillAddressUserDeclinedSave[];
@@ -27,6 +25,9 @@ extern const char kHatsSurveyTriggerAutofillCreditCardUserPerception[];
 extern const char kHatsSurveyTriggerAutofillPasswordUserPerception[];
 extern const char kHatsSurveyTriggerAutofillCard[];
 extern const char kHatsSurveyTriggerAutofillPassword[];
+extern const char kHatsSurveyTriggerAutoPipAllowed[];
+extern const char kHatsSurveyTriggerAutoPipBlocked[];
+extern const char kHatsSurveyTriggerAutoPipPermissionPromptIgnored[];
 extern const char kHatsSurveyTriggerManageYourSavedInfoPerception[];
 extern const char kHatsSurveyTriggerManagePasswordsPerception[];
 extern const char kHatsSurveyTriggerManagePaymentsPerception[];
@@ -40,14 +41,21 @@ extern const char kHatsSurveyTriggerDownloadWarningPageBypass[];
 extern const char kHatsSurveyTriggerDownloadWarningPageHeed[];
 extern const char kHatsSurveyTriggerDownloadWarningPageIgnore[];
 extern const char kHatsSurveyTriggerHistoryEmbeddings[];
+extern const char kHatsSurveyTriggerHistoryPageExperiment[];
+extern const char kHatsSurveyTriggerHistoryPageControl[];
 extern const char kHatsSurveyTriggerIdentityAddressBubbleSignin[];
 extern const char kHatsSurveyTriggerIdentityDiceWebSigninAccepted[];
 extern const char kHatsSurveyTriggerIdentityDiceWebSigninDeclined[];
 extern const char kHatsSurveyTriggerIdentityFirstRunSignin[];
+extern const char kHatsSurveyTriggerIdentityFirstRunCompleted[];
 extern const char kHatsSurveyTriggerIdentityPasswordBubbleSignin[];
 extern const char kHatsSurveyTriggerIdentityProfileMenuDismissed[];
 extern const char kHatsSurveyTriggerIdentityProfileMenuSignin[];
 extern const char kHatsSurveyTriggerIdentityProfilePickerAddProfileSignin[];
+extern const char kHatsSurveyTriggerIdentityRefreshedFirstRunCompleted[];
+extern const char kHatsSurveyTriggerFirstRunDesktopRevampCompleted[];
+extern const char
+    kHatsSurveyTriggerFirstRunDesktopRevampNoFeatureShowcaseCompleted[];
 extern const char kHatsSurveyTriggerIdentitySigninInterceptProfileSeparation[];
 extern const char kHatsSurveyTriggerIdentitySigninPromoBubbleDismissed[];
 extern const char kHatsSurveyTriggerIdentitySwitchProfileFromProfileMenu[];
@@ -56,10 +64,6 @@ extern const char kHatsSurveyTriggerLensOverlayResults[];
 extern const char kHatsSurveyTriggerNtpModules[];
 extern const char kHatsSurveyTriggerNextPanel[];
 extern const char kHatsSurveyTriggerNtpPhotosModuleOptOut[];
-extern const char kHatsSurveyTriggerPasswordChangeCanceled[];
-extern const char kHatsSurveyTriggerPasswordChangeDelayed[];
-extern const char kHatsSurveyTriggerPasswordChangeError[];
-extern const char kHatsSurveyTriggerPasswordChangeSuccess[];
 extern const char kHatsSurveyTriggerPerformanceControlsPPM[];
 extern const char kHatsSurveyTriggerPrivacyGuide[];
 extern const char kHatsSurveyTriggerRedWarning[];
@@ -70,6 +74,7 @@ extern const char kHatsSurveyTriggerSettings[];
 extern const char kHatsSurveyTriggerSEHijacking[];
 extern const char kHatsSurveyTriggerSettingsPrivacy[];
 extern const char kHatsSurveyTriggerSettingsSecurity[];
+extern const char kHatsSurveyTriggerSettingsSecurityV2[];
 extern const char kHatsSurveyTriggerTrustSafetyPrivacySettings[];
 extern const char kHatsSurveyTriggerTrustSafetyTrustedSurface[];
 extern const char kHatsSurveyTriggerTrustSafetyTransactions[];
@@ -91,28 +96,19 @@ extern const char kHatsSurveyTriggerComposeClose[];
 extern const char kHatsSurveyTriggerComposeNudgeClose[];
 #endif  // #if BUILDFLAG(ENABLE_COMPOSE)
 extern const char kHatsSurveyTriggerWhatsNew[];
+extern const char kHatsSurveyTriggerReadingModeExit[];
 #else   // BUILDFLAG(IS_ANDROID)
 extern const char kHatsSurveyTriggerAndroidStartupSurvey[];
 extern const char kHatsSurveyTriggerSigninFirstRun[];
 extern const char kHatsSurveyTriggerSigninWeb[];
-extern const char kHatsSurveyTriggerSigninNtpAvatar[];
+extern const char kHatsSurveyTriggerSigninNtpSigninButton[];
+extern const char kHatsSurveyTriggerSigninNtpAccountAvatarTap[];
 extern const char kHatsSurveyTriggerSigninNtpPromo[];
 extern const char kHatsSurveyTriggerSigninBookmarkPromo[];
 #endif  // #if !BUILDFLAG(IS_ANDROID)
 
+extern const char kHatsSurveyTriggerAutofillAiFilling[];
 extern const char kHatsSurveyTriggerPermissionsPrompt[];
-extern const char kHatsSurveyTriggerPlusAddressAcceptedFirstTimeCreate[];
-extern const char kHatsSurveyTriggerPlusAddressCreatedMultiplePlusAddresses[];
-extern const char
-    kHatsSurveyTriggerPlusAddressCreatedPlusAddressViaManualFallback[];
-extern const char kHatsSurveyTriggerPlusAddressDeclinedFirstTimeCreate[];
-extern const char
-    kHatsSurveyTriggerPlusAddressDidChooseEmailOverPlusAddressSurvey[];
-extern const char
-    kHatsSurveyTriggerPlusAddressDidChoosePlusAddressOverEmailSurvey[];
-extern const char
-    kHatsSurveyTriggerPlusAddressFilledPlusAddressViaManualFallback[];
-extern const char kHatsSurveyTriggerPrivacySandboxSentimentSurvey[];
 extern const char kHatsSurveyTriggerPrivacySandboxActSurvey[];
 extern const char kHatsSurveyTriggerOnFocusZpsSuggestionsHappiness[];
 extern const char kHatsSurveyTriggerOnFocusZpsSuggestionsUtility[];
@@ -127,19 +123,17 @@ extern const char kHatsSurveyTriggerTesting[];
 // and demo purposes when the migration feature flag is enabled.
 extern const char kHatsNextSurveyTriggerIDTesting[];
 
-class Profile;
-
 namespace hats {
 struct SurveyConfig {
-  // LINT.IfChange(RequestedBrowserType)
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.hats
   enum RequestedBrowserType {
     // A standard survey, shown only in regular mode.
     kRegular = 0,
     // An Incognito survey, shown only in incognito.
     kIncognito = 1,
   };
-  // LINT.ThenChange(//chrome/browser/ui/android/hats/java/src/org/chromium/chrome/browser/ui/hats/SurveyConfig.java:RequestedBrowserType)
 
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.ui.hats
   // Enum to control the minimum profile age check before showing a survey.
   // The profile age is determined by the creation time of the profile
   // directory, and is NOT related to the age of the user.
@@ -239,32 +233,6 @@ struct SurveyConfig {
   static std::optional<uint64_t> ValidateHatsSurveyUkmId(
       const std::optional<uint64_t> hats_survey_ukm_id);
 
-  // Initializes the cooldown period override for this survey config if
-  // `cooldown_period_override` is not zero.
-  void SetCooldownPeriodOverride(
-      const base::TimeDelta& cooldown_period_override);
-
-  // Returns the cooldown override for this survey only if the survey feature
-  // is enabled for the current profile and the feature is in the dogfood stage,
-  // i.e. it's controlled by some Google group.
-  std::optional<base::TimeDelta> GetCooldownPeriodOverride(
-      Profile* profile) const;
-
-  // A convenience method to check if the survey config has an effective
-  // cooldown override period.
-  bool IsCooldownOverrideEnabled(Profile* profile) const;
-
- private:
-  // Overrides the default time between a user seeing a survey and being able to
-  // see it again. When this value is non-zero, the date when other survey
-  // impressions happened is ignored. This value should not be used directly
-  // because the cooldown period override should be effective only if the survey
-  // feature is launched for a specific Google group, see
-  // `IsCooldownOverrideEnabled()`.
-  // TODO: crbug.com/348137782 - Either make this a global constant or add a
-  // verification logic that no 2 different cooldown period overrides are
-  // configured.
-  std::optional<base::TimeDelta> cooldown_period_override_;
 };
 
 using SurveyConfigs = base::flat_map<std::string, SurveyConfig>;

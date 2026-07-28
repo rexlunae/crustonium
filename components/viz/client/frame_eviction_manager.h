@@ -16,6 +16,7 @@
 #include "base/memory/post_delayed_memory_reduction_task.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
@@ -27,6 +28,10 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/pre_freeze_background_memory_trimmer.h"
 #endif
+
+namespace ash {
+FORWARD_DECLARE_TEST(LockStateControllerTest, PauseFrameEvictionWhileLocked);
+}  // namespace ash
 
 namespace viz {
 
@@ -43,7 +48,8 @@ class FrameEvictionManagerClient {
 // clients can lock their frame to prevent it from being discarded, e.g. if the
 // tab is visible, or while capturing a screenshot.
 class VIZ_CLIENT_EXPORT FrameEvictionManager
-    : public base::trace_event::MemoryDumpProvider {
+    : public base::trace_event::MemoryDumpProvider,
+      public base::MemoryConsumer {
  public:
   // Pauses frame eviction within its scope.
   class VIZ_CLIENT_EXPORT ScopedPause {
@@ -85,6 +91,8 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
  private:
   friend struct base::DefaultSingletonTraits<FrameEvictionManager>;
   FRIEND_TEST_ALL_PREFIXES(FrameEvictionManagerTest, PeriodicCulling);
+  FRIEND_TEST_ALL_PREFIXES(ash::LockStateControllerTest,
+                           PauseFrameEvictionWhileLocked);
 
   FrameEvictionManager();
   ~FrameEvictionManager() override;
@@ -108,8 +116,14 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       const base::TickClock* clock);
 
+  // base::MemoryConsumer:
+  void OnReleaseMemory() override;
+  void OnUpdateMemoryLimit() override;
+
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
+
+  bool is_paused_for_testing() const { return pause_count_ != 0; }
 
   std::map<FrameEvictionManagerClient*, size_t> locked_frames_;
   // {FrameEvictionManagerClient, Last Unlock() time}, ordered with the most
@@ -126,6 +140,8 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
 
   base::OneShotDelayedBackgroundTimer idle_frame_culling_timer_;
   raw_ptr<const base::TickClock> clock_ = base::DefaultTickClock::GetInstance();
+
+  std::optional<base::MemoryConsumerRegistration> memory_consumer_registration_;
 };
 
 }  // namespace viz

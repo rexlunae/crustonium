@@ -38,7 +38,6 @@ std::unique_ptr<MappableBufferDXGI> MappableBufferDXGI::CreateFromHandle(
     CopyNativeBufferToShMemCallback copy_native_buffer_to_shmem_callback,
     scoped_refptr<base::UnsafeSharedMemoryPool> pool) {
   DCHECK(handle.dxgi_handle().IsValid());
-  CHECK(viz::HasEquivalentBufferFormat(format));
   return base::WrapUnique(new MappableBufferDXGI(
       size, format, std::move(handle).dxgi_handle(),
       std::move(copy_native_buffer_to_shmem_callback), std::move(pool)));
@@ -117,7 +116,7 @@ bool MappableBufferDXGI::Map() {
 
 void MappableBufferDXGI::MapAsync(base::OnceCallback<void(bool)> result_cb) {
   TRACE_EVENT0("gpu", "MappableBufferDXGI::MapAsync");
-  std::optional<base::OnceCallback<void(void)>> early_result;
+  std::optional<base::OnceClosure> early_result;
   early_result = DoMapAsync(std::move(result_cb));
   // Can't run the callback inside DoMapAsync because it grabs the lock.
   if (early_result.has_value()) {
@@ -125,7 +124,7 @@ void MappableBufferDXGI::MapAsync(base::OnceCallback<void(bool)> result_cb) {
   }
 }
 
-std::optional<base::OnceCallback<void(void)>> MappableBufferDXGI::DoMapAsync(
+std::optional<base::OnceClosure> MappableBufferDXGI::DoMapAsync(
     base::OnceCallback<void(bool)> result_cb) {
   base::AutoLock auto_lock(map_lock_);
   if (map_count_ > 0) {
@@ -215,24 +214,21 @@ bool MappableBufferDXGI::AsyncMappingIsNonBlocking() const {
   return true;
 }
 
-void* MappableBufferDXGI::memory(size_t plane) {
+base::span<uint8_t> MappableBufferDXGI::memory(size_t plane) {
   AssertMapped();
 
   if (static_cast<int>(plane) > format_.NumberOfPlanes() ||
       (!shared_memory_handle_ && !premapped_memory_.data())) {
-    return nullptr;
+    return {};
   }
 
-  uint8_t* plane_addr = (use_premapped_memory_ && premapped_memory_.data())
-                            ? premapped_memory_.data()
-                            : shared_memory_handle_->GetMapping()
-                                  .GetMemoryAsSpan<uint8_t>()
-                                  .data();
-  // This is safe, since we already checked that the requested plane is
-  // valid for current format.
-  UNSAFE_TODO(plane_addr += viz::SharedMemoryOffsetForSharedImageFormat(
-                  format_, plane, size_));
-  return plane_addr;
+  size_t offset =
+      viz::SharedMemoryOffsetForSharedImageFormat(format_, plane, size_);
+  return (use_premapped_memory_ && premapped_memory_.data())
+             ? premapped_memory_.subspan(offset)
+             : shared_memory_handle_->GetMapping()
+                   .GetMemoryAsSpan<uint8_t>()
+                   .subspan(offset);
 }
 
 void MappableBufferDXGI::Unmap() {
@@ -265,6 +261,10 @@ gfx::GpuMemoryBufferHandle MappableBufferDXGI::CloneHandle() const {
   handle.stride = stride(0);
 
   return handle;
+}
+
+bool MappableBufferDXGI::SupportsZeroCopyWebGPUImport() const {
+  return false;
 }
 
 void MappableBufferDXGI::SetUsePreMappedMemory(bool use_premapped_memory) {

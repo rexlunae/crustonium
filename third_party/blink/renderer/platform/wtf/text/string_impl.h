@@ -69,7 +69,7 @@ class AtomicStringTable;
 
 enum TextCaseSensitivity {
   kTextCaseSensitive,
-  kTextCaseASCIIInsensitive,
+  kTextCaseAsciiInsensitive,
 };
 
 // Computes a standard StringHasher string for the given buffer,
@@ -91,6 +91,10 @@ typedef HashMap<wtf_size_t, StringImpl*, AlreadyHashedTraits>
 // You can find documentation about this class in this doc:
 // https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/platform/wtf/text/README.md
 class WTF_EXPORT StringImpl {
+ public:
+  using size_type = string_size_t;
+  static constexpr size_type npos = kNotFound;
+
  private:
   // StringImpls are allocated out of the WTF buffer partition.
   void* operator new(size_t);
@@ -121,18 +125,18 @@ class WTF_EXPORT StringImpl {
 
   // FIXME: there has to be a less hacky way to do this.
   enum Force8Bit { kForce8BitConstructor };
-  StringImpl(wtf_size_t length, Force8Bit)
+  StringImpl(size_type length, Force8Bit)
       : length_(length), hash_and_flags_(LengthToAsciiFlags(length) | kIs8Bit) {
     DCHECK(length_);
   }
 
-  StringImpl(wtf_size_t length)
+  StringImpl(size_type length)
       : length_(length), hash_and_flags_(LengthToAsciiFlags(length)) {
     DCHECK(length_);
   }
 
   enum StaticStringTag { kStaticString };
-  StringImpl(wtf_size_t length, wtf_size_t hash, StaticStringTag)
+  StringImpl(size_type length, wtf_size_t hash, StaticStringTag)
       : length_(length),
         hash_and_flags_(hash << kHashShift | LengthToAsciiFlags(length) |
                         kIs8Bit | kIsStatic) {}
@@ -152,7 +156,7 @@ class WTF_EXPORT StringImpl {
   static void ReserveStaticStringsCapacityForSize(wtf_size_t size);
   static void FreezeStaticStrings();
   static const StaticStringsTable& AllStaticStrings();
-  static wtf_size_t HighestStaticStringLength() {
+  static size_type HighestStaticStringLength() {
     return highest_static_string_length_;
   }
 
@@ -180,21 +184,11 @@ class WTF_EXPORT StringImpl {
   static scoped_refptr<StringImpl> CreateUninitialized(size_t length,
                                                        base::span<UChar>& data);
 
-  wtf_size_t length() const { return length_; }
+  size_type length() const { return length_; }
   bool Is8Bit() const {
     return hash_and_flags_.load(std::memory_order_relaxed) & kIs8Bit;
   }
 
-  // Use Span8() instead.
-  UNSAFE_BUFFER_USAGE ALWAYS_INLINE const LChar* Characters8() const {
-    DCHECK(Is8Bit());
-    return reinterpret_cast<const LChar*>(this + 1);
-  }
-  // Use Span16() instead.
-  UNSAFE_BUFFER_USAGE ALWAYS_INLINE const UChar* Characters16() const {
-    DCHECK(!Is8Bit());
-    return reinterpret_cast<const UChar*>(this + 1);
-  }
   ALWAYS_INLINE base::span<const LChar> Span8() const {
     DCHECK(Is8Bit());
     return CharacterBuffer<LChar>();
@@ -211,8 +205,9 @@ class WTF_EXPORT StringImpl {
     // SAFETY: The AllocationSize<CharType>() helper function computes a size
     // that includes `length_` UChar/LChar characters in addition to the size
     // required for the StringImpl.
-    return UNSAFE_BUFFERS(
-        {reinterpret_cast<const uint8_t*>(this + 1), CharactersSizeInBytes()});
+    return UNSAFE_BUFFERS(base::span(base::unchecked,
+                                     reinterpret_cast<const uint8_t*>(this + 1),
+                                     CharactersSizeInBytes()));
   }
   // Create a new std::u16string based on this.
   // The character content is always copied.
@@ -243,9 +238,8 @@ class WTF_EXPORT StringImpl {
     return hash_and_flags_.load(std::memory_order_relaxed) & kIsStatic;
   }
 
-  bool ContainsOnlyASCIIOrEmpty() const;
-
-  bool IsLowerASCII() const;
+  bool ContainsOnlyAsciiOrEmpty() const;
+  bool ContainsNoAsciiUpper() const;
 
   // The high bits of 'hash' are always empty, but we prefer to store our
   // flags in the low bits because it makes them slightly more efficient to
@@ -314,10 +308,10 @@ class WTF_EXPORT StringImpl {
 
   ALWAYS_INLINE void Release() {
     if (!IsStatic()) {
-      // This can be a relaxed load as long as the subtraction is performed
-      // with acq_rel order. Any modification to `ref_count_` reordered after
-      // this load will be caught by the while loop or the fetch_sub inside
-      // DestroyIfNeeded().
+      // This can be relaxed: if it observes the last reference,
+      // DestroyIfNeeded() performs the acquire load before checking flags.
+      // Successful non-final decrements only need release ordering to publish
+      // prior writes through the ref_count_ release sequence.
       uint32_t current_ref = ref_count_.load(std::memory_order_relaxed);
 #if DCHECK_IS_ON()
       // In non-DCHECK builds, we can save a bit of time in micro-benchmarks by
@@ -339,7 +333,8 @@ class WTF_EXPORT StringImpl {
           return;
         }
       } while (!ref_count_.compare_exchange_weak(current_ref, current_ref - 1,
-                                                 std::memory_order_acq_rel));
+                                                 std::memory_order_release,
+                                                 std::memory_order_relaxed));
     }
   }
 
@@ -365,7 +360,7 @@ class WTF_EXPORT StringImpl {
 
     constexpr hw::FixedTag<uint16_t, 8> d16;
     constexpr hw::FixedTag<uint8_t, 16> d8;
-    constexpr size_t kLanes = hw::Lanes(d8);
+    HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d8);
 
     const size_t length = source.size();
     const LChar* src = source.data();
@@ -409,49 +404,34 @@ class WTF_EXPORT StringImpl {
   // purposes.
   scoped_refptr<StringImpl> IsolatedCopy() const;
 
-  scoped_refptr<StringImpl> Substring(wtf_size_t pos,
-                                      wtf_size_t len = UINT_MAX) const;
+  scoped_refptr<StringImpl> Substring(size_type pos,
+                                      size_type len = npos) const;
 
-  UChar operator[](wtf_size_t i) const {
+  // PRECONDITIONS: `i` must be less than `length`.
+  UNSAFE_BUFFER_USAGE UChar operator[](size_type i) const {
     SECURITY_DCHECK(i < length_);
-    // SAFETY: It's safe when i < length.
+    // SAFETY: Performance sensitive. Safety required from caller, enforced
+    // by UNSAFE_BUFFER_USAGE.
     UNSAFE_BUFFERS({
       if (Is8Bit()) {
-        return Characters8()[i];
+        return reinterpret_cast<const LChar*>(this + 1)[i];
       }
-      return Characters16()[i];
+      return reinterpret_cast<const UChar*>(this + 1)[i];
     });
   }
-  UChar32 CharacterStartingAt(wtf_size_t);
+  UChar32 CodePointAtOrZero(size_type);
 
   bool ContainsOnlyWhitespaceOrEmpty();
 
-  int ToInt(NumberParsingOptions, bool* ok) const;
-  wtf_size_t ToUInt(NumberParsingOptions, bool* ok) const;
-  int64_t ToInt64(NumberParsingOptions, bool* ok) const;
-  uint64_t ToUInt64(NumberParsingOptions, bool* ok) const;
-
-  wtf_size_t HexToUIntStrict(bool* ok);
-  uint64_t HexToUInt64Strict(bool* ok);
-
-  // FIXME: Like NumberParsingOptions::kStrict, these give false for "ok" when
-  // there is trailing garbage.  Like NumberParsingOptions::kLoose, these return
-  // the value when there is trailing garbage.  It would be better if these were
-  // more consistent with the above functions instead.
-  double ToDouble(bool* ok = nullptr);
-  float ToFloat(bool* ok = nullptr);
-
-  scoped_refptr<StringImpl> LowerASCII();
-  scoped_refptr<StringImpl> UpperASCII();
+  scoped_refptr<StringImpl> ToAsciiLower();
+  scoped_refptr<StringImpl> ToAsciiUpper();
 
   scoped_refptr<StringImpl> Fill(UChar);
   // FIXME: Do we need fill(char) or can we just do the right thing if UChar is
   // ASCII?
   scoped_refptr<StringImpl> FoldCase();
 
-  scoped_refptr<StringImpl> Truncate(wtf_size_t length);
-
-  wtf_size_t LengthWithStrippedWhiteSpace() const;
+  size_type LengthWithStrippedWhiteSpace() const;
 
   scoped_refptr<StringImpl> StripWhiteSpace();
   scoped_refptr<StringImpl> StripWhiteSpace(IsWhiteSpaceFunctionPtr);
@@ -469,29 +449,28 @@ class WTF_EXPORT StringImpl {
 
   // Remove characters between [start, start+lengthToRemove). The range is
   // clamped to the size of the string. Does nothing if start >= length().
-  scoped_refptr<StringImpl> Remove(wtf_size_t start,
-                                   wtf_size_t length_to_remove = 1);
+  scoped_refptr<StringImpl> Remove(size_type start,
+                                   size_type length_to_remove = 1);
 
   // Find characters.
-  wtf_size_t Find(LChar character, wtf_size_t start = 0) const;
-  wtf_size_t Find(char character, wtf_size_t start = 0) const;
-  wtf_size_t Find(UChar character, wtf_size_t start = 0) const;
-  wtf_size_t Find(CharacterMatchFunctionPtr, wtf_size_t index = 0) const;
-  wtf_size_t Find(base::RepeatingCallback<bool(UChar)> match_callback,
-                  wtf_size_t index = 0) const;
+  size_type Find(LChar character, size_type start = 0) const;
+  size_type Find(char character, size_type start = 0) const;
+  size_type Find(UChar character, size_type start = 0) const;
+  size_type Find(CharacterMatchFunctionPtr, size_type index = 0) const;
+  size_type Find(base::RepeatingCallback<bool(UChar)> match_callback,
+                 size_type index = 0) const;
 
   // Find substrings.
-  wtf_size_t Find(const StringView&, wtf_size_t index = 0) const;
+  size_type Find(const StringView&, size_type index = 0) const;
   // Unicode aware case insensitive string matching. Non-ASCII characters might
   // match to ASCII characters. This function is rarely used to implement web
   // platform features.  See crbug.com/40476285.
-  wtf_size_t DeprecatedFindIgnoringCase(const StringView&,
-                                        wtf_size_t index = 0) const;
-  wtf_size_t FindIgnoringASCIICase(const StringView&,
-                                   wtf_size_t index = 0) const;
+  size_type DeprecatedFindIgnoringCase(const StringView&,
+                                       size_type index = 0) const;
+  size_type FindIgnoringAsciiCase(const StringView&, size_type index = 0) const;
 
-  wtf_size_t ReverseFind(UChar, wtf_size_t index = UINT_MAX) const;
-  wtf_size_t ReverseFind(const StringView&, wtf_size_t index = UINT_MAX) const;
+  size_type ReverseFind(UChar, size_type index = npos) const;
+  size_type ReverseFind(const StringView&, size_type index = npos) const;
 
   bool StartsWith(UChar) const;
   bool StartsWith(const StringView&) const;
@@ -500,7 +479,7 @@ class WTF_EXPORT StringImpl {
   // platform features.  See crbug.com/40476285.
   bool DeprecatedStartsWithIgnoringCase(const StringView&) const;
   bool StartsWithIgnoringCaseAndAccents(const StringView&) const;
-  bool StartsWithIgnoringASCIICase(const StringView&) const;
+  bool StartsWithIgnoringAsciiCase(const StringView&) const;
 
   bool EndsWith(UChar) const;
   bool EndsWith(const StringView&) const;
@@ -508,7 +487,7 @@ class WTF_EXPORT StringImpl {
   // match to ASCII characters. This function is rarely used to implement web
   // platform features.  See crbug.com/40476285.
   bool DeprecatedEndsWithIgnoringCase(const StringView&) const;
-  bool EndsWithIgnoringASCIICase(const StringView&) const;
+  bool EndsWithIgnoringAsciiCase(const StringView&) const;
 
   // Replace parts of the string.
   scoped_refptr<StringImpl> Replace(UChar pattern, UChar replacement);
@@ -516,8 +495,8 @@ class WTF_EXPORT StringImpl {
                                     const StringView& replacement);
   scoped_refptr<StringImpl> Replace(const StringView& pattern,
                                     const StringView& replacement);
-  scoped_refptr<StringImpl> Replace(wtf_size_t index,
-                                    wtf_size_t length_to_replace,
+  scoped_refptr<StringImpl> Replace(size_type index,
+                                    size_type length_to_replace,
                                     const StringView& replacement);
 
   scoped_refptr<StringImpl> UpconvertedString();
@@ -525,7 +504,7 @@ class WTF_EXPORT StringImpl {
   // Copy characters from string starting at `start` up until the size of
   // `buffer` or the end of the string is reached. Returns the actual number of
   // characters copied.
-  size_t CopyTo(base::span<UChar> buffer, wtf_size_t start) const;
+  size_t CopyTo(base::span<UChar> buffer, size_type start) const;
 
   // Append characters from this string into a buffer. Expects the buffer to
   // have the methods:
@@ -534,8 +513,8 @@ class WTF_EXPORT StringImpl {
   // StringBuilder and Vector conform to this protocol.
   template <typename BufferType>
   void AppendTo(BufferType&,
-                wtf_size_t start = 0,
-                wtf_size_t length = UINT_MAX) const;
+                size_type start = 0,
+                size_type length = npos) const;
 
 #if BUILDFLAG(IS_APPLE)
   base::apple::ScopedCFTypeRef<CFStringRef> CreateCFString();
@@ -615,7 +594,7 @@ class WTF_EXPORT StringImpl {
   }
 
   template <typename CharType>
-  static size_t AllocationSize(wtf_size_t length) {
+  static size_t AllocationSize(size_type length) {
     static_assert(
         sizeof(CharType) > 1,
         "Don't use this template with 1-byte chars; use a template "
@@ -630,8 +609,8 @@ class WTF_EXPORT StringImpl {
     // SAFETY: The AllocationSize<CharType>() helper function computes a size
     // that includes `length_` UChar/LChar characters in addition to the size
     // required for the StringImpl.
-    return UNSAFE_BUFFERS(
-        base::span(reinterpret_cast<CharType*>(this + 1), length_));
+    return UNSAFE_BUFFERS(base::span(
+        base::unchecked, reinterpret_cast<CharType*>(this + 1), length_));
   }
   template <typename CharType>
   ALWAYS_INLINE base::span<const CharType> CharacterBuffer() const {
@@ -663,13 +642,13 @@ class WTF_EXPORT StringImpl {
 
   // Calculates the kContainsOnlyAscii and kIsLowerAscii flags. Returns
   // a bitfield with those 2 values.
-  unsigned ComputeASCIIFlags() const;
+  unsigned ComputeAsciiFlags() const;
 
 #if DCHECK_IS_ON()
   std::string AsciiForDebugging() const;
 #endif
 
-  static wtf_size_t highest_static_string_length_;
+  static size_type highest_static_string_length_;
 
 #if DCHECK_IS_ON()
   void AssertHashIsCorrect() {
@@ -685,7 +664,7 @@ class WTF_EXPORT StringImpl {
 #endif
   // TODO (crbug.com/1083392): Use base::AtomicRefCount.
   mutable std::atomic_uint32_t ref_count_{1};
-  const unsigned length_;
+  const size_type length_;
   mutable std::atomic<uint32_t> hash_and_flags_;
 };
 
@@ -702,7 +681,7 @@ ALWAYS_INLINE base::span<UChar> StringImpl::Span<UChar>() const {
 // The following template specialization can be moved to the class declaration
 // once we officially switch to C++17 (we need C++ DR727 to be implemented).
 template <>
-ALWAYS_INLINE size_t StringImpl::AllocationSize<LChar>(wtf_size_t length) {
+ALWAYS_INLINE size_t StringImpl::AllocationSize<LChar>(size_type length) {
   static_assert(sizeof(LChar) == 1, "sizeof(LChar) should be 1.");
   return base::CheckAdd(sizeof(StringImpl), length).ValueOrDie();
 }
@@ -722,11 +701,11 @@ inline bool Equal(const StringImpl* a, base::span<const char> b) {
 }
 WTF_EXPORT bool EqualNonNull(const StringImpl* a, const StringImpl* b);
 
-ALWAYS_INLINE bool StringImpl::ContainsOnlyASCIIOrEmpty() const {
+ALWAYS_INLINE bool StringImpl::ContainsOnlyAsciiOrEmpty() const {
   uint32_t flags = hash_and_flags_.load(std::memory_order_relaxed);
   if (flags & kAsciiPropertyCheckDone)
     return flags & kContainsOnlyAscii;
-  return ComputeASCIIFlags() & kContainsOnlyAscii;
+  return ComputeAsciiFlags() & kContainsOnlyAscii;
 }
 
 ALWAYS_INLINE size_t StringImpl::GetAllocatedSize() const {
@@ -736,17 +715,17 @@ ALWAYS_INLINE size_t StringImpl::GetAllocatedSize() const {
   return size;
 }
 
-ALWAYS_INLINE bool StringImpl::IsLowerASCII() const {
+ALWAYS_INLINE bool StringImpl::ContainsNoAsciiUpper() const {
   uint32_t flags = hash_and_flags_.load(std::memory_order_relaxed);
   if (flags & kAsciiPropertyCheckDone)
     return flags & kIsLowerAscii;
-  return ComputeASCIIFlags() & kIsLowerAscii;
+  return ComputeAsciiFlags() & kIsLowerAscii;
 }
 
 // Unicode aware case insensitive string matching. Non-ASCII characters might
 // match to ASCII characters. These functions are rarely used to implement web
 // platform features.
-// These functions are deprecated. Use EqualIgnoringASCIICase(), or introduce
+// These functions are deprecated. Use EqualIgnoringAsciiCase(), or introduce
 // EqualIgnoringUnicodeCase(). See crbug.com/627682
 WTF_EXPORT bool DeprecatedEqualIgnoringCase(base::span<const LChar>,
                                             base::span<const LChar>);
@@ -762,7 +741,7 @@ WTF_EXPORT bool DeprecatedEqualIgnoringCase(base::span<const UChar>,
 WTF_EXPORT bool EqualIgnoringNullity(StringImpl*, StringImpl*);
 
 template <typename CharacterTypeA, typename CharacterTypeB>
-inline bool EqualIgnoringASCIICase(base::span<const CharacterTypeA> a,
+inline bool EqualIgnoringAsciiCase(base::span<const CharacterTypeA> a,
                                    base::span<const CharacterTypeB> b) {
   CHECK_EQ(a.size(), b.size());
   size_t length = a.size();
@@ -770,8 +749,9 @@ inline bool EqualIgnoringASCIICase(base::span<const CharacterTypeA> a,
   const CharacterTypeB* b_data = b.data();
   while (length--) {
     // Avoid base::span::operator[] for better performance.
-    // SAFETY: This function ensures a_data and b_data move inside their spans.
-    if (UNSAFE_BUFFERS(ToASCIILower(*a_data++) != ToASCIILower(*b_data++))) {
+    // SAFETY: This function ensures a_data and b_data move inside their spans,
+    // since CHECK() above ensures a and b have same size.
+    if (UNSAFE_BUFFERS(ToAsciiLower(*a_data++) != ToAsciiLower(*b_data++))) {
       return false;
     }
   }
@@ -779,11 +759,11 @@ inline bool EqualIgnoringASCIICase(base::span<const CharacterTypeA> a,
 }
 
 #if HWY_TARGET != HWY_SCALAR
-ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const LChar> a,
+ALWAYS_INLINE bool SimdEqualIgnoringAsciiCase(base::span<const LChar> a,
                                               base::span<const LChar> b) {
   namespace hw = hwy::HWY_NAMESPACE;
   constexpr hw::FixedTag<uint8_t, 16> d;
-  constexpr size_t kLanes = hw::Lanes(d);
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d);
 
   // SAFETY: The SIMD code requires raw buffer access.
   UNSAFE_BUFFERS({
@@ -805,7 +785,7 @@ ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const LChar> a,
       }
     }
     for (; i < a.size(); ++i) {
-      if (ToASCIILower(a.data()[i]) != ToASCIILower(b.data()[i])) {
+      if (ToAsciiLower(a.data()[i]) != ToAsciiLower(b.data()[i])) {
         return false;
       }
     }
@@ -813,12 +793,12 @@ ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const LChar> a,
   return true;
 }
 
-ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const UChar> a,
+ALWAYS_INLINE bool SimdEqualIgnoringAsciiCase(base::span<const UChar> a,
                                               base::span<const LChar> b) {
   namespace hw = hwy::HWY_NAMESPACE;
   constexpr hw::FixedTag<uint16_t, 8> d16;
   constexpr hw::FixedTag<uint8_t, 8> d8;
-  constexpr size_t kLanes = hw::Lanes(d16);
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d16);
 
   // SAFETY: The SIMD code requires raw buffer access.
   UNSAFE_BUFFERS({
@@ -843,7 +823,7 @@ ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const UChar> a,
       }
     }
     for (; i < a.size(); ++i) {
-      if (ToASCIILower(a.data()[i]) != ToASCIILower(b.data()[i])) {
+      if (ToAsciiLower(a.data()[i]) != ToAsciiLower(b.data()[i])) {
         return false;
       }
     }
@@ -851,11 +831,11 @@ ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const UChar> a,
   return true;
 }
 
-ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const UChar> a,
+ALWAYS_INLINE bool SimdEqualIgnoringAsciiCase(base::span<const UChar> a,
                                               base::span<const UChar> b) {
   namespace hw = hwy::HWY_NAMESPACE;
   constexpr hw::FixedTag<uint16_t, 8> d;
-  constexpr size_t kLanes = hw::Lanes(d);
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d);
 
   // SAFETY: The SIMD code requires raw buffer access.
   UNSAFE_BUFFERS({
@@ -877,7 +857,7 @@ ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const UChar> a,
       }
     }
     for (; i < a.size(); ++i) {
-      if (ToASCIILower(a.data()[i]) != ToASCIILower(b.data()[i])) {
+      if (ToAsciiLower(a.data()[i]) != ToAsciiLower(b.data()[i])) {
         return false;
       }
     }
@@ -886,56 +866,45 @@ ALWAYS_INLINE bool SimdEqualIgnoringASCIICase(base::span<const UChar> a,
 }
 #endif  // HWY_TARGET != HWY_SCALAR
 
-ALWAYS_INLINE bool EqualIgnoringASCIICase(base::span<const LChar> a,
+ALWAYS_INLINE bool EqualIgnoringAsciiCase(base::span<const LChar> a,
                                           base::span<const LChar> b) {
   CHECK_EQ(a.size(), b.size());
 #if HWY_TARGET != HWY_SCALAR
-  return SimdEqualIgnoringASCIICase(a, b);
+  return SimdEqualIgnoringAsciiCase(a, b);
 #else
-  return EqualIgnoringASCIICase<LChar, LChar>(a, b);
+  return EqualIgnoringAsciiCase<LChar, LChar>(a, b);
 #endif  // HWY_TARGET != HWY_SCALAR
 }
 
-ALWAYS_INLINE bool EqualIgnoringASCIICase(base::span<const UChar> a,
+ALWAYS_INLINE bool EqualIgnoringAsciiCase(base::span<const UChar> a,
                                           base::span<const LChar> b) {
   CHECK_EQ(a.size(), b.size());
 #if HWY_TARGET != HWY_SCALAR
-  return SimdEqualIgnoringASCIICase(a, b);
+  return SimdEqualIgnoringAsciiCase(a, b);
 #else
-  return EqualIgnoringASCIICase<UChar, LChar>(a, b);
+  return EqualIgnoringAsciiCase<UChar, LChar>(a, b);
 #endif  // HWY_TARGET != HWY_SCALAR
 }
 
-ALWAYS_INLINE bool EqualIgnoringASCIICase(base::span<const LChar> a,
+ALWAYS_INLINE bool EqualIgnoringAsciiCase(base::span<const LChar> a,
                                           base::span<const UChar> b) {
-  return EqualIgnoringASCIICase(b, a);
+  return EqualIgnoringAsciiCase(b, a);
 }
 
-ALWAYS_INLINE bool EqualIgnoringASCIICase(base::span<const UChar> a,
+ALWAYS_INLINE bool EqualIgnoringAsciiCase(base::span<const UChar> a,
                                           base::span<const UChar> b) {
   CHECK_EQ(a.size(), b.size());
 #if HWY_TARGET != HWY_SCALAR
-  return SimdEqualIgnoringASCIICase(a, b);
+  return SimdEqualIgnoringAsciiCase(a, b);
 #else
-  return EqualIgnoringASCIICase<UChar, UChar>(a, b);
+  return EqualIgnoringAsciiCase<UChar, UChar>(a, b);
 #endif  // HWY_TARGET != HWY_SCALAR
-}
-
-WTF_EXPORT int CodeUnitCompareIgnoringASCIICase(const StringImpl*,
-                                                const StringImpl*);
-WTF_EXPORT int CodeUnitCompareIgnoringASCIICase(const StringImpl*,
-                                                const LChar*);
-
-template <typename CharacterType1, typename CharacterType2>
-int CodeUnitCompareIgnoringAsciiCase(base::span<const CharacterType1> c1,
-                                     base::span<const CharacterType2> c2) {
-  return CodeUnitCompare(c1, c2, [](auto c) { return ToASCIILower(c); });
 }
 
 template <typename CharType>
-inline wtf_size_t Find(base::span<const CharType> characters,
-                       CharType match_character,
-                       wtf_size_t index = 0) {
+inline string_size_t Find(base::span<const CharType> characters,
+                          CharType match_character,
+                          string_size_t index = 0) {
   if (index >= characters.size()) {
     return kNotFound;
   }
@@ -944,34 +913,34 @@ inline wtf_size_t Find(base::span<const CharType> characters,
   const CharType* end = base::to_address(characters.end());
   const CharType* it = std::find(base::to_address(characters.begin() + index),
                                  end, match_character);
-  return it == end ? kNotFound : std::distance(begin, it);
+  return it == end ? kNotFound : CheckedDistance(begin, it);
 }
 
-ALWAYS_INLINE wtf_size_t Find(base::span<const UChar> characters,
-                              LChar match_character,
-                              wtf_size_t index = 0) {
+ALWAYS_INLINE string_size_t Find(base::span<const UChar> characters,
+                                 LChar match_character,
+                                 string_size_t index = 0) {
   return Find(characters, static_cast<UChar>(match_character), index);
 }
 
-inline wtf_size_t Find(base::span<const LChar> characters,
-                       UChar match_character,
-                       wtf_size_t index = 0) {
+inline string_size_t Find(base::span<const LChar> characters,
+                          UChar match_character,
+                          string_size_t index = 0) {
   if (match_character & ~0xFF)
     return kNotFound;
   return Find(characters, static_cast<LChar>(match_character), index);
 }
 
 template <typename CharacterType>
-inline wtf_size_t Find(base::span<const CharacterType> characters,
-                       char match_character,
-                       wtf_size_t index = 0) {
+inline string_size_t Find(base::span<const CharacterType> characters,
+                          char match_character,
+                          string_size_t index = 0) {
   return Find(characters, static_cast<LChar>(match_character), index);
 }
 
 template <typename CharType>
-inline wtf_size_t Find(base::span<const CharType> characters,
-                       CharacterMatchFunctionPtr match_function,
-                       wtf_size_t index = 0) {
+inline string_size_t Find(base::span<const CharType> characters,
+                          CharacterMatchFunctionPtr match_function,
+                          string_size_t index = 0) {
   if (index >= characters.size()) {
     return kNotFound;
   }
@@ -980,59 +949,43 @@ inline wtf_size_t Find(base::span<const CharType> characters,
   const CharType* end = base::to_address(characters.end());
   const CharType* it = std::find_if(
       base::to_address(characters.begin() + index), end, match_function);
-  return it == end ? kNotFound : std::distance(begin, it);
+  return it == end ? kNotFound : CheckedDistance(begin, it);
 }
 
-// Search the `characters` span for `match_character` from the end of the span,
-// and returns the found index or kNotFound.
-//
-// If the optional `index` parameter is specified, this function searches from
-// characters[min(index, characters.size()-1)] to characters[0].
-template <typename CharacterType>
-inline wtf_size_t ReverseFind(base::span<const CharacterType> characters,
-                              CharacterType match_character,
-                              wtf_size_t index = UINT_MAX) {
-  const size_t length = characters.size();
-  if (!length)
+template <typename CharType>
+inline string_size_t ReverseFind(base::span<const CharType> characters,
+                                 CharacterMatchFunctionPtr match_function,
+                                 string_size_t index) {
+  const string_size_t length =
+      base::checked_cast<string_size_t>(characters.size());
+  if (!length) {
     return kNotFound;
-  if (index >= length)
+  }
+  if (index >= length) {
     index = length - 1;
-  const CharacterType* data = characters.data();
-  // We don't use characters[index] for better performance.
-  // SAFETY: The above code ensures `index` is less than characters.size().
-  while (UNSAFE_BUFFERS(data[index]) != match_character) {
-    if (!index--)
+  }
+  while (!match_function(characters[index])) {
+    if (!index--) {
       return kNotFound;
+    }
   }
   return index;
 }
 
-ALWAYS_INLINE wtf_size_t ReverseFind(base::span<const UChar> characters,
-                                     LChar match_character,
-                                     wtf_size_t index = UINT_MAX) {
-  return ReverseFind(characters, static_cast<UChar>(match_character), index);
-}
-
-inline wtf_size_t ReverseFind(base::span<const LChar> characters,
-                              UChar match_character,
-                              wtf_size_t index = UINT_MAX) {
-  if (match_character & ~0xFF)
-    return kNotFound;
-  return ReverseFind(characters, static_cast<LChar>(match_character), index);
-}
-
-inline wtf_size_t StringImpl::Find(LChar character, wtf_size_t start) const {
+inline StringImpl::size_type StringImpl::Find(LChar character,
+                                              size_type start) const {
   if (Is8Bit())
     return blink::Find(Span8(), character, start);
   return blink::Find(Span16(), character, start);
 }
 
-ALWAYS_INLINE wtf_size_t StringImpl::Find(char character,
-                                          wtf_size_t start) const {
+ALWAYS_INLINE StringImpl::size_type StringImpl::Find(char character,
+                                                     size_type start) const {
   return Find(static_cast<LChar>(character), start);
 }
 
-inline wtf_size_t StringImpl::Find(UChar character, wtf_size_t start) const {
+inline StringImpl::size_type StringImpl::Find(UChar character,
+                                              size_type start) const {
   if (Is8Bit())
     return blink::Find(Span8(), character, start);
   return blink::Find(Span16(), character, start);
@@ -1040,13 +993,13 @@ inline wtf_size_t StringImpl::Find(UChar character, wtf_size_t start) const {
 
 // Null-terminated strings is generally discouraged as it has high chance to
 // cause Buffer overflow.
-UNSAFE_BUFFER_USAGE inline wtf_size_t LengthOfNullTerminatedString(
+UNSAFE_BUFFER_USAGE inline string_size_t LengthOfNullTerminatedString(
     const UChar* string) {
   size_t length = 0;
   while (string[length] != 0) {
     ++length;
   }
-  return base::checked_cast<wtf_size_t>(length);
+  return base::checked_cast<string_size_t>(length);
 }
 
 template <typename CharacterType1,
@@ -1099,15 +1052,15 @@ inline scoped_refptr<StringImpl> StringImpl::IsolatedCopy() const {
 
 template <typename BufferType>
 inline void StringImpl::AppendTo(BufferType& result,
-                                 wtf_size_t start,
-                                 wtf_size_t length) const {
-  wtf_size_t number_of_characters_to_copy = std::min(length, length_ - start);
+                                 size_type start,
+                                 size_type length) const {
+  size_type number_of_characters_to_copy = std::min(length, length_ - start);
   if (!number_of_characters_to_copy)
     return;
   if (Is8Bit())
-    result.AppendSpan(Span8().subspan(start, number_of_characters_to_copy));
+    result.append_range(Span8().subspan(start, number_of_characters_to_copy));
   else
-    result.AppendSpan(Span16().subspan(start, number_of_characters_to_copy));
+    result.append_range(Span16().subspan(start, number_of_characters_to_copy));
 }
 
 template <typename T>
@@ -1117,6 +1070,55 @@ template <>
 struct HashTraits<StringImpl*>;
 template <>
 struct HashTraits<scoped_refptr<StringImpl>>;
+
+namespace internal {
+
+// This is not in string_internal.h because this should be visible from
+// wtf_string.h and we don't want to include string_internal.h from
+// wtf_string.h.
+template <typename StringType, typename FinderType, bool allow_empty_entries>
+Vector<StringType> SplitByFinder(const StringType& input, FinderType finder) {
+  Vector<StringType> result;
+  if (input.empty()) {
+    if (allow_empty_entries) {
+      result.push_back(input);
+    }
+    return result;
+  }
+
+  auto input_view = input.subview(0);
+  using size_type = typename StringType::size_type;
+  size_type start_pos = 0;
+  size_type current_pos = 0;
+
+  while (current_pos < input.length()) {
+    auto separator_length = finder(input_view, current_pos);
+    if (separator_length) {
+      auto sub = input.substr(start_pos, current_pos - start_pos);
+      if (allow_empty_entries || !sub.empty()) {
+        result.push_back(sub);
+      }
+      if (*separator_length == 0) {
+        start_pos = current_pos;
+        current_pos++;
+      } else {
+        current_pos += *separator_length;
+        start_pos = current_pos;
+      }
+    } else {
+      current_pos++;
+    }
+  }
+
+  auto sub = input.substr(start_pos);
+  if (allow_empty_entries || !sub.empty()) {
+    result.push_back(sub);
+  }
+
+  return result;
+}
+
+}  // namespace internal
 
 }  // namespace blink
 

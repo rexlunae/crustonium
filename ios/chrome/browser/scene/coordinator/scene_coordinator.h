@@ -6,40 +6,76 @@
 #define IOS_CHROME_BROWSER_SCENE_COORDINATOR_SCENE_COORDINATOR_H_
 
 #import "base/ios/block_types.h"
+#import "base/memory/raw_ptr.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/coordinator/root_coordinator/root_coordinator.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_coordinator_delegate.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_paging.h"
 
+enum class ApplicationMode;
 class Browser;
 @protocol BrowserProviderInterface;
-class GURL;
 enum class SafariDataImportEntryPoint;
 @protocol SafariDataImportUIHandler;
 @protocol SceneCommands;
+@class BrowserLayoutViewController;
+@class OpenNewTabCommand;
+@class SceneCoordinator;
+class SceneUrlLoadingService;
+@protocol SceneURLLoadingServiceDelegate;
 @class SettingsNavigationController;
 @class ShowSigninCommand;
 @class SigninCoordinator;
-@class SceneCoordinator;
+@protocol TabOpening;
+enum class UserFeedbackSender;
+struct UrlLoadParams;
 
 namespace password_manager {
 enum class PasswordCheckReferrer;
 enum class WarningType;
 }  // namespace password_manager
 
+// Protocol to handle Scene UI changes that require access to the BVC.
+@protocol SceneUIHandler
+
+// Sets the current interface to `ApplicationMode::INCOGNITO` or
+// `ApplicationMode::NORMAL`.
+- (void)setCurrentInterfaceForMode:(ApplicationMode)mode;
+
+// Displays current (incognito/normal) BVC and calls `completion`.
+- (void)displayCurrentBVC:(ProceduralBlock)completion;
+
+// Checks the target BVC's current tab's URL. If `urlLoadParams` has an empty
+// URL, no new tab will be opened and `tabOpenedCompletion` will be run. If this
+// URL is chrome://newtab, loads `urlLoadParams` in this tab. Otherwise, open
+// `urlLoadParams` in a new tab in the target BVC. `tabOpenedCompletion` will be
+// called on the new tab (if not nil).
+- (void)openOrReuseTabInMode:(ApplicationMode)targetMode
+           withUrlLoadParams:(UrlLoadParams)urlLoadParams
+         tabOpenedCompletion:(ProceduralBlock)tabOpenedCompletion;
+
+@end
+
 // Coordinator for the scene, managing the top-level UI.
 @interface SceneCoordinator
-    : RootCoordinator <SettingsCommands, SettingsNavigationControllerDelegate>
+    : RootCoordinator <GeminiCommands,
+                       SceneCommands,
+                       SettingsCommands,
+                       SettingsNavigationControllerDelegate>
 
-- (instancetype)initWithSceneCommandsEndpoint:
-                    (id<SceneCommands>)sceneCommandsEndpoint
+- (instancetype)initWithTabOpener:(id<TabOpening>)tabOpener
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;
 
-@property(nonatomic, weak) id<TabGridCoordinatorDelegate> delegate;
+// An object to handle scene ui changes.
+@property(nonatomic, weak) id<SceneUIHandler> UIHandler;
+
+// A delegate for the Tab Grid coordinator.
+@property(nonatomic, weak) id<TabGridCoordinatorDelegate> tabGridDelegate;
 
 // Proxy properties for TabGridCoordinator.
 @property(nonatomic, readonly, strong) UIViewController* activeViewController;
@@ -50,14 +86,12 @@ enum class WarningType;
 // because the incognito profile is deleted.
 @property(nonatomic, assign) Browser* incognitoBrowser;
 
-// Navigation View controller for the settings.
-// TODO(crbug.com/463347803): This property is temporarily exposed to facilitate
-// migration. It should be private once the migration is complete.
-@property(nonatomic, strong)
-    SettingsNavigationController* settingsNavigationController;
-
 // Returns YES if sign-in is in progress.
 @property(nonatomic, readonly) BOOL isSigninInProgress;
+
+// The scene level component for url loading.
+@property(nonatomic, assign) raw_ptr<SceneUrlLoadingService>
+    sceneURLLoadingService;
 
 // Sets the main, inactive, and incognito browsers from the given provider.
 - (void)setBrowsersFromProvider:(id<BrowserProviderInterface>)provider;
@@ -68,113 +102,30 @@ enum class WarningType;
 // Returns YES if the current Tab is available to present a view controller.
 - (BOOL)isTabAvailableToPresentViewController;
 
-// Stops all child coordinators then calls `completion`. `completion` is called
-// whether or not child coordinators exist.
-- (void)stopChildCoordinatorsWithCompletion:(ProceduralBlock)completion;
+// Open a non-incognito tab, if one exists. If one doesn't exist, open a new
+// one. If incognito is forced, an incognito tab will be opened.
+- (void)openNonIncognitoTab:(ProceduralBlock)completion;
 
 // Displays the TabGrid at `page`.
 - (void)showTabGridPage:(TabGridPage)page;
 
-// Displays the given view controller.
+// Displays the given browser layout view controller.
 // Runs the given `completion` block after the view controller is visible.
-- (void)showTabViewController:(UIViewController*)viewController
-                    incognito:(BOOL)incognito
-                   completion:(ProceduralBlock)completion;
+- (void)showBrowserLayoutViewController:
+            (BrowserLayoutViewController*)viewController
+                              incognito:(BOOL)incognito
+                             completion:(ProceduralBlock)completion;
 
 // Sets the `mode` as the active one.
 - (void)setActiveMode:(TabGridMode)mode;
 
-// Shows the account menu.
-- (void)showAccountMenuFromWebWithURL:(const GURL&)url;
+// Shows the Youtube Incognito interstitial with the given `URLLoadParams`.
+- (void)showYoutubeIncognitoWithUrlLoadParams:
+    (const UrlLoadParams&)URLLoadParams;
 
-// Shows the signin UI.
-- (void)showSignin:(ShowSigninCommand*)command
-    baseViewController:(UIViewController*)baseViewController;
-
-// Shows the fullscreen sign-in promo.
-- (void)showFullscreenSigninPromoWithCompletion:
-    (SigninCoordinatorCompletionCallback)completion;
-
-// Shows the web sign-in promo.
-- (void)showWebSigninPromoFromViewController:(UIViewController*)viewController
-                                         URL:(const GURL&)URL;
-
-// Stops the sign-in coordinator actions and dismisses its views either
-// with or without animation. Executes its signinCompletion. It’s expected to be
-// not already executed.
-- (void)stopSigninCoordinatorWithCompletionAnimated:(BOOL)animated;
-
-// Shows the Safari Data Import UI.
-- (void)
-    displaySafariDataImportFromEntryPoint:(SafariDataImportEntryPoint)entryPoint
-                            withUIHandler:
-                                (id<SafariDataImportUIHandler>)UIHandler
-                       baseViewController:(UIViewController*)baseViewController;
-
-// Stops the Safari Data Import coordinator.
-- (void)stopSafariDataImportCoordinator;
-
-// Stops the settings navigation controller.
-- (void)stopSettingsAnimated:(BOOL)animated
-                  completion:(ProceduralBlock)completion;
-
-// Creates the settings navigation controller for the safety check if it doesn't
-// exist.
-- (void)createSafetyCheckSettingsWithReferrer:
-    (password_manager::PasswordCheckReferrer)referrer;
-
-// Shows the Password Checkup page for `referrer`.
-- (void)showPasswordCheckupPageForReferrer:
-    (password_manager::PasswordCheckReferrer)referrer;
-
-// Shows the Password Issues page for `warningType`.
-- (void)
-    showPasswordIssuesWithWarningType:(password_manager::WarningType)warningType
-                             referrer:(password_manager::PasswordCheckReferrer)
-                                          referrer;
-
-// Stops the Password Checkup coordinator.
-- (void)stopPasswordCheckupCoordinator;
-
-// Shows the History page.
-- (void)showHistory;
-
-// Stops the History coordinator.
-- (void)stopHistoryCoordinator;
-
-// Shows the settings navigation controller.
-- (void)presentSettingsFromViewController:(UIViewController*)baseViewController;
-
-// Shows the settings UI, presenting from `baseViewController` and with blue dot
-// for default browser settings if specified.
-- (void)showSettingsFromViewController:(UIViewController*)baseViewController
-              hasDefaultBrowserBlueDot:(BOOL)hasDefaultBrowserBlueDot;
-
-// Shows the Safe Browsing settings page presenting from `baseViewController`.
-- (void)showSafeBrowsingSettingsFromViewController:
-    (UIViewController*)baseViewController;
-
-// Shows the Settings UI, presenting from `baseViewController`.
-- (void)showSettingsFromViewController:(UIViewController*)baseViewController;
-
-// Shows the settings Privacy UI.
-- (void)showPrivacySettingsFromViewController:
-    (UIViewController*)baseViewController;
-
-// Shows the Settings UI if nothing else is displayed.
-- (void)maybeShowSettingsFromViewController;
-
-// Opens the Price Tracking notifications settings UI.
-- (void)openPriceTrackingNotificationsSettings;
-
-// Opens a debug menu for AI prototyping.
-- (void)openAIMenu;
-
-// Opens the assistant sheet.
-- (void)showAssistant;
-
-// Stops the AssistantSheetcoordinator;
-- (void)stopAssistantSheetCoordinator;
+// Shows the Incognito interstitial with the given `URLLoadParams`.
+- (void)showIncognitoInterstitialWithUrlLoadParams:
+    (const UrlLoadParams&)URLLoadParams;
 
 @end
 

@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -28,16 +29,16 @@ constexpr int kIntMax = std::numeric_limits<int>::max();
 
 }  // namespace
 
-TEST(RandUtilTest, RandInt) {
-  EXPECT_EQ(RandInt(0, 0), 0);
-  EXPECT_EQ(RandInt(kIntMin, kIntMin), kIntMin);
-  EXPECT_EQ(RandInt(kIntMax, kIntMax), kIntMax);
+TEST(RandUtilTest, RandIntInclusive) {
+  EXPECT_EQ(RandIntInclusive(0, 0), 0);
+  EXPECT_EQ(RandIntInclusive(kIntMin, kIntMin), kIntMin);
+  EXPECT_EQ(RandIntInclusive(kIntMax, kIntMax), kIntMax);
 
-  // Check that the DCHECKS in RandInt() don't fire due to internal overflow.
-  // There was a 50% chance of that happening, so calling it 40 times means
-  // the chances of this passing by accident are tiny (9e-13).
+  // Check that the DCHECKS in RandIntInclusive() don't fire due to internal
+  // overflow. There was a 50% chance of that happening, so calling it 40 times
+  // means the chances of this passing by accident are tiny (9e-13).
   for (int i = 0; i < 40; ++i) {
-    RandInt(kIntMin, kIntMax);
+    RandIntInclusive(kIntMin, kIntMax);
   }
 }
 
@@ -148,14 +149,14 @@ TEST(RandUtilTest, BitsToOpenEndedUnitIntervalF) {
 
 TEST(RandUtilTest, RandBytes) {
   const size_t buffer_size = 50;
-  uint8_t buffer[buffer_size];
-  UNSAFE_TODO(memset(buffer, 0, buffer_size));
+  std::array<uint8_t, buffer_size> buffer = {};
   RandBytes(buffer);
-  std::sort(buffer, UNSAFE_TODO(buffer + buffer_size));
+  std::ranges::sort(buffer);
+  const auto [unique_end, _] = std::ranges::unique(buffer);
+  const size_t unique_count = std::distance(buffer.begin(), unique_end);
   // Probability of occurrence of less than 25 unique bytes in 50 random bytes
   // is below 10^-25.
-  UNSAFE_TODO(
-      EXPECT_GT(std::unique(buffer, buffer + buffer_size) - buffer, 25));
+  EXPECT_GT(unique_count, 25);
 }
 
 // Verify that calling RandBytes with an empty buffer doesn't fail.

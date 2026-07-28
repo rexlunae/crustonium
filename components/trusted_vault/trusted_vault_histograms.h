@@ -21,7 +21,7 @@ enum class TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA {
   kPersistentAuthErrorResolved = 1,
   kMaxValue = kPersistentAuthErrorResolved,
 };
-// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:TrustedVaultHintDegradedRecoverabilityChangedReason)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultHintDegradedRecoverabilityChangedReason)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -72,6 +72,8 @@ enum class TrustedVaultURLFetchReasonForUMA {
   kDownloadAuthenticationFactorsRegistrationState,
   kRegisterGpmPin,
   kRegisterICloudKeychain,
+  kDownloadGaiaPasswordPublicKey,
+  kRotateSharedKey,
 };
 
 // Used to provide UMA metric breakdowns.
@@ -155,6 +157,19 @@ enum class TrustedVaultListSecurityDomainMembersPinStatus {
   kMaxValue = kNoPinPresent
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultListSecurityDomainMembersPinStatus)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(TrustedVaultRecoveryFlowEndpoint)
+enum class TrustedVaultRecoveryFlowEndpoint {
+  kDesktop = 0,
+  kDesktopEmbedded = 1,
+  kMaxValue = kDesktopEmbedded,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultRecoveryFlowEndpoint)
+
+void RecordTrustedVaultRecoveryFlowTriggeredEndpoint(
+    TrustedVaultRecoveryFlowEndpoint endpoint);
 
 void RecordTrustedVaultHintDegradedRecoverabilityChangedReason(
     TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA

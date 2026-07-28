@@ -31,11 +31,11 @@ TEST_F(UiEventDebugStringTest, StartTask) {
 }
 
 TEST_F(UiEventDebugStringTest, StopTask) {
-  EXPECT_EQ(
-      DebugString(SyncUiEvent(StopTask(
-          TaskId(123), ActorTask::State::kCancelled, /*title=*/"", Handle()))),
-      "StopTask[id=123, final_state=Cancelled, title="
-      ", last_acted_on_tab=5555]");
+  EXPECT_EQ(DebugString(SyncUiEvent(StopTask(
+                TaskId(123), ActorTask::State::kCancelled, /*title=*/"",
+                Handle(), ActorTask::TaskDuration::kDefault))),
+            "StopTask[id=123, final_state=Cancelled, title="
+            ", last_acted_on_tab=5555]");
 }
 
 TEST_F(UiEventDebugStringTest, TaskStateChanged) {
@@ -77,6 +77,19 @@ TEST_F(UiEventDebugStringTest, MouseClick) {
       DebugString(AsyncUiEvent(MouseClick(Handle(), mojom::ClickType::kRight,
                                           mojom::ClickCount::kDouble))),
       "MouseClick[type=kRight, count=kDouble]");
+}
+
+TEST_F(UiEventDebugStringTest, MouseMove_UnresolvableFromRenderer) {
+  EXPECT_EQ(
+      DebugString(UiEvent(MouseMove(Handle(), std::nullopt,
+                                    TargetSource::kUnresolvableFromRenderer))),
+      "MouseMove[target=null target_source=UnresolvableFromRenderer]");
+}
+
+TEST_F(UiEventDebugStringTest, MouseMove_RendererResolved) {
+  EXPECT_EQ(DebugString(UiEvent(MouseMove(Handle(), gfx::Point(50, 50),
+                                          TargetSource::kRendererResolved))),
+            "MouseMove[target=50,50 target_source=RendererResolved]");
 }
 
 }  // namespace

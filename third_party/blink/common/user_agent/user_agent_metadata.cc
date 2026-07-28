@@ -106,7 +106,7 @@ std::optional<std::string> UserAgentMetadata::Marshal(
   for (const auto& form_factors : in->form_factors) {
     out.WriteString(form_factors);
   }
-  return std::string(reinterpret_cast<const char*>(out.data()), out.size());
+  return std::string(out.AsStringView());
 }
 
 // static
@@ -116,9 +116,8 @@ std::optional<UserAgentMetadata> UserAgentMetadata::Demarshal(
     return std::nullopt;
   }
 
-  base::Pickle pickle =
-      base::Pickle::WithUnownedBuffer(base::as_byte_span(encoded.value()));
-  base::PickleIterator in(pickle);
+  base::PickleIterator in =
+      base::PickleIterator::WithData(base::as_byte_span(encoded.value()));
 
   uint32_t version;
   UserAgentMetadata out;

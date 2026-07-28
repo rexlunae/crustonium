@@ -10,10 +10,17 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/content_setting_permission_context_base.h"
 
-#if BUILDFLAG(IS_ANDROID)
 namespace permissions {
+struct PermissionRequestData;
+#if BUILDFLAG(IS_ANDROID)
 struct PermissionPromptDecision;
+#endif
 }  // namespace permissions
+
+#if BUILDFLAG(IS_ANDROID)
+namespace content {
+struct PermissionResult;
+}
 #endif
 
 // Common class which handles the mic and camera permissions.
@@ -31,11 +38,15 @@ class MediaStreamDevicePermissionContext
   ~MediaStreamDevicePermissionContext() override;
 
   // PermissionContextBase:
+  void DecidePermission(
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
+      permissions::BrowserPermissionCallback callback) override;
 #if BUILDFLAG(IS_ANDROID)
   void NotifyPermissionSet(
       const permissions::PermissionRequestData& request_data,
       permissions::BrowserPermissionCallback callback,
       bool persist,
+      const content::PermissionResult* permission_result,
       const permissions::PermissionPromptDecision& decision) override;
 #endif
   void ResetPermission(const GURL& requesting_origin,
@@ -43,8 +54,8 @@ class MediaStreamDevicePermissionContext
 
   // ContentSettingPermissionContextBase:
   // TODO(xhwang): GURL.DeprecatedGetOriginAsURL() shouldn't be used as the
-  // origin. Need to refactor to use url::Origin. crbug.com/527149 is filed for
-  // this.
+  // origin. Need to refactor to use url::Origin. crbug.com/40082781 is filed
+  // for this.
   ContentSetting GetContentSettingStatusInternal(
       content::RenderFrameHost* render_frame_host,
       const GURL& requesting_origin,
@@ -57,10 +68,8 @@ class MediaStreamDevicePermissionContext
                         bool allowed) override;
 
   void OnAndroidPermissionDecided(
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
-      const permissions::PermissionPromptDecision& website_permission_decision,
+      const permissions::PermissionRequestData& request_data,
+      const content::PermissionResult& website_permission_result,
       permissions::BrowserPermissionCallback callback,
       bool permission_granted);
 #endif

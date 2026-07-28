@@ -11,13 +11,16 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
+#include "chrome/browser/ui/read_anything/read_anything_hats_survey_controller.h"
+#include "chrome/browser/ui/read_anything/read_anything_immersive_activation_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_omnibox_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_controller.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_ui.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
@@ -28,7 +31,7 @@
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 class ReadAnythingController;
-class ReadAnythingImmersiveOverlayView;
+class ReadAnythingService;
 
 // A helper class to observe a specific WebContents, so the ReadAnything
 // Controller can observe multiple WebContents. Event callbacks are configured
@@ -89,13 +92,13 @@ class ReadAnythingControllerGlue
 //
 // It acts as the primary entry point for all Reading Mode commands and is
 // responsible for orchestrating the display of the Reading Mode UI.
-class ReadAnythingController {
+class ReadAnythingController : public tabs::ContentsObservingTabFeature {
  public:
   using Observer = ReadAnythingLifecycleObserver;
 
   ReadAnythingController(const ReadAnythingController&) = delete;
   ReadAnythingController& operator=(const ReadAnythingController&) = delete;
-  ~ReadAnythingController();
+  ~ReadAnythingController() override;
 
   using PresentationState = read_anything::mojom::ReadAnythingPresentationState;
 
@@ -113,8 +116,15 @@ class ReadAnythingController {
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  // Add/removes observer responsible for handling immersive mode showing and
+  // hiding.
+  void AddImmersiveActivationObserver(
+      ReadAnythingImmersiveActivationObserver* observer);
+  void RemoveImmersiveActivationObserver(
+      ReadAnythingImmersiveActivationObserver* observer);
+
   // Called when the WebUI is shown/hidden.
-  void OnEntryShown(std::optional<ReadAnythingOpenTrigger> trigger);
+  void OnEntryShown(ReadAnythingOpenTrigger trigger);
   void OnEntryHidden();
 
   // Displays the Reading Mode UI in the Side Panel.
@@ -124,16 +134,19 @@ class ReadAnythingController {
   void ShowImmersiveUI(ReadAnythingOpenTrigger trigger);
 
   // Closes the Immersive Reading Mode UI.
-  void CloseImmersiveUI(bool closed_by_tab_switch = false);
+  void CloseImmersiveUI(ReadAnythingCloseReason reason);
+
+  // Closes the Reading mode side panel UI.
+  void CloseSidePanelUI(ReadAnythingCloseReason reason);
+
+  // Shows Reading Mode using the user's preferred presentation mode.
+  void ShowInPreferredUI(ReadAnythingOpenTrigger trigger);
 
   // Toggles the Immersive Reading Mode UI.
   void ToggleUI(ReadAnythingOpenTrigger trigger);
 
   // Toggles between the Immersive Reading Mode UI and the Side Panel UI.
-  void TogglePresentation();
-
-  // Toggles the Reading Mode Side Panel UI.
-  void ToggleReadAnythingSidePanel(SidePanelOpenTrigger trigger);
+  void TogglePresentation(bool is_user_initiated);
 
   // Returns the current presentation_state_ of the Reading Mode feature. This
   // refers to the current host of the WebUI, but does not guarantee that the
@@ -143,7 +156,14 @@ class ReadAnythingController {
   void SetPresentationState(PresentationState new_state);
 
   void OnDistillationStateChanged(DistillationState new_state);
-  void LockDistillationStateForTesting();
+
+  // For testing only. Allows the distillation-related reactions to occur.
+  void UnlockDistillationStateForTesting();
+
+  // For testing only. Pauses distillation-related reactions from occurring.
+  // Only affects new ReadAnythingController instances created after this flag
+  // is set.
+  static void SetFreezeDistillationOnCreationForTesting(bool locked);
 
   // Lazily creates and returns the WebUIContentsWrapper for the
   // Reading Mode WebUI. Transfers ownership of the WebUIContentsWrapper to the
@@ -165,33 +185,39 @@ class ReadAnythingController {
   // the WebUIContentsWrapper to this controller.
   void TransferWebUiOwnership(
       std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-          web_ui_wrapper);
+          web_ui_wrapper,
+      PresentationState from_presentation);
 
   // Recreates the WebUI on the next GetOrCreateWebUIWrapper() call. This should
   // be called if Reading mode crashes so that we don't get stuck in a crashed
   // state.
   void RecreateWebUIWrapper();
 
-  // Artitficially sets the time when the user entered a page for testing the
+  // Artificially sets the time when the user entered a page for testing the
   // omnibox entry point.
   void SetDwellTimeForTesting(base::TimeTicks test_time);
 
- private:
-  // Called when the tab will detach.
-  void TabWillDetach(tabs::TabInterface* tab,
-                     tabs::TabInterface::DetachReason reason);
-  // Called when the tab is activated.
-  void OnTabActivated(tabs::TabInterface* tab);
-  // Called when the tab is backgrounded.
-  void OnTabBackgrounded(tabs::TabInterface* tab);
+  ReadAnythingSidePanelController* GetSidePanelControllerForTesting() {
+    return read_anything_side_panel_controller_.get();
+  }
 
-  std::unique_ptr<WebContentsObserverInstance> main_page_observer_;
+  void OnSoftNavigation();
+
+ private:
+  // Saves the presentation state to the user's preferences.
+  void SavePresentationPreference(PresentationState state);
+
+  // Updates the FindBarController's target WebContents if necessary. This
+  // ensures that find-in-page (Cmd-F) targets the IRM overlay when it's open,
+  // rather than the occluded main WebContents.
+  void MaybeUpdateFindBarController();
+
   std::unique_ptr<WebContentsObserverInstance> ra_web_ui_observer_;
   std::unique_ptr<ReadAnythingOmniboxController> omnibox_controller_;
+  std::unique_ptr<ReadAnythingHatsSurveyController> hats_survey_;
 
-  // Callback for when main_page_observer_ receives a PrimaryPageChanged event.
-  void OnMainPagePrimaryPageChanged();
-
+  // content::WebContentsObserver:
+  void PrimaryPageChanged(content::Page& page) override;
   // Callback for when ra_web_ui_observer_ receives a OnVisibilityChanged
   // event.
   void OnReadAnythingVisibilityChanged(content::Visibility visibility);
@@ -200,14 +226,18 @@ class ReadAnythingController {
   // (e.g. due to being unresponsive).
   void OnRendererCrashed();
 
+  // Records OnEntryHidden metrics and returns the calculated session duration
+  // if Reading Mode was successfully shown. Returns std::nullopt if the UI is
+  // closed before being successfully shown or hidden due to an in-progress
+  // presentation mode transition.
+  std::optional<base::TimeDelta> RecordEntryHiddenMetrics();
+
   // Returns the SidePanelUI for the active tab if it can be shown.
   // Otherwise, returns nullptr.
   SidePanelUI* GetSidePanelUI();
 
-  // Returns the immersive overlay view for the current tab.
-  ReadAnythingImmersiveOverlayView* GetImmersiveOverlayView();
-
   raw_ptr<tabs::TabInterface> tab_ = nullptr;
+  raw_ptr<SidePanelRegistry> side_panel_registry_ = nullptr;
   ui::ScopedUnownedUserData<ReadAnythingController> scoped_unowned_user_data_;
 
   std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
@@ -219,10 +249,26 @@ class ReadAnythingController {
   bool has_shown_ui_ = false;
   bool should_recreate_web_ui_ = false;
 
-  base::ObserverList<Observer> observers_;
+  // Timestamp of when the Reading Mode overlay begins to be shown.
+  base::TimeTicks entry_shown_timestamp_;
 
-  // Holds subscriptions for TabInterface callbacks.
-  std::vector<base::CallbackListSubscription> tab_subscriptions_;
+  // Returns if we are in the process of switching the Reading Mode Overlay.
+  // Used to ensure we keep transitions between RM UI states ( Immersive -> SP
+  // and vice-versa) as part of the same RM session.
+  bool is_presentation_transitioning_ = false;
+
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
+
+  base::ObserverList<ReadAnythingImmersiveActivationObserver>
+      immersive_activation_observers_;
+
+  // Holds subscription for TabInterface callbacks.
+  base::CallbackListSubscription tab_did_activate_subscription_;
 
   PresentationState presentation_state_ = PresentationState::kUndefined;
   // When a tab becomes inactive and hides IRM, this is set to true to let us
@@ -231,31 +277,28 @@ class ReadAnythingController {
 
   // When the Immersive Reading Mode overlay is shown, it covers the main web
   // contents, changing it's visibility to Visibility::OCCLUDED. This causes
-  // the renderer to make optimizations that break Reading Mode (namely, that it
-  // can stop generating accessibility events). This method tells the renderer
-  // that even though the webpage is technically occluded, we want it treated as
-  // if it were visible.
+  // the renderer to make optimizations that break Reading Mode (namely, that
+  // it can stop generating accessibility events). This method tells the
+  // renderer that even though the webpage is technically occluded, we want it
+  // treated as if it were visible.
   void CaptureMainContentsAsVisible();
   // Reset the main contents capturer handle_ when we no longer need to force
   // the main webpage to be treated as visible for IRM purposes.
   void ReleaseMainContentsCapture();
 
-  // Sets the accessibility status of the view of the main webpage. If IRM is
-  // open and covering the page, we don't want the main webpage to be accessible
-  // to screen readers and keyboard navigation.
-  void SetMainContentsAccessible(bool should_be_accessible);
-
   DistillationState distillation_state_ = DistillationState::kUndefined;
   bool distillation_state_locked_for_testing_ = false;
 
-  // The handle returned by web_contents_->IncrementCapturerCount. This is used
-  // to release the capture when the ReadAnythingController is destroyed.
+  // The handle returned by web_contents_->IncrementCapturerCount. This is
+  // used to release the capture when the ReadAnythingController is destroyed.
   // Note: Do not access this directly. Use CaptureMainContentsAsVisible() and
   // ReleaseMainContentsCapture() instead to ensure the handle is correctly
   // managed.
   base::ScopedClosureRunner main_contents_capturer_handle_;
 
-  raw_ptr<ReadAnythingImmersiveOverlayView> active_overlay_view_ = nullptr;
+  raw_ptr<ReadAnythingService> active_service_ = nullptr;
+
+  static bool freeze_distillation_for_testing_;
 
   base::WeakPtrFactory<ReadAnythingController> weak_factory_{this};
 };

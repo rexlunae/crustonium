@@ -21,7 +21,6 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/account_id/account_id.h"
-#include "components/user_manager/multi_user/multi_user_sign_in_policy_controller.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_manager_export.h"
@@ -263,6 +262,10 @@ class USER_MANAGER_EXPORT UserManagerImpl : public UserManager {
                      std::vector<AccountId>* users_vector,
                      std::set<AccountId>* users_set);
 
+  // Implementation of UserManager::RecordOwner.
+  static void RecordOwner(PrefService& local_state,
+                          std::string_view user_email);
+
  protected:
   friend class ash::UserManagerTest;
 
@@ -304,9 +307,6 @@ class USER_MANAGER_EXPORT UserManagerImpl : public UserManager {
 
   // Notifies that user has logged in.
   virtual void NotifyOnLogin();
-
-  // Notifies observers that another user was added to the session.
-  void NotifyUserAddedToSession(const User* added_user);
 
   // Removes a regular or supervised user from the user list.
   // Returns the user if found or NULL otherwise.
@@ -353,7 +353,12 @@ class USER_MANAGER_EXPORT UserManagerImpl : public UserManager {
   void RegularUserLoggedInAsEphemeral(const AccountId& account_id,
                                       const UserType user_type);
 
-  base::ObserverList<UserManager::Observer> observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      UserManager::Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observer_list_;
 
   // A list of User instances taking their ownership.
   // Following members can refer User instances in this vector.
@@ -440,9 +445,6 @@ class USER_MANAGER_EXPORT UserManagerImpl : public UserManager {
 
   // Sends metrics in response to a user with gaia account (regular) logging in.
   void SendGaiaUserLoginMetrics(const AccountId& account_id);
-
-  // Sends metrics for multi user sign-in.
-  void SendMultiUserSignInMetrics();
 
   // Updates user account after locale was resolved.
   void DoUpdateAccountLocale(const AccountId& account_id,

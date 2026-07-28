@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/icu_test_util.h"
@@ -39,6 +41,7 @@
 #include "pdf/content_restriction.h"
 #include "pdf/document_layout.h"
 #include "pdf/mojom/pdf.mojom.h"
+#include "pdf/page_orientation.h"
 #include "pdf/paint_ready_rect.h"
 #include "pdf/pdf_accessibility_data_handler.h"
 #include "pdf/pdf_features.h"
@@ -51,7 +54,6 @@
 #include "pdf/test/test_pdfium_engine.h"
 #include "printing/metafile_skia.h"
 #include "printing/units.h"
-#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "services/screen_ai/buildflags/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -119,6 +121,7 @@ using ::testing::InSequence;
 using ::testing::IsEmpty;
 using ::testing::IsFalse;
 using ::testing::IsTrue;
+using ::testing::Matcher;
 using ::testing::MockFunction;
 using ::testing::NiceMock;
 using ::testing::Pair;
@@ -132,6 +135,8 @@ constexpr uint8_t kSaveDataBuffer[] = {'b', 'u', 'f', 'f', 'e', 'r'};
 #endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
 
 #if BUILDFLAG(ENABLE_PDF_INK2)
+constexpr char kPdfLoadedWithInkTextAnnotationsMetric[] =
+    "PDF.LoadedWithInkTextAnnotations";
 constexpr char kPdfLoadedWithV2InkAnnotationsMetric[] =
     "PDF.LoadedWithV2InkAnnotations2";
 #endif  // BUILDFLAG(ENABLE_PDF_INK2)
@@ -209,6 +214,18 @@ base::DictValue GenerateShowSearchifyInProgressMessage(bool show) {
       .Set("show", show);
 }
 #endif
+
+base::DictValue GenerateResetPrintPreviewModeMessage(const char* id,
+                                                     int page_number,
+                                                     bool grayscale,
+                                                     int page_count) {
+  return base::DictValue()
+      .Set("type", "resetPrintPreviewMode")
+      .Set("url", base::StringPrintf("chrome-untrusted://print/%s/%d/print.pdf",
+                                     id, page_number))
+      .Set("grayscale", grayscale)
+      .Set("pageCount", page_count);
+}
 
 class MockHeaderVisitor : public blink::WebHTTPHeaderVisitor {
  public:
@@ -386,10 +403,7 @@ class FakePdfHost : public pdf::mojom::PdfHost {
               (override));
   MOCK_METHOD(void, OnDocumentLoadComplete, (), (override));
   MOCK_METHOD(void, UpdateContentRestrictions, (int32_t), (override));
-  MOCK_METHOD(void,
-              SaveUrlAs,
-              (const GURL&, network::mojom::ReferrerPolicy),
-              (override));
+  MOCK_METHOD(void, SavePdf, (), (override));
   MOCK_METHOD(void,
               SelectionChanged,
               (const gfx::PointF&, int32_t, const gfx::PointF&, int32_t),
@@ -413,8 +427,8 @@ class PdfViewWebPluginWithoutInitializeTest : public testing::Test {
   static void AddToPluginParams(std::string_view name,
                                 std::string_view value,
                                 blink::WebPluginParams& params) {
-    params.attribute_names.push_back(blink::WebString::FromUTF8(name));
-    params.attribute_values.push_back(blink::WebString::FromUTF8(value));
+    params.attribute_names.push_back(blink::WebString::FromUtf8(name));
+    params.attribute_values.push_back(blink::WebString::FromUtf8(value));
   }
 
   void SetUpPlugin(std::string_view document_url,
@@ -1069,6 +1083,30 @@ TEST_F(PdfViewWebPluginTest, GetAccessibilityDocInfoWithPDFDocTagged) {
   EXPECT_FALSE(doc_info->text_copyable);
 }
 
+TEST_F(PdfViewWebPluginTest, HasMeaningfulText) {
+  EXPECT_CALL(*engine_ptr_, HasMeaningfulText).WillOnce(Return(true));
+
+  base::test::TestFuture<bool> future;
+  plugin_->HasMeaningfulText(future.GetCallback());
+  EXPECT_TRUE(future.Get());
+}
+
+TEST_F(PdfViewWebPluginTest, HasJavaScript) {
+  EXPECT_CALL(*engine_ptr_, HasJavaScript).WillOnce(Return(true));
+
+  base::test::TestFuture<bool> future;
+  plugin_->HasJavaScript(future.GetCallback());
+  EXPECT_TRUE(future.Get());
+}
+
+TEST_F(PdfViewWebPluginTest, IsPasswordProtected) {
+  EXPECT_CALL(*engine_ptr_, IsPasswordProtected).WillOnce(Return(true));
+
+  base::test::TestFuture<bool> future;
+  plugin_->IsPasswordProtected(future.GetCallback());
+  EXPECT_TRUE(future.Get());
+}
+
 TEST_F(PdfViewWebPluginTest, GetAccessibilityDocInfoWithCopyAccessibleAllowed) {
   EXPECT_CALL(*engine_ptr_, HasPermission).WillRepeatedly(Return(false));
   EXPECT_CALL(*engine_ptr_, HasPermission(DocumentPermission::kCopyAccessible))
@@ -1625,13 +1663,13 @@ class PdfViewWebPluginImeTest : public PdfViewWebPluginTest {
 };
 
 TEST_F(PdfViewWebPluginImeTest, ImeSetCompositionAndFinishAscii) {
-  const blink::WebString text = blink::WebString::FromASCII("input");
+  const blink::WebString text = blink::WebString::FromAscii("input");
   TestImeSetCompositionForPlugin(text);
   TestImeFinishComposingTextForPlugin(text);
 }
 
 TEST_F(PdfViewWebPluginImeTest, ImeSetCompositionAndFinishUnicode) {
-  const blink::WebString text = blink::WebString::FromUTF16(u"你好");
+  const blink::WebString text = blink::WebString::FromUtf16(u"你好");
   TestImeSetCompositionForPlugin(text);
   TestImeFinishComposingTextForPlugin(text);
   // Calling ImeFinishComposingTextForPlugin() again is a no-op.
@@ -1645,12 +1683,12 @@ TEST_F(PdfViewWebPluginImeTest, ImeSetCompositionAndFinishEmpty) {
 }
 
 TEST_F(PdfViewWebPluginImeTest, ImeCommitTextForPluginAscii) {
-  const blink::WebString text = blink::WebString::FromASCII("a b");
+  const blink::WebString text = blink::WebString::FromAscii("a b");
   TestImeCommitTextForPlugin(text);
 }
 
 TEST_F(PdfViewWebPluginImeTest, ImeCommitTextForPluginUnicode) {
-  const blink::WebString text = blink::WebString::FromUTF16(u"さようなら");
+  const blink::WebString text = blink::WebString::FromUtf16(u"さようなら");
   TestImeCommitTextForPlugin(text);
 }
 
@@ -1717,7 +1755,7 @@ TEST_F(PdfViewWebPluginTest, ChangeTextSelection) {
 
   static constexpr char kSelectedText[] = "1234";
   EXPECT_CALL(*client_ptr_,
-              TextSelectionChanged(blink::WebString::FromUTF8(kSelectedText), 0,
+              TextSelectionChanged(blink::WebString(kSelectedText), 0,
                                    gfx::Range(0, 4)));
 
   plugin_->SetSelectedText(kSelectedText);
@@ -1726,9 +1764,8 @@ TEST_F(PdfViewWebPluginTest, ChangeTextSelection) {
   EXPECT_EQ(kSelectedText, plugin_->SelectionAsMarkup().Utf8());
 
   static constexpr char kEmptyText[] = "";
-  EXPECT_CALL(*client_ptr_,
-              TextSelectionChanged(blink::WebString::FromUTF8(kEmptyText), 0,
-                                   gfx::Range(0, 0)));
+  EXPECT_CALL(*client_ptr_, TextSelectionChanged(blink::WebString(kEmptyText),
+                                                 0, gfx::Range(0, 0)));
   plugin_->SetSelectedText(kEmptyText);
   EXPECT_FALSE(plugin_->HasSelection());
   EXPECT_TRUE(plugin_->SelectionAsText().IsEmpty());
@@ -1739,7 +1776,7 @@ TEST_F(PdfViewWebPluginTest, SelectAll) {
   EXPECT_CALL(*engine_ptr_, SelectAll);
 
   EXPECT_TRUE(plugin_->ExecuteEditCommand(
-      /*name=*/blink::WebString::FromASCII("SelectAll"),
+      /*name=*/blink::WebString::FromAscii("SelectAll"),
       /*value=*/blink::WebString()));
 }
 
@@ -2208,9 +2245,7 @@ class PdfViewWebPluginSaveTest : public PdfViewWebPluginTest {
 TEST_F(PdfViewWebPluginSaveTest, OriginalInNonEditMode) {
   {
     InSequence pdf_host_sequence;
-
-    EXPECT_CALL(pdf_host_, SaveUrlAs(GURL(kPdfUrl),
-                                     network::mojom::ReferrerPolicy::kDefault));
+    EXPECT_CALL(pdf_host_, SavePdf());
   }
 
   EXPECT_EQ(blink::WebTextInputType::kWebTextInputTypeNone,
@@ -2238,8 +2273,7 @@ TEST_F(PdfViewWebPluginSaveTest, OriginalInEditMode) {
     InSequence pdf_host_sequence;
 
     EXPECT_CALL(pdf_host_, SetPluginCanSave(false));
-    EXPECT_CALL(pdf_host_, SaveUrlAs(GURL(kPdfUrl),
-                                     network::mojom::ReferrerPolicy::kDefault));
+    EXPECT_CALL(pdf_host_, SavePdf());
     EXPECT_CALL(pdf_host_, SetPluginCanSave(true));
   }
 
@@ -2619,7 +2653,7 @@ class PdfViewWebPluginSubmitFormTest
       return associated_loader;
     });
 
-    plugin_->SubmitForm(url, form_data.data(), form_data.size());
+    plugin_->SubmitForm(url, base::as_byte_span(form_data));
   }
 
   void SubmitFailingForm(const std::string& url) {
@@ -2628,7 +2662,7 @@ class PdfViewWebPluginSubmitFormTest
     EXPECT_CALL(*client_ptr_, CreateAssociatedURLLoader).Times(0);
 
     constexpr std::string_view kFormData = "form data";
-    plugin_->SubmitForm(url, kFormData.data(), kFormData.size());
+    plugin_->SubmitForm(url, base::as_byte_span(kFormData));
   }
 
   blink::WebURLRequest request_;
@@ -2801,6 +2835,9 @@ class PdfViewWebPluginPrintPreviewTest : public PdfViewWebPluginTest {
     EXPECT_CALL(*client_ptr_, GetEmbedderOriginString)
         .WillRepeatedly(Return("chrome://print/"));
   }
+
+  // For use with `base::StringPrintf()`.
+  static constexpr char kTestId[] = "1234567890abcdef1234567890abcdef";
 };
 
 TEST_F(PdfViewWebPluginPrintPreviewTest, HandleResetPrintPreviewModeMessage) {
@@ -2817,12 +2854,9 @@ TEST_F(PdfViewWebPluginPrintPreviewTest, HandleResetPrintPreviewModeMessage) {
         return engine;
       });
 
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/0/0/print.pdf",
-    "grayscale": false,
-    "pageCount": 1,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/0, /*grayscale=*/false,
+      /*page_count=*/1));
 }
 
 TEST_F(PdfViewWebPluginPrintPreviewTest,
@@ -2835,14 +2869,11 @@ TEST_F(PdfViewWebPluginPrintPreviewTest,
         return std::make_unique<NiceMock<TestPDFiumEngine>>(client);
       });
 
-  // The UI ID of 1 in the URL is arbitrary.
+  // The UI ID token in the URL is arbitrary.
   // The page index value of -1, AKA `kCompletePDFIndex`, is required for PDFs.
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/1/-1/print.pdf",
-    "grayscale": false,
-    "pageCount": 0,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/-1, /*grayscale=*/false,
+      /*page_count=*/0));
 
   EXPECT_CALL(*client_ptr_, PostMessage).Times(AnyNumber());
   EXPECT_CALL(*client_ptr_, PostMessage(base::test::IsJson(R"({
@@ -2862,21 +2893,15 @@ TEST_F(PdfViewWebPluginPrintPreviewTest,
         return engine;
       });
 
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/0/0/print.pdf",
-    "grayscale": true,
-    "pageCount": 1,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/0, /*grayscale=*/true,
+      /*page_count=*/1));
 }
 
 TEST_F(PdfViewWebPluginPrintPreviewTest, DocumentLoadComplete) {
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/0/0/print.pdf",
-    "grayscale": false,
-    "pageCount": 1,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/0, /*grayscale=*/false,
+      /*page_count=*/1));
 
   EXPECT_CALL(*client_ptr_, RecordComputedAction("PDF.LoadSuccess"));
   EXPECT_CALL(*client_ptr_, PostMessage);
@@ -2903,12 +2928,9 @@ TEST_F(PdfViewWebPluginPrintPreviewTest,
        DocumentLoadProgressResetByResetPrintPreviewModeMessage) {
   plugin_->DocumentLoadProgress(2, 100);
 
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/123/0/print.pdf",
-    "grayscale": false,
-    "pageCount": 2,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/0, /*grayscale=*/false,
+      /*page_count=*/2));
 
   EXPECT_CALL(*client_ptr_, PostMessage(base::test::IsJson(R"({
     "type": "loadProgress",
@@ -2919,20 +2941,18 @@ TEST_F(PdfViewWebPluginPrintPreviewTest,
 
 TEST_F(PdfViewWebPluginPrintPreviewTest,
        DocumentLoadProgressNotResetByLoadPreviewPageMessage) {
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/123/0/print.pdf",
-    "grayscale": false,
-    "pageCount": 2,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/0, /*grayscale=*/false,
+      /*page_count=*/2));
 
   plugin_->DocumentLoadProgress(2, 100);
 
-  plugin_->OnMessage(ParseMessage(R"({
+  plugin_->OnMessage(ParseMessage(base::StringPrintf(R"({
     "type": "loadPreviewPage",
-    "url": "chrome-untrusted://print/123/1/print.pdf",
+    "url": "chrome-untrusted://print/%s/1/print.pdf",
     "index": 1,
-  })"));
+  })",
+                                                     kTestId)));
 
   EXPECT_CALL(*client_ptr_, PostMessage).Times(0);
   plugin_->DocumentLoadProgress(3, 100);
@@ -2970,10 +2990,10 @@ class PdfViewWebPluginInkTest
     // setup in PdfViewWebPluginTest::SetUp().
     feature_list_.InitAndEnableFeatureWithParameters(
         chrome_pdf::features::kPdfInk2,
-        {{features::kPdfInk2TextAnnotations.name,
-          base::ToString(UseTextAnnotations())},
-         {features::kPdfInk2TextHighlighting.name,
-          base::ToString(UseTextHighlighting())}});
+        {
+            {features::kPdfInk2TextAnnotations.name,
+             base::ToString(UseTextAnnotations())},
+        });
 
     PdfViewWebPluginTest::SetUp();
   }
@@ -2991,7 +3011,6 @@ class PdfViewWebPluginInkTest
   };
 
   bool UseTextAnnotations() const { return GetParam().use_text_annotations; }
-  bool UseTextHighlighting() const { return GetParam().use_text_highlighting; }
 
   void SetUpWithTrivialInkStrokes() {
     // Set up the engine so the plugin can draw strokes. The exact strokes do
@@ -3209,7 +3228,7 @@ TEST_P(PdfViewWebPluginInkTest, LoadV2InkPathsForPageAndUpdateShapeActive) {
       /*active=*/false);
 }
 
-TEST_P(PdfViewWebPluginInkTest, SendThumbnailUpdatesInkThumbnail) {
+TEST_P(PdfViewWebPluginInkTest, SendThumbnail) {
   SetUpWithTrivialInkStrokes();
 
   EXPECT_CALL(*client_ptr_, PostMessage)
@@ -3217,20 +3236,6 @@ TEST_P(PdfViewWebPluginInkTest, SendThumbnailUpdatesInkThumbnail) {
         auto expected = base::test::ParseJsonDict(R"({
             "type": "getThumbnailReply",
             "messageId": "foo",
-            "width": 216,
-            "height": 108,
-        })");
-        EXPECT_THAT(dict, base::test::DictionaryHasValues(expected));
-
-        // Test `dict` contains the image data, but not the exact value.
-        const auto* blob = dict.FindBlob("imageData");
-        ASSERT_TRUE(blob);
-        EXPECT_FALSE(blob->empty());
-      })
-      .WillOnce([](const base::DictValue& dict) {
-        auto expected = base::test::ParseJsonDict(R"({
-            "type": "updateInk2Thumbnail",
-            "pageNumber": 1,
             "width": 216,
             "height": 108,
         })");
@@ -3594,6 +3599,61 @@ TEST_P(PdfViewWebPluginInkTest, DrawInProgressStrokeWithPenWithPressure) {
       events.end_event);
 }
 
+TEST_P(PdfViewWebPluginInkTest, AddFont) {
+  static constexpr FontId kFontId(1);
+  static constexpr auto kSerializedTypeface =
+      std::to_array<const uint8_t>({1, 2, 3});
+
+  EXPECT_CALL(*engine_ptr_,
+              AddFont(kFontId, "test",
+                      Matcher<base::span<const uint8_t>>(kSerializedTypeface)));
+
+  plugin_->ink_module_client_for_testing()->AddFont(kFontId, "test",
+                                                    kSerializedTypeface);
+}
+
+TEST_P(PdfViewWebPluginInkTest, DiscardText) {
+  static constexpr InkTextId kTextId(1);
+
+  EXPECT_CALL(*engine_ptr_, DiscardText(kTextId));
+
+  plugin_->ink_module_client_for_testing()->DiscardText(kTextId);
+}
+
+TEST_P(PdfViewWebPluginInkTest, DrawText) {
+  static constexpr int kPageIndex = 0;
+  static constexpr InkTextId kTextId(1);
+  static constexpr double kZoom = 1.5;
+  static constexpr float kAscent = 5;
+
+  EXPECT_CALL(*engine_ptr_,
+              DrawText(kPageIndex, kTextId, _, kAscent, kZoom, _));
+
+  const InkTextBoxAttributes text_box_attributes(
+      /*rect=*/gfx::RectF(20.0f, 20.0f, 100.0f, 100.0f),
+      /*color=*/SK_ColorBLACK,
+      /*css_font_size=*/10.0f,
+      /*typeface=*/TextTypeface::kSansSerif,
+      /*alignment=*/TextAlignment::kLeft,
+      /*orientation=*/0,
+      /*viewport_orientation=*/PageOrientation::kOriginal,
+      /*is_bold=*/true,
+      /*is_italic=*/false,
+      /*text=*/"Hello");
+  plugin_->ink_module_client_for_testing()->DrawText(
+      kPageIndex, kTextId, {}, kAscent, kZoom, text_box_attributes);
+}
+
+TEST_P(PdfViewWebPluginInkTest, UpdateTextActiveAndInvalidate) {
+  static constexpr InkTextId kTextId(1);
+
+  EXPECT_CALL(*engine_ptr_,
+              UpdateTextActiveAndInvalidate(TextId(kTextId), /*active=*/false));
+
+  plugin_->ink_module_client_for_testing()->UpdateTextActiveAndInvalidate(
+      kTextId, /*active=*/false);
+}
+
 class PdfViewWebPluginInkTextHighlightTest : public PdfViewWebPluginInkTest {
  public:
   static constexpr TestAnnotationBrushMessageParams kLightGreenBrushParams{
@@ -3673,6 +3733,105 @@ TEST_P(PdfViewWebPluginInkTextHighlightTest, DrawInProgressTextHighlight) {
       start_event, {&move_event}, end_event);
 }
 
+TEST_P(PdfViewWebPluginInkTextHighlightTest,
+       DrawInProgressTextHighlightMultipage) {
+  plugin_->set_in_paint_for_testing(true);
+
+  // Plugin size is 100x100 (kCanvasSize).
+  constexpr gfx::Rect kPluginRect(kCanvasSize);
+  UpdatePluginGeometry(/*device_scale=*/1.0f, kPluginRect);
+  SetDocumentDimensions(kCanvasSize);
+
+  // Page 0: top half, Page 1: bottom half.
+  constexpr gfx::Rect kPage0Rect(0, 0, 100, 50);
+  constexpr gfx::Rect kPage1Rect(0, 50, 100, 50);
+
+  ON_CALL(*engine_ptr_, GetPageContentsRect)
+      .WillByDefault([kPage0Rect, kPage1Rect](int page_index) {
+        if (page_index == 0) {
+          return kPage0Rect;
+        }
+        if (page_index == 1) {
+          return kPage1Rect;
+        }
+        return gfx::Rect();
+      });
+  ON_CALL(*engine_ptr_, GetPageSizeInPoints)
+      .WillByDefault(Return(gfx::SizeF(100.0f, 50.0f)));
+  ON_CALL(*engine_ptr_, GetThumbnailSize)
+      .WillByDefault(Return(gfx::Size(50, 25)));
+  ON_CALL(*engine_ptr_, IsPageVisible).WillByDefault(Return(true));
+
+  // Enter annotation mode and select the highlighter.
+  plugin_->OnMessage(
+      CreateSetAnnotationModeMessageForTesting(InkAnnotationMode::kDraw));
+  plugin_->OnMessage(CreateSetAnnotationBrushMessageForTesting(
+      "highlighter", &kLightGreenBrushParams));
+
+  // The canvas starts blank.
+  canvas_.DrawColor(SK_ColorWHITE);
+  plugin_->Paint(canvas_.sk_canvas(), kPluginRect);
+  SkBitmap blank_bitmap =
+      GenerateExpectedBitmapForPaint(kPluginRect, SK_ColorWHITE);
+  EXPECT_TRUE(cc::MatchesBitmap(canvas_.GetBitmap(), blank_bitmap,
+                                cc::ExactPixelComparator()));
+
+  constexpr gfx::PointF kStartPosition{50.0f, 25.0f};
+  constexpr gfx::PointF kEndPosition{50.0f, 75.0f};
+
+  EXPECT_CALL(*engine_ptr_, OnTextOrLinkAreaClick(kStartPosition, 1));
+  EXPECT_CALL(*engine_ptr_, ExtendSelectionByPoint(kEndPosition));
+
+  // Mock the selection rect map.
+  PdfInkModuleClient::SelectionRectMap mock_selection_rect_map{
+      {0, {PdfRect(50, 15, 100, 35)}}, {1, {PdfRect(0, 15, 50, 35)}}};
+  ON_CALL(*engine_ptr_, GetSelectionRectMap())
+      .WillByDefault(Return(mock_selection_rect_map));
+  ON_CALL(*engine_ptr_, IsSelectableTextOrLinkArea(_))
+      .WillByDefault(Return(true));
+
+  // Start to draw a stroke.  There should not be a call to apply the stroke
+  // until drawing is finished.
+  EXPECT_CALL(*engine_ptr_, ApplyStroke(_, _, _)).Times(0);
+
+  // Send mouse down on Page 0.
+  TestSendInputEvent(CreateLeftClickWebMouseEventAtPosition(kStartPosition),
+                     blink::WebInputEventResult::kHandledApplication);
+  // Send mouse move to Page 1.
+  TestSendInputEvent(CreateLeftClickWebMouseMoveEventAtPosition(kEndPosition),
+                     blink::WebInputEventResult::kHandledApplication);
+
+  // Draw the canvas for the in-progress stroke.
+  plugin_->Paint(canvas_.sk_canvas(), kPluginRect);
+  const base::FilePath stroked_image_png_file = GetInkTestDataFilePath(
+      FILE_PATH_LITERAL("text_highlight_multipage_stroke.png"));
+  EXPECT_TRUE(
+      MatchesPngFile(*canvas_.GetBitmap().asImage(), stroked_image_png_file));
+
+  // Finish the stroke.
+  testing::Mock::VerifyAndClearExpectations(engine_ptr_);
+  EXPECT_CALL(*engine_ptr_, ApplyStroke(0, InkStrokeId(0), _));
+  EXPECT_CALL(*engine_ptr_, ApplyStroke(1, InkStrokeId(1), _));
+
+  blink::WebMouseEvent end_event =
+      CreateLeftClickWebMouseUpEventAtPosition(kEndPosition);
+  TestSendInputEvent(end_event,
+                     blink::WebInputEventResult::kHandledApplication);
+
+  // Verify the snapshot.
+  plugin_->Paint(canvas_.sk_canvas(), kPluginRect);
+  EXPECT_TRUE(
+      MatchesPngFile(*canvas_.GetBitmap().asImage(), stroked_image_png_file));
+  EXPECT_TRUE(plugin_->HasInkInputsSnapshotForTesting());
+
+  plugin_->UpdateSnapshot(CreateSkiaImageForTesting(
+      plugin_->GetPluginRectForTesting().size(), SK_ColorWHITE));
+  plugin_->Paint(canvas_.sk_canvas(), kPluginRect);
+  EXPECT_TRUE(cc::MatchesBitmap(canvas_.GetBitmap(), blank_bitmap,
+                                cc::ExactPixelComparator()));
+  EXPECT_FALSE(plugin_->HasInkInputsSnapshotForTesting());
+}
+
 class PdfViewWebPluginInk2SaveTest : public PdfViewWebPluginSaveTest {
  private:
   base::test::ScopedFeatureList feature_list_{features::kPdfInk2};
@@ -3733,11 +3892,55 @@ TEST_F(PdfViewWebPluginInk2SaveTest, AnnotationInEditMode) {
 
 using PdfViewWebPluginInkMetricTest = PdfViewWebPluginInkTest;
 
+TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithoutInkTextAnnotations) {
+  base::HistogramTester histograms;
+
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_))
+      .WillOnce(Return(PDFiumEngine::InkIdentifiers{
+          .ink_text_annotations = PDFLoadedWithInkTextAnnotations::kFalse,
+          .v2_ink_path = PDFLoadedWithV2InkAnnotations::kFalse,
+      }));
+  plugin_->DocumentLoadComplete();
+
+  histograms.ExpectUniqueSample(kPdfLoadedWithInkTextAnnotationsMetric,
+                                PDFLoadedWithInkTextAnnotations::kFalse, 1);
+}
+
+TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithInkTextAnnotations) {
+  base::HistogramTester histograms;
+
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_))
+      .WillOnce(Return(PDFiumEngine::InkIdentifiers{
+          .ink_text_annotations = PDFLoadedWithInkTextAnnotations::kTrue,
+          .v2_ink_path = PDFLoadedWithV2InkAnnotations::kFalse,
+      }));
+  plugin_->DocumentLoadComplete();
+
+  histograms.ExpectUniqueSample(kPdfLoadedWithInkTextAnnotationsMetric,
+                                PDFLoadedWithInkTextAnnotations::kTrue, 1);
+}
+
+TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithInkTextAnnotationsTimeout) {
+  base::HistogramTester histograms;
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_))
+      .WillOnce(Return(PDFiumEngine::InkIdentifiers{
+          .ink_text_annotations = PDFLoadedWithInkTextAnnotations::kUnknown,
+          .v2_ink_path = PDFLoadedWithV2InkAnnotations::kFalse,
+      }));
+  plugin_->DocumentLoadComplete();
+
+  histograms.ExpectUniqueSample(kPdfLoadedWithInkTextAnnotationsMetric,
+                                PDFLoadedWithInkTextAnnotations::kUnknown, 1);
+}
+
 TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithoutV2InkAnnotations) {
   base::HistogramTester histograms;
 
-  EXPECT_CALL(*engine_ptr_, ContainsV2InkPath(_))
-      .WillOnce(Return(PDFLoadedWithV2InkAnnotations::kFalse));
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_))
+      .WillOnce(Return(PDFiumEngine::InkIdentifiers{
+          .ink_text_annotations = PDFLoadedWithInkTextAnnotations::kFalse,
+          .v2_ink_path = PDFLoadedWithV2InkAnnotations::kFalse,
+      }));
   plugin_->DocumentLoadComplete();
 
   histograms.ExpectUniqueSample(kPdfLoadedWithV2InkAnnotationsMetric,
@@ -3747,8 +3950,11 @@ TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithoutV2InkAnnotations) {
 TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithV2InkAnnotations) {
   base::HistogramTester histograms;
 
-  EXPECT_CALL(*engine_ptr_, ContainsV2InkPath(_))
-      .WillOnce(Return(PDFLoadedWithV2InkAnnotations::kTrue));
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_))
+      .WillOnce(Return(PDFiumEngine::InkIdentifiers{
+          .ink_text_annotations = PDFLoadedWithInkTextAnnotations::kFalse,
+          .v2_ink_path = PDFLoadedWithV2InkAnnotations::kTrue,
+      }));
   plugin_->DocumentLoadComplete();
 
   histograms.ExpectUniqueSample(kPdfLoadedWithV2InkAnnotationsMetric,
@@ -3757,8 +3963,11 @@ TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithV2InkAnnotations) {
 
 TEST_P(PdfViewWebPluginInkMetricTest, LoadedWithV2InkAnnotationsTimeout) {
   base::HistogramTester histograms;
-  EXPECT_CALL(*engine_ptr_, ContainsV2InkPath(_))
-      .WillOnce(Return(PDFLoadedWithV2InkAnnotations::kUnknown));
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_))
+      .WillOnce(Return(PDFiumEngine::InkIdentifiers{
+          .ink_text_annotations = PDFLoadedWithInkTextAnnotations::kFalse,
+          .v2_ink_path = PDFLoadedWithV2InkAnnotations::kUnknown,
+      }));
   plugin_->DocumentLoadComplete();
 
   histograms.ExpectUniqueSample(kPdfLoadedWithV2InkAnnotationsMetric,
@@ -3772,22 +3981,20 @@ class PdfViewWebPluginPrintPreviewInkMetricTest
 };
 
 TEST_F(PdfViewWebPluginPrintPreviewInkMetricTest,
-       LoadedWithV2InkAnnotationsDoesNotCountPrintPreview) {
+       LoadedWithInkAnnotationsDoesNotCountPrintPreview) {
   base::HistogramTester histograms;
 
-  OnMessageWithEngineUpdate(ParseMessage(R"({
-    "type": "resetPrintPreviewMode",
-    "url": "chrome-untrusted://print/0/0/print.pdf",
-    "grayscale": false,
-    "pageCount": 1,
-  })"));
+  OnMessageWithEngineUpdate(GenerateResetPrintPreviewModeMessage(
+      /*id=*/kTestId, /*page_number=*/0, /*grayscale=*/false,
+      /*page_count=*/1));
 
-  EXPECT_CALL(*engine_ptr_, ContainsV2InkPath(_)).Times(0);
+  EXPECT_CALL(*engine_ptr_, ScanForInkAnnotations(_)).Times(0);
   plugin_->DocumentLoadComplete();
 
-  // The V2 ink annotations PDF load metric should not increment for Print
+  // The Ink annotations PDF load metrics should not increment for Print
   // Preview.
   histograms.ExpectTotalCount(kPdfLoadedWithV2InkAnnotationsMetric, 0);
+  histograms.ExpectTotalCount(kPdfLoadedWithInkTextAnnotationsMetric, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -3796,10 +4003,9 @@ INSTANTIATE_TEST_SUITE_P(All,
 INSTANTIATE_TEST_SUITE_P(All,
                          PdfViewWebPluginInkMetricTest,
                          testing::ValuesIn(GetAllInkTestVariations()));
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    PdfViewWebPluginInkTextHighlightTest,
-    testing::ValuesIn(GetInkTestVariationsWithTextHighlighting()));
+INSTANTIATE_TEST_SUITE_P(All,
+                         PdfViewWebPluginInkTextHighlightTest,
+                         testing::ValuesIn(GetAllInkTestVariations()));
 #endif  // BUILDFLAG(ENABLE_PDF_INK2)
 
 class PdfViewWebPluginAnnotationAgentContainerTest

@@ -18,14 +18,14 @@
 #include "base/threading/thread_id_name_manager.h"
 #include "build/build_config.h"
 #include "build/config/compiler/compiler_buildflags.h"
-#include "components/performance_manager/scenario_api/performance_scenarios.h"
 #include "content/child/child_thread_impl.h"
 #include "content/common/process_priority_tracker.h"
 #include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
+#include "net/base/features.h"
+#include "net/base/scheduler/sequence_manager_configurator.h"
 #include "sandbox/policy/sandbox_type.h"
 #include "services/network/public/cpp/features.h"
-#include "services/network/public/cpp/sequence_manager_configurator.h"
 #include "services/tracing/public/cpp/trace_startup.h"
 #include "third_party/blink/public/common/features.h"
 
@@ -134,7 +134,7 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
 #endif
 
   if (base::FeatureList::IsEnabled(features::kIOThreadInteractiveThreadType)) {
-    thread_options.thread_type = base::ThreadType::kInteractive;
+    thread_options.thread_type = base::ThreadType::kAudioProcessing;
   }
 
   // If the NetworkServiceTaskScheduler feature is enabled and this is the main
@@ -142,22 +142,11 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
   // SequenceManager with specific settings for network service task scheduler.
   // This ensures the network thread's task scheduling is handled by the
   // experimental scheduler infrastructure.
-  if (base::FeatureList::IsEnabled(
-          network::features::kNetworkServiceTaskScheduler) &&
+  if (base::FeatureList::IsEnabled(net::features::kNetTaskScheduler) &&
       base::ThreadIdNameManager::GetInstance()->GetName(
           base::PlatformThread::CurrentId()) ==
           std::string_view("network.CrUtilityMain")) {
-    network::ConfigureSequenceManager(thread_options);
-  }
-
-  scenario_priority_boost_ =
-      std::make_unique<base::TaskMonitoringScopedBoostPriority>(
-          base::ThreadType::kInteractive,
-          base::BindRepeating(&ChildProcess::ShouldBoostIOThreadPriority,
-                              base::Unretained(this)));
-  if (base::FeatureList::IsEnabled(
-          features::kBoostThreadsPriorityDuringInputScenario)) {
-    thread_options.task_observer = scenario_priority_boost_.get();
+    net::ConfigureSequenceManager(thread_options);
   }
 
   CHECK(io_thread_->StartWithOptions(std::move(thread_options)));
@@ -255,18 +244,6 @@ ChildProcess* ChildProcess::current() {
 
 base::WaitableEvent* ChildProcess::GetShutDownEvent() {
   return &shutdown_event_;
-}
-
-bool ChildProcess::ShouldBoostIOThreadPriority() {
-  DCHECK(base::FeatureList::IsEnabled(
-      features::kBoostThreadsPriorityDuringInputScenario));
-  performance_scenarios::ScenarioPattern no_input{
-      .input = {performance_scenarios::InputScenario::kNoInput},
-  };
-  performance_scenarios::ScenarioScope scope =
-      is_renderer_ ? performance_scenarios::ScenarioScope::kCurrentProcess
-                   : performance_scenarios::ScenarioScope::kGlobal;
-  return !performance_scenarios::CurrentScenariosMatch(scope, no_input);
 }
 
 }  // namespace content

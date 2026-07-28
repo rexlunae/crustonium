@@ -7,9 +7,11 @@
 
 #include <optional>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "sql/database.h"
 #include "url/gurl.h"
 
@@ -18,19 +20,6 @@ class Statement;
 }  // namespace sql
 
 namespace optimization_guide {
-
-// Defines the result of a page content fetch from the store.
-struct PageContentResult {
-  PageContentResult();
-  ~PageContentResult();
-  PageContentResult(PageContentResult&&);
-  PageContentResult& operator=(PageContentResult&&);
-
-  GURL url;
-  base::Time navigation_timestamp;
-  base::Time extraction_time;
-  proto::PageContext page_context;
-};
 
 // Stores page content (in the form of PageContext protos) in an
 // SQLite database.
@@ -43,7 +32,7 @@ class PageContentStore {
   PageContentStore& operator=(const PageContentStore&) = delete;
 
   // Initializes the encryptor. Must be called before any get/add methods.
-  void InitWithEncryptor(os_crypt_async::Encryptor encryptor);
+  void InitWithEncryptor(scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   // Adds a new page content entry to the database.
   // `visit_timestamp` is the timestamp at which the URL was visited.
@@ -64,8 +53,7 @@ class PageContentStore {
   std::optional<proto::PageContext> GetPageContent(const GURL& url);
 
   // Retrieves the page content for a given tab ID.
-  std::optional<optimization_guide::PageContentResult> GetPageContentForTab(
-      int64_t tab_id);
+  std::optional<proto::PageContext> GetPageContentForTab(int64_t tab_id);
 
   // Deletes page content, where visit timestamp older than a given `timestamp`.
   bool DeletePageContentOlderThan(base::Time timestamp);
@@ -88,9 +76,6 @@ class PageContentStore {
   // The error callback for the database.
   void OnDatabaseError(int extended_error, sql::Statement* stmt);
 
-  std::optional<optimization_guide::PageContentResult>
-  GetPageContentAndMetadataFromStatement(sql::Statement* statement);
-
   std::optional<proto::PageContext> GetPageContentFromStatement(
       sql::Statement* statement);
 
@@ -98,7 +83,7 @@ class PageContentStore {
   sql::Database db_;
 
   bool db_initialized_ = false;
-  std::optional<os_crypt_async::Encryptor> encryptor_;
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

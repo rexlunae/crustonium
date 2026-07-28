@@ -22,7 +22,7 @@ using content::WebContents;
 TabStripModelChange::RemovedTab::RemovedTab(
     tabs::TabInterface* tab,
     int index,
-    RemoveReason remove_reason,
+    TabRemovedReason remove_reason,
     tabs::TabInterface::DetachReason tab_detach_reason,
     std::optional<SessionID> session_id)
     : tab(tab),
@@ -253,10 +253,12 @@ SplitTabChange::AddedChange::AddedChange(const SplitTabChange::AddedChange&) =
 SplitTabChange::VisualsChange::VisualsChange(
     const split_tabs::SplitTabVisualData& old_visual_data,
     const split_tabs::SplitTabVisualData& new_visual_data,
-    SplitVisualChangeReason reason)
+    SplitVisualChangeReason reason,
+    bool is_intermediate)
     : old_visual_data_(old_visual_data),
       new_visual_data_(new_visual_data),
-      reason_(reason) {}
+      reason_(reason),
+      is_intermediate_(is_intermediate) {}
 SplitTabChange::VisualsChange::~VisualsChange() = default;
 
 SplitTabChange::ContentsChange::ContentsChange(
@@ -362,9 +364,6 @@ void TabStripModelObserver::OnTabChangedAt(tabs::TabInterface* tab,
 
 void TabStripModelObserver::OnTabPinnedStateChanged(tabs::TabInterface* tab,
                                                     int index) {}
-
-void TabStripModelObserver::OnTabBlockedStateChanged(tabs::TabInterface* tab,
-                                                     int index) {}
 
 void TabStripModelObserver::TabGroupedStateChanged(
     TabStripModel* tab_strip_model,

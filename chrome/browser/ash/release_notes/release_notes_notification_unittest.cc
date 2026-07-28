@@ -5,13 +5,14 @@
 #include "chrome/browser/ash/release_notes/release_notes_notification.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/webui/help_app_ui/help_app_prefs.h"
 #include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/version.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/notifications/system_notification_helper.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -107,7 +108,7 @@ TEST_P(ReleaseNotesNotificationTest, DoNotShowReleaseNotesNotification) {
   // Set the pref to the last shown milestone to ensure release notes do not
   // show.
   profile()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone,
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone,
       version_info::GetVersion().components()[0]);
 
   release_notes_notification_->MaybeShowReleaseNotes();
@@ -120,7 +121,7 @@ TEST_P(ReleaseNotesNotificationTest, ShowReleaseNotesNotification) {
 
   // Set the pref to an older milestone to ensure release notes do show.
   profile()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone, 20);
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
 
   release_notes_notification_->MaybeShowReleaseNotes();
 
@@ -138,7 +139,7 @@ TEST_P(ReleaseNotesNotificationTest, ShowReleaseNotesNotification) {
               base::UTF16ToASCII(GetReleaseNotesNotification().message()));
     // And it show the release notes suggestion chip.
     EXPECT_EQ(3, profile()->GetPrefs()->GetInteger(
-                     prefs::kReleaseNotesSuggestionChipTimesLeftToShow));
+                     ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow));
   }
 }
 

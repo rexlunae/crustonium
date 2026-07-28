@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include "base/containers/queue.h"
@@ -15,6 +16,7 @@
 #include "base/observer_list.h"
 #include "base/process/process.h"
 #include "base/threading/thread_checker.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
@@ -172,6 +174,8 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
     kDataChannelRecordings,
   };
 
+  void UpdateStatsTimer();
+
   void SendUpdate(const std::string& event_name, base::Value event_data);
   void SendUpdate(const std::string& event_name, base::DictValue event_data);
 
@@ -219,6 +223,10 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   // notifications.
   void ProcessPendingUpdates();
 
+  // Sends a request to the browser to get peer connection statistics from the
+  // standard getStats() API (promise-based).
+  void RequestStandardStats();
+
   // Returns an iterator for peer_connection_data_.GetList (an end() iterator
   // if not found).
   base::ListValue::iterator FindRecord(GlobalRenderFrameHostId frame_id,
@@ -227,6 +235,8 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   base::ObserverList<WebRTCInternalsUIObserver>::Unchecked observers_;
 
   base::ObserverList<WebRtcInternalsConnectionsObserver> connections_observers_;
+
+  base::RepeatingTimer stats_timer_;
 
   // |peer_connection_data_| is a list containing all the PeerConnection
   // updates. Stored as a Value rather than as a List::Value so it can be passed
@@ -328,8 +338,13 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   // Weak factory for this object that we use for bulking up updates.
   base::WeakPtrFactory<WebRTCInternals> weak_factory_{this};
 
+  // Removes tracked getUserMedia/getDisplayMedia requests whose timestamp is
+  // older than kMaxMediaEntryAge so that long-lived sessions do not accumulate
+  // stale entries.
+  void PruneOldGetUserMediaRequests();
+
   // Helper functions for getUserMedia/getDisplayMedia.
-  void OnGetMedia(const std::string& request_type,
+  void OnGetMedia(std::string_view request_type,
                   GlobalRenderFrameHostId frame_id,
                   base::ProcessId pid,
                   int request_id,
@@ -337,14 +352,14 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
                   bool video,
                   const std::string& audio_constraints,
                   const std::string& video_constraints);
-  void OnGetMediaSuccess(const std::string& request_type,
+  void OnGetMediaSuccess(std::string_view request_type,
                          GlobalRenderFrameHostId frame_id,
                          base::ProcessId pid,
                          int request_id,
                          const std::string& stream_id,
                          const std::string& audio_track_info,
                          const std::string& video_track_info);
-  void OnGetMediaFailure(const std::string& request_type,
+  void OnGetMediaFailure(std::string_view request_type,
                          GlobalRenderFrameHostId frame_id,
                          base::ProcessId pid,
                          int request_id,

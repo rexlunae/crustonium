@@ -16,11 +16,11 @@
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "chrome/common/extensions/api/tab_groups.h"
 #include "chrome/common/extensions/api/tabs.h"
 #include "chrome/common/extensions/api/windows.h"
@@ -49,6 +49,7 @@ constexpr char kCannotMoveGroupIntoMiddleOfOtherGroupError[] =
     "Cannot move the group to an index that is in the middle of another group.";
 constexpr char kCannotMoveGroupIntoMiddleOfPinnedTabsError[] =
     "Cannot move the group to an index that is in the middle of pinned tabs.";
+constexpr char kFailedToMoveGroupError[] = "Failed to move group.";
 
 // Returns true if a group could be moved into the |target_index| of the given
 // |tab_strip|. Sets the |error| string otherwise.
@@ -237,8 +238,9 @@ ExtensionFunction::ResponseAction TabGroupsUpdateFunction::Run() {
   DCHECK(!id.is_empty());
 
   bool collapsed = visual_data.is_collapsed();
-  if (params->update_properties.collapsed)
+  if (params->update_properties.collapsed) {
     collapsed = *params->update_properties.collapsed;
+  }
 
   tab_groups::TabGroupColorId color = visual_data.color();
   if (params->update_properties.color != api::tab_groups::Color::kNone) {
@@ -246,10 +248,11 @@ ExtensionFunction::ResponseAction TabGroupsUpdateFunction::Run() {
   }
 
   std::u16string title = visual_data.title();
-  if (params->update_properties.title)
+  if (params->update_properties.title) {
     title = base::UTF8ToUTF16(*params->update_properties.title);
+  }
 
-  if (!ExtensionTabUtil::IsTabStripEditable()) {
+  if (!ExtensionTabUtil::IsTabStripEditable(*window->profile())) {
     return RespondNow(Error(ExtensionTabUtil::kTabStripNotEditableError));
   }
 
@@ -273,8 +276,9 @@ ExtensionFunction::ResponseAction TabGroupsUpdateFunction::Run() {
   tab_groups::TabGroupVisualData new_visual_data(title, color, collapsed);
   tab_list->SetTabGroupVisualData(id, new_visual_data);
 
-  if (!has_callback())
+  if (!has_callback()) {
     return RespondNow(NoArguments());
+  }
 
   return RespondNow(ArgumentList(api::tab_groups::Get::Results::Create(
       ExtensionTabUtil::CreateTabGroupObject(id, new_visual_data))));
@@ -331,12 +335,14 @@ ExtensionFunction::ResponseAction TabGroupsMoveFunction::Run() {
   if (cross_window) {
     // Cross window group moves are asynchronous on Android. OnTabGroupCreated()
     // will be called later when the group is created in the new window.
+    AddRef();  // Balanced in OnTabGroupCreated().
     return RespondLater();
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  if (!has_callback())
+  if (!has_callback()) {
     return RespondNow(NoArguments());
+  }
 
   auto group_object = ExtensionTabUtil::CreateTabGroupObject(group);
   CHECK(group_object);
@@ -358,7 +364,7 @@ bool TabGroupsMoveFunction::MoveGroup(int group_id,
     return false;
   }
 
-  if (!ExtensionTabUtil::IsTabStripEditable()) {
+  if (!ExtensionTabUtil::IsTabStripEditable(*source_window->profile())) {
     *error = ExtensionTabUtil::kTabStripNotEditableError;
     return false;
   }
@@ -500,8 +506,11 @@ bool TabGroupsMoveFunction::MoveTabGroupBetweenBrowsers(
 
   // Pausing Saved Tab Groups is handled in TabListBridge on Win/Mac/Linux and
   // in MultiInstanceManagerApi31 on Android.
-  source_tab_list->MoveTabGroupToWindow(group, target_browser->GetSessionID(),
-                                        new_index);
+  if (!source_tab_list->MoveTabGroupToWindow(
+          group, target_browser->GetSessionID(), new_index)) {
+    *error = kFailedToMoveGroupError;
+    return false;
+  }
 
   return true;
 }
@@ -513,6 +522,8 @@ void TabGroupsMoveFunction::OnTabGroupCreated(tab_groups::TabGroupId group_id) {
   auto group_object = ExtensionTabUtil::CreateTabGroupObject(group_id);
   CHECK(group_object);
   Respond(ArgumentList(api::tab_groups::Get::Results::Create(*group_object)));
+
+  Release();  // Balanced in MoveGroup().
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 

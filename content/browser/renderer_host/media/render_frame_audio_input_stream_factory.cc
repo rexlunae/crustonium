@@ -250,12 +250,18 @@ void RenderFrameAudioInputStreamFactory::Core::CreateStream(
   if (!forwarding_factory_)
     return;
 
+  if (!media_stream_manager_->ValidateAudioSession(
+          session_id, GlobalRenderFrameHostId(process_id_, frame_id_))) {
+    mojo::ReportBadMessage("Unauthorized audio capture session.");
+    return;
+  }
+
   const blink::MediaStreamDevice* device =
       media_stream_manager_->audio_input_device_manager()->GetOpenedDeviceById(
           session_id);
 
   if (!device) {
-    TRACE_EVENT_INSTANT0("audio", "device not found", TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("audio", "device not found");
     return;
   }
 

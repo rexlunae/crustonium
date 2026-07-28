@@ -24,8 +24,8 @@
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 
 @interface BookmarksFolderEditorCoordinator () <
-    BookmarksFolderEditorViewControllerDelegate,
     BookmarksFolderChooserCoordinatorDelegate,
+    BookmarksFolderEditorViewControllerDelegate,
     UIAdaptivePresentationControllerDelegate> {
   // The navigation controller is `nullptr` if the folder chooser view
   // controller is pushed into the base navigation controller.
@@ -166,13 +166,14 @@
 
 #pragma mark - BookmarksFolderEditorViewControllerDelegate
 
-- (void)showBookmarksFolderChooserWithParentFolder:
-            (const bookmarks::BookmarkNode*)parent
-                                       hiddenNodes:
-                                           (const std::set<
-                                               const bookmarks::BookmarkNode*>&)
-                                               hiddenNodes {
-  if (_folderChooserCoordinator) {
+- (void)
+    showBookmarksFolderChooserWithParentFolder:
+        (const bookmarks::BookmarkNode*)parent
+                                   editedNodes:
+                                       (const std::set<raw_ptr<
+                                            const bookmarks::BookmarkNode>>&)
+                                           editedNodes {
+  if (_folderChooserCoordinator || _viewController.UIDisabled) {
     // This can occur if the user tap on the button while the previous folder
     // chooser is being dismissed.
     return;
@@ -182,10 +183,11 @@
                                             ? _baseNavigationController
                                             : _navigationController)
                                browser:self.browser
-                           hiddenNodes:hiddenNodes];
+                            movedNodes:editedNodes];
   _folderChooserCoordinator.allowsNewFolders = NO;
   [_folderChooserCoordinator setSelectedFolder:parent];
   _folderChooserCoordinator.delegate = self;
+  _viewController.UIDisabled = YES;
   [_folderChooserCoordinator start];
 }
 
@@ -274,6 +276,7 @@
   [_folderChooserCoordinator stop];
   _folderChooserCoordinator.delegate = nil;
   _folderChooserCoordinator = nil;
+  _viewController.UIDisabled = NO;
 }
 
 @end

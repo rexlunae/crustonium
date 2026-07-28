@@ -13,7 +13,6 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_view_delegate.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/tab_group_activity_summary_cell.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/tab_group_header.h"
-#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/legacy_grid_transition_layout.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_utils.h"
 #import "ui/base/device_form_factor.h"
 
@@ -28,20 +27,13 @@
   UICollectionViewCellRegistration* _activitySummaryCellRegistration;
 }
 
-- (void)setGroupColor:(UIColor*)groupColor {
-  if ([_groupColor isEqual:groupColor]) {
-    return;
-  }
-  _groupColor = groupColor;
-  [self updateTabGroupHeader];
-}
-
 - (void)setTabGroupColorPalette:(TabGroupColorPalette*)tabGroupColorPalette {
   if (_tabGroupColorPalette == tabGroupColorPalette) {
     return;
   }
   _tabGroupColorPalette = tabGroupColorPalette;
   [self updateTabGroupHeader];
+  [self reconfigureItems];
 }
 
 - (void)setGroupTitle:(NSString*)groupTitle {
@@ -101,19 +93,6 @@
                          UICollectionViewDropIntentInsertAtDestinationIndexPath];
 }
 
-#pragma mark - Parent's functions
-
-- (LegacyGridTransitionLayout*)legacyTransitionLayout {
-  LegacyGridTransitionLayout* transitionLayout = [super legacyTransitionLayout];
-  // When the user is entering the TabGrid from a Tab in a group, the
-  // non-selected tabs should not animate otherwise they will be
-  // displayed outside of the container.
-  transitionLayout = [LegacyGridTransitionLayout
-      layoutWithInactiveItems:@[]
-                   activeItem:transitionLayout.activeItem
-                selectionItem:transitionLayout.selectionItem];
-  return transitionLayout;
-}
 
 // Returns a configured header for the given index path.
 - (UICollectionReusableView*)headerForSectionAtIndexPath:
@@ -175,7 +154,8 @@
 
 - (EmptyThumbnailLayoutType)layoutTypeForContainerSize:(CGSize)containerSize
                                             isGridCell:(BOOL)isGridCell {
-  const CGFloat aspectRatio = TabGridItemAspectRatio(containerSize);
+  const CGFloat aspectRatio =
+      TabGridItemAspectRatio(containerSize, self.view.window.windowScene);
   if (aspectRatio < 1 &&
       ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
     return EmptyThumbnailLayoutTypeLandscapeLeading;
@@ -188,11 +168,10 @@
 // Configures the tab group header according to the current state.
 - (void)configureTabGroupHeader:(TabGroupHeader*)header {
   header.title = self.groupTitle;
-  if (IsTabGroupColorOnSurfaceEnabled()) {
-    header.color = self.tabGroupColorPalette.commonColor;
-    return;
+  if (IsOpenEditGroupViewByTappingTitleEnabled()) {
+    header.tabGroupHeaderDelegate = self.tabGroupHeaderDelegate;
   }
-  header.color = self.groupColor;
+  header.color = self.tabGroupColorPalette.commonColor;
 }
 
 // Configures the activity summary cell for a shared tab group.
@@ -284,6 +263,14 @@
   [self.diffableDataSource applySnapshot:snapshot animatingDifferences:YES];
 }
 
+// Reconfigures items to refresh the UI.
+- (void)reconfigureItems {
+  NSDiffableDataSourceSnapshot* snapshot = [self.diffableDataSource snapshot];
+  [snapshot reconfigureItemsWithIdentifiers:snapshot.itemIdentifiers];
+
+  [self.diffableDataSource applySnapshot:snapshot animatingDifferences:NO];
+}
+
 #pragma mark - TabGroupActivitySummaryCellDelegate
 
 - (void)closeButtonForActivitySummaryTapped {
@@ -301,10 +288,7 @@
              withItem:(TabSwitcherItem*)item
               atIndex:(NSUInteger)index {
   [super configureCell:cell withItem:item atIndex:index];
-  if (IsTabGroupColorOnSurfaceEnabled()) {
-    // Forward the palette to the cell.
-    cell.tabGroupColorPalette = self.tabGroupColorPalette;
-  }
+  cell.tabGroupColorPalette = self.tabGroupColorPalette;
 }
 
 @end

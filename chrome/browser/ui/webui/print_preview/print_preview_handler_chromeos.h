@@ -9,17 +9,21 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
+#include "chrome/browser/ash/printing/cups_printers_manager.h"
 #include "chrome/browser/ash/printing/print_servers_manager.h"
 #include "chrome/common/buildflags.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/web_ui_message_handler.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "printing/backend/print_backend.h"
 #include "printing/buildflags/buildflags.h"
 #include "printing/print_job_constants.h"
+
+namespace ash {
+class LocalPrinter;
+}
 
 namespace content {
 class WebContents;
@@ -37,8 +41,8 @@ class PrintPreviewHandler;
 // The handler for Javascript messages related to the print preview dialog.
 class PrintPreviewHandlerChromeOS
     : public content::WebUIMessageHandler,
-      public crosapi::mojom::PrintServerObserver,
-      public crosapi::mojom::LocalPrintersObserver {
+      public ash::PrintServersManager::Observer,
+      public ash::CupsPrintersManager::LocalPrintersObserver {
  public:
   PrintPreviewHandlerChromeOS();
   PrintPreviewHandlerChromeOS(const PrintPreviewHandlerChromeOS&) = delete;
@@ -50,6 +54,9 @@ class PrintPreviewHandlerChromeOS
   void RegisterMessages() override;
   void OnJavascriptDisallowed() override;
   void OnJavascriptAllowed() override;
+
+  // CupsPrintersManager::LocalPrintersObserver:
+  void OnLocalPrintersUpdated() override;
 
  protected:
   // Protected so unit tests can override.
@@ -95,10 +102,11 @@ class PrintPreviewHandlerChromeOS
       base::Value callback_id,
       std::optional<base::DictValue> result);
 
-  // crosapi::mojom::PrintServerObserver Implementation
-  void OnPrintServersChanged(
-      crosapi::mojom::PrintServersConfigPtr ptr) override;
-  void OnServerPrintersChanged() override;
+  // ash::PrintServersManager::Observer Implementation:
+  void OnPrintServersChanged(const ash::PrintServersConfig& config) override;
+  void OnServerPrintersChanged(
+      const std::vector<ash::PrinterDetector::DetectedPrinter>& printers)
+      override;
 
   // Loads printers corresponding to the print server(s).  First element of
   // |args| is the print server IDs.
@@ -120,33 +128,22 @@ class PrintPreviewHandlerChromeOS
 
   void HandleObserveLocalPrinters(const base::ListValue& args);
 
-  // Callback for `HandleGetShowManagePrinters()`.
-  void OnHandleObserveLocalPrinters(
-      const std::string& callback_id,
-      std::vector<crosapi::mojom::LocalDestinationInfoPtr> printers);
-
-  // crosapi::mojom::LocalPrintersObserver Implementation:
-  void OnLocalPrintersUpdated(
-      std::vector<crosapi::mojom::LocalDestinationInfoPtr> printers) override;
-
   void SetInitiatorForTesting(content::WebContents* test_initiator);
 
-  mojo::Receiver<crosapi::mojom::PrintServerObserver> receiver_{this};
-
-  mojo::Receiver<crosapi::mojom::LocalPrintersObserver>
-      local_printers_receiver_{this};
+  ash::PrintServersManager* GetPrintServersManager();
 
   // Used for testing, when `GetInitiator` called and `test_initiator` is set
   // then it will be returned instead of calling `PrintPreviewDialogController`
   // to find the initiator.
   raw_ptr<content::WebContents> test_initiator_ = nullptr;
 
-  // Used to transmit mojo interface method calls to ash chrome. Null if
-  // CrosapiManager is unavailable. In the post-Lacros world, it still bears the
-  // responsibility of talking to other parts of Ash for printer related
-  // business logic.
-  raw_ptr<crosapi::mojom::LocalPrinter, DanglingUntriaged> local_printer_ =
-      nullptr;
+  raw_ptr<ash::LocalPrinter> local_printer_ = nullptr;
+  base::ScopedObservation<ash::CupsPrintersManager,
+                          ash::CupsPrintersManager::LocalPrintersObserver>
+      local_printers_observation_{this};
+  base::ScopedObservation<ash::PrintServersManager,
+                          ash::PrintServersManager::Observer>
+      print_servers_observation_{this};
 
   base::WeakPtrFactory<PrintPreviewHandlerChromeOS> weak_factory_{this};
 };

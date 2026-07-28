@@ -176,7 +176,7 @@ CGFloat DoodleHeight(SearchEngineLogoState logo_state,
       (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET)) {
     return kGoogleSearchDoodleShrunkHeight;
   }
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     return kLargeFakeboxGoogleSearchLogoHeight;
   }
   return kGoogleSearchLogoHeight;
@@ -188,8 +188,7 @@ CGFloat DoodleTopMargin(SearchEngineLogoState logo_state,
     return kDoodleTopMarginRegularXRegular;
   }
   CGFloat top_inset = 0;
-  if ((logo_state == SearchEngineLogoState::kLogo) &&
-      ShouldEnlargeNTPFakeboxForMIA()) {
+  if ((logo_state == SearchEngineLogoState::kLogo) && IsAimEnabledInNtp()) {
     // Shrink the top inset so that the enlarged logo has the same bottom
     // positioning as the regular logo.
     top_inset = kGoogleSearchLogoHeight - kLargeFakeboxGoogleSearchLogoHeight;
@@ -216,8 +215,8 @@ CGFloat HeaderSeparatorHeight() {
 }
 
 CGFloat SearchFieldTopMargin(SearchEngineLogoState logo_state) {
-  CGFloat margin = ShouldEnlargeNTPFakeboxForMIA() ? kMIASearchFieldTopMargin
-                                                   : kSearchFieldTopMargin;
+  CGFloat margin =
+      IsAimEnabledInNtp() ? kMIASearchFieldTopMargin : kSearchFieldTopMargin;
   if (IsConsistentLogoDoodleHeightEnabled() &&
       ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
     if (logo_state == SearchEngineLogoState::kDoodle) {
@@ -232,8 +231,9 @@ CGFloat SearchFieldWidth(CGFloat width, UITraitCollection* trait_collection) {
     return kSearchFieldLarge;
   }
 
-  if (ShouldEnlargeNTPFakeboxForMIA() && !IsCompactHeight(trait_collection)) {
-    return std::max(width - kMIASearchFieldMinMargin * 2, kSearchFieldSmallMin);
+  if (IsAimEnabledInNtp() && !IsCompactHeight(trait_collection)) {
+    return std::clamp(width - kMIASearchFieldMinMargin * 2,
+                      kSearchFieldSmallMin, kSearchFieldLarge);
   }
 
   // Special case for narrow sizes.
@@ -242,7 +242,7 @@ CGFloat SearchFieldWidth(CGFloat width, UITraitCollection* trait_collection) {
 }
 
 CGFloat FakeOmniboxHeight() {
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     CGFloat multiplier = ui_util::SystemSuggestedFontSizeMultiplier();
     return AlignValueToPixel((kFakeboxHeight - kFakeboxHeightNonDynamic) *
                                  multiplier +
@@ -253,7 +253,7 @@ CGFloat FakeOmniboxHeight() {
 }
 
 CGFloat PinnedFakeOmniboxHeight() {
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     CGFloat multiplier = ui_util::SystemSuggestedFontSizeMultiplier();
     return AlignValueToPixel(
         (kPinnedFakeboxHeight - kPinnedFakeboxHeightNonDynamic) * multiplier +
@@ -264,7 +264,7 @@ CGFloat PinnedFakeOmniboxHeight() {
 }
 
 CGFloat FakeToolbarHeight() {
-  if (ShouldEnlargeNTPFakeboxForMIA()) {
+  if (IsAimEnabledInNtp()) {
     return PinnedFakeOmniboxHeight() + FakeToolbarVerticalMargin();
   }
   return ToolbarExpandedHeight(
@@ -289,7 +289,10 @@ CGFloat HeightForLogoHeader(SearchEngineLogoState logo_state,
            2 * (ntp_home::kHeaderIconMargin + ntp_home::kIdentityAvatarPadding);
   }
 
-  header_height += kTopSpacingMaterial;
+  // Minimize spacing between AI-mode entrypoint on large size class.
+  if (!base::FeatureList::IsEnabled(kAIMNTPEntrypointTablet)) {
+    header_height += kTopSpacingMaterial;
+  }
 
   return header_height;
 }
@@ -322,9 +325,10 @@ void ConfigureVoiceSearchButton(UIButton* voice_search_button,
   UIButtonConfiguration* buttonConfig =
       [UIButtonConfiguration plainButtonConfiguration];
   buttonConfig.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
+  buttonConfig.background.backgroundColor = [UIColor clearColor];
   voice_search_button.configuration = buttonConfig;
-  UIImage* mic_image = CustomSymbolWithPointSize(
-      kVoiceSymbol, kSymbolContentSuggestionsPointSize);
+  UIImage* mic_image =
+      SymbolWithPointSize(SymbolVoice, kSymbolContentSuggestionsPointSize);
   mic_image = use_color_icon ? MakeSymbolMulticolor(mic_image)
                              : MakeSymbolMonochrome(mic_image);
   [voice_search_button setImage:mic_image forState:UIControlStateNormal];
@@ -347,6 +351,7 @@ void ConfigureLensButtonAppearance(UIButton* lens_button,
   UIButtonConfiguration* buttonConfig =
       [UIButtonConfiguration plainButtonConfiguration];
   buttonConfig.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
+  buttonConfig.background.backgroundColor = [UIColor clearColor];
   lens_button.configuration = buttonConfig;
   lens_button.accessibilityLabel = l10n_util::GetNSString(IDS_IOS_ACCNAME_LENS);
   lens_button.accessibilityIdentifier = @"Lens";
@@ -357,8 +362,8 @@ void ConfigureLensButtonAppearance(UIButton* lens_button,
       CreateLiftEffectCirclePointerStyleProvider();
 
   // Use a monochrome or colored symbol with no background.
-  UIImage* camera_image = CustomSymbolWithPointSize(
-      kCameraLensSymbol, kSymbolContentSuggestionsPointSize);
+  UIImage* camera_image =
+      SymbolWithPointSize(SymbolCameraLens, kSymbolContentSuggestionsPointSize);
   camera_image = use_color_icon ? MakeSymbolMulticolor(camera_image)
                                 : MakeSymbolMonochrome(camera_image);
   [lens_button setImage:camera_image forState:UIControlStateNormal];
@@ -367,28 +372,6 @@ void ConfigureLensButtonAppearance(UIButton* lens_button,
     // Show the "New" badge and colored symbol.
     SetUpButtonWithNewFeatureBadge(lens_button, new_badge_color);
   }
-}
-
-void ConfigureMIAButton(UIButton* mia_button, BOOL use_color_icon) {
-  [mia_button setTranslatesAutoresizingMaskIntoConstraints:NO];
-
-  UIButtonConfiguration* buttonConfig =
-      [UIButtonConfiguration plainButtonConfiguration];
-  buttonConfig.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
-  mia_button.configuration = buttonConfig;
-
-  UIImage* magnifier_icon = CustomSymbolWithPointSize(
-      kMagnifyingglassSparkSymbol, kSymbolContentSuggestionsPointSize);
-
-  magnifier_icon = use_color_icon ? MakeSymbolMulticolor(magnifier_icon)
-                                  : MakeSymbolMonochrome(magnifier_icon);
-  [mia_button setImage:magnifier_icon forState:UIControlStateNormal];
-  // TODO(crbug.com/425339867): Handle button accessibility
-
-  mia_button.pointerInteractionEnabled = YES;
-  // Make the pointer shape fit the location bar's semi-circle end shape.
-  mia_button.pointerStyleProvider =
-      CreateLiftEffectCirclePointerStyleProvider();
 }
 
 void ConfigureLensButtonWithNewBadgeAlpha(UIButton* lens_button,
@@ -434,7 +417,7 @@ UIColor* SearchHintLabelColor() {
 }
 
 UIColor* DefaultIconTintColorWithAIMAllowed(bool aim_allowed) {
-  if (aim_allowed && ShouldEnlargeNTPFakeboxForMIA()) {
+  if (aim_allowed && IsAimEnabledInNtp()) {
     return [UIColor colorNamed:kSolidBlackColor];
   }
   return [UIColor colorNamed:kGrey700Color];

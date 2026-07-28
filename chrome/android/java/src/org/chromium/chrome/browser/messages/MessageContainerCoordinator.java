@@ -7,8 +7,7 @@ package org.chromium.chrome.browser.messages;
 import android.content.res.Resources;
 import android.graphics.Rect;
 import android.view.View;
-
-import androidx.coordinatorlayout.widget.CoordinatorLayout;
+import android.view.ViewGroup;
 
 import org.chromium.base.ObserverList;
 import org.chromium.build.annotations.NullMarked;
@@ -61,8 +60,8 @@ public class MessageContainerCoordinator implements BrowserControlsStateProvider
         if (mContainer.getVisibility() != View.VISIBLE) {
             return;
         }
-        CoordinatorLayout.LayoutParams params =
-                (CoordinatorLayout.LayoutParams) mContainer.getLayoutParams();
+        ViewGroup.MarginLayoutParams params =
+                (ViewGroup.MarginLayoutParams) mContainer.getLayoutParams();
         params.topMargin = getContainerTopOffset();
         mContainer.setLayoutParams(params);
     }
@@ -173,9 +172,18 @@ public class MessageContainerCoordinator implements BrowserControlsStateProvider
     private int getContainerTopOffset() {
         assert mContainer != null;
 
-        if (mControlsManager.getContentOffset() == 0) return 0;
+        int contentOffset = mControlsManager.getContentOffset();
+        if (contentOffset == 0
+                && mControlsManager.getControlsPosition()
+                        == BrowserControlsStateProvider.ControlsPosition.TOP
+                && mControlsManager.isVisibilityForced()) {
+            // https://crbug.com/477993278: workaround that BrowserControlsManager does not
+            // signal onContentOffsetChanged on native pages.
+            contentOffset = mControlsManager.getTopControlsHeight();
+        }
+
+        if (contentOffset == 0) return 0;
         final Resources res = mContainer.getResources();
-        return mControlsManager.getContentOffset()
-                - res.getDimensionPixelOffset(R.dimen.message_bubble_inset);
+        return contentOffset - res.getDimensionPixelOffset(R.dimen.message_bubble_inset);
     }
 }

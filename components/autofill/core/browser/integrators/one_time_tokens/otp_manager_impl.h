@@ -6,20 +6,21 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_ONE_TIME_TOKENS_OTP_MANAGER_IMPL_H_
 
 #include <optional>
-#include <string>
-#include <variant>
 #include <vector>
 
-#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/types/expected.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
-#include "components/autofill/core/browser/integrators/one_time_tokens/metrics/otp_form_event_logger.h"
 #include "components/autofill/core/browser/integrators/one_time_tokens/otp_manager.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/one_time_tokens/core/browser/one_time_token.h"
+#include "components/one_time_tokens/core/browser/one_time_token_retrieval_error.h"
 #include "components/one_time_tokens/core/browser/one_time_token_service.h"
+#include "components/one_time_tokens/core/browser/util/expiring_subscription.h"
 
 namespace autofill {
 
@@ -41,6 +42,8 @@ enum class OneTimeTokensPhishGuardVerdict {
 // One instance per frame, owned by the BrowserAutofillManager.
 class OtpManagerImpl : public OtpManager, public AutofillManager::Observer {
  public:
+  friend class OtpManagerImplTestApi;
+
   OtpManagerImpl(BrowserAutofillManager& owner,
                  one_time_tokens::OneTimeTokenService* one_time_token_service);
   OtpManagerImpl(const OtpManagerImpl&) = delete;
@@ -53,14 +56,18 @@ class OtpManagerImpl : public OtpManager, public AutofillManager::Observer {
   void GetOtpSuggestions(GetOtpSuggestionsCallback callback) override;
 
   // AutofillManager::Observer:
-  void OnFieldTypesDetermined(
-      AutofillManager& manager,
-      FormGlobalId form,
-      AutofillManager::Observer::FieldTypeSource source) override;
+  void OnFieldTypesDetermined(AutofillManager& manager,
+                              FormGlobalId form,
+                              AutofillManager::Observer::FieldTypeSource source,
+                              bool small_forms_were_parsed) override;
   void OnBeforeFocusOnFormField(AutofillManager& manager,
                                 FormGlobalId form,
                                 FieldGlobalId field) override;
   void OnBeforeFocusOnNonFormField(AutofillManager& manager) override;
+
+  // Returns the most recent token from a list of tokens. Relevance is
+  // determined by the on-device arrival time.
+  std::optional<one_time_tokens::OneTimeToken> SelectMostRecentToken() const;
 
  private:
   // Fetches recent OTPs and creates or renewes a subscription. Any OTPs
@@ -101,9 +108,9 @@ class OtpManagerImpl : public OtpManager, public AutofillManager::Observer {
   // The time when the phish guard check was started.
   base::TimeTicks phish_guard_check_start_time_;
 
-  // The last received OTP. This is used to store the OTP between the phishing
+  // The received OTPs. This is used to store the OTPs between the phishing
   // check and the actual display of the suggestions.
-  std::optional<one_time_tokens::OneTimeToken> last_received_otp_;
+  std::vector<one_time_tokens::OneTimeToken> received_otps_;
 
   base::ScopedObservation<BrowserAutofillManager, AutofillManager::Observer>
       autofill_manager_observation_{this};

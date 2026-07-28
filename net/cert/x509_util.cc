@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include "base/containers/span.h"
 #include "base/containers/span_reader.h"
@@ -94,6 +95,32 @@ const EVP_MD* ToEVP(DigestAlgorithm alg) {
       return EVP_sha256();
   }
   return nullptr;
+}
+
+// Given a DER-encoded OID component, returns the value as an integer. Returns
+// nullopt if parsing failed or if the component cannot fit an a uint64.
+std::optional<uint64_t> ParseOidComponent(
+    base::span<const uint8_t> oid_component) {
+  if (oid_component.empty() || oid_component[0] == 0x80) {
+    return std::nullopt;
+  }
+  uint64_t out = 0;
+  while (!oid_component.empty()) {
+    uint8_t b = oid_component.take_first_elem();
+    // The continuation bit must be set exactly when there are more bytes to
+    // read.
+    bool continuation_bit = (b & 0x80) != 0;
+    if (continuation_bit == oid_component.empty()) {
+      return std::nullopt;
+    }
+    if (out >= (1llu << 57)) {
+      // Ensure we don't overflow |out|.
+      return std::nullopt;
+    }
+    out <<= 7;
+    out |= b & 0x7f;
+  }
+  return out;
 }
 
 }  // namespace
@@ -506,14 +533,10 @@ bssl::ParseCertificateOptions DefaultParseCertificateOptions() {
   return options;
 }
 
-bool CalculateSha256SpkiHash(const CRYPTO_BUFFER* buffer,
-                             SHA256HashValue* hash) {
+SHA256HashValue CalculateSha256SpkiHash(const CRYPTO_BUFFER* buffer) {
   std::string_view spki;
-  if (!asn1::ExtractSPKIFromDERCert(CryptoBufferAsStringPiece(buffer), &spki)) {
-    return false;
-  }
-  *hash = crypto::hash::Sha256(base::as_byte_span(spki));
-  return true;
+  CHECK(asn1::ExtractSPKIFromDERCert(CryptoBufferAsStringPiece(buffer), &spki));
+  return crypto::hash::Sha256(base::as_byte_span(spki));
 }
 
 bool SignatureVerifierInitWithCertificate(
@@ -595,26 +618,35 @@ std::optional<uint64_t> LastOidComponentFromBase(
     return std::nullopt;
   }
   auto [oid_base, rest] = oid.split_at(base.size());
-  if (oid_base != base || rest.empty() || rest[0] == 0x80) {
+  if (oid_base != base) {
     return std::nullopt;
   }
-  uint64_t out = 0;
-  while (!rest.empty()) {
-    uint8_t b = rest.take_first_elem();
-    // The continuation bit must be set exactly when there are more bytes to
-    // read.
-    bool continuation_bit = (b & 0x80) != 0;
-    if (continuation_bit == rest.empty()) {
-      return std::nullopt;
-    }
-    if (out >= (1llu << 57)) {
-      // Ensure we don't overflow |out|.
-      return std::nullopt;
-    }
-    out <<= 7;
-    out |= b & 0x7f;
+  return ParseOidComponent(rest);
+}
+
+std::optional<BaseOidAndComponent> SplitLastOidComponent(
+    base::span<const uint8_t> oid) {
+  if (oid.size() == 0) {
+    return std::nullopt;
   }
-  return out;
+  // Iterate in reverse over the OID starting from the second to last byte,
+  // looking for a byte without the continuation bit.
+  size_t last_component_size = 1;
+  for (; last_component_size < oid.size(); ++last_component_size) {
+    uint8_t b = oid[oid.size() - last_component_size - 1];
+    bool continuation_bit = (b & 0x80) != 0;
+    if (!continuation_bit) {
+      // Found the last byte of the next-to-last component in `oid`.
+      break;
+    }
+  }
+  std::optional<uint64_t> last_component =
+      ParseOidComponent(oid.last(last_component_size));
+  if (!last_component) {
+    return std::nullopt;
+  }
+  return BaseOidAndComponent(oid.first(oid.size() - last_component_size),
+                             *last_component);
 }
 
 std::string RelativeOidToString(base::span<const uint8_t> relative_oid) {
@@ -641,6 +673,16 @@ std::vector<std::vector<uint8_t>> ParseTlsTrustAnchorIDs(
     parsed_ids.emplace_back(base::ToVector(id));
   }
   return parsed_ids;
+}
+
+std::string TrustAnchorIDsToString(
+    const std::vector<std::vector<uint8_t>>& trust_anchor_ids) {
+  std::vector<std::string> oid_strings;
+  oid_strings.reserve(trust_anchor_ids.size());
+  for (const auto& id : trust_anchor_ids) {
+    oid_strings.emplace_back(RelativeOidToString(id));
+  }
+  return base::JoinString(oid_strings, ", ");
 }
 
 }  // namespace net::x509_util

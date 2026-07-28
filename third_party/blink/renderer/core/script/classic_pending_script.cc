@@ -4,10 +4,15 @@
 
 #include "third_party/blink/renderer/core/script/classic_pending_script.h"
 
+#include "base/byte_size.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
 #include "base/system/sys_info.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/lcp_critical_path_predictor_util.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/referrer_script_info.h"
@@ -25,18 +30,24 @@
 #include "third_party/blink/renderer/core/loader/resource/script_resource.h"
 #include "third_party/blink/renderer/core/loader/url_matcher.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/script/cache_hint_attribute_value.h"
 #include "third_party/blink/renderer/core/script/document_write_intervention.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
+#include "third_party/blink/renderer/platform/bindings/parkable_string.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/loader/allowed_by_nosniff.h"
 #include "third_party/blink/renderer/platform/loader/fetch/cached_metadata.h"
+#include "third_party/blink/renderer/platform/loader/fetch/code_cache_host.h"
 #include "third_party/blink/renderer/platform/loader/fetch/detachable_use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
+#include "third_party/blink/renderer/platform/loader/fetch/script_cached_metadata_handler.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
@@ -55,6 +66,25 @@ InlineScriptStreamer* GetInlineScriptStreamer(const String& source,
   // the script that was parsed in the background scanner exactly matches the
   // script we want to compile here.
   return scriptable_parser->TakeInlineScriptStreamer(source);
+}
+
+bool ShouldUseInlineScriptCache(ScriptSourceLocationType source_location_type,
+                                CacheHintAttributeValue cache_hint) {
+  if (source_location_type != ScriptSourceLocationType::kInline) {
+    return false;
+  }
+  if (!features::IsInlineScriptCacheEnabled()) {
+    return false;
+  }
+  switch (cache_hint) {
+    case CacheHintAttributeValue::kNever:
+      return false;
+    case CacheHintAttributeValue::kEager:
+      return true;
+    case CacheHintAttributeValue::kDefault:
+      return features::kInlineScriptCacheEnabledForDefaultHint.Get();
+  }
+  NOTREACHED();
 }
 
 }  // namespace
@@ -76,9 +106,9 @@ ClassicPendingScript* ClassicPendingScript::Fetch(
 
   ClassicPendingScript* pending_script =
       MakeGarbageCollected<ClassicPendingScript>(
-          element, TextPosition::MinimumPosition(), KURL(), KURL(), String(),
-          ScriptSourceLocationType::kExternalFile, options,
-          /*is_external=*/true, task_state);
+          element, TextPosition::MinimumPosition(), NullUrl(), NullUrl(),
+          String(), ScriptSourceLocationType::kExternalFile, options,
+          /*is_external=*/true, task_state, CacheHintAttributeValue::kDefault);
 
   // [Intervention]
   // For users on slow connections, we want to avoid blocking the parser in
@@ -123,11 +153,13 @@ ClassicPendingScript* ClassicPendingScript::CreateInline(
     const String& source_text,
     ScriptSourceLocationType source_location_type,
     const ScriptFetchOptions& options,
-    scheduler::TaskAttributionInfo* task_state) {
+    scheduler::TaskAttributionInfo* task_state,
+    CacheHintAttributeValue cache_hint) {
   ClassicPendingScript* pending_script =
       MakeGarbageCollected<ClassicPendingScript>(
           element, starting_position, source_url, base_url, source_text,
-          source_location_type, options, /*is_external=*/false, task_state);
+          source_location_type, options, /*is_external=*/false, task_state,
+          cache_hint);
   pending_script->CheckState();
   return pending_script;
 }
@@ -141,7 +173,8 @@ ClassicPendingScript::ClassicPendingScript(
     ScriptSourceLocationType source_location_type,
     const ScriptFetchOptions& options,
     bool is_external,
-    scheduler::TaskAttributionInfo* task_state)
+    scheduler::TaskAttributionInfo* task_state,
+    CacheHintAttributeValue cache_hint)
     : PendingScript(element, starting_position, task_state),
       options_(options),
       source_url_for_inline_script_(source_url_for_inline_script),
@@ -149,7 +182,8 @@ ClassicPendingScript::ClassicPendingScript(
       source_text_for_inline_script_(source_text_for_inline_script),
       source_location_type_(source_location_type),
       is_external_(is_external),
-      ready_state_(is_external ? kWaitingForResource : kReady) {
+      ready_state_(is_external ? kWaitingForResource : kReady),
+      cache_hint_(cache_hint) {
   CHECK(GetElement());
 
   if (is_external_) {
@@ -253,7 +287,7 @@ bool ClassicPendingScript::IsEligibleForLowPriorityAsyncScriptExecution()
       base::FeatureList::IsEnabled(
           features::kLowPriorityAsyncScriptExecution) &&
       !base::SysInfo::IsLowEndDevice() &&
-      (base::SysInfo::AmountOfPhysicalMemory().InGiBF() >=
+      (base::SysInfo::AmountOfTotalPhysicalMemory().InGiBF() >=
        features::kMinimumPhysicalMemoryForLowPriorityAsyncScriptExecution
            .Get());
   if (!feature_enabled) {
@@ -528,6 +562,7 @@ ClassicScript* ClassicPendingScript::GetSource() const {
   TRACE_EVENT0("blink", "ClassicPendingScript::GetSource");
   if (!is_external_) {
     InlineScriptStreamer* streamer = nullptr;
+    CachedMetadataHandler* cached_metadata_handler = nullptr;
     // We only create an inline cache handler for html-embedded scripts, not
     // for scripts produced by document.write, or not parser-inserted. This is
     // because we expect those to be too dynamic to benefit from caching.
@@ -541,6 +576,26 @@ ClassicScript* ClassicPendingScript::GetSource() const {
         element_document && element_document->IsActive()) {
       streamer = GetInlineScriptStreamer(source_text_for_inline_script_,
                                          *element_document);
+
+      mojo_base::BigBuffer code_cache;
+      if (DocumentLoader* loader = element_document->Loader();
+          loader &&
+          ShouldUseInlineScriptCache(source_location_type_, cache_hint_)) {
+        if (CodeCacheHost* cache_host = loader->GetCodeCacheHost()) {
+          CHECK(!source_text_for_inline_script_.IsNull());
+          // Stores an empty `mojo_base::BigBuffer` on cache miss.
+          code_cache = cache_host->FetchInlineScriptCacheSync(
+              ParkableString(source_text_for_inline_script_.Impl()));
+        }
+        cached_metadata_handler =
+            MakeGarbageCollected<SourceKeyedCachedMetadataHandler>(
+                element_document->Encoding(),
+                ParkableString(source_text_for_inline_script_.Impl()));
+        if (code_cache.size() != 0) {
+          cached_metadata_handler->SetSerializedCachedMetadata(
+              std::move(code_cache));
+        }
+      }
     }
 
     DCHECK(!GetResource());
@@ -552,7 +607,8 @@ ClassicScript* ClassicPendingScript::GetSource() const {
         source_text_for_inline_script_,
         ClassicScript::StripFragmentIdentifier(source_url_for_inline_script_),
         base_url_for_inline_script_, options_, source_location_type_,
-        SanitizeScriptErrors::kDoNotSanitize, nullptr, StartingPosition(),
+        SanitizeScriptErrors::kDoNotSanitize, cached_metadata_handler,
+        StartingPosition(),
         streamer ? ScriptStreamer::NotStreamingReason::kInvalid
                  : ScriptStreamer::NotStreamingReason::kInlineScript,
         streamer);
@@ -628,7 +684,7 @@ bool ClassicPendingScript::WasCanceled() const {
 
 KURL ClassicPendingScript::UrlForTracing() const {
   if (!is_external_ || !GetResource()) {
-    return NullURL();
+    return NullUrl();
   }
 
   return GetResource()->Url();

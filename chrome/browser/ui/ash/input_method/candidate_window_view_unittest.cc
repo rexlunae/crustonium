@@ -73,11 +73,11 @@ class CandidateWindowViewTest : public views::ViewsTestBase {
   void SetUp() override {
     views::ViewsTestBase::SetUp();
     candidate_window_view_ = new CandidateWindowView(GetContext());
-    candidate_window_view_->InitWidget();
+    widget_ = candidate_window_view_->InitWidget();
   }
 
   void TearDown() override {
-    candidate_window_view_->GetWidget()->CloseNow();
+    widget_.reset();
     views::ViewsTestBase::TearDown();
   }
 
@@ -117,7 +117,8 @@ class CandidateWindowViewTest : public views::ViewsTestBase {
 
  private:
   raw_ptr<CandidateWindowView, DanglingUntriaged>
-      candidate_window_view_;  // Owned by its Widget.
+      candidate_window_view_;  // Owned by widget_.
+  std::unique_ptr<views::Widget> widget_;
 };
 
 TEST_F(CandidateWindowViewTest, UpdateCandidatesTest_CursorVisibility) {
@@ -191,7 +192,7 @@ TEST_F(CandidateWindowViewTest, SelectCandidateAtTest) {
                                           &candidate_window_small);
   candidate_window_small.set_cursor_position(candidate_window_small_size - 1);
   // Make sure the test doesn't crash if the candidate window reduced
-  // its size. (crbug.com/174163)
+  // its size. (crbug.com/40300928)
   candidate_window_view()->UpdateCandidates(candidate_window_small);
   SelectCandidateAt(candidate_window_small_size - 1);
 }

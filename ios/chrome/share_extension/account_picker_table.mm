@@ -53,7 +53,6 @@ CGFloat const kAvatarImageDimension = 30.0;
   self.title = NSLocalizedString(
       @"IDS_IOS_ACCOUNTS_TITLE_SHARE_EXTENSION",
       @"The title of the item representing a signed out user.");
-  ;
   self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
       initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                            target:self
@@ -115,9 +114,13 @@ CGFloat const kAvatarImageDimension = 30.0;
              renderingMode:UIImageRenderingModeAlwaysOriginal];
 
   } else {
-    content.text = ([accountInfo.fullName length] > 0) ? accountInfo.fullName
-                                                       : accountInfo.email;
-    content.secondaryText = accountInfo.email;
+    NSString* name = accountInfo.fullName;
+    if (name.length > 0) {
+      content.text = name;
+      content.secondaryText = accountInfo.email;
+    } else {
+      content.text = accountInfo.email;
+    }
     content.image = accountInfo.avatar;
     UIListContentImageProperties* imageProperties = content.imageProperties;
     imageProperties.cornerRadius = kAvatarImageDimension / 2.0;
@@ -194,7 +197,8 @@ CGFloat const kAvatarImageDimension = 30.0;
 - (void)setUpBottomSheetDetents {
   UISheetPresentationController* presentationController =
       self.sheetPresentationController;
-  presentationController.detents = @[ self.customDetent ];
+  presentationController.detents =
+      @[ self.customDetent, UISheetPresentationControllerDetent.largeDetent ];
   presentationController.selectedDetentIdentifier =
       self.customDetent.identifier;
 }

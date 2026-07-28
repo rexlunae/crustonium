@@ -12,16 +12,6 @@
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "net/base/schemeful_site.h"
 
-class BrowserWindowInterface;
-
-namespace views {
-class Widget;
-}
-
-namespace privacy_sandbox {
-class PrivacySandboxQueueManager;
-}
-
 // Service which encapsulates logic related to displaying and controlling the
 // users Privacy Sandbox settings. This service contains the chrome/ specific
 // logic used by the UI, including decision making around what the users'
@@ -32,181 +22,6 @@ class PrivacySandboxQueueManager;
 // Sandbox APIs.
 class PrivacySandboxService : public KeyedService {
  public:
-  // Possible types of Privacy Sandbox prompts that may be shown to the user.
-  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.privacy_sandbox
-  enum class PromptType {
-    kNone = 0,
-    kM1Consent = 1,
-    kM1NoticeROW = 2,
-    kM1NoticeEEA = 3,
-    kM1NoticeRestricted = 4,
-    kMaxValue = kM1NoticeRestricted,
-  };
-
-  // A list of the client surfaces we show consents / notices on.
-  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.privacy_sandbox
-  enum class SurfaceType {
-    kDesktop = 0,
-    kBrApp = 1,
-    kAGACCT = 2,
-    kMaxValue = kAGACCT,
-  };
-
-  // An exhaustive list of actions related to showing & interacting with the
-  // prompt. Includes actions which do not impact consent / notice state.
-  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.privacy_sandbox
-  enum class PromptAction {
-    // Notice Interactions:
-    kNoticeShown = 0,
-    kNoticeOpenSettings = 1,
-    kNoticeAcknowledge = 2,
-    kNoticeDismiss = 3,
-
-    // Implies that the browser, or browser window, was shut before the user
-    // interacted with the notice.
-    kNoticeClosedNoInteraction = 4,
-
-    // Consent Interactions:
-    kConsentShown = 5,
-    kConsentAccepted = 6,
-    kConsentDeclined = 7,
-    kConsentMoreInfoOpened = 8,
-    kConsentMoreInfoClosed = 9,
-
-    // Implies that the browser, or browser window, was shut before the user
-    // has made the decision (accepted or declined the consent).
-    kConsentClosedNoDecision = 10,
-
-    // TODO(crbug.com/386240885): Clean up old learn more, as it is not used for
-    // any of the Privacy Sandbox Dialogs anymore.
-    // Interaction with notice bubble: click on the link to open interests
-    // settings.
-    kNoticeLearnMore = 11,
-
-    // Interactions with M1 Notice ROW prompt and M1 Notice EEA prompt.
-    kNoticeMoreInfoOpened = 12,
-    kNoticeMoreInfoClosed = 13,
-
-    // The button is shown only when the prompt content isn't fully visible.
-    kConsentMoreButtonClicked = 14,
-    kNoticeMoreButtonClicked = 15,
-
-    // Restricted notice interactions
-    kRestrictedNoticeAcknowledge = 16,
-    kRestrictedNoticeOpenSettings = 17,
-    kRestrictedNoticeShown = 18,
-    kRestrictedNoticeClosedNoInteraction = 19,
-    kRestrictedNoticeMoreButtonClicked = 20,
-
-    // Privacy policy interactions
-    kPrivacyPolicyLinkClicked = 21,
-
-    // Interactions with M1 Notice EEA Prompt. This is in relation to Ads API UX
-    // Enhancement splitting the more info into two different sections.
-    kNoticeSiteSuggestedAdsMoreInfoOpened = 22,
-    kNoticeSiteSuggestedAdsMoreInfoClosed = 23,
-    kNoticeAdsMeasurementMoreInfoOpened = 24,
-    kNoticeAdsMeasurementMoreInfoClosed = 25,
-
-    kMaxValue = kNoticeAdsMeasurementMoreInfoClosed,
-  };
-
-  // If during the trials a previous consent decision was made, or the notice
-  // was already acknowledged, and the privacy sandbox is disabled,
-  // `prefs::kPrivacySandboxM1PromptSuppressed` was set to either
-  // `kTrialsConsentDeclined` or `kTrialsDisabledAfterNotice` accordingly and
-  // the prompt is suppressed. This logic is now deprecated after launching GA.
-  enum class PromptSuppressedReason {
-    // Prompt has never been suppressed
-    kNone = 0,
-    // User had the Privacy Sandbox restricted at confirmation
-    kRestricted = 1,
-    // User was blocking 3PC when we attempted consent
-    kThirdPartyCookiesBlocked = 2,
-    // User declined the trials consent
-    kTrialsConsentDeclined = 3,
-    // User saw trials notice, and then disabled trials
-    kTrialsDisabledAfterNotice = 4,
-    // A policy is suppressing any prompt
-    kPolicy = 5,
-    // User migrated from EEA to ROW, and had already previously finished the
-    // EEA consent flow.
-    kEEAFlowCompletedBeforeRowMigration = 6,
-    // User migrated from ROW to EEA, but had already disabled Topics from
-    // settings.
-    kROWFlowCompletedAndTopicsDisabledBeforeEEAMigration = 7,
-    // The user is restricted with a guardian, so a direct notice is shown.
-    kNoticeShownToGuardian = 8,
-    kMaxValue = kNoticeShownToGuardian,
-  };
-
-  // Contains the possible states of the prompt start up states for m1.
-  // LINT.IfChange(SettingsPrivacySandboxPromptStartupState)
-  enum class PromptStartupState {
-    kEEAConsentPromptWaiting = 0,
-    kEEANoticePromptWaiting = 1,
-    kROWNoticePromptWaiting = 2,
-    kEEAFlowCompletedWithTopicsAccepted = 3,
-    kEEAFlowCompletedWithTopicsDeclined = 4,
-    kROWNoticeFlowCompleted = 5,
-    kPromptNotShownDueToPrivacySandboxRestricted = 6,
-    kPromptNotShownDueTo3PCBlocked = 7,
-    kPromptNotShownDueToTrialConsentDeclined = 8,
-    kPromptNotShownDueToTrialsDisabledAfterNoticeShown = 9,
-    kPromptNotShownDueToManagedState = 10,
-    kRestrictedNoticeNotShownDueToNoticeShownToGuardian = 11,
-    kRestrictedNoticePromptWaiting = 12,
-    kRestrictedNoticeFlowCompleted = 13,
-    kRestrictedNoticeNotShownDueToFullNoticeAcknowledged = 14,
-    kWaitingForGraduationRestrictedNoticeFlowNotCompleted = 15,
-    kWaitingForGraduationRestrictedNoticeFlowCompleted = 16,
-    kMaxValue = kWaitingForGraduationRestrictedNoticeFlowCompleted,
-  };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/settings/enums.xml:SettingsPrivacySandboxPromptStartupState)
-
-  // Enum for the different events that can be triggered from the
-  // PrivacySandboxApis Dialog. It used to bubble up some Dialog events to other
-  // components.
-  enum class AdsDialogCallbackNoArgsEvents {
-    kShowDialog,
-    kCloseDialog,
-    kOpenAdsPrivacySettings,
-    kOpenMeasurementSettings,
-  };
-
-  // Returns the prompt type that should be shown to the user. This consults
-  // previous consent / notice information stored in preferences, the
-  // current state of the Privacy Sandbox settings, and the current location
-  // of the user, to determine the appropriate type. This is expected to be
-  // called by UI code locations determining whether a prompt should be
-  // shown on startup.
-  virtual PromptType GetRequiredPromptType(SurfaceType surface_type) = 0;
-
-  // Informs the service that |action| occurred with the prompt. This allows
-  // the service to record this information in preferences such that future
-  // calls to GetRequiredPromptType() are correct. This is expected to be
-  // called appropriately by all locations showing the prompt. Metrics
-  // shared between platforms will also be recorded.
-  virtual void PromptActionOccurred(PromptAction action,
-                                    SurfaceType surface_type) = 0;
-
-  // Functions for coordinating the display of the Privacy Sandbox prompts
-  // across multiple browser windows. Only relevant for Desktop.
-
-#if !BUILDFLAG(IS_ANDROID)
-  // Informs the service that a Privacy Sandbox prompt has been opened
-  // or closed for |browser|.
-  virtual void PromptOpenedForBrowser(BrowserWindowInterface* browser,
-                                      views::Widget* widget) = 0;
-  virtual void PromptClosedForBrowser(BrowserWindowInterface* browser) = 0;
-
-  // Returns whether a Privacy Sandbox prompt is currently open for |browser|.
-  virtual bool IsPromptOpenForBrowser(BrowserWindowInterface* browser) = 0;
-
-  virtual privacy_sandbox::PrivacySandboxQueueManager&
-  GetPrivacySandboxNoticeQueueManager() = 0;
-#endif  // !BUILDFLAG(IS_ANDROID)
-
   // If set to true, this treats the testing environment as that of a branded
   // Chrome build.
   virtual void ForceChromeBuildForTests(bool force_chrome_build) = 0;
@@ -298,10 +113,6 @@ class PrivacySandboxService : public KeyedService {
   // in tests.
   virtual void SetTopicAllowed(privacy_sandbox::CanonicalTopic topic,
                                bool allowed) = 0;
-
-  // Determines whether the Topics API step should be shown in the Privacy
-  // Guide.
-  virtual bool PrivacySandboxPrivacyGuideShouldShowAdTopicsCard() = 0;
 
   // Determines whether the China domain should be used for the Privacy Policy
   // page.

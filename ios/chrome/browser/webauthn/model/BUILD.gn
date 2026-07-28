@@ -32,20 +32,28 @@ source_set("ios_chrome_passkey_client") {
     "ios_chrome_passkey_client.mm",
   ]
   deps = [
-    ":common",
+    "//components/metrics",
     "//components/metrics:metrics_pref_names",
     "//components/password_manager/core/browser",
+    "//components/password_manager/core/common",
     "//components/password_manager/ios",
     "//components/webauthn/ios",
     "//components/webauthn/ios:features",
+    "//components/webauthn/ios:passkey_types",
+    "//ios/chrome/app/strings",
     "//ios/chrome/browser/credential_provider/model:buildflags",
+    "//ios/chrome/browser/device_reauth/model",
     "//ios/chrome/browser/passwords/model",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/signin/model",
-    "//ios/chrome/common/credential_provider:passkey_keychain_provider_chrome",
+    "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/webauthn/public",
+    "//ios/chrome/common/credential_provider:passkey_keychain_provider_bridge_chrome",
+    "//ios/chrome/common/ui/reauthentication",
     "//ios/web/public",
+    "//ui/base",
   ]
 
   if (ios_enable_credential_provider_extension) {
@@ -53,58 +61,21 @@ source_set("ios_chrome_passkey_client") {
   }
 }
 
-source_set("common") {
-  sources = [
-    "scoped_passkey_keychain_provider_override.h",
-    "scoped_passkey_keychain_provider_override.mm",
-  ]
-  deps = [
-    "//base",
-    "//ios/chrome/common/credential_provider:passkey_keychain_provider_header",
-  ]
-}
-
-source_set("eg_app_support+eg2") {
-  configs += [ "//build/config/ios:xctest_config" ]
+source_set("unit_tests") {
   testonly = true
-  sources = [
-    "ios_chrome_passkey_client_app_interface.h",
-    "ios_chrome_passkey_client_app_interface.mm",
-  ]
+  sources = [ "ios_chrome_passkey_client_unittest.mm" ]
   deps = [
-    ":common",
-    "//base",
-    "//ios/chrome/common/credential_provider:passkey_keychain_provider_chrome",
+    ":ios_chrome_passkey_client",
+    "//base/test:test_support",
+    "//components/password_manager/core/common",
+    "//components/prefs",
+    "//components/sync:test_support",
+    "//components/sync/service",
+    "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
+    "//ios/web/public/test",
     "//testing/gmock",
-  ]
-}
-
-source_set("eg_test_support+eg2") {
-  configs += [ "//build/config/ios:xctest_config" ]
-  testonly = true
-
-  sources = [
-    "ios_chrome_passkey_client_app_interface.h",
-    "ios_chrome_passkey_client_app_interface_stub.mm",
-  ]
-  deps = [ "//ios/testing/earl_grey:eg_test_support+eg2" ]
-}
-
-source_set("eg2_tests") {
-  configs += [ "//build/config/ios:xctest_config" ]
-  testonly = true
-
-  sources = [ "passkey_egtest.mm" ]
-
-  deps = [
-    ":eg_test_support+eg2",
-    "//components/webauthn/ios:features",
-    "//ios/chrome/app/strings",
-    "//ios/chrome/browser/authentication/test:eg_test_support+eg2",
-    "//ios/chrome/browser/signin/model:fake_system_identity",
-    "//ios/chrome/test/earl_grey:eg_test_support+eg2",
-    "//ios/testing/earl_grey:eg_test_support+eg2",
-    "//net:test_support",
-    "//ui/base",
+    "//testing/gtest",
   ]
 }

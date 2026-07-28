@@ -1366,13 +1366,11 @@ TEST_F(HistoryURLProviderTest, DoTrimHttpsScheme) {
 // the keyword, i.e. "@history google" should only match "google".
 TEST_F(HistoryURLProviderTest, KeywordModeExtractUserInput) {
   const auto test = [&](std::u16string input_text,
-                        bool input_prefer_keyword_mode = false) {
+                        bool input_in_keyword_mode = false) {
     AutocompleteInput input(input_text, metrics::OmniboxEventProto::OTHER,
                             TestSchemeClassifier());
-    if (input_prefer_keyword_mode) {
-      input.set_prefer_keyword(true);
-      input.set_keyword_mode_entry_method(
-          metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
+    if (input_in_keyword_mode) {
+      input.set_in_keyword_mode(true);
     }
 
     provider_->Stop(AutocompleteStopReason::kClobbered);
@@ -1439,9 +1437,7 @@ TEST_F(HistoryURLProviderTest, MaxMatches) {
   EXPECT_EQ(matches_.size(), provider_->provider_max_matches());
 
   // Turn keyword mode on. we should be able to get more matches now.
-  input.set_keyword_mode_entry_method(
-      metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
-  input.set_prefer_keyword(true);
+  input.set_in_keyword_mode(true);
   provider_->Start(input, false);
   if (!provider_->done()) {
     base::RunLoop loop{base::RunLoop::Type::kNestableTasksAllowed};

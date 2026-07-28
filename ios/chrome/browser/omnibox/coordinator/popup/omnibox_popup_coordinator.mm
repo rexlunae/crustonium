@@ -173,6 +173,7 @@
   [self.sharingCoordinator stop];
   self.sharingCoordinator = nil;
 
+  [self.popupViewController disconnect];
   self.popupViewController = nil;
   self.mediator = nil;
   self.autocompleteController = nullptr;
@@ -221,11 +222,12 @@
       initWithURL:URL
             title:title
          scenario:SharingScenario::OmniboxMostVisitedEntry];
+  [self.sharingCoordinator stop];
   self.sharingCoordinator = [[SharingCoordinator alloc]
       initWithBaseViewController:self.popupViewController
                          browser:self.browser
                           params:params
-                      originView:originView];
+                      sourceItem:originView];
   [self.sharingCoordinator start];
 }
 

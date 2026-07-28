@@ -39,6 +39,7 @@
 #include "components/viz/common/features.h"
 #include "components/viz/common/switches.h"
 #include "components/viz/host/persistent_cache_sandboxed_file_factory.h"
+#include "components/vrp_flags/buildflags.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/child_process_host_impl.h"
 #include "content/browser/child_process_launcher.h"
@@ -63,10 +64,10 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/gpu_utils.h"
+#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/result_codes.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/zygote/zygote_buildflags.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/config/gpu_driver_bug_list.h"
@@ -110,9 +111,11 @@
 #include "base/win/security_descriptor.h"
 #include "base/win/win_util.h"
 #include "components/app_launch_prefetch/app_launch_prefetch.h"
+#include "content/browser/webnn/webnn_compiler_process_host.h"
 #include "sandbox/policy/win/sandbox_win.h"
 #include "sandbox/win/src/sandbox_policy.h"
 #include "sandbox/win/src/window.h"
+#include "services/webnn/public/cpp/ep_device_info.h"
 #include "ui/gfx/win/rendering_window_manager.h"
 #endif
 
@@ -129,6 +132,10 @@
 #if BUILDFLAG(IS_MAC)
 #include "content/browser/gpu/browser_child_process_backgrounded_bridge.h"
 #include "content/browser/gpu/ca_transaction_gpu_coordinator.h"
+#endif
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+#include "components/vrp_flags/vrp_flags.h"  // nogncheck
 #endif
 
 namespace content {
@@ -258,7 +265,6 @@ static const char* const kSwitchNames[] = {
 #if BUILDFLAG(IS_WIN)
     switches::kDisableHighResTimer,
     switches::kRaiseTimerFrequency,
-    switches::kUseRedistributableDirectML,
 #endif  // BUILDFLAG(IS_WIN)
     switches::kBackgroundThreadPoolFieldTrial,
     switches::kEnableANGLEFeatures,
@@ -274,6 +280,7 @@ static const char* const kSwitchNames[] = {
     switches::kDumpCompositorFrame,
     switches::kEnableGpuMainTimeKeeperMetrics,
     switches::kEnableGpuRasterization,
+    switches::kEnableWebGLDraftExtensions,
     switches::kEnableSkiaGraphite,
     switches::kEnableSkiaGraphitePrecompilation,
     switches::kDoubleBufferCompositing,
@@ -287,10 +294,9 @@ static const char* const kSwitchNames[] = {
     switches::kProfilingFlush,
     switches::kRunAllCompositorStagesBeforeDraw,
     switches::kSkiaFontCacheLimitMb,
-    switches::kSkiaGraphiteBackend,
+    switches::kSkiaGraphiteDawnBackend,
     switches::kSkiaResourceCacheLimitMb,
     switches::kTestGLLib,
-    switches::kUseAdapterLuid,
     switches::kUseFakeMjpegDecodeAccelerator,
     switches::kUseGpuInTests,
     switches::kWebViewDrawFunctorUsesVulkan,
@@ -316,7 +322,7 @@ static const char* const kSwitchNames[] = {
     switches::kGpuWatchdogTimeoutSeconds,
     switches::kUseCmdDecoder,
     switches::kForceVideoOverlays,
-    switches::kSkiaGraphiteBackend,
+    switches::kSkiaGraphiteDawnBackend,
 #if BUILDFLAG(IS_ANDROID)
     switches::kDisableAdpf,
 #endif
@@ -327,6 +333,12 @@ static const char* const kSwitchNames[] = {
 #endif
 #if BUILDFLAG(USE_V4L2_CODEC)
     switches::kHardwareVideoDecodeFrameRate,
+#endif
+#if BUILDFLAG(USE_VAAPI)
+    switches::kHardwareVideoDevicePath,
+#endif
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+    vrp_flags::switches::kVrpFlags,
 #endif
 };
 
@@ -540,7 +552,7 @@ void BindDiscardableMemoryReceiverOnUI(
 // src/content/browser/browser_main_loop.cc once the persistent cache is used
 // for all cache types.
 void InitGpuPersistentCacheFileFactoryOnce() {
-  if ((features::kSkiaGraphiteDawnUsePersistentCache.Get() ||
+  if ((features::SkiaGraphiteUsesPersistentCache() ||
        base::FeatureList::IsEnabled(features::kGpuPersistentCache)) &&
       !viz::PersistentCacheSandboxedFileFactory::GetInstance()) {
     base::FilePath cache_root_dir =
@@ -680,6 +692,33 @@ void GpuProcessHost::TerminateGpuProcess(const std::string& message) {
   process_->TerminateOnBadMessageReceived(message);
 }
 #endif  // BUILDFLAG(IS_OZONE)
+
+#if BUILDFLAG(IS_WIN)
+void GpuProcessHost::RequestWebNNCompilerContext(
+    webnn::mojom::CreateContextOptionsPtr context_options,
+    const webnn::ContextProperties& context_properties,
+    const webnn::EpDeviceInfo& target_device,
+    mojo::PendingReceiver<webnn::mojom::WebNNCompilerContext>
+        compiler_context_receiver,
+    mojo::PendingRemote<webnn::mojom::WebNNModelLoader> model_loader_remote) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  if (!gpu_service()) {
+    LOG(ERROR) << "[WebNN] RequestWebNNCompilerContext() failed: GPU process "
+                  "is not available.";
+    // Drop the pipe endpoints — peer endpoints will observe a disconnect.
+    return;
+  }
+
+  if (!webnn_compiler_process_host_) {
+    webnn_compiler_process_host_ = std::make_unique<WebNNCompilerProcessHost>();
+  }
+
+  webnn_compiler_process_host_->RequestCompilerContext(
+      std::move(context_options), context_properties, target_device,
+      std::move(compiler_context_receiver), std::move(model_loader_remote));
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 // static
 GpuProcessHost* GpuProcessHost::FromID(int host_id) {
@@ -906,7 +945,7 @@ GpuProcessHost::~GpuProcessHost() {
 bool GpuProcessHost::Init() {
   init_start_time_ = base::TimeTicks::Now();
 
-  TRACE_EVENT_INSTANT0("gpu", "LaunchGpuProcess", TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("gpu", "LaunchGpuProcess");
 
   process_->GetHost()->CreateChannel();
 
@@ -1027,6 +1066,8 @@ void GpuProcessHost::DidInitialize(
                                            gpu_feature_info_for_hardware_gpu);
     gpu_data_manager->UpdateGpuInfo(gpu_info, gpu_info_for_hardware_gpu);
     gpu_data_manager->UpdateGpuExtraInfo(gpu_extra_info);
+    // The GPU process might change the actual GpuMode after initialization.
+    mode_ = gpu_data_manager->GetGpuMode();
   }
 
 #if BUILDFLAG(IS_ANDROID)

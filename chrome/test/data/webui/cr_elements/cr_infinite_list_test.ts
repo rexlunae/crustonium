@@ -14,15 +14,9 @@ const SAMPLE_ITEM_HEIGHT = 56;
 const SAMPLE_AVAIL_HEIGHT =
     SAMPLE_HEIGHT_VIEWPORT_ITEM_COUNT * SAMPLE_ITEM_HEIGHT;
 
-class TestItem extends CrLitElement {
+class TestItemElement extends CrLitElement {
   static get is() {
     return 'test-item';
-  }
-
-  static override get properties() {
-    return {
-      name: {type: String},
-    };
   }
 
   override render() {
@@ -31,6 +25,12 @@ class TestItem extends CrLitElement {
   <span>${this.name}</span>
   <button>click item</button>
 </div>`;
+  }
+
+  static override get properties() {
+    return {
+      name: {type: String},
+    };
   }
 
   override focus() {
@@ -42,22 +42,12 @@ class TestItem extends CrLitElement {
   accessor name: string = '';
 }
 
-customElements.define('test-item', TestItem);
+customElements.define(TestItemElement.is, TestItemElement);
 
-class TestApp extends CrLitElement {
+class TestAppElement extends CrLitElement {
   static get is() {
     return 'test-app';
   }
-
-  static override get properties() {
-    return {
-      listItems: {type: Array},
-      useDefaultScroll: {type: Boolean},
-    };
-  }
-
-  accessor listItems: Array<{name: string}> = [];
-  accessor useDefaultScroll: boolean = false;
 
   override render() {
     return this.useDefaultScroll ?
@@ -80,12 +70,23 @@ class TestApp extends CrLitElement {
                    </test-item>`}>
       </cr-infinite-list>`;
   }
+
+  static override get properties() {
+    return {
+      listItems: {type: Array},
+      useDefaultScroll: {type: Boolean},
+    };
+  }
+
+  accessor listItems: Array<{name: string}> = [];
+  accessor useDefaultScroll: boolean = false;
 }
 
-customElements.define('test-app', TestApp);
+customElements.define(TestAppElement.is, TestAppElement);
 
-function queryItems(infiniteList: CrInfiniteListElement): NodeListOf<TestItem> {
-  return infiniteList.querySelectorAll<TestItem>('test-item');
+function queryItems(infiniteList: CrInfiniteListElement<{name: string}>):
+    NodeListOf<TestItemElement> {
+  return infiniteList.querySelectorAll<TestItemElement>('test-item');
 }
 
 function getTestItems(count: number): Array<{name: string}> {
@@ -106,15 +107,16 @@ function getTestItems(count: number): Array<{name: string}> {
   return items.slice(0, count);
 }
 
-function getKeyboardFocusableItem(infiniteList: CrInfiniteListElement):
-    TestItem {
-  const item = infiniteList.querySelector<TestItem>('test-item[tabindex="0"]');
+function getKeyboardFocusableItem(
+    infiniteList: CrInfiniteListElement<{name: string}>): TestItemElement {
+  const item =
+      infiniteList.querySelector<TestItemElement>('test-item[tabindex="0"]');
   assertTrue(!!item);
   return item;
 }
 
-function createTestApp(useDefaultScroll: boolean = false): TestApp {
-  const testApp = document.createElement('test-app') as TestApp;
+function createTestApp(useDefaultScroll: boolean = false): TestAppElement {
+  const testApp = document.createElement('test-app') as TestAppElement;
   testApp.useDefaultScroll = useDefaultScroll;
   testApp.style.height = `${SAMPLE_AVAIL_HEIGHT}px`;
   testApp.style.maxHeight = `${SAMPLE_AVAIL_HEIGHT}px`;
@@ -129,8 +131,8 @@ function createTestApp(useDefaultScroll: boolean = false): TestApp {
 }
 
 suite('InfiniteListTest', () => {
-  let infiniteList: CrInfiniteListElement;
-  let testApp: TestApp;
+  let infiniteList: CrInfiniteListElement<{name: string}>;
+  let testApp: TestAppElement;
   let innerList: HTMLElement;
 
   async function setupTest(
@@ -139,7 +141,9 @@ suite('InfiniteListTest', () => {
     testApp = createTestApp(useDefaultScroll);
     testApp.listItems = sampleData;
 
-    infiniteList = testApp.shadowRoot.querySelector('cr-infinite-list')!;
+    infiniteList =
+        testApp.shadowRoot.querySelector<CrInfiniteListElement<{name: string}>>(
+            'cr-infinite-list')!;
     const lazyList = infiniteList.querySelector('cr-lazy-list');
     assertTrue(!!lazyList);
     innerList = lazyList;
@@ -233,8 +237,8 @@ suite('InfiniteListTest', () => {
 });
 
 suite('InfiniteListFocusTest', () => {
-  let infiniteList: CrInfiniteListElement;
-  let testApp: TestApp;
+  let infiniteList: CrInfiniteListElement<{name: string}>;
+  let testApp: TestAppElement;
   let innerList: HTMLElement;
 
   async function setupTest(sampleData: Array<{name: string}>) {
@@ -242,7 +246,9 @@ suite('InfiniteListFocusTest', () => {
     testApp = createTestApp();
     testApp.listItems = sampleData;
 
-    infiniteList = testApp.shadowRoot.querySelector('cr-infinite-list')!;
+    infiniteList =
+        testApp.shadowRoot.querySelector<CrInfiniteListElement<{name: string}>>(
+            'cr-infinite-list')!;
     const lazyList = infiniteList.querySelector('cr-lazy-list');
     assertTrue(!!lazyList);
     innerList = lazyList;

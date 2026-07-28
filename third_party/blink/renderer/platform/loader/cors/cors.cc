@@ -9,8 +9,10 @@
 #include "base/functional/function_ref.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/cors/cors.h"
+#include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
@@ -57,7 +59,7 @@ class HTTPHeaderNameListParser {
         return;
       }
 
-      output.insert(value_.Substring(token_start, token_size).Ascii());
+      output.insert(value_.substr(token_start, token_size).Ascii());
       ConsumeSpaces();
 
       if (pos_ == value_.length()) {
@@ -138,7 +140,8 @@ PLATFORM_EXPORT Vector<String> PrivilegedNoCorsHeaderNames() {
 }
 
 bool IsForbiddenRequestHeader(const String& name, const String& value) {
-  return !net::HttpUtil::IsSafeHeader(name.Latin1(), value.Latin1());
+  return !net::HttpUtil::IsSafeHeader(
+      name.Latin1(), FetchUtils::NormalizeHeaderValue(value).Latin1());
 }
 
 bool ContainsOnlyCorsSafelistedHeaders(const HTTPHeaderMap& header_map) {
@@ -202,20 +205,7 @@ HTTPHeaderSet ExtractCorsExposedHeaderNamesList(
 }
 
 bool IsCorsSafelistedResponseHeader(const String& name) {
-  // https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name
-  // TODO(dcheng): Consider using a flat_set here with a transparent comparator.
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(HTTPHeaderSet,
-                                  allowed_cross_origin_response_headers,
-                                  ({
-                                      "cache-control",
-                                      "content-language",
-                                      "content-length",
-                                      "content-type",
-                                      "expires",
-                                      "last-modified",
-                                      "pragma",
-                                  }));
-  return allowed_cross_origin_response_headers.contains(name.Ascii());
+  return network::cors::IsCorsSafelistedResponseHeaderName(name.Latin1());
 }
 
 // In the spec, https://fetch.spec.whatwg.org/#ref-for-concept-request-mode,
@@ -239,6 +229,11 @@ bool IsNoCorsAllowedContext(mojom::blink::RequestContextType context) {
     default:
       return false;
   }
+}
+
+bool IsBypassRequestForbiddenHeadersCheckEnabled() {
+  return base::FeatureList::IsEnabled(
+      network::features::kBypassRequestForbiddenHeadersCheck);
 }
 
 }  // namespace cors

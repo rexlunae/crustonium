@@ -9,15 +9,16 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/view_class_properties.h"
 
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kBookmarkSigninPromoFrameViewId);
 
 BookmarkSigninPromoBubbleView::BookmarkSigninPromoBubbleView(
-    View* anchor_view,
+    views::BubbleAnchor bubble_anchor,
     content::WebContents* web_contents,
     const bookmarks::BookmarkNode* bookmark)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents) {
+    : LocationBarBubbleDelegateView(bubble_anchor, web_contents) {
   CHECK(bookmark);
   CHECK(web_contents);
 

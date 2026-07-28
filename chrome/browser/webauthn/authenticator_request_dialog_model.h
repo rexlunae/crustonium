@@ -108,9 +108,6 @@ using UIPresentation =
   AUTHENTICATOR_REQUEST_EVENT_0(OnChromeProfileCreatePasskeyAccepted)         \
   /* Called when the user accepts passkey creation dialog. */                 \
   AUTHENTICATOR_REQUEST_EVENT_0(OnGPMCreationConfirmed)                       \
-  /* Called when the user accepts the warning dialog for creating a GPM */    \
-  /* passkey in incognito mode.*/                                             \
-  AUTHENTICATOR_REQUEST_EVENT_0(OnGPMConfirmOffTheRecordCreate)               \
   /* Called when the user clicks "Forgot PIN" during UV. */                   \
   AUTHENTICATOR_REQUEST_EVENT_0(OnGPMForgotPinPressed)                        \
   /* OnOffTheRecordInterstitialAccepted is called when the user accepts */    \
@@ -140,6 +137,8 @@ using UIPresentation =
   /* Open the system dialog to grant BLE permission to Chrome. Valid */       \
   /* action when at step: kBlePermissionMac. */                               \
   AUTHENTICATOR_REQUEST_EVENT_0(OpenBlePreferences)                           \
+  /* Open the Google Password Manager settings page. */                       \
+  AUTHENTICATOR_REQUEST_EVENT_0(OpenGpmSettings)                              \
   /* Turns on the BLE adapter automatically. Valid action when at step: */    \
   /* kBlePowerOnAutomatic. */                                                 \
   AUTHENTICATOR_REQUEST_EVENT_0(PowerOnBleAdapter)                            \
@@ -208,6 +207,7 @@ struct AuthenticatorRequestDialogModel
     // after user interaction.
     kErrorNoAvailableTransports,
     kErrorNoPasskeys,
+    kErrorGpmDisabled,
     kErrorInternalUnrecognized,
     kErrorWindowsHelloNotEnabled,
     // The request is already complete, but the error dialog should wait
@@ -231,7 +231,6 @@ struct AuthenticatorRequestDialogModel
     // will be recorded.
     kOffTheRecordInterstitial,
     // Phone as a security key.
-    kCableActivate,
     kCableV2QRCode,
     kCableV2Connecting,
     kCableV2Connected,
@@ -273,7 +272,6 @@ struct AuthenticatorRequestDialogModel
     kGPMTouchID,
     // GPM passkey creation.
     kGPMCreatePasskey,
-    kGPMConfirmOffTheRecordCreate,
     kChromeProfileCreatePasskey,
     kGPMError,
     kGPMConnecting,
@@ -284,8 +282,6 @@ struct AuthenticatorRequestDialogModel
     // Changing GPM PIN.
     kGPMReauthForPinReset,
     kGPMLockedPin,
-    // ChallengeUrl failure.
-    kErrorFetchingChallenge,
     // OS authentication after selecting a password.
     kPasswordOsAuth,
     // The request is being dispatched to a platform authenticator.
@@ -381,14 +377,6 @@ struct AuthenticatorRequestDialogModel
     const base::RepeatingClosure callback;
   };
 
-  // CableUIType enumerates the different types of caBLE UI that we've ended
-  // up with.
-  enum class CableUIType {
-    CABLE_V1,
-    CABLE_V2_SERVER_LINK,
-    CABLE_V2_2ND_FACTOR,
-  };
-
   // Returns a user-friendly description for a |type|.
   static std::u16string GetMechanismDescription(
       const device::DiscoverableCredentialMetadata& cred,
@@ -417,7 +405,12 @@ struct AuthenticatorRequestDialogModel
   void RemoveObserver(AuthenticatorRequestDialogModel::Observer* observer);
 
   // Views and controllers add themselves as observers here to receive events.
-  base::ObserverList<Observer> observers;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers;
 
   // The primary state of the model is the current `Step`. It's important that
   // this always be changed via `SetStep` so the field isn't exposed directly.
@@ -493,14 +486,15 @@ struct AuthenticatorRequestDialogModel
   std::optional<int> uv_attempts;
   device::pin::PINEntryError pin_error = device::pin::PINEntryError::kNoError;
 
-  // cable_ui_type contains the type of UI to display for a caBLE transaction.
-  std::optional<CableUIType> cable_ui_type;
-
   std::optional<std::string> cable_qr_string;
 
   // Number of remaining GPM pin entry attempts before getting locked out or
   // `std::nullopt` if there was no failed attempts during that request.
   std::optional<int> gpm_pin_remaining_attempts_;
+
+  // True if GPM passkey creation is available has been disabled by enterprise
+  // policy or Chrome settings.
+  bool gpm_create_available_but_disabled_by_policy = false;
 
   // Whether the UI is currently in a disabled state, which is required for some
   // transitions (e.g. when waiting for the response from the enclave). When

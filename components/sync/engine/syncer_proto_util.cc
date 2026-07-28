@@ -238,8 +238,10 @@ void ProcessClientCommand(const sync_pb::ClientCommand& command,
 }  // namespace
 
 DataTypeSet GetTypesToMigrate(const ClientToServerResponse& response) {
-  return GetDataTypeSetFromSpecificsFieldNumberList(
+  DataTypeSet types = GetDataTypeSetFromSpecificsFieldNumberList(
       response.migrated_data_type_id());
+  types.Remove(NIGORI);
+  return types;
 }
 
 SyncProtocolError ConvertErrorPBToSyncProtocolError(
@@ -564,9 +566,8 @@ std::string SyncerProtoUtil::SyncEntityDebugString(
       "name: %s, "
       "d, "
       "%s ",
-      entry.id_string().c_str(), entry.parent_id_string().c_str(),
-      entry.version(), entry.mtime(), mtime_str.c_str(), entry.ctime(),
-      ctime_str.c_str(), entry.name().c_str(),
+      entry.id_string(), entry.parent_id_string(), entry.version(),
+      entry.mtime(), mtime_str, entry.ctime(), ctime_str, entry.name(),
       entry.deleted() ? "deleted, " : "");
 }
 

@@ -154,20 +154,20 @@ export class CrTextareaElement extends PolymerElement {
     };
   }
 
-  override autofocus: boolean;
-  disabled: boolean;
-  readonly: boolean;
-  required: boolean;
-  maxlength: number;
-  rows: number;
-  label: string;
-  value: string;
-  placeholder: string;
-  autogrow: boolean;
-  hasMaxHeight: boolean;
-  invalid: boolean;
-  firstFooter: string;
-  secondFooter: string;
+  declare autofocus: boolean;
+  declare disabled: boolean;
+  declare readonly: boolean;
+  declare required: boolean;
+  declare maxlength: number;
+  declare rows: number;
+  declare label: string;
+  declare value: string;
+  declare placeholder: string;
+  declare autogrow: boolean;
+  declare hasMaxHeight: boolean;
+  declare invalid: boolean;
+  declare firstFooter: string;
+  declare secondFooter: string;
 
   focusInput() {
     this.$.input.focus();
@@ -178,12 +178,12 @@ export class CrTextareaElement extends PolymerElement {
    * This function helps propagate it to host since change events don't
    * propagate across Shadow DOM boundary by default.
    */
-  private onInputChange_(e: Event) {
+  protected onInputChange_(e: Event) {
     this.dispatchEvent(new CustomEvent(
         'change', {bubbles: true, composed: true, detail: {sourceEvent: e}}));
   }
 
-  private calculateMirror_(): string {
+  protected calculateMirror_(): string {
     if (!this.autogrow) {
       return '';
     }
@@ -197,7 +197,7 @@ export class CrTextareaElement extends PolymerElement {
     return tokens.join('\n') + '&nbsp;';
   }
 
-  private onInputFocusChange_() {
+  protected onInputFocusChange_() {
     // focused_ is used instead of :focus-within, so focus on elements within
     // the suffix slot does not trigger a change in input styles.
     if (this.shadowRoot!.activeElement === this.$.input) {
@@ -207,11 +207,11 @@ export class CrTextareaElement extends PolymerElement {
     }
   }
 
-  private onDisabledChanged_() {
+  protected onDisabledChanged_() {
     this.setAttribute('aria-disabled', this.disabled ? 'true' : 'false');
   }
 
-  private getFooterAria_(): string {
+  protected getFooterAria_(): string {
     return this.invalid ? 'assertive' : 'polite';
   }
 }

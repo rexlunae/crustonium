@@ -6,8 +6,18 @@
 
 namespace skills {
 
+bool SkillsService::Observer::Require1PSkillRefresh() {
+  return false;
+}
+
 SkillsService::SkillsService() = default;
 
 SkillsService::~SkillsService() = default;
+
+// static
+bool SkillsService::IsValidSkillImageUrl(const GURL& gurl) {
+  return gurl.is_valid() && gurl.DomainIs("gstatic.com") &&
+         (gurl.SchemeIs(url::kHttpsScheme) || gurl.SchemeIs(url::kHttpScheme));
+}
 
 }  // namespace skills

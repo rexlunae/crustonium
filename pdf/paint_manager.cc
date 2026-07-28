@@ -20,11 +20,14 @@
 #include "base/location.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "pdf/paint_manager_simd.h"
 #include "pdf/paint_ready_rect.h"
 #include "pdf/pdf_features.h"
+#include "third_party/skia/include/core/SkAlphaType.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
@@ -126,36 +129,52 @@ void PaintManager::BufferFinishedOnMainThread(
   }
 }
 
-void PaintManager::SetSize(const gfx::Size& new_size, float device_scale) {
+void PaintManager::SetSize(const gfx::Size& new_size,
+                           float device_scale,
+                           SkAlphaType alpha_type) {
   if (GetEffectiveSize() == new_size &&
-      GetEffectiveDeviceScale() == device_scale) {
+      GetEffectiveDeviceScale() == device_scale &&
+      image_info_.alphaType() == alpha_type) {
     return;
   }
 
   if (base::FeatureList::IsEnabled(features::kPdfBufferedPaintManager)) {
-    gfx::Size new_new_size = GetNewContextSize(plugin_size_, new_size);
-    image_info_ =
-        SkImageInfo::MakeN32Premul(new_new_size.width(), new_new_size.height());
+    gfx::Size old_image_size = gfx::SkISizeToSize(image_info_.dimensions());
+    gfx::Size padded_new_size = GetNewContextSize(old_image_size, new_size);
+    static_assert(SkColorType::kN32_SkColorType ==
+                  SkColorType::kBGRA_8888_SkColorType);
+
     plugin_size_ = new_size;
     device_scale_ = device_scale;
-    weak_factory_.InvalidateWeakPtrs();
-    manual_callback_pending_ = false;
 
-    // Return the old `engine_buffer_` if it exists. If the old buffer fits the
-    // new data, this is a no-op, as the next GetBuffer() call will return the
-    // same buffer.
-    if (engine_buffer_) {
-      BufferFinishedOnMainThread(std::move(engine_buffer_));
+    if (old_image_size != padded_new_size ||
+        image_info_.alphaType() != alpha_type || !engine_buffer_) {
+      image_info_ = SkImageInfo::MakeN32(padded_new_size.width(),
+                                         padded_new_size.height(), alpha_type);
+      weak_factory_.InvalidateWeakPtrs();
+      manual_callback_pending_ = false;
+
+      // Free the old `engine_buffer_` if it exists. If the old buffer fits the
+      // new data, this is a no-op, as the next GetBuffer() call will return the
+      // same buffer.
+      if (engine_buffer_) {
+        BufferFinishedOnMainThread(std::move(engine_buffer_));
+      }
+      if (draw_buffer_) {
+        BufferFinishedOnMainThread(std::move(draw_buffer_));
+      }
+      surface_.reset();
+      engine_buffer_ = GetBuffer();
+      engine_bitmap_ =
+          client_->InstallBuffer(image_info_, engine_buffer_->allocation);
+
+      previous_frame_.reset();
+      flush_pending_ = false;
     }
-    engine_buffer_ = GetBuffer();
-    engine_bitmap_ =
-        client_->InstallBuffer(image_info_, engine_buffer_->allocation.data());
 
     client_->UpdateScale(1.0f / device_scale_);
 
     view_size_changed_waiting_for_paint_ = true;
-    previous_frame_.reset();
-    flush_pending_ = false;
     aggregator_.InvalidateRect(gfx::Rect(new_size));
     EnsureCallbackPending();
   } else {
@@ -475,15 +494,16 @@ void PaintManager::DoPaint() {
       skia_rect.intersect(
           SkRect::MakeWH(surface_->width(), surface_->height()));
 
-      // Directly `memcpy` the memory from the engine bitmap into the surfact
-      // pixmap, making sure to do it line by line because GetNewContextSize()
-      // adds padding (which leads to them having a different rowBytes() value).
+      // Copy (possibly with blending into the white page background) the memory
+      // from the engine bitmap into the surfact pixmap, making sure to do it
+      // line by line because GetNewContextSize() adds padding (which leads to
+      // them having a different rowBytes() value).
       //
-      // SAFETY: We do a bounds check before performing the `memcpy`. We are
-      // forced into doing this because pdfium directly modifies the pixmap
-      // rather than using skia as outlined below. These objects share an
-      // image_info_, and so the memcpy can directly copy the binary without
-      // translating color spaces.
+      // SAFETY: We do a bounds check before performing the copy. We are forced
+      // into doing this because pdfium directly modifies the pixmap rather than
+      // using skia as outlined below. These objects share an `image_info_`, and
+      // so no color space translation needs to be done, though blending with
+      // white may be required, depending.
       //
       // There is no Skia-supported way to copy directly a subset of a pixmap to
       // another pixmap or from a pixmap to a canvas. For some reason,
@@ -495,26 +515,47 @@ void PaintManager::DoPaint() {
       // something we can't do for performance reasons.
       SkPixmap draw_pixmap;
       CHECK(surface_->getCanvas()->peekPixels(&draw_pixmap));
-      for (int i = 0; i < skia_rect.height(); ++i) {
+      // Should be some kind of BGRx. The blending algorithm implemented below
+      // will not work if the alpha channel isn't in the MSB or if there are
+      // more than 8 bits per channel.
+      CHECK_EQ(image_info_.bytesPerPixel(), 4);
+      size_t copy_size = skia_rect.width() * image_info_.bytesPerPixel();
+      for (int row_i = 0; row_i < skia_rect.height(); ++row_i) {
         size_t curr_engine_offset = image_info_.computeOffset(
-            skia_rect.x(), skia_rect.y() + i, engine_bitmap_->rowBytes());
+            skia_rect.x(), skia_rect.y() + row_i, engine_bitmap_->rowBytes());
         size_t curr_draw_offset = image_info_.computeOffset(
-            skia_rect.x(), skia_rect.y() + i, draw_pixmap.rowBytes());
-        size_t copy_size = skia_rect.width() * image_info_.bytesPerPixel();
-        UNSAFE_BUFFERS(
-            uint8_t* src_ptr =
-                engine_buffer_->allocation.data() + curr_engine_offset;
-            uint8_t* dest_ptr =
-                draw_buffer_->allocation.data() + curr_draw_offset;
-            CHECK_GE(src_ptr, engine_buffer_->allocation.data());
+            skia_rect.x(), skia_rect.y() + row_i, draw_pixmap.rowBytes());
+        UNSAFE_BUFFERS({
+          uint8_t* src_ptr =
+              engine_buffer_->allocation.data() + curr_engine_offset;
+          uint8_t* dest_ptr =
+              draw_buffer_->allocation.data() + curr_draw_offset;
+          CHECK_GE(src_ptr, engine_buffer_->allocation.data());
+          CHECK_LE(src_ptr + copy_size, engine_buffer_->allocation.data() +
+                                            engine_buffer_->allocation.size());
+          CHECK_GE(dest_ptr, draw_buffer_->allocation.data());
+          CHECK_LE(dest_ptr + copy_size, draw_buffer_->allocation.data() +
+                                             draw_buffer_->allocation.size());
 
-            CHECK_LE(src_ptr + copy_size,
-                     engine_buffer_->allocation.data() +
-                         engine_buffer_->allocation.size());
-            CHECK_GE(dest_ptr, draw_buffer_->allocation.data());
-            CHECK_LE(dest_ptr + copy_size, draw_buffer_->allocation.data() +
-                                               draw_buffer_->allocation.size());
-            memcpy(dest_ptr, src_ptr, copy_size););
+          // Depending on the alpha type of the image, it may need to be
+          // blended with white. There is no blending with previous frames.
+          switch (image_info_.alphaType()) {
+            case kOpaque_SkAlphaType:
+              memcpy(dest_ptr, src_ptr, copy_size);
+              break;
+
+            case kUnpremul_SkAlphaType:
+              NonPremulBlend(src_ptr, dest_ptr, skia_rect.width());
+              break;
+
+            case kPremul_SkAlphaType:
+              PremulBlend(src_ptr, dest_ptr, skia_rect.width());
+              break;
+
+            default:
+              NOTREACHED();
+          }
+        });
       }
     }
 

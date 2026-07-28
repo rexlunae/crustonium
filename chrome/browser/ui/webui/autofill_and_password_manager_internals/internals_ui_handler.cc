@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/webui/autofill_and_password_manager_internals/internals_ui_handler.h"
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <optional>
 #include <utility>
 
@@ -21,6 +22,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/channel_info.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/autofill/core/browser/at_memory/at_memory_enablement_utils.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -31,6 +33,9 @@
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/grit/autofill_and_password_manager_internals_resources.h"
 #include "components/grit/autofill_and_password_manager_internals_resources_map.h"
+#include "components/password_manager/content/browser/content_password_manager_driver_factory.h"
+#include "components/password_manager/core/browser/password_change_service_interface.h"
+#include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
@@ -41,6 +46,7 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "url/gurl.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
@@ -48,8 +54,6 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #endif
-
-using autofill::LogRouter;
 
 namespace autofill {
 
@@ -141,6 +145,10 @@ void InternalsUIHandler::RegisterMessages() {
       "removeAutofillAiCacheEntry",
       base::BindRepeating(&InternalsUIHandler::OnDeleteAutofillAiCacheEntry,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "checkAtMemoryPermissions",
+      base::BindRepeating(&InternalsUIHandler::CheckAtMemoryPermissions,
+                          base::Unretained(this)));
 #if !BUILDFLAG(IS_ANDROID)
   web_ui()->RegisterMessageCallback(
       "checkAutofillAiPermissions",
@@ -150,6 +158,10 @@ void InternalsUIHandler::RegisterMessages() {
       "setDomNodeId", base::BindRepeating(&InternalsUIHandler::SetDomNodeId,
                                           base::Unretained(this)));
 #endif
+  web_ui()->RegisterMessageCallback(
+      "setPasswordChangeOverrideUrl",
+      base::BindRepeating(&InternalsUIHandler::OnSetPasswordChangeOverrideUrl,
+                          base::Unretained(this)));
 }
 
 void InternalsUIHandler::OnJavascriptAllowed() {
@@ -198,9 +210,9 @@ void InternalsUIHandler::OnGetAutofillAiCache(const base::ListValue& args) {
               .Set("rank",
                    base::NumberToString(
                        field_identifier.field_rank_in_signature_group()))
-              .Set("type",
-                   FieldTypeToStringView(ToSafeFieldType(
-                       field_response.field_type(), autofill::UNKNOWN_TYPE)));
+              .Set("type", FieldTypeToStringView(
+                               ToSafeFieldType(field_response.field_type())
+                                   .value_or(UNKNOWN_TYPE)));
       if (!field_response.formatting_meta().empty()) {
         field_info.Set("format", field_response.formatting_meta());
       }
@@ -262,15 +274,78 @@ void InternalsUIHandler::OnDumpAddresses(const base::ListValue& args) {
   }
 }
 
+void InternalsUIHandler::CheckAtMemoryPermissions(const base::ListValue& args) {
+  if (args.size() < 1 || !args[0].is_string()) {
+    return;
+  }
+  std::optional<AtMemoryAction> action;
+  const std::string& action_str = args[0].GetString();
+  // LINT.IfChange(AtMemoryAction)
+  if (action_str == "kTriggerSearchUI") {
+    action = AtMemoryAction::kTriggerSearchUI;
+  } else if (action_str == "kShowAtMemoryInSettings") {
+    action = AtMemoryAction::kShowAtMemoryInSettings;
+  } else if (action_str == "kAllowCustomizeAtMemoryShortcut") {
+    action = AtMemoryAction::kAllowCustomizeAtMemoryShortcut;
+  } else if (action_str == "kShowIph") {
+    action = AtMemoryAction::kShowIph;
+  } else if (action_str == "kShowAutocompleteAtMemoryButton") {
+    action = AtMemoryAction::kShowAutocompleteAtMemoryButton;
+  } else if (action_str == "kRetrievePaymentsForFilling") {
+    action = AtMemoryAction::kRetrievePaymentsForFilling;
+  } else if (action_str == "kRetrieveContactInfoForFilling") {
+    action = AtMemoryAction::kRetrieveContactInfoForFilling;
+  } else if (action_str == "kRetrieveIdentityDocsForFilling") {
+    action = AtMemoryAction::kRetrieveIdentityDocsForFilling;
+  } else if (action_str == "kRetrieveTravelDataForFilling") {
+    action = AtMemoryAction::kRetrieveTravelDataForFilling;
+  } else if (action_str == "kRetrieveShoppingDataForFilling") {
+    action = AtMemoryAction::kRetrieveShoppingDataForFilling;
+  }
+  // LINT.ThenChange(/components/autofill/core/browser/at_memory/at_memory_enablement_utils.h:AtMemoryAction)
+  if (!action.has_value()) {
+    return;
+  }
+
+  std::optional<GURL> url;
+  if (args.size() >= 2 && args[1].is_string() && !args[1].GetString().empty()) {
+    GURL parsed_url(args[1].GetString());
+    if (parsed_url.is_valid()) {
+      url = std::move(parsed_url);
+    }
+  }
+
+  ContentAutofillClient& client = CHECK_DEREF(
+      ContentAutofillClient::FromWebContents(web_ui()->GetWebContents()));
+  std::string debug_message;
+  const auto sources =
+      std::to_array({MemoryEntrySource{MemoryEntrySourceType::kAutofill}});
+  std::optional<RetrieveForFillingParams> retrieve_params;
+  if (IsRetrieveForFillingAction(*action)) {
+    retrieve_params =
+        RetrieveForFillingParams{.is_spii = false,
+                                 .sources = sources,
+                                 .is_context_secure = client.IsContextSecure()};
+  }
+
+  const bool may_perform = MayPerformAtMemoryAction(
+      *action, client, url, retrieve_params, &debug_message);
+  FireWebUIListener(
+      "on-at-memory-permission-check-done",
+      base::Value(may_perform
+                      ? "AtMemory action is allowed"
+                      : base::StrCat({"AtMemory action is not allowed: ",
+                                      debug_message})));
+}
+
 #if !BUILDFLAG(IS_ANDROID)
 void InternalsUIHandler::CheckAutofillAiPermissions(
     const base::ListValue& args) {
   std::string debug_message;
-  const bool may_opt_in = autofill::MayPerformAutofillAiAction(
-      CHECK_DEREF(autofill::ContentAutofillClient::FromWebContents(
-          web_ui()->GetWebContents())),
-      autofill::AutofillAiAction::kOptIn, /*entity_type=*/std::nullopt,
-      &debug_message);
+  const bool may_opt_in = MayPerformAutofillAiAction(
+      CHECK_DEREF(
+          ContentAutofillClient::FromWebContents(web_ui()->GetWebContents())),
+      AutofillAiAction::kOptIn, /*entity_type=*/std::nullopt, &debug_message);
   FireWebUIListener(
       "on-autofill-ai-permission-check-done",
       base::Value(
@@ -287,9 +362,8 @@ void InternalsUIHandler::SetDomNodeId(const base::ListValue& args) {
 
     for (int i = 0; i < browser->GetTabStripModel()->count(); i++) {
       auto* web_contents = browser->GetTabStripModel()->GetWebContentsAt(i);
-      autofill::AutofillDriver* driver =
-          ContentAutofillDriver::GetForRenderFrameHost(
-              web_contents->GetPrimaryMainFrame());
+      AutofillDriver* driver = ContentAutofillDriver::GetForRenderFrameHost(
+          web_contents->GetPrimaryMainFrame());
       if (driver) {
         driver->ExposeDomNodeIdsInAllFrames();
       }
@@ -318,6 +392,27 @@ void InternalsUIHandler::EndSubscription() {
       get_log_router_function_.Run(Profile::FromWebUI(web_ui()));
   if (log_router) {
     log_router->UnregisterReceiver(this);
+  }
+}
+
+void InternalsUIHandler::OnSetPasswordChangeOverrideUrl(
+    const base::ListValue& args) {
+  if (args.size() != 1 || !args[0].is_string()) {
+    return;
+  }
+  password_manager::ContentPasswordManagerDriverFactory* factory =
+      password_manager::ContentPasswordManagerDriverFactory::FromWebContents(
+          web_ui()->GetWebContents());
+  if (factory) {
+    password_manager::PasswordManagerClient* client =
+        factory->password_client();
+    if (client) {
+      password_manager::PasswordChangeServiceInterface* service =
+          client->GetPasswordChangeService();
+      if (service) {
+        service->AddChangePasswordUrlOverride(GURL(args[0].GetString()));
+      }
+    }
   }
 }
 

@@ -42,6 +42,7 @@
 #include "services/network/public/mojom/parsed_headers.mojom-blink-forward.h"
 #include "services/network/public/mojom/sri_message_signature.mojom-blink-forward.h"
 #include "services/network/public/mojom/timing_allow_origin.mojom-blink.h"
+#include "services/network/public/mojom/unencoded_digest.mojom-blink-forward.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_response_headers.h"
 #include "third_party/blink/renderer/platform/network/parsed_content_type.h"
 #include "third_party/blink/renderer/platform/network/server_timing_header.h"
@@ -65,7 +66,8 @@ enum ContentTypeOptionsDisposition {
   kContentTypeOptionsNosniff
 };
 
-using CommaDelimitedHeaderSet = HashSet<String, CaseFoldingHashTraits<String>>;
+using CommaDelimitedHeaderSet =
+    HashSet<String, DeprecatedCaseFoldingHashTraits<String>>;
 
 struct CacheControlHeader {
   DISALLOW_NEW();
@@ -90,10 +92,10 @@ PLATFORM_EXPORT bool IsValidHTTPHeaderValue(const String&);
 // Checks whether the given string conforms to the |token| ABNF production
 // defined in the RFC 7230 or not.
 //
-// The ABNF is for validating octets, but this method takes a String instance
-// for convenience which consists of Unicode code points. When this method sees
-// non-ASCII characters, it just returns false.
-PLATFORM_EXPORT bool IsValidHTTPToken(const String&);
+// The ABNF is for validating octets, but this method takes a StringView
+// instance for convenience which consists of Unicode code points. When this
+// method sees non-ASCII characters, it just returns false.
+PLATFORM_EXPORT bool IsValidHTTPToken(const StringView&);
 // |matcher| specifies a function to check a whitespace character. if |nullptr|
 // is specified, ' ' and '\t' are treated as whitespace characters.
 PLATFORM_EXPORT bool ParseHTTPRefresh(const String& refresh,
@@ -186,11 +188,20 @@ Vector<network::mojom::blink::ContentSecurityPolicyPtr>
 ParseContentSecurityPolicyHeaders(
     const ContentSecurityPolicyResponseHeaders& headers);
 
+// Parses an allowed-origins expression into a CSPSourceList using blink types.
+PLATFORM_EXPORT
+network::mojom::blink::CSPSourceListPtr ParseAllowedOrigins(
+    const String& raw_value);
+
 // Parses SRI-relevant HTTP Message Signature headers. This wraps
 // network::ParseSRIMessageSignaturesFromHeaders with blink types.
 PLATFORM_EXPORT
 network::mojom::blink::SRIMessageSignaturesPtr
 ParseSRIMessageSignaturesFromHeaders(const String& raw_headers);
+
+PLATFORM_EXPORT
+network::mojom::blink::UnencodedDigestsPtr ParseUnencodedDigestsFromHeaders(
+    const String& raw_headers);
 
 PLATFORM_EXPORT
 network::mojom::blink::TimingAllowOriginPtr ParseTimingAllowOrigin(
@@ -203,6 +214,14 @@ network::mojom::blink::NoVarySearchWithParseErrorPtr ParseNoVarySearch(
 PLATFORM_EXPORT
 String GetNoVarySearchHintConsoleMessage(
     const network::mojom::NoVarySearchParseError& error);
+
+// Returns true if `url1` and `url2` are equivalent under the given
+// No-Vary-Search hint (i.e. they only differ by query parameters that the
+// hint says should be ignored). `no_vary_search` must be non-null.
+PLATFORM_EXPORT bool AreUrlsEquivalentUnderNoVarySearch(
+    const KURL& url1,
+    const KURL& url2,
+    const network::mojom::blink::NoVarySearchPtr& no_vary_search);
 }  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_NETWORK_HTTP_PARSERS_H_

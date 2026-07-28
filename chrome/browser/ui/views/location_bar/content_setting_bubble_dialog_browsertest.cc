@@ -4,9 +4,7 @@
 
 #include "base/auto_reset.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -20,9 +18,7 @@
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
-#include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -34,7 +30,6 @@
 #include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/test/content_settings_mock_provider.h"
 #include "components/content_settings/core/test/content_settings_test_utils.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/prediction_service/permission_ui_selector.h"
 #include "components/permissions/request_type.h"
@@ -45,10 +40,6 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
-#include "ui/events/event.h"
-#include "ui/events/event_constants.h"
-#include "ui/views/view.h"
-#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace {
@@ -63,7 +54,9 @@ class TestPopupNavigationDelegate : public ChromePopupNavigationDelegate {
   using ChromePopupNavigationDelegate::ChromePopupNavigationDelegate;
 
   // ChromePopupNavigationDelegate:
-  GURL GetURL() override { return GURL("http://blocked-popup/"); }
+  GURL GetURL() override {
+    return GURL("https://sub.blocked-popup-domain.com/path");
+  }
 };
 
 std::unique_ptr<blocked_content::PopupNavigationDelegate>
@@ -122,7 +115,7 @@ void ContentSettingBubbleDialogTest::ApplyMediastreamSettings(
 
   GURL last_committed_url = web_contents->GetLastCommittedURL();
   // Default opt-in for camera PTZ permission to current tab.
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetContentSettingDefaultScope(last_committed_url, GURL(),
                                       ContentSettingsType::CAMERA_PAN_TILT_ZOOM,
                                       CONTENT_SETTING_ASK);
@@ -194,7 +187,7 @@ void ContentSettingBubbleDialogTest::ApplyContentSettingsForType(
       break;
   }
   OverrideContentSettingsProvider({content_type});
-  browser()->window()->UpdateToolbar(web_contents);
+  BrowserWindow::FromBrowser(browser())->UpdateToolbar(web_contents);
 }
 
 void ContentSettingBubbleDialogTest::TriggerQuietNotificationPermissionRequest(
@@ -219,7 +212,7 @@ void ContentSettingBubbleDialogTest::OverrideContentSettingsProvider(
     const std::vector<ContentSettingsType>& types) {
   auto provider = std::make_unique<content_settings::MockProvider>();
   HostContentSettingsMap* map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
   // All settings should have a default value defined.
   if (GetParam() == content_settings::ProviderType::kDefaultProvider) {
@@ -258,7 +251,9 @@ void ContentSettingBubbleDialogTest::NavigateToContentTab() {
 void ContentSettingBubbleDialogTest::ShowDialogBubble(
     ContentSettingImageModel::ImageType image_type) {
   LocationBarTesting* location_bar_testing =
-      browser()->window()->GetLocationBar()->GetLocationBarForTesting();
+      BrowserWindow::FromBrowser(browser())
+          ->GetLocationBar()
+          ->GetLocationBarForTesting();
   EXPECT_TRUE(location_bar_testing->TestContentSettingImagePressed(
       ContentSettingImageModel::GetContentSettingImageModelIndexForTesting(
           image_type)));
@@ -282,7 +277,7 @@ void ContentSettingBubbleDialogTest::ShowUi(const std::string& name) {
     }
     OverrideContentSettingsProvider(types);
     ApplyMediastreamSettings(apply_mic_settings, apply_camera_settings);
-    ShowDialogBubble(ImageType::MEDIASTREAM);
+    ShowDialogBubble(ImageType::kMediaStream);
     return;
   }
 
@@ -304,7 +299,7 @@ void ContentSettingBubbleDialogTest::ShowUi(const std::string& name) {
       reason = QuietUiReason::kServicePredictedVeryUnlikelyGrant;
     }
     TriggerQuietNotificationPermissionRequest(reason);
-    ShowDialogBubble(ImageType::NOTIFICATIONS);
+    ShowDialogBubble(ImageType::kNotifications);
     return;
   }
 
@@ -313,21 +308,22 @@ void ContentSettingBubbleDialogTest::ShowUi(const std::string& name) {
     ContentSettingsType content_type;
     ContentSettingImageModel::ImageType image_type;
   } content_settings_values[] = {
-      {"cookies", ContentSettingsType::COOKIES, ImageType::COOKIES},
-      {"images", ContentSettingsType::IMAGES, ImageType::IMAGES},
-      {"javascript", ContentSettingsType::JAVASCRIPT, ImageType::JAVASCRIPT},
-      {"popups", ContentSettingsType::POPUPS, ImageType::POPUPS},
-      {"geolocation", ContentSettingsType::GEOLOCATION, ImageType::GEOLOCATION},
+      {"cookies", ContentSettingsType::COOKIES, ImageType::kCookies},
+      {"images", ContentSettingsType::IMAGES, ImageType::kImages},
+      {"javascript", ContentSettingsType::JAVASCRIPT, ImageType::kJavaScript},
+      {"popups", ContentSettingsType::POPUPS, ImageType::kPopups},
+      {"geolocation", ContentSettingsType::GEOLOCATION,
+       ImageType::kGeolocation},
       {"mixed_script", ContentSettingsType::MIXEDSCRIPT,
-       ImageType::MIXEDSCRIPT},
+       ImageType::kMixedScript},
       {"protocol_handlers", ContentSettingsType::PROTOCOL_HANDLERS,
-       ImageType::PROTOCOL_HANDLERS},
+       ImageType::kProtocolHandlers},
       {"automatic_downloads", ContentSettingsType::AUTOMATIC_DOWNLOADS,
-       ImageType::AUTOMATIC_DOWNLOADS},
-      {"midi_sysex", ContentSettingsType::MIDI_SYSEX, ImageType::MIDI_SYSEX},
-      {"ads", ContentSettingsType::ADS, ImageType::ADS},
+       ImageType::kAutomaticDownloads},
+      {"midi_sysex", ContentSettingsType::MIDI_SYSEX, ImageType::kMidiSysex},
+      {"ads", ContentSettingsType::ADS, ImageType::kAds},
       {"storage_access", ContentSettingsType::STORAGE_ACCESS,
-       ImageType::STORAGE_ACCESS},
+       ImageType::kStorageAccess},
   };
   for (auto content_settings : content_settings_values) {
     if (base::StartsWith(name, content_settings.name,

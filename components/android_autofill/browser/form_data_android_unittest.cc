@@ -28,10 +28,12 @@
 namespace autofill {
 namespace {
 
+using ::autofill::test::FormDataEq;
 using ::testing::_;
 using ::testing::Eq;
 using ::testing::InSequence;
 using ::testing::MockFunction;
+using ::testing::Not;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 
@@ -122,10 +124,10 @@ TEST_F(FormDataAndroidTest, Form) {
   FormData form = CreateTestForm();
   FormDataAndroid form_android(form, kSampleSessionId);
 
-  EXPECT_EQ(form_android.form(), form);
+  EXPECT_THAT(form_android.form(), FormDataEq(form));
 
   form.set_name(form.name() + u"x");
-  EXPECT_NE(form_android.form(), form);
+  EXPECT_THAT(form_android.form(), Not(FormDataEq(form)));
 }
 
 // Tests that form similarity checks include name, name_attribute, id_attribute,
@@ -194,21 +196,6 @@ TEST_F(FormDataAndroidTest, SimilarFormAs_Fields) {
   f = af.form();
   test_api(f).field(0).set_name(f.fields().front().name() + u"x");
   EXPECT_FALSE(af.SimilarFormAs(f));
-}
-
-TEST_F(FormDataAndroidTest, GetFieldIndex) {
-  FormData f = CreateTestForm();
-  f.set_fields({CreateTestField(u"name1"), CreateTestField(u"name2")});
-  FormDataAndroid af(f, kSampleSessionId);
-
-  size_t index = 100;
-  EXPECT_TRUE(af.GetFieldIndex(f.fields()[1], &index));
-  EXPECT_EQ(index, 1u);
-
-  // As updates in `f` are not propagated to the Android version `af`, the
-  // lookup fails.
-  test_api(f).field(1).set_name(u"name3");
-  EXPECT_FALSE(af.GetFieldIndex(f.fields()[1], &index));
 }
 
 // Tests that `GetSimilarFieldIndex` only checks field similarity.
@@ -359,7 +346,7 @@ TEST_F(FormDataAndroidTest, UpdateFieldVisibilities) {
   EXPECT_CALL(*field_bridges()[2], UpdateFocusable).Times(0);
   form_android.UpdateFieldVisibilities(form);
 
-  EXPECT_EQ(form_android.form(), form);
+  EXPECT_THAT(form_android.form(), FormDataEq(form));
 }
 
 // Tests that `GetJavaPeer` passes the correct `FormData`, `SessionId` and

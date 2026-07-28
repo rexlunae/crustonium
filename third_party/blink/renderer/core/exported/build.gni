@@ -31,6 +31,7 @@ blink_core_sources_exported = [
   "web_history_item.cc",
   "web_hit_test_result.cc",
   "web_image.cc",
+  "web_image_replacement.cc",
   "web_image_cache.cc",
   "web_input_element.cc",
   "web_input_method_controller_impl.cc",
@@ -74,6 +75,7 @@ blink_core_sources_exported = [
   "web_view_impl.cc",
   "web_view_impl.h",
   "web_view_observer.cc",
+  "web_spelling_marker.cc",
 ]
 
 blink_core_tests_exported = [
@@ -91,13 +93,13 @@ blink_core_tests_exported = [
   "web_frame_serializer_test_helper.h",
   "web_image_test.cc",
   "web_meaningful_layouts_test.cc",
-  "web_link_preview_triggerer_test.cc",
   "web_node_test.cc",
   "web_plugin_container_test.cc",
   "web_range_test.cc",
   "web_scoped_window_focus_allowed_indicator_test.cc",
   "web_searchable_form_data_test.cc",
   "web_selector_test.cc",
+  "web_serialized_script_value_test.cc",
   "web_view_impl_test.cc",
   "web_view_test.cc",
 ]

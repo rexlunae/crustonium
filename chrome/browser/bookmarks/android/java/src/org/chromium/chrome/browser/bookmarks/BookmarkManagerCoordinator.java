@@ -64,6 +64,7 @@ import org.chromium.components.image_fetcher.ImageFetcherFactory;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.Clipboard;
+import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -106,7 +107,7 @@ public class BookmarkManagerCoordinator
             // fade animation. Theoretically we could clear it and let the RecyclerView continue
             // normally, but it seems sometimes this is called after bind, and the transient
             // state is really just the fade in animation of the new content. For more details
-            // see https://crbug.com/1496181. Instead, return true to tell the RecyclerView to
+            // see https://crbug.com/40075653. Instead, return true to tell the RecyclerView to
             // reuse the view regardless. The view binding code should be robust enough to
             // handle an in progress animation anyway.
             return true;
@@ -204,8 +205,7 @@ public class BookmarkManagerCoordinator
         DragTouchHandler dragTouchHandler = new DragTouchHandler(mContext, mModelList);
 
         // Disable the default long press so that our custom one can be used.
-        dragTouchHandler.setDefaultLongPressDragEnabled(
-                !ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled());
+        dragTouchHandler.setDefaultLongPressDragEnabled(false);
 
         DragReorderableRecyclerViewAdapter dragReorderableRecyclerViewAdapter =
                 new DragAndCancelAdapter(activity, mModelList, dragTouchHandler);
@@ -304,8 +304,8 @@ public class BookmarkManagerCoordinator
                         mProfile.getOriginalProfile(),
                         activityResultTracker,
                         SigninAndHistorySyncActivityLauncherImpl.get(),
-                        bottomSheetControllerSupplier.get(),
-                        ObservableSuppliers.createNonNull(mModalDialogManager),
+                        bottomSheetControllerSupplier,
+                        mModalDialogManager,
                         snackbarManager,
                         DeviceLockActivityLauncherImpl.get(),
                         new BookmarkSigninPromoDelegate(
@@ -504,6 +504,24 @@ public class BookmarkManagerCoordinator
     View buildEmptyStateView(ViewGroup parent) {
         ViewGroup emptyStateView = (ViewGroup) inflate(parent, R.layout.empty_state_view);
         emptyStateView.setTouchscreenBlocksFocus(true);
+        // Adjust the empty state view height dynamically to fill the remaining space in the
+        // RecyclerView. Since R.layout.empty_state_view is a shared layout of height match_parent,
+        // displaying it alongside the search box in the RecyclerView would exceed the viewport
+        // height and cause the page to scroll unnecessarily.
+        emptyStateView.addOnLayoutChangeListener(
+                (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                    int parentHeight = parent.getHeight();
+                    int targetHeight = parentHeight - top - parent.getPaddingBottom();
+                    if (targetHeight > 0 && v.getLayoutParams().height != targetHeight) {
+                        v.getLayoutParams().height = targetHeight;
+                        v.post(
+                                () ->
+                                        ViewUtils.requestLayout(
+                                                v,
+                                                "BookmarkManagerCoordinator"
+                                                        + ".buildEmptyStateView"));
+                    }
+                });
         return emptyStateView;
     }
 
@@ -632,8 +650,6 @@ public class BookmarkManagerCoordinator
     @SuppressLint("ClickableViewAccessibility")
     private void bindDragProperties(
             RecyclerView.ViewHolder viewHolder, ItemTouchHelper itemTouchHelper) {
-        if (!ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled()) return;
-
         int position = viewHolder.getBindingAdapterPosition();
         if (position == RecyclerView.NO_POSITION) return;
 

@@ -12,6 +12,7 @@
 #include "base/command_line.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
@@ -236,6 +237,12 @@ class OzonePlatformWayland : public OzonePlatform,
     return connection_->xdg_decoration_manager_v1() == nullptr;
   }
 
+  void OnPreSandboxStartup() override {
+    // TODO(https://crbug.com/40083534): It may not be necessary to set this
+    // environment variable when using swiftshader.
+    setenv("EGL_PLATFORM", "wayland", 0);
+  }
+
   bool InitializeUI(const InitParams& args) override {
     if (ShouldFailInitializeUIForTest()) {
       LOG(ERROR) << "Failing for test";
@@ -359,10 +366,10 @@ class OzonePlatformWayland : public OzonePlatform,
       // arbitrary position.
       properties->supports_global_screen_coordinates = false;
 
-      // TODO(crbug.com/40800718): Revisit (and maybe remove) once proper
-      // support, probably backed by org.freedesktop.portal.Screenshot.PickColor
-      // API is implemented.
-      properties->supports_color_picker_dialog = false;
+      // Sever communicates a preferred drm device for chrome to both composite
+      // and decode video. This is a workaround to prevent decoding and
+      // compositing on different GPUs.
+      properties->webgpu_on_vulkan_via_gl_interop = true;
 
       initialised = true;
     }

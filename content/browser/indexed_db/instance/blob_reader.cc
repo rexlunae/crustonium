@@ -11,7 +11,9 @@
 
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/numerics/clamped_math.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/uuid.h"
 #include "content/browser/indexed_db/file_stream_reader_to_data_pipe.h"
@@ -29,12 +31,16 @@ void BlobReader::AsDataPipeGetter(
   data_pipe_getter_receivers_.Add(this, std::move(receiver));
 }
 
+uint64_t BlobReader::ClampReadLength(uint64_t offset, uint64_t length) const {
+  return base::ClampMin(length, base::ClampSub(blob_length_, offset));
+}
+
 void BlobReader::ReadRange(
     uint64_t offset,
     uint64_t length,
     mojo::ScopedDataPipeProducerHandle handle,
     mojo::PendingRemote<blink::mojom::BlobReaderClient> pending_client) {
-  uint64_t read_length = std::min(blob_length_, length);
+  uint64_t read_length = ClampReadLength(offset, length);
   mojo::Remote<blink::mojom::BlobReaderClient> client;
   if (pending_client) {
     client.Bind(std::move(pending_client));
@@ -42,9 +48,16 @@ void BlobReader::ReadRange(
   }
   OpenFileAndReadIntoPipe(
       file_path_, offset, read_length, std::move(handle),
-      client ? base::BindOnce(&blink::mojom::BlobReaderClient::OnComplete,
-                              std::move(client))
-             : base::DoNothing());
+      base::BindOnce(
+          [](base::OnceCallback<void(net::Error)> on_read_complete,
+             mojo::Remote<blink::mojom::BlobReaderClient> client,
+             net::Error result, uint64_t transferred_bytes) {
+            std::move(on_read_complete).Run(result);
+            if (client) {
+              client->OnComplete(result, transferred_bytes);
+            }
+          },
+          on_read_complete_, std::move(client)));
 }
 
 void BlobReader::ReadAll(
@@ -105,13 +118,15 @@ void BlobReader::Read(
     mojo::ScopedDataPipeProducerHandle pipe,
     storage::mojom::BlobDataItemReader::ReadCallback callback) {
   OpenFileAndReadIntoPipe(
-      file_path_, offset, length, std::move(pipe),
+      file_path_, offset, ClampReadLength(offset, length), std::move(pipe),
       base::BindOnce(
-          [](storage::mojom::BlobDataItemReader::ReadCallback callback,
-             int result, uint64_t /*transferred_bytes*/) {
+          [](base::OnceCallback<void(net::Error)> on_read_complete,
+             storage::mojom::BlobDataItemReader::ReadCallback callback,
+             net::Error result, uint64_t /*transferred_bytes*/) {
+            std::move(on_read_complete).Run(result);
             std::move(callback).Run(result);
           },
-          std::move(callback)));
+          on_read_complete_, std::move(callback)));
 }
 
 void BlobReader::ReadSideData(
@@ -120,13 +135,16 @@ void BlobReader::ReadSideData(
   std::move(callback).Run(net::ERR_NOT_IMPLEMENTED, mojo_base::BigBuffer());
 }
 
-BlobReader::BlobReader(const IndexedDBExternalObject& blob_info,
-                       base::OnceClosure on_last_receiver_disconnected)
+BlobReader::BlobReader(
+    const IndexedDBExternalObject& blob_info,
+    base::OnceClosure on_last_receiver_disconnected,
+    base::RepeatingCallback<void(net::Error)> on_read_complete)
     : uuid_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
       blob_length_(blob_info.size()),
       content_type_(base::UTF16ToUTF8(blob_info.type())),
       file_path_(blob_info.indexed_db_file_path()),
-      on_last_receiver_disconnected_(std::move(on_last_receiver_disconnected)) {
+      on_last_receiver_disconnected_(std::move(on_last_receiver_disconnected)),
+      on_read_complete_(std::move(on_read_complete)) {
   receivers_.set_disconnect_handler(base::BindRepeating(
       &BlobReader::OnMojoDisconnect, base::Unretained(this)));
   data_pipe_getter_receivers_.set_disconnect_handler(base::BindRepeating(

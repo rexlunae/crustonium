@@ -36,6 +36,10 @@ bool IsWithoutWellKnownEnforcementEnabled() {
       features::kFedCmWithoutWellKnownEnforcement);
 }
 
+bool IsWebIdentitySubdomainEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmWebIdentitySubdomain);
+}
+
 bool IsDigitalCredentialsEnabled() {
   return base::FeatureList::IsEnabled(features::kWebIdentityDigitalCredentials);
 }
@@ -52,10 +56,6 @@ bool IsSameSiteLaxEnabled() {
 
 bool IsLightweightModeEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmLightweightMode);
-}
-
-bool IsFedCmEmbedderCheckEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmEmbedderCheck);
 }
 
 bool IsAutofillEnabled() {
@@ -93,6 +93,14 @@ bool IsNavigationInterceptionEnabled() {
 
 bool IsEmbedderInitiatedLoginEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin);
+}
+
+bool IsFedCmAmbientUIEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmAmbientUI);
+}
+
+bool IsFedCmNativeIdPsEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmNativeIdPs);
 }
 
 }  // namespace content::webid

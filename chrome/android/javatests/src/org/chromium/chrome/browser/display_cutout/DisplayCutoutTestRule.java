@@ -75,6 +75,15 @@ public class DisplayCutoutTestRule<T extends ChromeActivity> extends ChromeActiv
             return new TestDisplayCutoutController(delegate);
         }
 
+        /**
+         * Creates a controller that observes the real {@link ActivityDisplayCutoutModeSupplier}
+         * attached to the activity's window instead of a test-supplied one.
+         */
+        public static TestDisplayCutoutController createWithRealBrowserCutoutSupplier(Tab tab) {
+            return new TestDisplayCutoutController(
+                    new DisplayCutoutTabHelper.ChromeDisplayCutoutDelegate(tab));
+        }
+
         private TestDisplayCutoutController(DisplayCutoutController.Delegate delegate) {
             super(delegate);
         }
@@ -146,8 +155,11 @@ public class DisplayCutoutTestRule<T extends ChromeActivity> extends ChromeActiv
     /** The {@link FullscreenManager.Observer} observing fullscreen mode. */
     private FullscreenManager.Observer mListener;
 
+    private final Class<T> mActivityClass;
+
     public DisplayCutoutTestRule(Class<T> activityClass) {
         super(activityClass);
+        mActivityClass = activityClass;
     }
 
     @Override
@@ -159,7 +171,7 @@ public class DisplayCutoutTestRule<T extends ChromeActivity> extends ChromeActiv
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    setDisplayCutoutController(TestDisplayCutoutController.create(mTab, null));
+                    setDisplayCutoutController(createDisplayCutoutController(mTab));
                     mListener = new FullscreenToggleObserver();
                     getActivity().getFullscreenManager().addObserver(mListener);
                 });
@@ -169,7 +181,12 @@ public class DisplayCutoutTestRule<T extends ChromeActivity> extends ChromeActiv
     protected void startActivity() {
         ChromeTabbedActivityTestRule rule = new ChromeTabbedActivityTestRule();
         rule.startMainActivityOnBlankPage();
-        setActivity((T) rule.getActivity());
+        setActivity(mActivityClass.cast(rule.getActivity()));
+    }
+
+    /** Creates the {@link TestDisplayCutoutController} used by this test. */
+    protected TestDisplayCutoutController createDisplayCutoutController(Tab tab) {
+        return TestDisplayCutoutController.create(tab, null);
     }
 
     @Override
@@ -227,6 +244,22 @@ public class DisplayCutoutTestRule<T extends ChromeActivity> extends ChromeActiv
                 () -> {
                     try {
                         Criteria.checkThat(getAppliedSafeArea(), Matchers.is(expected));
+                    } catch (TimeoutException ex) {
+                        throw new CriteriaNotSatisfiedException(ex);
+                    }
+                },
+                TEST_TIMEOUT,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+    }
+
+    /** Wait for the main frame to report a positive top safe-area inset. */
+    public void waitForSafeAreaTopInset() {
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    try {
+                        Criteria.checkThat(
+                                getAppliedSafeArea().top,
+                                Matchers.greaterThan(TEST_SAFE_AREA_WITHOUT_CUTOUT.top));
                     } catch (TimeoutException ex) {
                         throw new CriteriaNotSatisfiedException(ex);
                     }
@@ -312,7 +345,8 @@ public class DisplayCutoutTestRule<T extends ChromeActivity> extends ChromeActiv
 
         CriteriaHelper.pollUiThread(
                 () -> mIsTabFullscreen, TEST_TIMEOUT, CriteriaHelper.DEFAULT_POLLING_INTERVAL);
-        // A subsequently call to exitFullscreen() seems not to work without this, at least for android-13 emulators.
+        // A subsequently call to exitFullscreen() seems not to work without this, at least for
+        // android-13 emulators.
         TestThreadUtils.sleep(500);
     }
 }

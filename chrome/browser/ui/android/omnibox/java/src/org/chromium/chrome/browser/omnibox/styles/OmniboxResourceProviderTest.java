@@ -5,6 +5,8 @@
 package org.chromium.chrome.browser.omnibox.styles;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 
@@ -18,7 +20,6 @@ import androidx.annotation.ColorInt;
 
 import com.google.android.material.color.MaterialColors;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -31,7 +32,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
@@ -62,14 +63,14 @@ public class OmniboxResourceProviderTest {
                         mContext,
                         BrandedColorScheme.LIGHT_BRANDED_THEME,
                         R.attr.selectableItemBackground);
-        Assert.assertNotNull(drawableLight);
+        assertNotNull(drawableLight);
 
         Drawable drawableDark =
                 OmniboxResourceProvider.resolveAttributeToDrawable(
                         mContext,
                         BrandedColorScheme.DARK_BRANDED_THEME,
                         R.attr.selectableItemBackground);
-        Assert.assertNotNull(drawableDark);
+        assertNotNull(drawableDark);
     }
 
     @Test
@@ -394,14 +395,14 @@ public class OmniboxResourceProviderTest {
                 OmniboxResourceProvider.getDrawable(mContext, R.drawable.btn_suggestion_refine_up);
         ConstantState constantState = drawable.getConstantState();
 
-        Assert.assertEquals(
+        assertEquals(
                 constantState,
                 OmniboxResourceProvider.getDrawableCacheForTesting()
                         .get(R.drawable.btn_suggestion_refine_up));
 
         drawable =
                 OmniboxResourceProvider.getDrawable(mContext, R.drawable.btn_suggestion_refine_up);
-        Assert.assertNotNull(drawable);
+        assertNotNull(drawable);
     }
 
     @Test
@@ -411,17 +412,17 @@ public class OmniboxResourceProviderTest {
                 OmniboxResourceProvider.getString(
                         mContext, R.string.accessibility_omnibox_btn_refine, "foobar");
 
-        Assert.assertEquals(
+        assertEquals(
                 mContext.getString(R.string.accessibility_omnibox_btn_refine, "foobar"),
                 refineString);
-        Assert.assertEquals(
+        assertEquals(
                 mContext.getString(R.string.accessibility_omnibox_btn_refine),
                 OmniboxResourceProvider.getStringCacheForTesting()
                         .get(R.string.accessibility_omnibox_btn_refine));
 
         String copyString = OmniboxResourceProvider.getString(mContext, R.string.copy_link);
-        Assert.assertEquals(mContext.getString(R.string.copy_link, "foobar"), copyString);
-        Assert.assertEquals(
+        assertEquals(mContext.getString(R.string.copy_link, "foobar"), copyString);
+        assertEquals(
                 copyString,
                 OmniboxResourceProvider.getStringCacheForTesting().get(R.string.copy_link));
     }
@@ -458,13 +459,13 @@ public class OmniboxResourceProviderTest {
                 OmniboxResourceProvider.getDrawable(mContext, R.drawable.btn_suggestion_refine_up);
         ConstantState constantState = drawable.getConstantState();
 
-        Assert.assertEquals(
+        assertEquals(
                 constantState,
                 OmniboxResourceProvider.getDrawableCacheForTesting()
                         .get(R.drawable.btn_suggestion_refine_up));
 
         OmniboxResourceProvider.invalidateDrawableCache();
-        Assert.assertEquals(0, OmniboxResourceProvider.getDrawableCacheForTesting().size());
+        assertEquals(0, OmniboxResourceProvider.getDrawableCacheForTesting().size());
     }
 
     @Test
@@ -472,12 +473,12 @@ public class OmniboxResourceProviderTest {
     public void replaceContextForSmallTabletWindow() {
         Context originalContext = mContext;
         originalContext.getResources().getConfiguration().screenWidthDp = 700;
-        Assert.assertEquals(
+        assertEquals(
                 originalContext,
                 OmniboxResourceProvider.maybeReplaceContextForSmallTabletWindow(originalContext));
 
         originalContext.getResources().getConfiguration().screenWidthDp = 400;
-        Assert.assertNotEquals(
+        assertNotEquals(
                 originalContext,
                 OmniboxResourceProvider.maybeReplaceContextForSmallTabletWindow(originalContext));
     }
@@ -490,5 +491,73 @@ public class OmniboxResourceProviderTest {
                 "Wrong additional text color.",
                 defaultTextColorSecondary,
                 OmniboxResourceProvider.getAdditionalTextColor(mContext));
+    }
+
+    @Test
+    public void testInstanceMethods() {
+        OmniboxResourceProvider provider =
+                new OmniboxResourceProvider(mContext, BrandedColorScheme.LIGHT_BRANDED_THEME);
+
+        // Test getDrawable.
+        Drawable drawable = provider.getDrawable(R.drawable.btn_suggestion_refine_up);
+        assertNotNull(drawable);
+
+        // Test getString.
+        String string = provider.getString(R.string.copy_link);
+        assertEquals(mContext.getString(R.string.copy_link), string);
+
+        // Test color resolution.
+        assertEquals(
+                OmniboxResourceProvider.getUrlBarPrimaryTextColor(
+                        mContext, BrandedColorScheme.LIGHT_BRANDED_THEME),
+                provider.getUrlBarPrimaryTextColor());
+
+        assertEquals(
+                OmniboxResourceProvider.getSuggestionPrimaryTextColor(
+                        mContext, BrandedColorScheme.LIGHT_BRANDED_THEME),
+                provider.getSuggestionPrimaryTextColor());
+
+        // Test dynamic update (setter).
+        provider.setBrandedColorScheme(BrandedColorScheme.INCOGNITO);
+        assertEquals(
+                OmniboxResourceProvider.getUrlBarPrimaryTextColor(
+                        mContext, BrandedColorScheme.INCOGNITO),
+                provider.getUrlBarPrimaryTextColor());
+
+        // Test constructor that resolves scheme.
+        OmniboxResourceProvider provider2 =
+                new OmniboxResourceProvider(mContext, /* isIncognitoBranded= */ false, Color.WHITE);
+        @BrandedColorScheme
+        int expectedScheme =
+                OmniboxResourceProvider.getBrandedColorScheme(mContext, false, Color.WHITE);
+        assertEquals(
+                OmniboxResourceProvider.getUrlBarPrimaryTextColor(mContext, expectedScheme),
+                provider2.getUrlBarPrimaryTextColor());
+    }
+
+    @Test
+    public void getPopoverSuggestionBackgroundColor_incognito() {
+        final int incognitoColor = mContext.getColor(R.color.gm3_baseline_surface_container_dark);
+        assertEquals(
+                incognitoColor,
+                OmniboxResourceProvider.getPopoverSuggestionBackgroundColor(
+                        mContext, BrandedColorScheme.INCOGNITO));
+    }
+
+    @Test
+    public void getPopoverSuggestionBackgroundColor_light() {
+        assertEquals(
+                MaterialColors.getColor(mContext, R.attr.colorSurface, TAG),
+                OmniboxResourceProvider.getPopoverSuggestionBackgroundColor(
+                        mContext, BrandedColorScheme.APP_DEFAULT));
+    }
+
+    @Test
+    @Config(qualifiers = "night")
+    public void getPopoverSuggestionBackgroundColor_dark() {
+        assertEquals(
+                SemanticColorUtils.getColorSurfaceContainer(mContext),
+                OmniboxResourceProvider.getPopoverSuggestionBackgroundColor(
+                        mContext, BrandedColorScheme.APP_DEFAULT));
     }
 }

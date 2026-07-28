@@ -24,7 +24,7 @@
 #include "chrome/browser/ui/exclusive_access/keyboard_lock_controller.h"
 #include "chrome/browser/ui/exclusive_access/pointer_lock_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -74,6 +74,8 @@ ExclusiveAccessTest::ExclusiveAccessTest() {
 ExclusiveAccessTest::~ExclusiveAccessTest() = default;
 
 void ExclusiveAccessTest::SetUpOnMainThread() {
+  ExclusiveAccessBubbleViews::set_skip_presentation_delay_for_testing(true);
+
   permission_controller_ =
       std::make_unique<content::MockPermissionController>();
   ON_CALL(*permission_controller_, RequestPermissionsFromCurrentDocument)
@@ -110,6 +112,8 @@ void ExclusiveAccessTest::SetUpOnMainThread() {
 }
 
 void ExclusiveAccessTest::TearDownOnMainThread() {
+  ExclusiveAccessBubbleViews::set_skip_presentation_delay_for_testing(false);
+
   GetExclusiveAccessManager()
       ->pointer_lock_controller()
       ->bubble_hide_callback_for_test_ =
@@ -248,8 +252,10 @@ void ExclusiveAccessTest::EnterExtensionInitiatedFullscreen() {
   ui_test_utils::FullscreenWaiter waiter(browser(),
                                          {.browser_fullscreen = true});
   static const char kExtensionId[] = "extension-id";
-  browser()->ToggleFullscreenModeWithExtension(
-      extensions::Extension::GetBaseURLFromExtensionId(kExtensionId));
+  GetExclusiveAccessManager()
+      ->fullscreen_controller()
+      ->ToggleBrowserFullscreenModeWithExtension(
+          extensions::Extension::GetBaseURLFromExtensionId(kExtensionId));
   waiter.Wait();
 }
 
@@ -288,7 +294,7 @@ FullscreenController* ExclusiveAccessTest::GetFullscreenController() {
 }
 
 ExclusiveAccessManager* ExclusiveAccessTest::GetExclusiveAccessManager() {
-  return browser()->GetFeatures().exclusive_access_manager();
+  return ExclusiveAccessManager::From(browser());
 }
 
 void ExclusiveAccessTest::SetEscRepeatWindowLength(

@@ -4,13 +4,20 @@
 
 #include "crypto/unexportable_key.h"
 
+#include <Security/SecBase.h>
+
 #include <cstdint>
 #include <vector>
 
+#include "base/apple/foundation_util.h"
+#include "base/check_deref.h"
+#include "base/containers/extend.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
 #include "crypto/apple/fake_keychain_v2.h"
 #include "crypto/apple/scoped_fake_keychain_v2.h"
+#include "crypto/hash.h"
 #include "crypto/keypair.h"
 #include "crypto/signature_verifier.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -48,8 +55,7 @@ constexpr SignatureVerifier::SignatureAlgorithm kAcceptableAlgos[] = {
 // keys.
 class UnexportableKeyMacTest : public testing::Test {
  protected:
-  crypto::apple::ScopedFakeKeychainV2 scoped_fake_keychain_{
-      kTestKeychainAccessGroup};
+  ScopedFakeKeychainV2 scoped_fake_keychain_{kTestKeychainAccessGroup};
 
   const UnexportableKeyProvider::Config config_{
       .keychain_access_group = kTestKeychainAccessGroup,
@@ -60,17 +66,19 @@ class UnexportableKeyMacTest : public testing::Test {
       GetUnexportableKeyProvider(config_)};
 };
 
+#if !BUILDFLAG(IS_IOS)
 TEST_F(UnexportableKeyMacTest, SecureEnclaveAvailability) {
   for (bool available : {true, false}) {
     scoped_fake_keychain_.keychain()->set_secure_enclave_available(available);
     EXPECT_EQ(GetUnexportableKeyProvider(config_) != nullptr, available);
   }
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
-TEST_F(UnexportableKeyMacTest, GetAllSigningKeys) {
+TEST_F(UnexportableKeyMacTest, GetAllKeys) {
   // Initially, there should be no keys.
   EXPECT_THAT(
-      provider_->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
+      provider_->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
       Optional(IsEmpty()));
 
   // Create one key.
@@ -79,7 +87,7 @@ TEST_F(UnexportableKeyMacTest, GetAllSigningKeys) {
   ASSERT_NE(key1, nullptr);
 
   EXPECT_THAT(
-      provider_->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
+      provider_->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
       Optional(UnorderedElementsAre(WrappedKeyEq(key1.get()))));
 
   // Create a second key.
@@ -88,12 +96,12 @@ TEST_F(UnexportableKeyMacTest, GetAllSigningKeys) {
   ASSERT_NE(key2, nullptr);
 
   EXPECT_THAT(
-      provider_->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
+      provider_->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
       Optional(UnorderedElementsAre(WrappedKeyEq(key1.get()),
                                     WrappedKeyEq(key2.get()))));
 }
 
-TEST_F(UnexportableKeyMacTest, GetAllSigningKeysFiltersByTag) {
+TEST_F(UnexportableKeyMacTest, GetAllKeysFiltersByTag) {
   ASSERT_TRUE(provider_);
   auto key = provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key);
@@ -113,16 +121,16 @@ TEST_F(UnexportableKeyMacTest, GetAllSigningKeysFiltersByTag) {
 
   // The original provider should still only see its own key.
   EXPECT_THAT(
-      provider_->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
+      provider_->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
       Optional(UnorderedElementsAre(WrappedKeyEq(key.get()))));
 
   // The other provider should only see its own key.
-  EXPECT_THAT(other_provider->AsStatefulUnexportableKeyProvider()
-                  ->GetAllSigningKeysSlowly(),
-              Optional(UnorderedElementsAre(WrappedKeyEq(other_key.get()))));
+  EXPECT_THAT(
+      other_provider->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
+      Optional(UnorderedElementsAre(WrappedKeyEq(other_key.get()))));
 }
 
-TEST_F(UnexportableKeyMacTest, GetAllSigningKeysPerformsPrefixMatching) {
+TEST_F(UnexportableKeyMacTest, GetAllKeysPerformsPrefixMatching) {
   // 1. Create a key with the base tag "test-tag".
   UnexportableKeyProvider::Config config = config_;
   config.application_tag = "test-tag";
@@ -155,16 +163,15 @@ TEST_F(UnexportableKeyMacTest, GetAllSigningKeysPerformsPrefixMatching) {
 
   // 4. Verify that the base provider sees both its own key and the extended
   // key.
-  EXPECT_THAT(
-      provider->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
-      Optional(UnorderedElementsAre(WrappedKeyEq(key1.get()),
-                                    WrappedKeyEq(key2.get()))));
+  EXPECT_THAT(provider->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
+              Optional(UnorderedElementsAre(WrappedKeyEq(key1.get()),
+                                            WrappedKeyEq(key2.get()))));
 
   // 5. Verify that the extended provider only sees its own key.
   // It should NOT see "test-tag" because "test-tag.extension" is not a
   // prefix of "test-tag".
   EXPECT_THAT(extended_provider->AsStatefulUnexportableKeyProvider()
-                  ->GetAllSigningKeysSlowly(),
+                  ->GetAllKeysSlowly(),
               Optional(UnorderedElementsAre(WrappedKeyEq(key2.get()))));
 }
 
@@ -184,9 +191,9 @@ TEST_F(UnexportableKeyMacTest, FromWrappedSigningKeyRepairsKey) {
   ASSERT_TRUE(other_provider);
 
   // 3. Initially, the second provider should not see any keys.
-  EXPECT_THAT(other_provider->AsStatefulUnexportableKeyProvider()
-                  ->GetAllSigningKeysSlowly(),
-              Optional(IsEmpty()));
+  EXPECT_THAT(
+      other_provider->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
+      Optional(IsEmpty()));
 
   // 4. Load the key using the second provider. This should trigger the
   //    repair/copy logic because the wrapped key (label) exists but the tag
@@ -202,33 +209,37 @@ TEST_F(UnexportableKeyMacTest, FromWrappedSigningKeyRepairsKey) {
   ASSERT_TRUE(signature);
 
   // 6. Verify that the key is now persisted for the second provider.
-  //    GetAllSigningKeysSlowly filters by the provider's tag, so it should now
+  //    GetAllKeysSlowly filters by the provider's tag, so it should now
   //    find the newly created entry.
-  EXPECT_THAT(other_provider->AsStatefulUnexportableKeyProvider()
-                  ->GetAllSigningKeysSlowly(),
-              Optional(UnorderedElementsAre(WrappedKeyEq(key_repaired.get()))));
+  EXPECT_THAT(
+      other_provider->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
+      Optional(UnorderedElementsAre(WrappedKeyEq(key_repaired.get()))));
 
   // 7. Verify the original key is still accessible to the first provider.
   //    The repair operation should copy the key, not move/steal it.
   EXPECT_THAT(
-      provider_->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
+      provider_->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
       Optional(UnorderedElementsAre(WrappedKeyEq(key_original.get()))));
 }
 
 TEST_F(UnexportableKeyMacTest, FromWrappedSigningKeyForNonExistentKey) {
   // Verify that trying to load a completely non-existent key still returns null
   // and doesn't crash or create phantom entries.
+  base::HistogramTester histograms;
   std::vector<uint8_t> bogus_wrapped_key = {1, 2, 3, 4, 5};
   auto key = provider_->FromWrappedSigningKeySlowly(bogus_wrapped_key);
   EXPECT_EQ(key, nullptr);
+
+  histograms.ExpectUniqueSample(
+      "Crypto.SecureEnclaveOperation.Apple.WrappedKeyCreation.Error",
+      errSecItemNotFound, 1);
 }
 
 TEST_F(UnexportableKeyMacTest, GetKeyTag) {
   ASSERT_TRUE(provider_);
   auto key = provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key);
-  EXPECT_EQ(key->AsStatefulUnexportableSigningKey()->GetKeyTag(),
-            kTestApplicationTag);
+  EXPECT_EQ(key->AsStatefulKey()->GetKeyTag(), kTestApplicationTag);
 }
 
 TEST_F(UnexportableKeyMacTest, GetCreationTime) {
@@ -237,8 +248,7 @@ TEST_F(UnexportableKeyMacTest, GetCreationTime) {
   ASSERT_TRUE(key);
 
   // Check that the time returned is the one set in the fake keychain.
-  EXPECT_EQ(key->AsStatefulUnexportableSigningKey()->GetCreationTime(),
-            base::Time::UnixEpoch());
+  EXPECT_EQ(key->AsStatefulKey()->GetCreationTime(), base::Time::UnixEpoch());
 }
 
 TEST_F(UnexportableKeyMacTest, GetSecKeyRef) {
@@ -254,8 +264,7 @@ TEST_F(UnexportableKeyMacTest, GeneratedSpkiIsValid) {
   ASSERT_TRUE(key);
 
   const auto spki = key->GetSubjectPublicKeyInfo();
-  const auto imported =
-      crypto::keypair::PublicKey::FromSubjectPublicKeyInfo(spki);
+  const auto imported = keypair::PublicKey::FromSubjectPublicKeyInfo(spki);
   ASSERT_TRUE(imported);
   EXPECT_TRUE(imported->IsEcP256());
 }
@@ -415,20 +424,17 @@ TEST_F(UnexportableKeyMacTest,
   EXPECT_FALSE(provider_->FromWrappedSigningKeySlowly(key->GetWrappedKey()));
 }
 
-TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_KeyObjects) {
+TEST_F(UnexportableKeyMacTest, DeleteKeysSlowly_KeyObjects) {
   // Generate two keys.
   auto key1 = provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key1);
   auto key2 = provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key2);
 
-  auto* stateful_key1 = key1->AsStatefulUnexportableSigningKey();
-  ASSERT_TRUE(stateful_key1);
-
   // Delete key1 using the new overload.
   std::optional<size_t> count =
-      provider_->AsStatefulUnexportableKeyProvider()->DeleteSigningKeysSlowly(
-          {stateful_key1});
+      provider_->AsStatefulUnexportableKeyProvider()->DeleteKeysSlowly(
+          {key1.get()});
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 1u);
 
@@ -437,7 +443,7 @@ TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_KeyObjects) {
   EXPECT_TRUE(provider_->FromWrappedSigningKeySlowly(key2->GetWrappedKey()));
 }
 
-TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_PrecisionCollision) {
+TEST_F(UnexportableKeyMacTest, DeleteKeysSlowly_PrecisionCollision) {
   // Generate a key with the default provider (Tag A).
   auto key_a = provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key_a);
@@ -461,8 +467,8 @@ TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_PrecisionCollision) {
 
   // Delete using the Tag A key object.
   std::optional<size_t> count =
-      provider_->AsStatefulUnexportableKeyProvider()->DeleteSigningKeysSlowly(
-          {key_a->AsStatefulUnexportableSigningKey()});
+      provider_->AsStatefulUnexportableKeyProvider()->DeleteKeysSlowly(
+          {key_a.get()});
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 1u);
 
@@ -470,19 +476,19 @@ TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_PrecisionCollision) {
   EXPECT_EQ(scoped_fake_keychain_.keychain()->items().size(), 1u);
 
   // Verify that provider A no longer sees any keys.
-  // We use GetAllSigningKeysSlowly() here because it only returns keys
+  // We use GetAllKeysSlowly() here because it only returns keys
   // matching Tag A and does NOT trigger the repair logic.
   EXPECT_THAT(
-      provider_->AsStatefulUnexportableKeyProvider()->GetAllSigningKeysSlowly(),
+      provider_->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
       Optional(IsEmpty()));
 
   // Verify that provider B still sees its key.
-  EXPECT_THAT(provider_b->AsStatefulUnexportableKeyProvider()
-                  ->GetAllSigningKeysSlowly(),
-              Optional(SizeIs(1)));
+  EXPECT_THAT(
+      provider_b->AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly(),
+      Optional(SizeIs(1)));
 }
 
-TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_TagMismatch) {
+TEST_F(UnexportableKeyMacTest, DeleteKeysSlowly_TagMismatch) {
   auto key = provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key);
 
@@ -496,8 +502,8 @@ TEST_F(UnexportableKeyMacTest, DeleteSigningKeysSlowly_TagMismatch) {
   // Attempt to delete the key using the wrong provider.
   // It should find 0 matching items because the tags don't match.
   std::optional<size_t> count =
-      provider_other->AsStatefulUnexportableKeyProvider()
-          ->DeleteSigningKeysSlowly({key->AsStatefulUnexportableSigningKey()});
+      provider_other->AsStatefulUnexportableKeyProvider()->DeleteKeysSlowly(
+          {key.get()});
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 0u);
 
@@ -519,8 +525,8 @@ TEST_F(UnexportableKeyMacTest, DeleteAllSigningKeys) {
   ASSERT_TRUE(provider_->FromWrappedSigningKeySlowly(key2->GetWrappedKey()));
 
   // Delete all.
-  std::optional<size_t> count = provider_->AsStatefulUnexportableKeyProvider()
-                                    ->DeleteAllSigningKeysSlowly();
+  std::optional<size_t> count =
+      provider_->AsStatefulUnexportableKeyProvider()->DeleteAllKeysSlowly();
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 2u);
 
@@ -567,7 +573,7 @@ TEST_F(UnexportableKeyMacTest, DeleteAllSigningKeysPrefixMatching) {
   // Use prefix provider to delete all starting with "com.example".
   std::optional<size_t> count =
       provider_prefix->AsStatefulUnexportableKeyProvider()
-          ->DeleteAllSigningKeysSlowly();
+          ->DeleteAllKeysSlowly();
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 2u);
 
@@ -605,8 +611,7 @@ TEST_F(UnexportableKeyMacTest, DeleteAllSigningKeysPrefixMatchingSeparation) {
 
   // Use foo provider to delete. Should only delete foo key.
   std::optional<size_t> count =
-      provider_foo->AsStatefulUnexportableKeyProvider()
-          ->DeleteAllSigningKeysSlowly();
+      provider_foo->AsStatefulUnexportableKeyProvider()->DeleteAllKeysSlowly();
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 1u);
 
@@ -658,7 +663,7 @@ TEST_F(UnexportableKeyMacTest, DeleteAllSigningKeysEmptyPrefix) {
   // have an empty application_tag.
   std::optional<size_t> count =
       provider_empty->AsStatefulUnexportableKeyProvider()
-          ->DeleteAllSigningKeysSlowly();
+          ->DeleteAllKeysSlowly();
   ASSERT_TRUE(count.has_value());
   EXPECT_EQ(count.value(), 1u);
 
@@ -670,6 +675,186 @@ TEST_F(UnexportableKeyMacTest, DeleteAllSigningKeysEmptyPrefix) {
       key_specific->GetWrappedKey()));
 }
 
+class ScopedMockKeychain : public FakeKeychainV2 {
+ public:
+  explicit ScopedMockKeychain(const std::string& keychain_access_group)
+      : FakeKeychainV2(keychain_access_group) {
+    SetInstanceOverride(this);
+  }
+
+  ~ScopedMockKeychain() override { ClearInstanceOverride(); }
+
+  MOCK_METHOD(OSStatus,
+              ItemCopyMatching,
+              (CFDictionaryRef query, CFTypeRef* result),
+              (override));
+
+  MOCK_METHOD(base::apple::ScopedCFTypeRef<CFDataRef>,
+              KeyCreateSignature,
+              (SecKeyRef key,
+               SecKeyAlgorithm algorithm,
+               CFDataRef data,
+               CFErrorRef* error),
+              (override));
+};
+
+// Setting `kSecUseDataProtectionKeychain` to `@YES` is required to explicitly
+// restrict the keychain search to the modern Data Protection keychain,
+// preventing fallback to legacy keychains where access group filtering is
+// broken. This test ensures the flag is always present in the query.
+TEST(UnexportableKeyMacFiltersTest, QueriesDataProtectionKeychain) {
+  ScopedMockKeychain mock_keychain(kTestKeychainAccessGroup);
+
+  EXPECT_CALL(mock_keychain, ItemCopyMatching)
+      .WillOnce([&mock_keychain](CFDictionaryRef query, CFTypeRef* result) {
+        auto use_data_protection =
+            base::apple::GetValueFromDictionary<CFBooleanRef>(
+                query, kSecUseDataProtectionKeychain);
+        EXPECT_TRUE(CFBooleanGetValue(use_data_protection));
+        return mock_keychain.FakeKeychainV2::ItemCopyMatching(query, result);
+      });
+
+  std::unique_ptr<UnexportableKeyProvider> provider =
+      GetUnexportableKeyProvider({
+          .keychain_access_group = kTestKeychainAccessGroup,
+          .application_tag = kTestApplicationTag,
+      });
+
+  // Trigger a query.
+  CHECK_DEREF(provider).AsStatefulUnexportableKeyProvider()->GetAllKeysSlowly();
+}
+
+TEST_F(UnexportableKeyMacTest, GenerateAttestationKeyAndRestore) {
+  ASSERT_TRUE(provider_);
+  std::unique_ptr<UnexportableAttestationKey> key =
+      provider_->GenerateAttestationKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(key);
+  EXPECT_EQ(key->Algorithm(), SignatureVerifier::ECDSA_SHA256);
+
+  std::vector<uint8_t> wrapped_key = key->GetWrappedKey();
+  std::unique_ptr<UnexportableAttestationKey> restored_key =
+      provider_->FromWrappedAttestationKeySlowly(wrapped_key);
+  ASSERT_TRUE(restored_key);
+  EXPECT_EQ(restored_key->Algorithm(), SignatureVerifier::ECDSA_SHA256);
+  EXPECT_EQ(restored_key->GetWrappedKey(), wrapped_key);
+}
+
+TEST_F(UnexportableKeyMacTest, CertifySlowlyStatementAndSignature) {
+  ASSERT_TRUE(provider_);
+  std::unique_ptr<UnexportableSigningKey> signing_key =
+      provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(signing_key);
+
+  std::unique_ptr<UnexportableAttestationKey> attestation_key =
+      provider_->GenerateAttestationKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(attestation_key);
+
+  const std::vector<uint8_t> challenge = {1, 2, 3, 4, 5, 6, 7, 8};
+  std::optional<AttestationStatement> cert =
+      attestation_key->CertifySlowly(*signing_key, challenge);
+  ASSERT_TRUE(cert);
+  EXPECT_EQ(cert->format, AttestationStatement::kSecureEnclave);
+
+  std::vector<uint8_t> expected_statement = challenge;
+  // TODO(crbug.com/406190025): Make the hash algorithm generic once we use
+  // the crypto::sign algorithms.
+  base::Extend(expected_statement,
+               hash::Sha256(signing_key->GetSubjectPublicKeyInfo()));
+  EXPECT_EQ(cert->statement, expected_statement);
+
+  SignatureVerifier verifier;
+  ASSERT_TRUE(verifier.VerifyInit(SignatureVerifier::ECDSA_SHA256,
+                                  cert->signature,
+                                  attestation_key->GetSubjectPublicKeyInfo()));
+  verifier.VerifyUpdate(cert->statement);
+  EXPECT_TRUE(verifier.VerifyFinal());
+}
+
+TEST_F(UnexportableKeyMacTest, FromWrappedAttestationKeyForNonExistentKey) {
+  base::HistogramTester histograms;
+  std::vector<uint8_t> bogus_wrapped_key = {1, 2, 3, 4, 5};
+  auto key = provider_->FromWrappedAttestationKeySlowly(bogus_wrapped_key);
+  EXPECT_EQ(key, nullptr);
+
+  histograms.ExpectUniqueSample(
+      "Crypto.SecureEnclaveOperation.Apple.WrappedAttestationKeyCreation.Error",
+      errSecItemNotFound, 1);
+}
+
+TEST_F(UnexportableKeyMacTest, FromWrappedAttestationKeyRepairsKey) {
+  auto key_original = provider_->GenerateAttestationKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(key_original);
+  auto wrapped_key = key_original->GetWrappedKey();
+
+  const UnexportableKeyProvider::Config other_config{
+      .keychain_access_group = kTestKeychainAccessGroup,
+      .application_tag = "other-application-tag",
+  };
+  std::unique_ptr<UnexportableKeyProvider> other_provider =
+      GetUnexportableKeyProvider(other_config);
+  ASSERT_TRUE(other_provider);
+
+  auto key_repaired =
+      other_provider->FromWrappedAttestationKeySlowly(wrapped_key);
+  ASSERT_TRUE(key_repaired);
+  EXPECT_THAT(key_repaired->GetWrappedKey(), Eq(wrapped_key));
+}
+
+TEST_F(UnexportableKeyMacTest, DeleteAttestationKeysSlowly) {
+  auto key1 = provider_->GenerateAttestationKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(key1);
+  auto key2 = provider_->GenerateAttestationKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(key2);
+
+  EXPECT_THAT(provider_->AsStatefulUnexportableKeyProvider()->DeleteKeysSlowly(
+                  {key1.get()}),
+              Optional(1));
+
+  EXPECT_FALSE(
+      provider_->FromWrappedAttestationKeySlowly(key1->GetWrappedKey()));
+  EXPECT_TRUE(
+      provider_->FromWrappedAttestationKeySlowly(key2->GetWrappedKey()));
+}
+
+TEST(UnexportableKeyMacFailingSignatureTest, SigningAndCertificationFailure) {
+  ScopedMockKeychain mock_keychain(kTestKeychainAccessGroup);
+
+  EXPECT_CALL(mock_keychain, KeyCreateSignature)
+      .WillRepeatedly([](SecKeyRef key, SecKeyAlgorithm algorithm,
+                         CFDataRef data, CFErrorRef* error) {
+        if (error) {
+          *error = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainOSStatus,
+                                 errSecAuthFailed, nullptr);
+        }
+        return base::apple::ScopedCFTypeRef<CFDataRef>();
+      });
+
+  const UnexportableKeyProvider::Config config{
+      .keychain_access_group = kTestKeychainAccessGroup,
+      .application_tag = kTestApplicationTag,
+  };
+  std::unique_ptr<UnexportableKeyProvider> provider =
+      GetUnexportableKeyProvider(config);
+  ASSERT_TRUE(provider);
+
+  auto signing_key = provider->GenerateSigningKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(signing_key);
+  auto attestation_key =
+      provider->GenerateAttestationKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(attestation_key);
+
+  base::HistogramTester histograms;
+  const std::vector<uint8_t> challenge = {1, 2, 3, 4};
+  EXPECT_FALSE(signing_key->SignSlowly(challenge));
+  histograms.ExpectUniqueSample(
+      "Crypto.SecureEnclaveOperation.Apple.MessageSigning.Error",
+      errSecAuthFailed, 1);
+
+  EXPECT_FALSE(attestation_key->CertifySlowly(*signing_key, challenge));
+  histograms.ExpectUniqueSample(
+      "Crypto.SecureEnclaveOperation.Apple.KeyCertification.Error",
+      errSecAuthFailed, 1);
+}
 }  // namespace
 
 }  // namespace crypto::apple

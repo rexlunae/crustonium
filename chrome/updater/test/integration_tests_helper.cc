@@ -16,6 +16,7 @@
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
@@ -219,9 +220,10 @@ base::RepeatingCallback<bool(Args...)> WithSwitch(
         int flag_app_bundle_web_create_mode = -1;
         if (base::StringToInt(flag, &flag_app_bundle_web_create_mode) &&
             flag_app_bundle_web_create_mode >=
-                static_cast<int>(AppBundleWebCreateMode::kCreateApp) &&
+                std::to_underlying(AppBundleWebCreateMode::kCreateApp) &&
             flag_app_bundle_web_create_mode <=
-                static_cast<int>(AppBundleWebCreateMode::kCreateInstalledApp)) {
+                std::to_underlying(
+                    AppBundleWebCreateMode::kCreateInstalledApp)) {
           return callback.Run(static_cast<AppBundleWebCreateMode>(
                                   flag_app_bundle_web_create_mode),
                               std::move(args)...);
@@ -515,6 +517,13 @@ void AppTestHelper::FirstTaskRun() {
       {"delete_legacy_updater", WithSystemScope(Wrap(&DeleteLegacyUpdater))},
       {"expect_prepare_to_run_bundle_success",
        WithSwitch("bundle_path", Wrap(&ExpectPrepareToRunBundleSuccess))},
+      {"expect_cru_registration_checks_for_update",
+       WithSwitch(
+           "expected_version",
+           WithSwitch(
+               "xc_path",
+               WithSwitch("app_id",
+                          Wrap(&ExpectCRURegistrationChecksForUpdate))))},
 #endif  // BUILDFLAG(IS_MAC)
       {"expect_legacy_updater_migrated",
        WithSystemScope(Wrap(&ExpectLegacyUpdaterMigrated))},

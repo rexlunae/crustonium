@@ -28,7 +28,10 @@ class MockDelegatedFrameHostClient : public DelegatedFrameHostClient {
   MockDelegatedFrameHostClient() = default;
   ~MockDelegatedFrameHostClient() override = default;
 
-  MOCK_METHOD(ui::Layer*, DelegatedFrameHostGetLayer, (), (const, override));
+  MOCK_METHOD(ui::LayerSurface*,
+              GetDelegatedFrameHostLayer,
+              (),
+              (const, override));
   MOCK_METHOD(bool, DelegatedFrameHostIsVisible, (), (const, override));
   MOCK_METHOD(SkColor, DelegatedFrameHostGetGutterColor, (), (const, override));
   MOCK_METHOD2(OnFrameTokenChanged,
@@ -114,6 +117,15 @@ TEST_F(DelegatedFrameHostTest, NoCopyOutputRequestWithNoValidSurface) {
           },
           run_loop.QuitClosure()));
   run_loop.Run();
+}
+
+TEST_F(DelegatedFrameHostTest, ForceSpecifiedDeadline) {
+  auto* dfh = delegated_frame_host();
+  EXPECT_EQ(std::nullopt, dfh->GetForceSpecifiedDeadlineForTesting());
+  dfh->SetForceSpecifiedDeadline(5);
+  EXPECT_EQ(5u, dfh->GetForceSpecifiedDeadlineForTesting());
+  dfh->SetForceSpecifiedDeadline(std::nullopt);
+  EXPECT_EQ(std::nullopt, dfh->GetForceSpecifiedDeadlineForTesting());
 }
 
 }  // namespace content

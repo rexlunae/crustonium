@@ -4,12 +4,15 @@
 
 #include "chrome/browser/android/guest_view/chrome_guest_view_manager_delegate.h"
 
+#include "base/check_is_test.h"
 #include "chrome/browser/glic/host/guest_util.h"
+#include "chrome/browser/performance_manager/public/guest_view_policy.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/common/buildflags.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
 #include "components/guest_view/browser/slim_web_view/slim_web_view_guest.h"
+#include "components/guest_view/browser/slim_web_view/slim_web_view_page_handler.h"
 #include "content/public/browser/web_contents.h"
 
 namespace android {
@@ -25,18 +28,30 @@ void ChromeGuestViewManagerDelegate::OnGuestAdded(
   // manager.
   task_manager::WebContentsTags::CreateForGuestContents(guest_web_contents);
 
-#if BUILDFLAG(ENABLE_GLIC)
   // Check if guest belongs to glic and apply specific customizations if so.
   glic::OnGuestAdded(guest_web_contents);
-#endif
+
+  performance_manager::GuestViewAssociatedToWebContents(guest_web_contents);
 }
 
 void ChromeGuestViewManagerDelegate::DispatchEvent(
     const std::string& event_name,
-    base::Value::Dict args,
+    base::DictValue args,
     guest_view::GuestViewBase* guest,
     int instance_id) {
-  // TODO(crbug.com/460804848): Implement event dispatching.
+  // We only have one guest type for now.
+  CHECK(guest->GetViewType() == guest_view::SlimWebViewGuest::Type);
+  auto* rfh = guest->owner_rfh();
+  if (!rfh) {
+    return;
+  }
+  auto* handler =
+      guest_view::SlimWebViewPageHandler::GetForCurrentDocument(rfh);
+  if (!handler) {
+    CHECK_IS_TEST();
+    return;
+  }
+  handler->DispatchEvent(event_name, std::move(args), instance_id);
 }
 
 bool ChromeGuestViewManagerDelegate::IsGuestAvailableToContext(

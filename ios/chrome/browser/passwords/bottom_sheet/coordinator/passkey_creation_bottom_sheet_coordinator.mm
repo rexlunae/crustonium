@@ -7,6 +7,8 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/sync/service/sync_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/passkey_creation_bottom_sheet_mediator.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/passkey_creation_bottom_sheet_mediator_delegate.h"
@@ -17,6 +19,7 @@
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
+#import "ios/chrome/common/ui/reauthentication/reauthentication_module.h"
 #import "ios/web/public/web_state.h"
 
 @interface PasskeyCreationBottomSheetCoordinator () <
@@ -28,8 +31,8 @@
   // The Passkey Creation Bottom Sheet's mediator.
   PasskeyCreationBottomSheetMediator* _mediator;
 
-  // The passkey request's ID, originating from PasskeyTabHelper.
-  std::optional<std::string> _pendingRequestID;
+  // Information about the pending passkey request.
+  std::optional<webauthn::IOSPasskeyClient::RequestInfo> _requestInfo;
 }
 
 @end
@@ -38,21 +41,29 @@
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
                                    browser:(Browser*)browser
-                                 requestID:(std::string)requestID {
+                               requestInfo:
+                                   (webauthn::IOSPasskeyClient::RequestInfo)
+                                       requestInfo {
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
-    _pendingRequestID = requestID;
+    _requestInfo = std::move(requestInfo);
   }
   return self;
 }
 
 - (void)start {
   WebStateList* webStateList = self.browser->GetWebStateList();
+  id<ReauthenticationProtocol> reauthModule =
+      ReauthenticationServiceFactory::GetForProfile(self.profile)
+          ->GetReauthModule();
   _mediator = [[PasskeyCreationBottomSheetMediator alloc]
       initWithWebStateList:webStateList
-                 requestID:std::move(*_pendingRequestID)
+               requestInfo:std::move(*_requestInfo)
           accountForSaving:[self accountForSaving]
+              reauthModule:reauthModule
                   delegate:self];
+
+  _requestInfo.reset();
 
   FaviconLoader* faviconLoader =
       IOSChromeFaviconLoaderFactory::GetForProfile(self.profile);
@@ -79,6 +90,14 @@
   _mediator = nil;
 }
 
+- (BOOL)hasPendingRequest:
+    (const webauthn::IOSPasskeyClient::RequestInfo&)requestInfo {
+  if (_mediator) {
+    return [_mediator hasPendingRequest:requestInfo];
+  }
+  return _requestInfo.has_value() && *_requestInfo == requestInfo;
+}
+
 #pragma mark - PasskeyCreationBottomSheetMediatorDelegate
 
 - (void)endPresentation {
@@ -87,17 +106,19 @@
   [_viewController dismissViewControllerAnimated:NO completion:nil];
 }
 
+- (void)dismissPasskeyCreation {
+  [self.browserCoordinatorCommandsHandler dismissPasskeyCreation];
+}
+
 #pragma mark - ConfirmationAlertActionHandler
 
 - (void)confirmationAlertPrimaryAction {
-  // TODO(crbug.com/460485496): Perform user authentication if required.
   [_mediator createPasskey];
-  [self.browserCoordinatorCommandsHandler dismissPasskeyCreation];
 }
 
 - (void)confirmationAlertSecondaryAction {
   [_mediator deferPasskeyCreationToRenderer];
-  [self.browserCoordinatorCommandsHandler dismissPasskeyCreation];
+  [self dismissPasskeyCreation];
 }
 
 #pragma mark - Private

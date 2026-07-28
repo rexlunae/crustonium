@@ -5,33 +5,36 @@
 #include "chrome/browser/ui/views/extensions/extensions_request_access_button.h"
 
 #include <memory>
-#include <string>
 
 #include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/strings/string_util.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_ui_util.h"
-#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extensions_toolbar_view_model.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/extensions/extensions_container_views.h"
 #include "chrome/browser/ui/views/extensions/extensions_request_access_hover_card_coordinator.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_chip_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/events/event.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 
@@ -39,33 +42,24 @@ namespace {
 // shared location.
 constexpr auto kConfirmationDisplayDuration = base::Seconds(4);
 
-std::vector<const extensions::Extension*> GetExtensions(
-    Profile* profile,
-    std::vector<extensions::ExtensionId>& extension_ids) {
-  const extensions::ExtensionSet& enabled_extensions =
-      extensions::ExtensionRegistry::Get(profile)->enabled_extensions();
-  std::vector<const extensions::Extension*> extensions;
-  for (const auto& extension_id : extension_ids) {
-    extensions.push_back(enabled_extensions.GetByID(extension_id));
-  }
-  return extensions;
-}
 
 }  // namespace
 
 ExtensionsRequestAccessButton::ExtensionsRequestAccessButton(
     BrowserWindowInterface* browser,
-    ExtensionsContainer* extensions_container,
+    ExtensionsToolbarViewModel* extensions_toolbar_view_model,
     ExtensionsContainerViews* extensions_container_views)
     : ToolbarChipButton(
           base::BindRepeating(&ExtensionsRequestAccessButton::OnButtonPressed,
                               base::Unretained(this)),
           ToolbarChipButton::Edge::kRight),
       browser_(browser),
-      extensions_container_(extensions_container),
+      extensions_toolbar_view_model_(extensions_toolbar_view_model),
       extensions_container_views_(extensions_container_views),
       hover_card_coordinator_(
-          std::make_unique<ExtensionsRequestAccessHoverCardCoordinator>()) {
+          std::make_unique<ExtensionsRequestAccessHoverCardCoordinator>()),
+      input_protector_(
+          std::make_unique<views::InputEventActivationProtector>()) {
   // Set button for IPH.
   SetProperty(views::kElementIdentifierKey,
               kExtensionsRequestAccessButtonElementId);
@@ -104,7 +98,8 @@ void ExtensionsRequestAccessButton::MaybeShowHoverCard() {
   }
 
   hover_card_coordinator_->ShowBubble(GetActiveWebContents(), this,
-                                      extensions_container_, extension_ids_);
+                                      extensions_toolbar_view_model_,
+                                      extension_ids_);
 }
 
 void ExtensionsRequestAccessButton::ResetConfirmation() {
@@ -140,7 +135,87 @@ bool ExtensionsRequestAccessButton::ShouldShowInkdropAfterIphInteraction() {
   return false;
 }
 
-void ExtensionsRequestAccessButton::OnButtonPressed() {
+void ExtensionsRequestAccessButton::VisibilityChanged(
+    views::View* starting_from,
+    bool is_visible) {
+  views::View::VisibilityChanged(starting_from, is_visible);
+  input_protector_->VisibilityChanged(is_visible);
+}
+
+void ExtensionsRequestAccessButton::OnBoundsChanged(
+    const gfx::Rect& previous_bounds) {
+  ToolbarChipButton::OnBoundsChanged(previous_bounds);
+  input_protector_->MaybeUpdateViewProtectedTimeStamp();
+
+  auto* extensions_toolbar =
+      views::AsViewClass<ExtensionsToolbarDesktop>(parent());
+  if (extensions_toolbar) {
+    views::View* extensions_button = extensions_toolbar->GetExtensionsButton();
+    if (extensions_button) {
+      UpdateClipPath(extensions_button);
+    }
+  }
+}
+
+void ExtensionsRequestAccessButton::AddedToWidget() {
+  ToolbarChipButton::AddedToWidget();
+  auto* extensions_toolbar =
+      views::AsViewClass<ExtensionsToolbarDesktop>(parent());
+  if (extensions_toolbar) {
+    views::View* extensions_button = extensions_toolbar->GetExtensionsButton();
+    if (extensions_button && !sibling_observation_.IsObserving()) {
+      sibling_observation_.Observe(extensions_button);
+      UpdateClipPath(extensions_button);
+    }
+  }
+}
+
+void ExtensionsRequestAccessButton::RemovedFromWidget() {
+  sibling_observation_.Reset();
+  ToolbarChipButton::RemovedFromWidget();
+}
+
+ExtensionsRequestAccessButton::SiblingObserver::SiblingObserver(
+    ExtensionsRequestAccessButton* button)
+    : button_(button) {}
+
+ExtensionsRequestAccessButton::SiblingObserver::~SiblingObserver() = default;
+
+void ExtensionsRequestAccessButton::SiblingObserver::OnViewBoundsChanged(
+    views::View* observed_view) {
+  button_->UpdateClipPath(observed_view);
+}
+
+void ExtensionsRequestAccessButton::SiblingObserver::OnViewIsDeleting(
+    views::View* observed_view) {
+  button_->OnSiblingDeleting();
+}
+
+void ExtensionsRequestAccessButton::OnSiblingDeleting() {
+  sibling_observation_.Reset();
+}
+
+void ExtensionsRequestAccessButton::UpdateClipPath(
+    views::View* extensions_button) {
+  if (GetVisible() && extensions_button && extensions_button->GetVisible()) {
+    int clip_width = std::max(0, extensions_button->x() - x());
+
+    gfx::Rect clip_rect =
+        base::i18n::IsRTL()
+            ? gfx::Rect(width() - clip_width, 0, clip_width, height())
+            : gfx::Rect(0, 0, clip_width, height());
+
+    SetClipPath(SkPath::Rect(gfx::RectToSkRect(clip_rect)));
+  } else {
+    SetClipPath(SkPath());
+  }
+}
+
+void ExtensionsRequestAccessButton::OnButtonPressed(const ui::Event& event) {
+  if (input_protector_->IsPossiblyUnintendedInteraction(
+          event, /*allow_key_events=*/false)) {
+    return;
+  }
   // Record IPH usage.
   BrowserUserEducationInterface::From(browser_)->NotifyFeaturePromoFeatureUsed(
       feature_engagement::kIPHExtensionsRequestAccessButtonFeature,
@@ -160,12 +235,7 @@ void ExtensionsRequestAccessButton::OnButtonPressed() {
 
   // Always grant access to this site to all extensions.
   DCHECK_GT(extension_ids_.size(), 0u);
-  Profile* profile = browser_->GetProfile();
-  std::vector<const extensions::Extension*> extensions_to_run =
-      GetExtensions(profile, extension_ids_);
-  extensions::SitePermissionsHelper(profile).UpdateSiteAccess(
-      extensions_to_run, web_contents,
-      extensions::PermissionsManager::UserSiteAccess::kOnSite);
+  extensions_toolbar_view_model_->GrantSiteAccess(web_contents, extension_ids_);
 
   // Show confirmation message, and disable the button, for a specific duration.
   std::optional<SkColor> color;
@@ -178,7 +248,7 @@ void ExtensionsRequestAccessButton::OnButtonPressed() {
                                           ? base::Seconds(0)
                                           : kConfirmationDisplayDuration;
   // base::Unretained() below is safe because this view is tied to the
-  // lifetime of `extensions_container_`.
+  // lifetime of `extensions_toolbar_view_model_`.
   collapse_timer_.Start(
       FROM_HERE, collapse_duration,
       base::BindOnce(&ExtensionsContainerViews::CollapseConfirmation,

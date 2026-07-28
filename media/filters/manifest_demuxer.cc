@@ -64,6 +64,11 @@ bool ManifestDemuxer::ManifestDemuxerStream::SupportsConfigChanges() {
   return stream_->SupportsConfigChanges();
 }
 
+bool ManifestDemuxer::ManifestDemuxerStream::ManagesTrackSwitchesInternally()
+    const {
+  return true;
+}
+
 ManifestDemuxer::~ManifestDemuxer() {
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   impl_->Stop();
@@ -85,7 +90,7 @@ ManifestDemuxer::ManifestDemuxer(
           "Demuxing stream using ManifestDemuxer");
       }
 
-std::vector<DemuxerStream*> ManifestDemuxer::GetAllStreams() {
+std::vector<raw_ptr<DemuxerStream>> ManifestDemuxer::GetAllStreams() {
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   // For each stream that ChunkDemuxer returns, we need to wrap it so that we
   // can grab the timestamp. Chunk demuxer's streams live forever, so ours
@@ -94,7 +99,7 @@ std::vector<DemuxerStream*> ManifestDemuxer::GetAllStreams() {
   // TODO(crbug.com/40057824): Rearchitect the demuxer stream ownership model to
   // prevent long-lived streams from potentially leaking memory.
 
-  std::vector<DemuxerStream*> streams;
+  std::vector<raw_ptr<DemuxerStream>> streams;
   for (DemuxerStream* chunk_demuxer_stream :
        impl_->FilterDemuxerStreams(chunk_demuxer_->GetAllStreams())) {
     auto it = streams_.find(chunk_demuxer_stream);
@@ -437,7 +442,7 @@ void ManifestDemuxer::ResetParserState(std::string_view role,
 void ManifestDemuxer::OnError(PipelineStatus error) {
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   cancelable_next_event_.Cancel();
-  weak_factory_.InvalidateWeakPtrs();
+  weak_factory_.InvalidateWeakPtrsAndDoom();
 
   if (pending_init_) {
     std::move(pending_init_).Run(std::move(error).AddHere());

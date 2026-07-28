@@ -11,9 +11,11 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_predefined_color_space.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_htmlcanvaselement_offscreencanvas.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_webgl_context_attributes.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_context_object_support.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_swap_buffer_provider.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -32,11 +34,13 @@ class ImageData;
 class ProxyDawnInstanceForANGLE;
 class ScriptState;
 class V8PredefinedColorSpace;
+class V8UnionElementOrElementImage;
 class V8UnionHTMLCanvasElementOrOffscreenCanvas;
 class VideoFrame;
 class WebGLActiveInfo;
 class WebGLObject;
 class WebGLBuffer;
+class WebGLCopyElementImageConfig;
 class WebGLFramebuffer;
 class WebGLProgram;
 class WebGLQuery;
@@ -74,7 +78,8 @@ class MODULES_EXPORT WebGLRenderingContextWebGPUBase
   // **************************************************************************
   // Start of WebGLRenderingContextBase's IDL methods
   // **************************************************************************
-  V8UnionHTMLCanvasElementOrOffscreenCanvas* getHTMLOrOffscreenCanvas() const;
+  V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret getHTMLOrOffscreenCanvas(
+      ScriptState*) const;
 
   int drawingBufferWidth() const;
   int drawingBufferHeight() const;
@@ -599,92 +604,10 @@ class MODULES_EXPORT WebGLRenderingContextWebGPUBase
                   int64_t src_offset);
 
   void texElementImage2D(GLenum target,
-                         GLint level,
-                         GLint internalformat,
-                         GLenum format,
-                         GLenum type,
-                         Element* element,
+                         GLenum internalformat,
+                         const V8UnionElementOrElementImage* element,
+                         const WebGLCopyElementImageConfig* config,
                          ExceptionState& exception_state);
-
-  void texElementImage2D(GLenum target,
-                         GLint level,
-                         GLint internalformat,
-                         GLsizei width,
-                         GLsizei height,
-                         GLenum format,
-                         GLenum type,
-                         Element* element,
-                         ExceptionState& exception_state);
-
-  void texElementImage2D(GLenum target,
-                         GLint level,
-                         GLint internalformat,
-                         GLfloat sx,
-                         GLfloat sy,
-                         GLfloat swidth,
-                         GLfloat sheight,
-                         GLenum format,
-                         GLenum type,
-                         Element* element,
-                         ExceptionState& exception_state);
-
-  void texElementImage2D(GLenum target,
-                         GLint level,
-                         GLint internalformat,
-                         GLfloat sx,
-                         GLfloat sy,
-                         GLfloat swidth,
-                         GLfloat sheight,
-                         GLsizei width,
-                         GLsizei height,
-                         GLenum format,
-                         GLenum type,
-                         Element* element,
-                         ExceptionState& exception_state);
-
-  void texElement2D(GLenum target,
-                    GLint level,
-                    GLint internalformat,
-                    GLenum format,
-                    GLenum type,
-                    Element* element,
-                    ExceptionState& exception_state);
-
-  void texElement2D(GLenum target,
-                    GLint level,
-                    GLint internalformat,
-                    GLsizei width,
-                    GLsizei height,
-                    GLenum format,
-                    GLenum type,
-                    Element* element,
-                    ExceptionState& exception_state);
-
-  void texElement2D(GLenum target,
-                    GLint level,
-                    GLint internalformat,
-                    GLfloat sx,
-                    GLfloat sy,
-                    GLfloat swidth,
-                    GLfloat sheight,
-                    GLenum format,
-                    GLenum type,
-                    Element* element,
-                    ExceptionState& exception_state);
-
-  void texElement2D(GLenum target,
-                    GLint level,
-                    GLint internalformat,
-                    GLfloat sx,
-                    GLfloat sy,
-                    GLfloat swidth,
-                    GLfloat sheight,
-                    GLsizei width,
-                    GLsizei height,
-                    GLenum format,
-                    GLenum type,
-                    Element* element,
-                    ExceptionState& exception_state);
 
   void texSubImage2D(GLenum target,
                      GLint level,
@@ -1345,9 +1268,7 @@ class MODULES_EXPORT WebGLRenderingContextWebGPUBase
   // **************************************************************************
   // Start of CanvasRenderingContext implementation
   // **************************************************************************
-  SkAlphaType GetAlphaType() const override;
-  viz::SharedImageFormat GetSharedImageFormat() const override;
-  gfx::ColorSpace GetColorSpace() const override;
+  bool IsOpaque() const override;
   base::ByteSize AllocatedBufferSize() const override;
   bool isContextLost() const override;
   scoped_refptr<StaticBitmapImage> GetImage() override;
@@ -1368,7 +1289,8 @@ class MODULES_EXPORT WebGLRenderingContextWebGPUBase
   void Reshape(int width, int height) override;
   void Stop() override;
   void FinalizeFrame(FlushReason) override;
-  bool PushFrame() override;
+  scoped_refptr<CanvasResource> GetResourceForPushFrame(
+      bool& should_call_push_frame) override;
 
   // **************************************************************************
   // End of CanvasRenderingContext implementation
@@ -1524,6 +1446,13 @@ class MODULES_EXPORT WebGLRenderingContextWebGPUBase
       bound_textures_;
 
   Member<WebGLBuffer> array_buffer_binding_;
+  Member<WebGLBuffer> copy_read_buffer_binding_;
+  Member<WebGLBuffer> copy_write_buffer_binding_;
+  Member<WebGLBuffer> pixel_pack_buffer_binding_;
+  Member<WebGLBuffer> pixel_unpack_buffer_binding_;
+  Member<WebGLBuffer> transform_feedback_buffer_binding_;
+  Member<WebGLBuffer> uniform_buffer_binding_;
+
   // TODO(413078308): This reference should live in the VAO instead.
   Member<WebGLBuffer> element_array_buffer_binding_;
 

@@ -4,35 +4,46 @@
 
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_manager.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
+#include <deque>
 #include <functional>
+#include <list>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/base64url.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
-#include "base/numerics/safe_conversions.h"
-#include "base/rand_util.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_encoding.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
-#include "components/autofill/core/browser/logging/log_protobufs.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
@@ -45,6 +56,7 @@
 #include "components/autofill/core/common/autofill_switches.h"
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/logging/log_buffer.h"
+#include "components/autofill/core/common/logging/log_macros.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/google/core/common/google_util.h"
@@ -52,20 +64,25 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/variations/net/variations_http_headers.h"
+#include "components/variations/variations_associated_data.h"
 #include "components/variations/variations_ids_provider.h"
 #include "google_apis/common/api_key_request_util.h"
 #include "google_apis/google_api_keys.h"
-#include "net/base/load_flags.h"
+#include "net/base/backoff_entry.h"
+#include "net/base/isolation_info.h"
+#include "net/base/net_errors.h"
+#include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
-#include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace autofill {
 
@@ -320,8 +337,8 @@ size_t CountActiveFieldsInForms(const std::vector<FormData>& forms) {
 
 std::string FieldTypeToString(uint32_t type) {
   return base::StrCat(
-      {base::NumberToString(type), std::string("/"),
-       FieldTypeToStringView(ToSafeFieldType(type, UNKNOWN_TYPE))});
+      {base::NumberToString(type), "/",
+       FieldTypeToStringView(ToSafeFieldType(type).value_or(UNKNOWN_TYPE))});
 }
 
 LogBuffer& operator<<(LogBuffer& out, const AutofillPageQueryRequest& query) {
@@ -480,7 +497,7 @@ bool ShouldThrottleUpload(FormSignature form_signature,
   // event pref to set the appropriate bit.
   const bool is_first_upload_for_event = ((value & mask) == 0);
   if (is_first_upload_for_event) {
-    ScopedDictPrefUpdate update(pref_service, std::string(preference));
+    ScopedDictPrefUpdate update(pref_service, preference);
     update->Set(key, value | mask);
   }
 
@@ -597,12 +614,9 @@ void InitActiveExperiments() {
       std::unique(active_experiments.begin(), active_experiments.end()),
       active_experiments.end());
 
-  // We specify the experiment id for AutofillAI server predictions via a
-  // feature parameter instead of a variations ids so that we can use it
-  // together with a Google Groups controlled study.
-  if (features::kAutofillAiWithDataSchemaServerExperimentId.Get()) {
+  if (features::debug::kAutofillServerCommunicationExperimentId.Get()) {
     active_experiments.push_back(
-        features::kAutofillAiWithDataSchemaServerExperimentId.Get());
+        features::debug::kAutofillServerCommunicationExperimentId.Get());
   }
 
   GetActiveExperiments() = std::move(active_experiments);
@@ -1097,6 +1111,21 @@ void AutofillCrowdsourcingManager::OnSimpleLoaderComplete(
     base::UmaHistogramCounts100000(
         GetMetricName(request_data.request_type, "FailingPayloadSize"),
         request_data.payload.length());
+
+#if !BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(
+            features::debug::kAutofillOverridePredictions) &&
+        request_data.callback) {
+      // When overriding server predictions, the callback requires a non null
+      // response, so sending an empty (non null) response is enough to allow
+      // server prediction overrides to be applied.
+      std::move(request_data.callback)
+          .Release()
+          .Run(QueryResponse(/*response=*/"",
+                             std::move(request_data.form_signatures)));
+      return;
+    }
+#endif
 
     // If the failure was a client error don't retry.
     if (response_code >= 400 && response_code <= 499) {

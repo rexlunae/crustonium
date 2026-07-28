@@ -266,8 +266,8 @@ bool TextIteratorAlgorithm<Strategy>::IsInsideAtomicInlineElement() const {
   if (AtEnd() || length() != 1 || !node_)
     return false;
 
-  LayoutObject* layout_object = node_->GetLayoutObject();
-  return layout_object && layout_object->IsAtomicInlineLevel();
+  const LayoutObject* layout_object = node_->GetLayoutObject();
+  return layout_object && layout_object->IsAtomicInline();
 }
 
 template <typename Strategy>
@@ -466,12 +466,10 @@ void TextIteratorAlgorithm<Strategy>::Advance() {
               node_ ? node_->GetLayoutObject() : nullptr;
           LayoutObject* parent_node_layout =
               parent_node ? parent_node->GetLayoutObject() : nullptr;
-          bool should_exit_node = have_layout_object ||
-              (RuntimeEnabledFeatures::
-                   CallExitNodeWithoutLayoutObjectEnabled() &&
-               node_layout && parent_node_layout &&
-               node_layout->IsLayoutBlock() &&
-               !parent_node_layout->IsInline());
+          bool should_exit_node =
+              have_layout_object ||
+              (node_layout && parent_node_layout &&
+               node_layout->IsLayoutBlock() && !parent_node_layout->IsInline());
           if (should_exit_node) {
             ExitNode();
           }
@@ -598,7 +596,7 @@ void TextIteratorAlgorithm<Strategy>::HandleReplacedElement() {
     return;
 
   LayoutObject* layout_object = node_->GetLayoutObject();
-  if (layout_object->Style()->Visibility() != EVisibility::kVisible &&
+  if (layout_object->StyleRef().Visibility() != EVisibility::kVisible &&
       !IgnoresStyleVisibility()) {
     return;
   }
@@ -796,7 +794,7 @@ bool TextIteratorAlgorithm<Strategy>::ShouldRepresentNodeOffsetZero() {
   // unrendered content, we would create VisiblePositions on every call to this
   // function without this check.
   if (!node_->GetLayoutObject() ||
-      node_->GetLayoutObject()->Style()->Visibility() !=
+      node_->GetLayoutObject()->StyleRef().Visibility() !=
           EVisibility::kVisible ||
       (node_->GetLayoutObject()->IsLayoutBlockFlow() &&
        !To<LayoutBlock>(node_->GetLayoutObject())->StitchedSize().height &&

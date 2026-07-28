@@ -31,7 +31,6 @@
 #include "chrome/browser/web_applications/jobs/manifest_update_job.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/locks/noop_lock.h"
-#include "chrome/browser/web_applications/manifest_update_utils.h"
 #include "chrome/browser/web_applications/model/web_app_comparison.h"
 #include "chrome/browser/web_applications/proto/web_app.equal.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
@@ -48,7 +47,6 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "components/sync/protocol/web_app_specifics.pb.h"
 #include "components/webapps/browser/image_visual_diff.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
@@ -201,8 +199,15 @@ void ManifestSilentUpdateCommand::OnManifestFetchedAcquireAppLock(
     return;
   }
 
-  CHECK(opt_manifest->id.is_valid());
-  app_id_ = GenerateAppIdFromManifestId(opt_manifest->id);
+  std::optional<webapps::ManifestId> manifest_id =
+        webapps::ManifestId::Create(opt_manifest->id);
+  if (!manifest_id.has_value()) {
+    CompleteCommandAndSelfDestruct(
+        FROM_HERE, ManifestSilentUpdateCheckResult::kInvalidManifest);
+    return;
+  }
+
+  app_id_ = GenerateAppIdFromManifestId(*manifest_id);
 
   SetStage(ManifestSilentUpdateCommandStage::kAcquiringAppLock);
   app_lock_ = std::make_unique<AppLock>();
@@ -223,13 +228,15 @@ void ManifestSilentUpdateCommand::OnAppLockAcquired(
   ManifestUpdateJob::Options options;
   options.fail_if_any_icon_download_fails = true;
   options.record_icon_results_on_update = true;
+  // Sub apps (IWA only API) are fine without user prompt for icon/title change.
   options.use_manifest_icons_as_trusted =
       app_lock_->registrar().AppMatches(app_id_, WebAppFilter::IsTrusted());
   options.previous_time_for_silent_icon_update =
       previous_time_for_silent_icon_update_;
 
   manifest_update_job_ = ManifestUpdateJob::CreateAndStart(
-      app_lock_.get(), web_contents_.get(),
+      *Profile::FromBrowserContext(web_contents_->GetBrowserContext()),
+      app_lock_.get(), app_lock_.get(), web_contents_.get(),
       GetMutableDebugValue().EnsureDict("manifest_update_job"),
       std::move(manifest), data_retriever_.get(), &app_lock_->clock(),
       base::BindOnce(&ManifestSilentUpdateCommand::OnUpdateJobCompleted,
@@ -292,6 +299,10 @@ void ManifestSilentUpdateCommand::OnUpdateJobCompleted(
     case ManifestUpdateJobResult::kUserNavigated:
       check_result = ManifestSilentUpdateCheckResult::kUserNavigated;
       break;
+    case ManifestUpdateJobResult::kSilentlyUpdatedDueToSmallIconComparison:
+      check_result = ManifestSilentUpdateCheckResult::
+          kAppSilentlyUpdatedDueToSmallIconComparison;
+      break;
   }
 
   CompleteCommandAndSelfDestruct(FROM_HERE, check_result);
@@ -306,6 +317,8 @@ void ManifestSilentUpdateCommand::CompleteCommandAndSelfDestruct(
   CommandResult command_result;
   switch (check_result) {
     case ManifestSilentUpdateCheckResult::kAppSilentlyUpdated:
+    case ManifestSilentUpdateCheckResult::
+        kAppSilentlyUpdatedDueToSmallIconComparison:
     case ManifestSilentUpdateCheckResult::kAppHasNonSecurityAndSecurityChanges:
       record_update = true;
       command_result = CommandResult::kSuccess;

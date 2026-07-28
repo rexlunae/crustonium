@@ -4,18 +4,13 @@
 
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
 
-#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "chrome/browser/themes/theme_properties.h"
-#include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "ui/base/ui_base_switches.h"
 #include "ui/views/test/widget_test.h"
 #include "url/gurl.h"
 
@@ -35,9 +30,16 @@ class BrowserFrameViewTest : public TestWithBrowserView {
         static_cast<BrowserFrameView*>(widget->non_client_view()->frame_view());
   }
 
+  void TearDown() override {
+    // Nullify the frame_view_ pointer before destroying the browser to avoid
+    // dangling pointers.
+    frame_view_ = nullptr;
+    TestWithBrowserView::TearDown();
+  }
+
  protected:
-  // Owned by the browser view.
-  raw_ptr<BrowserFrameView, DanglingUntriaged> frame_view_ = nullptr;
+  // Owned by the widget's NonClientView.
+  raw_ptr<BrowserFrameView> frame_view_ = nullptr;
 };
 
 class BrowserFrameViewPopupTest : public BrowserFrameViewTest {

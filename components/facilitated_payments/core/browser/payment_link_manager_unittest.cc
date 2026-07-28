@@ -155,6 +155,10 @@ TEST_F(PaymentLinkManagerTest, LogPaymentLinkDetected) {
   histogram_tester.ExpectUniqueSample("FacilitatedPayments.PaymentLinkDetected",
                                       /*sample=*/true,
                                       /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.ShopeePay",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
   auto ukm_entries = ukm_recorder_.GetEntries(
       ukm::builders::FacilitatedPayments_PaymentLinkDetected::kEntryName,
       {ukm::builders::FacilitatedPayments_PaymentLinkDetected::
@@ -857,6 +861,33 @@ TEST_F(PaymentLinkManagerTest,
       "FacilitatedPayments.Ewallet.InitiatePurchaseAction.Attempt.ShopeePay",
       /*sample=*/true,
       /*expected_bucket_count=*/1);
+}
+
+// Test that multiple calls to TriggerPaymentLinkPushPayment are ignored.
+TEST_F(PaymentLinkManagerTest,
+       TriggerPaymentLinkPushPayment_MultipleCalls_Ignored) {
+  GURL page_url("https://example.com/");
+  payments_data_manager_.AddEwalletForTest(autofill::Ewallet(
+      /*instrument_id=*/100, u"nickname",
+      /*display_icon_url=*/page_url, u"ewallet_name", u"account_display_name",
+      /*supported_payment_link_uris=*/
+      {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$",
+       u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
+      /*is_fido_enrolled=*/true));
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011051692389958586862838?merchant=Walmart&amount=101&currency=usd");
+
+  // ShowPaymentLinkPrompt should be called exactly once.
+  EXPECT_CALL(client_, ShowPaymentLinkPrompt).Times(1);
+
+  // First call should trigger the payment flow.
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, page_url, ukm::UkmRecorder::GetNewSourceID());
+
+  // Second call should be ignored because the UI state is no longer hidden.
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, page_url, ukm::UkmRecorder::GetNewSourceID());
 }
 
 // Test that eWalet payment prompt is shown for websites in the allowlist.
@@ -1642,7 +1673,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow, A2APaymentPromptShown) {
   GURL supported_payment_link(
       "https://www.itmx.co.th/facilitated-payment/prompt-pay?path=fake_path");
   EXPECT_CALL(*mock_facilitated_payments_app_info_list_, Size())
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(testing::Return(2));
   EXPECT_CALL(client_, ShowPaymentLinkPrompt);
 
@@ -1785,7 +1816,7 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
   GURL supported_payment_link(
       "https://www.itmx.co.th/facilitated-payment/prompt-pay?path=fake_path");
   EXPECT_CALL(*mock_facilitated_payments_app_info_list_, Size())
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(testing::Return(2));
   EXPECT_CALL(client_, ShowPaymentLinkPrompt);
 
@@ -1806,17 +1837,6 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
       "https://www.itmx.co.th/facilitated-payment/prompt-pay?path=fake_path");
   ON_CALL(*mock_facilitated_payments_app_info_list_, Size)
       .WillByDefault(testing::Return(2));
-
-  // Test that when `kFacilitatedPaymentsA2AEnabled` pref is true,
-  // `ShowPaymentLinkPrompt` is invoked.
-  pref_service_.get()->SetBoolean(
-      autofill::prefs::kFacilitatedPaymentsA2AEnabled, true);
-
-  EXPECT_CALL(client_, ShowPaymentLinkPrompt).Times(1);
-
-  payment_link_manager_->TriggerPaymentLinkPushPayment(
-      supported_payment_link, GURL("https://www.example.com"),
-      ukm::UkmRecorder::GetNewSourceID());
 
   // Test that when `kFacilitatedPaymentsA2AEnabled` pref is false,
   // `ShowPaymentLinkPrompt` is not invoked.
@@ -2187,6 +2207,222 @@ TEST_F(PaymentLinkManagerTestForA2AFlow,
       "FacilitatedPayments.A2A.PayflowExitedReason.PromptPay",
       A2AFlowExitedReason::kFopSelectorClosedByUser,
       /*expected_bucket_count=*/1);
+}
+
+// Ewallet payment prompt is not exited early when a supported creation option
+// exists
+TEST_F(PaymentLinkManagerTest,
+       FlagEnabled_SupportedCreationOption_RetrieveCreationOptions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // Add ewallet creation option (instrument_id = 0)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"ewallet_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert that matched eWallet creation options were cached directly
+  auto creation_options =
+      test_api(*payment_link_manager_).supported_ewallet_creation_options();
+  ASSERT_EQ(creation_options.size(), 1u);
+  EXPECT_EQ(creation_options[0].ewallet_name(), u"ewallet_name");
+
+  // Expect kNoSupportedEwallet to be logged since ewallets are empty.
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      /*sample=*/EwalletFlowExitedReason::kNoSupportedEwallet,
+      /*expected_bucket_count=*/1);
+
+  // Expect NAL eligibility top-of-funnel metric to be logged.
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
+}
+
+// Verify that creation options are completely ignored and the flow exits early
+// if the feature flag is disabled.
+TEST_F(PaymentLinkManagerTest, FlagDisabled_SupportedCreationOption_Ignored) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // Add ewallet creation option (instrument_id = 0)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"ewallet_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert that creation options were ignored
+  EXPECT_TRUE(test_api(*payment_link_manager_)
+                  .supported_ewallet_creation_options()
+                  .empty());
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      /*sample=*/EwalletFlowExitedReason::kNoSupportedEwallet,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking", 0);
+}
+
+// Verify that a creation option is ignored if it does not match the triggered
+// payment link regex pattern.
+TEST_F(PaymentLinkManagerTest, FlagEnabled_UnsupportedCreationOption_NoMatch) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // Add mismatched creation option supporting ONLY Touch'n Go (tngd://)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"ewallet_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^tngd:\\/\\/tngdigital\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  // Trigger ShopeePay paylink
+  GURL unsupported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      unsupported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert that mismatched option was filtered out
+  EXPECT_TRUE(test_api(*payment_link_manager_)
+                  .supported_ewallet_creation_options()
+                  .empty());
+
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      EwalletFlowExitedReason::kNoSupportedEwallet, 1);
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.NewAccountLinkingFlowExitedReason",
+      EwalletNewAccountLinkingFlowExitedReason::kNoSupportedCreationOption, 1);
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking",
+      /*sample=*/true, 1);
+}
+
+// Verify that both standard linked accounts and unlinked creation options
+// can coexist and be cached without interference.
+TEST_F(PaymentLinkManagerTest,
+       FlagEnabled_BothLinkedAndUnlinkedExist_BothCached) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  // 1. Add standard linked ewallet (instrument_id = 100L)
+  payments_data_manager_.AddEwalletForTest(
+      autofill::Ewallet(/*instrument_id=*/100, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"linked_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/true));
+
+  // 2. Add unlinked creation option (instrument_id = 0)
+  payments_data_manager_.AddEwalletCreationOptionForTest(
+      autofill::Ewallet(/*instrument_id=*/0, u"nickname",
+                        /*display_icon_url=*/GURL("http://www.example.com"),
+                        u"unlinked_name", u"account_display_name",
+                        /*supported_payment_link_uris=*/
+                        {u"^shopeepay:\\/\\/shopeepay\\.com\\.my\\?code=.*$"},
+                        /*is_fido_enrolled=*/false));
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Assert both standard and creation options are cached
+  EXPECT_EQ(test_api(*payment_link_manager_).supported_ewallets().size(), 1u);
+  EXPECT_EQ(
+      test_api(*payment_link_manager_).supported_ewallets()[0].ewallet_name(),
+      u"linked_name");
+
+  EXPECT_EQ(test_api(*payment_link_manager_)
+                .supported_ewallet_creation_options()
+                .size(),
+            1u);
+  EXPECT_EQ(test_api(*payment_link_manager_)
+                .supported_ewallet_creation_options()[0]
+                .ewallet_name(),
+            u"unlinked_name");
+
+  // Ensure no exit metrics are logged
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      /*sample=*/EwalletFlowExitedReason::kNoSupportedEwallet,
+      /*expected_bucket_count=*/0);
+
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking", 0);
+}
+
+// Verify that EwalletFlowExitedReason::kNoSupportedCreationOption is logged
+// when the NAL feature is enabled but no creation options are available in the
+// database.
+TEST_F(PaymentLinkManagerTest,
+       FlagEnabled_NoCreationOptions_NoSupportedCreationOptionLogged) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      payments::facilitated::kEnableEwalletNewAccountLinking);
+
+  GURL supported_payment_link(
+      "shopeepay://shopeepay.com.my?code=https://shopeepay.com.my/"
+      "281011?merchant=Walmart");
+
+  base::HistogramTester histogram_tester;
+  payment_link_manager_->TriggerPaymentLinkPushPayment(
+      supported_payment_link, GURL("https://www.example.com"),
+      ukm::UkmRecorder::GetNewSourceID());
+
+  // Expect both standard empty and creation options empty to be logged.
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.PayflowExitedReason",
+      EwalletFlowExitedReason::kNoSupportedEwallet, 1);
+  histogram_tester.ExpectBucketCount(
+      "FacilitatedPayments.Ewallet.NewAccountLinkingFlowExitedReason",
+      EwalletNewAccountLinkingFlowExitedReason::kNoSupportedCreationOption, 1);
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.PaymentLinkDetected.EligibleForAccountLinking",
+      /*sample=*/true, 1);
 }
 
 }  // namespace payments::facilitated

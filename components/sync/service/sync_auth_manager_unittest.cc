@@ -43,13 +43,15 @@ class SyncAuthManagerTest
 
   ~SyncAuthManagerTest() override = default;
 
-  std::unique_ptr<SyncAuthManager> CreateAuthManager() {
+  std::unique_ptr<SyncAuthManager> CreateAuthManager(
+      base::TimeDelta timeout = base::Seconds(5)) {
     return std::make_unique<SyncAuthManager>(identity_env_.identity_manager(),
-                                             &delegate_);
+                                             &delegate_, timeout);
   }
 
-  std::unique_ptr<SyncAuthManager> CreateAuthManagerForLocalSync() {
-    return std::make_unique<SyncAuthManager>(nullptr, &delegate_);
+  std::unique_ptr<SyncAuthManager> CreateAuthManagerForLocalSync(
+      base::TimeDelta timeout = base::Seconds(5)) {
+    return std::make_unique<SyncAuthManager>(nullptr, &delegate_, timeout);
   }
 
   signin::IdentityTestEnvironment* identity_env() { return &identity_env_; }
@@ -73,8 +75,7 @@ TEST_P(SyncAuthManagerTest, ProvidesNothingInLocalSyncMode) {
   EXPECT_TRUE(auth_manager->GetActiveAccountInfo().account_info.IsEmpty());
   syncer::SyncCredentials credentials = auth_manager->GetCredentials();
   EXPECT_TRUE(credentials.email.empty());
-  EXPECT_TRUE(credentials.access_token.empty());
-  EXPECT_TRUE(auth_manager->access_token().empty());
+  EXPECT_TRUE(credentials.access_token_info.token.empty());
   // Note: Calling RegisterForAuthNotifications or any of the Connection*()
   // methods is illegal in local Sync mode, so we don't test that.
 }
@@ -168,16 +169,18 @@ TEST_P(SyncAuthManagerTest, NotifiesOfSignoutBeforeAccessTokenIsGone) {
   // Make sure an access token is available.
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Sign out of the account.
   EXPECT_CALL(delegate(), SyncAuthAccountStateChanged).WillOnce([&]() {
     // At the time the callback gets run, the access token should still be here.
-    EXPECT_FALSE(auth_manager->GetCredentials().access_token.empty());
+    EXPECT_FALSE(
+        auth_manager->GetCredentials().access_token_info.token.empty());
   });
   identity_env()->ClearPrimaryAccount();
   // After the signout is complete, the access token should be gone.
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
   ASSERT_TRUE(
       auth_manager->GetActiveAccountInfo().account_info.account_id.empty());
 }
@@ -210,8 +213,9 @@ TEST_P(SyncAuthManagerTest, ForwardsUnconsentedAccountEvents) {
   EXPECT_CALL(delegate(), SyncAuthAccountStateChanged);
   signin::PrimaryAccountMutator* primary_account_mutator =
       identity_env()->identity_manager()->GetPrimaryAccountMutator();
-  primary_account_mutator->SetPrimaryAccount(account_info.account_id,
-                                             signin::ConsentLevel::kSync);
+  primary_account_mutator->SetPrimaryAccount(
+      account_info.account_id, signin::ConsentLevel::kSync,
+      signin_metrics::AccessPoint::kStartPage);
 
   EXPECT_TRUE(auth_manager->GetActiveAccountInfo().is_sync_consented);
 }
@@ -341,19 +345,21 @@ TEST_P(SyncAuthManagerTest, ForwardsCredentialsEvents) {
   EXPECT_CALL(delegate(), SyncAuthCredentialsChanged);
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now the refresh token gets updated. The access token will get dropped, so
   // this should cause another notification.
   EXPECT_CALL(delegate(), SyncAuthCredentialsChanged);
   identity_env()->SetRefreshTokenForPrimaryAccount();
-  ASSERT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  ASSERT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
 
   // Once a new token is available, there's another notification.
   EXPECT_CALL(delegate(), SyncAuthCredentialsChanged);
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token_2", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token_2");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token_2");
 
   // Revoking the refresh token should also cause the access token to get
   // dropped.
@@ -363,7 +369,7 @@ TEST_P(SyncAuthManagerTest, ForwardsCredentialsEvents) {
   EXPECT_CALL(delegate(), SyncAuthCredentialsChanged)
       .Times(testing::AtLeast(1));
   identity_env()->SetInvalidRefreshTokenForPrimaryAccount();
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
 }
 
 TEST_P(SyncAuthManagerTest, RequestsAccessTokenOnSyncStartup) {
@@ -382,7 +388,8 @@ TEST_P(SyncAuthManagerTest, RequestsAccessTokenOnSyncStartup) {
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
 
-  EXPECT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  EXPECT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 }
 
 TEST_P(SyncAuthManagerTest,
@@ -424,14 +431,14 @@ TEST_P(SyncAuthManagerTest,
   auth_manager->ConnectionOpened();
 
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+      GoogleServiceAuthError::CreateRequestCanceled());
 
   // Expect no backoff the first time the request is canceled.
   EXPECT_FALSE(auth_manager->IsRetryingAccessTokenFetchForTest());
 
   // Cancel the retry as well.
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+      GoogleServiceAuthError::CreateRequestCanceled());
 
   // Expect retry with backoff when the first retry was also canceled.
   EXPECT_TRUE(auth_manager->IsRetryingAccessTokenFetchForTest());
@@ -452,7 +459,7 @@ TEST_P(SyncAuthManagerTest,
   auth_manager->ConnectionOpened();
 
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+      GoogleServiceAuthError::CreateRequestCanceled());
 
   // Expect no backoff the first time the request is canceled.
   EXPECT_FALSE(auth_manager->IsRetryingAccessTokenFetchForTest());
@@ -461,7 +468,8 @@ TEST_P(SyncAuthManagerTest,
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
 
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   // Don't expect any backoff when the retry is a success.
   EXPECT_FALSE(auth_manager->IsRetryingAccessTokenFetchForTest());
 }
@@ -505,7 +513,8 @@ TEST_P(SyncAuthManagerTest, FetchesNewAccessTokenWithBackoffOnServerError) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // The server is returning AUTH_ERROR - maybe something's wrong with the
   // token we got.
@@ -532,7 +541,8 @@ TEST_P(SyncAuthManagerTest, DoesNotExposeServerError) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now a server error happens.
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_SERVER_ERROR);
@@ -540,7 +550,8 @@ TEST_P(SyncAuthManagerTest, DoesNotExposeServerError) {
   // The error should not be reported as it is transient.
   EXPECT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
-  EXPECT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  EXPECT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 }
 
 TEST_P(SyncAuthManagerTest, ClearsServerErrorOnSyncDisable) {
@@ -557,7 +568,8 @@ TEST_P(SyncAuthManagerTest, ClearsServerErrorOnSyncDisable) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // The server returns an auth error.
   GoogleServiceAuthError auth_error =
@@ -593,11 +605,13 @@ TEST_P(SyncAuthManagerTest, RequestsNewAccessTokenOnExpiry) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now everything is okay for a while.
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_OK);
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   ASSERT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
@@ -605,11 +619,12 @@ TEST_P(SyncAuthManagerTest, RequestsNewAccessTokenOnExpiry) {
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_AUTH_ERROR);
 
   // Should immediately drop the access token and fetch a new one (no backoff).
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
 
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token_2", base::Time::Now() + base::Hours(1));
-  EXPECT_EQ(auth_manager->GetCredentials().access_token, "access_token_2");
+  EXPECT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token_2");
 }
 
 TEST_P(SyncAuthManagerTest, RequestsNewAccessTokenOnRefreshTokenUpdate) {
@@ -626,11 +641,13 @@ TEST_P(SyncAuthManagerTest, RequestsNewAccessTokenOnRefreshTokenUpdate) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now everything is okay for a while.
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_OK);
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   ASSERT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
@@ -638,11 +655,12 @@ TEST_P(SyncAuthManagerTest, RequestsNewAccessTokenOnRefreshTokenUpdate) {
   identity_env()->SetRefreshTokenForPrimaryAccount();
 
   // Should immediately drop the access token and fetch a new one (no backoff).
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
 
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token_2", base::Time::Now() + base::Hours(1));
-  EXPECT_EQ(auth_manager->GetCredentials().access_token, "access_token_2");
+  EXPECT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token_2");
 }
 
 TEST_P(SyncAuthManagerTest, DoesNotRequestAccessTokenAutonomously) {
@@ -672,7 +690,7 @@ TEST_P(SyncAuthManagerTest, DoesNotRequestAccessTokenAutonomously) {
   // posted tasks, we have to spin the message loop.
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
 }
 
 TEST_P(SyncAuthManagerTest, ClearsCredentialsOnRefreshTokenRemoval) {
@@ -689,11 +707,13 @@ TEST_P(SyncAuthManagerTest, ClearsCredentialsOnRefreshTokenRemoval) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now everything is okay for a while.
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_OK);
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   ASSERT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
@@ -706,7 +726,7 @@ TEST_P(SyncAuthManagerTest, ClearsCredentialsOnRefreshTokenRemoval) {
   identity_env()->SetInvalidRefreshTokenForPrimaryAccount();
 
   // Should immediately drop the access token and expose an auth error.
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
   EXPECT_NE(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
@@ -729,11 +749,13 @@ TEST_P(SyncAuthManagerTest, ClearsCredentialsOnInvalidRefreshToken) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now everything is okay for a while.
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_OK);
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   ASSERT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
@@ -746,7 +768,7 @@ TEST_P(SyncAuthManagerTest, ClearsCredentialsOnInvalidRefreshToken) {
   identity_env()->SetInvalidRefreshTokenForPrimaryAccount();
 
   // Should immediately drop the access token and expose a special auth error.
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
   GoogleServiceAuthError invalid_token_error =
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::
@@ -773,11 +795,13 @@ TEST_P(SyncAuthManagerTest, EntersPausedStateOnPersistentAuthError) {
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
 
   // Now everything is okay for a while.
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_OK);
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   ASSERT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
@@ -787,7 +811,7 @@ TEST_P(SyncAuthManagerTest, EntersPausedStateOnPersistentAuthError) {
       GoogleServiceAuthError::FromServiceError("Test error"));
 
   // Should immediately drop the access token and enter the sync-paused state.
-  EXPECT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  EXPECT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
   EXPECT_TRUE(auth_manager->GetLastAuthError().IsPersistentError());
   EXPECT_TRUE(auth_manager->IsSyncPaused());
 }
@@ -808,16 +832,18 @@ TEST_P(SyncAuthManagerTest,
   auth_manager->ConnectionOpened();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   auth_manager->ConnectionStatusChanged(syncer::CONNECTION_OK);
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token");
   ASSERT_EQ(auth_manager->GetLastAuthError(),
             GoogleServiceAuthError::AuthErrorNone());
 
   // But now an invalid refresh token gets set, i.e. we enter the "Sync/Signin
   // paused" state.
   identity_env()->SetInvalidRefreshTokenForPrimaryAccount();
-  ASSERT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  ASSERT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
   ASSERT_TRUE(auth_manager->IsSyncPaused());
 
   // Once the user signs in again and we have a valid refresh token, we should
@@ -825,7 +851,8 @@ TEST_P(SyncAuthManagerTest,
   identity_env()->SetRefreshTokenForPrimaryAccount();
   identity_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token_2", base::Time::Now() + base::Hours(1));
-  ASSERT_EQ(auth_manager->GetCredentials().access_token, "access_token_2");
+  ASSERT_EQ(auth_manager->GetCredentials().access_token_info.token,
+            "access_token_2");
 }
 
 TEST_P(SyncAuthManagerTest, DoesNotRequestAccessTokenIfSyncInactive) {
@@ -853,7 +880,7 @@ TEST_P(SyncAuthManagerTest, DoesNotRequestAccessTokenIfSyncInactive) {
   EXPECT_CALL(delegate(), SyncAuthCredentialsChanged)
       .Times(testing::AtLeast(1));
   identity_env()->SetInvalidRefreshTokenForPrimaryAccount();
-  ASSERT_TRUE(auth_manager->GetCredentials().access_token.empty());
+  ASSERT_TRUE(auth_manager->GetCredentials().access_token_info.token.empty());
   ASSERT_TRUE(auth_manager->IsSyncPaused());
 
   // Once the user signs in again and we have a valid refresh token, we should
@@ -961,19 +988,7 @@ TEST_P(SyncAuthManagerTest, DetectsInvalidRefreshTokenAtStartup) {
   EXPECT_TRUE(auth_manager->GetLastAuthError().IsPersistentError());
 }
 
-class SyncAuthManagerWithDetermineAccountTypeTest : public SyncAuthManagerTest {
- public:
-  SyncAuthManagerWithDetermineAccountTypeTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        kSyncDetermineAccountManagedStatus);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_F(SyncAuthManagerWithDetermineAccountTypeTest,
-       DeterminesAccountTypeSynchronously) {
+TEST_F(SyncAuthManagerTest, DeterminesAccountTypeSynchronously) {
   // There is a primary account. It's @gmail.com so it's managed status can be
   // determined synchronously.
   AccountInfo account_info = identity_env()->MakePrimaryAccountAvailable(
@@ -1015,8 +1030,7 @@ TEST_F(SyncAuthManagerWithDetermineAccountTypeTest,
   histograms.ExpectTotalCount("Sync.AccountManagedStatusDuration", 0);
 }
 
-TEST_F(SyncAuthManagerWithDetermineAccountTypeTest,
-       DeterminesAccountTypeAsynchronously) {
+TEST_F(SyncAuthManagerTest, DeterminesAccountTypeAsynchronously) {
   // There is a primary account, whose managed-ness status isn't known yet.
   AccountInfo account_info = identity_env()->MakePrimaryAccountAvailable(
       "test@consumer.com", signin::ConsentLevel::kSignin);
@@ -1059,8 +1073,7 @@ TEST_F(SyncAuthManagerWithDetermineAccountTypeTest,
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
-TEST_F(SyncAuthManagerWithDetermineAccountTypeTest,
-       AccountChangeWhileDeterminingAccountType) {
+TEST_F(SyncAuthManagerTest, AccountChangeWhileDeterminingAccountType) {
   // There is a primary account, whose managed-ness status isn't known yet.
   AccountInfo account_info = identity_env()->MakePrimaryAccountAvailable(
       "test@consumer.com", signin::ConsentLevel::kSignin);

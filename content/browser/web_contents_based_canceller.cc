@@ -5,6 +5,7 @@
 #include "content/browser/web_contents_based_canceller.h"
 
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "content/common/features.h"
 #include "content/public/browser/render_frame_host.h"
@@ -46,7 +47,7 @@ bool WebContentsBasedCanceller::CanShow() {
 
 bool WebContentsBasedCanceller::CanShowForVisibility(Visibility visibility) {
   return condition_ != CancelCondition::kVisibility ||
-         visibility != Visibility::HIDDEN;
+         visibility == Visibility::VISIBLE;
 }
 
 bool WebContentsBasedCanceller::CanShowForRFHActiveState() {

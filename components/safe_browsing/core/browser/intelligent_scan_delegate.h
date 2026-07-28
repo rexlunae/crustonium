@@ -31,10 +31,14 @@ class IntelligentScanDelegate : public KeyedService {
   // Represents the result of an intelligent scan.
   struct IntelligentScanResult {
     static constexpr int kModelVersionUnavailable = -1;
-    static IntelligentScanResult Success(std::string brand,
-                                         std::string intent,
-                                         int model_version,
-                                         ModelType model_type);
+    // Magic number for the default server model version.
+    static constexpr int kDefaultServerModelVersion = 1000;
+    static IntelligentScanResult Success(
+        std::string brand,
+        std::string intent,
+        int model_version,
+        ModelType model_type,
+        std::optional<float> scam_score = std::nullopt);
     static IntelligentScanResult Failure(
         int model_version,
         ModelType model_type,
@@ -46,6 +50,7 @@ class IntelligentScanDelegate : public KeyedService {
 
     std::string brand;
     std::string intent;
+    std::optional<float> scam_score;
     int model_version;
     bool execution_success;
     ModelType model_type;

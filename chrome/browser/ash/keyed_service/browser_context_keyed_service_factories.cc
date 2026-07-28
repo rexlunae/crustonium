@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/keyed_service/browser_context_keyed_service_factories.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/webui/help_app_ui/help_app_manager_factory.h"
 #include "ash/webui/shortcut_customization_ui/shortcuts_app_manager_factory.h"
 #include "chrome/browser/apps/app_discovery_service/app_discovery_service_factory.h"
@@ -12,7 +11,6 @@
 #include "chrome/browser/ash/accessibility/live_caption/system_live_caption_service_factory.h"
 #include "chrome/browser/ash/account_manager/account_apps_availability_factory.h"
 #include "chrome/browser/ash/account_manager/account_manager_policy_controller_factory.h"
-#include "chrome/browser/ash/android_sms/android_sms_service_factory.h"
 #include "chrome/browser/ash/app_list/app_sync_ui_state_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_vpn_provider_manager_factory.h"
 #include "chrome/browser/ash/app_list/search/local_image_search/local_image_search_service_factory.h"
@@ -24,7 +22,6 @@
 #include "chrome/browser/ash/arc/session/arc_service_launcher.h"
 #include "chrome/browser/ash/bluetooth/debug_logs_manager_factory.h"
 #include "chrome/browser/ash/boca/boca_manager_factory.h"
-#include "chrome/browser/ash/boca/on_task/locked_quiz_session_manager_factory.h"
 #include "chrome/browser/ash/boca/on_task/locked_session_window_tracker_factory.h"
 #include "chrome/browser/ash/boca/receiver/boca_receiver_service_factory.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
@@ -38,14 +35,12 @@
 #include "chrome/browser/ash/child_accounts/on_device_controls/app_controls_service_factory.h"
 #include "chrome/browser/ash/child_accounts/screen_time_controller_factory.h"
 #include "chrome/browser/ash/concierge_helper/concierge_helper_service.h"
-#include "chrome/browser/ash/crosapi/keystore_service_factory_ash.h"
 #include "chrome/browser/ash/crostini/crostini_export_import_factory.h"
 #include "chrome/browser/ash/crostini/crostini_installer_factory.h"
 #include "chrome/browser/ash/crostini/crostini_metrics_service.h"
 #include "chrome/browser/ash/crostini/crostini_port_forwarder_factory.h"
 #include "chrome/browser/ash/crostini/crostini_shared_devices_factory.h"
 #include "chrome/browser/ash/crostini/throttle/crostini_throttle_factory.h"
-#include "chrome/browser/ash/data_migration/data_migration_factory.h"
 #include "chrome/browser/ash/early_prefs/early_prefs_export_service_factory.h"
 #include "chrome/browser/ash/eche_app/eche_app_manager_factory.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router_factory.h"
@@ -79,7 +74,7 @@
 #include "chrome/browser/ash/login/signin/offline_signin_limiter_factory.h"
 #include "chrome/browser/ash/login/signin/signin_error_notifier_factory.h"
 #include "chrome/browser/ash/login/signin/token_handle_service_factory.h"
-#include "chrome/browser/ash/login/signin_partition_manager.h"
+#include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_service_factory.h"
 #include "chrome/browser/ash/multidevice_setup/auth_token_validator_factory.h"
 #include "chrome/browser/ash/multidevice_setup/multidevice_setup_service_factory.h"
@@ -94,7 +89,7 @@
 #include "chrome/browser/ash/phonehub/phone_hub_manager_factory.h"
 #include "chrome/browser/ash/platform_keys/key_permissions/key_permissions_service_factory.h"
 #include "chrome/browser/ash/platform_keys/key_permissions/user_private_token_kpm_service_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_engagement_metrics_service.h"
+#include "chrome/browser/ash/platform_keys/keystore_service_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_installer_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
@@ -117,6 +112,7 @@
 #include "chrome/browser/sharesheet/sharesheet_service_factory.h"
 #include "chrome/browser/speech/cros_speech_recognition_service_factory.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos_factory.h"
+#include "chrome/browser/ui/ash/account_manager/account_manager_dialog_coordinator_factory.h"
 #include "chrome/browser/ui/ash/birch/birch_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/desks/admin_template_service_factory.h"
 #include "chrome/browser/ui/ash/glanceables/glanceables_keyed_service_factory.h"
@@ -125,16 +121,15 @@
 #include "chrome/browser/ui/webui/ash/settings/services/hats/os_settings_hats_manager_factory.h"
 #include "chrome/browser/ui/webui/ash/settings/services/settings_manager/os_settings_manager_factory.h"
 #include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
-#include "printing/buildflags/buildflags.h"
 
 namespace ash {
 
 void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   AccountAppsAvailabilityFactory::GetInstance();
+  AccountManagerDialogCoordinatorFactory::GetInstance();
   AccountManagerPolicyControllerFactory::GetInstance();
   AdminTemplateServiceFactory::GetInstance();
   ash::AlwaysOnVpnPreConnectUrlAllowlistServiceFactory::GetInstance();
-  android_sms::AndroidSmsServiceFactory::GetInstance();
   ApkWebAppServiceFactory::GetInstance();
   app_list::ArcVpnProviderManagerFactory::GetInstance();
   app_list::LocalImageSearchServiceFactory::GetInstance();
@@ -148,7 +143,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
 
   BirchKeyedServiceFactory::GetInstance();
   bluetooth::DebugLogsManagerFactory::GetInstance();
-  boca::LockedQuizSessionManagerFactory::GetInstance();
   BocaManagerFactory::GetInstance();
   BocaReceiverServiceFactory::GetInstance();
   borealis::BorealisServiceFactory::GetInstance();
@@ -160,7 +154,7 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   ChildStatusReportingServiceFactory::GetInstance();
   ChildUserServiceFactory::GetInstance();
   ConciergeHelperServiceFactory::GetInstance();
-  crosapi::KeystoreServiceFactoryAsh::GetInstance();
+  KeystoreServiceFactory::GetInstance();
   CrosSpeechRecognitionServiceFactory::EnsureFactoryBuilt();
   crostini::CrostiniExportImportFactory::GetInstance();
   crostini::CrostiniInstallerFactory::GetInstance();
@@ -170,7 +164,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   crostini::CrostiniThrottleFactory::GetInstance();
   CupsPrintersManagerFactory::GetInstance();
   CupsPrintJobManagerFactory::GetInstance();
-  data_migration::DataMigrationFactory::GetInstance();
   EarlyPrefsExportServiceFactory::GetInstance();
   eche_app::EcheAppManagerFactory::GetInstance();
   EventBasedStatusReportingServiceFactory::GetInstance();
@@ -200,7 +193,7 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   LockScreenReauthManagerFactory::GetInstance();
   LockedSessionWindowTrackerFactory::GetInstance();
   login::SecurityTokenSessionControllerFactory::GetInstance();
-  login::SigninPartitionManager::Factory::GetInstance();
+  login::SigninPartitionManagerFactory::GetInstance();
   LoginScreenExtensionsContentScriptManagerFactory::GetInstance();
   LoginScreenExtensionsLifetimeManagerFactory::GetInstance();
   multidevice_setup::AuthTokenValidatorFactory::GetInstance();
@@ -221,7 +214,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   platform_keys::KeyPermissionsServiceFactory::GetInstance();
   platform_keys::UserPrivateTokenKeyPermissionsManagerServiceFactory::
       GetInstance();
-  plugin_vm::PluginVmEngagementMetricsService::Factory::GetInstance();
   plugin_vm::PluginVmInstallerFactory::GetInstance();
   plugin_vm::PluginVmManagerFactory::GetInstance();
   policy::UserCloudPolicyManagerAsh::EnsureFactoryBuilt();

@@ -91,8 +91,8 @@ class TestStackCopier : public StackCopier {
         UNSAFE_TODO(stack_buffer->buffer() + fake_stack_->size()));
     // Set the stack pointer to be consistent with the copied stack.
     *thread_context = {};
-    RegisterContextStackPointer(thread_context) =
-        reinterpret_cast<uintptr_t>(stack_buffer->buffer());
+    SetRegisterContextStackPointer(
+        thread_context, reinterpret_cast<uintptr_t>(stack_buffer->buffer()));
 
     *timestamp = timestamp_;
 
@@ -100,9 +100,14 @@ class TestStackCopier : public StackCopier {
   }
 
  protected:
-  std::vector<uintptr_t*> GetRegistersToRewrite(
+  std::vector<uintptr_t> GetRegisters(
       RegisterContext* thread_context) override {
-    return {&RegisterContextStackPointer(thread_context)};
+    return {RegisterContextStackPointer(thread_context)};
+  }
+
+  void SetRegisters(RegisterContext* thread_context,
+                    const std::vector<uintptr_t>& registers) override {
+    SetRegisterContextStackPointer(thread_context, registers[0]);
   }
 
  private:
@@ -126,17 +131,22 @@ class DelegateInvokingStackCopier : public StackCopier {
         UNSAFE_TODO(stack_buffer->buffer() + stack_buffer->size()));
     // Set the stack pointer to be consistent with the copied stack.
     *thread_context = {};
-    RegisterContextStackPointer(thread_context) =
-        reinterpret_cast<uintptr_t>(stack_buffer->buffer());
+    SetRegisterContextStackPointer(
+        thread_context, reinterpret_cast<uintptr_t>(stack_buffer->buffer()));
     *timestamp = TimeTicks::Now();
     delegate->OnStackCopy();
     return true;
   }
 
  protected:
-  std::vector<uintptr_t*> GetRegistersToRewrite(
+  std::vector<uintptr_t> GetRegisters(
       RegisterContext* thread_context) override {
-    return {&RegisterContextStackPointer(thread_context)};
+    return {RegisterContextStackPointer(thread_context)};
+  }
+
+  void SetRegisters(RegisterContext* thread_context,
+                    const std::vector<uintptr_t>& registers) override {
+    SetRegisterContextStackPointer(thread_context, registers[0]);
   }
 };
 
@@ -384,7 +394,7 @@ TEST_F(StackSamplerTest, CopyStackTimestamp) {
   const std::vector<uintptr_t> stack = {0};
   InjectModuleForContextInstructionPointer(stack, &module_cache_);
   std::vector<uintptr_t> stack_copy;
-  TimeTicks timestamp = TimeTicks::UnixEpoch();
+  TimeTicks timestamp = TimeTicks() + base::Hours(1);
   std::unique_ptr<StackSampler> stack_sampler = StackSampler::CreateForTesting(
       std::make_unique<TestStackCopier>(stack, timestamp),
       std::move(unwind_data),
@@ -426,16 +436,8 @@ TEST_F(StackSamplerTest, UnwinderInvokedWhileRecordingStackFrames) {
   EXPECT_TRUE(unwinder->update_modules_was_invoked());
 }
 
-// TODO(crbug.com/455972314): Failed on ChromeOS builders.
-#if BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_AuxUnwinderInvokedWhileRecordingStackFrames \
-  DISABLED_AuxUnwinderInvokedWhileRecordingStackFrames
-#else
-#define MAYBE_AuxUnwinderInvokedWhileRecordingStackFrames \
-  AuxUnwinderInvokedWhileRecordingStackFrames
-#endif
-
-TEST_F(StackSamplerTest, MAYBE_AuxUnwinderInvokedWhileRecordingStackFrames) {
+// TODO(crbug.com/455972314): Failed on ChromeOS and Tsan builders.
+TEST_F(StackSamplerTest, DISABLED_AuxUnwinderInvokedWhileRecordingStackFrames) {
   base::test::TestFuture<void> sample_completed;
   std::unique_ptr<StackBuffer> stack_buffer = std::make_unique<StackBuffer>(10);
   auto unwind_data = base::MakeRefCounted<StackUnwindData>(
@@ -513,8 +515,8 @@ TEST_F(StackSamplerTest, AsyncUnwindSafeAfterSamplerDeletion) {
 
 TEST_F(StackSamplerTest, WalkStack_Completed) {
   RegisterContext thread_context;
-  RegisterContextInstructionPointer(&thread_context) =
-      GetTestInstructionPointer();
+  SetRegisterContextInstructionPointer(&thread_context,
+                                       GetTestInstructionPointer());
   module_cache_.AddCustomNativeModule(std::make_unique<TestModule>(1u, 1u));
   auto native_unwinder =
       WrapUnique(new FakeTestUnwinder({{UnwindResult::kCompleted, {1u}}}));
@@ -530,8 +532,8 @@ TEST_F(StackSamplerTest, WalkStack_Completed) {
 
 TEST_F(StackSamplerTest, WalkStack_Aborted) {
   RegisterContext thread_context;
-  RegisterContextInstructionPointer(&thread_context) =
-      GetTestInstructionPointer();
+  SetRegisterContextInstructionPointer(&thread_context,
+                                       GetTestInstructionPointer());
   module_cache_.AddCustomNativeModule(std::make_unique<TestModule>(1u, 1u));
   auto native_unwinder =
       WrapUnique(new FakeTestUnwinder({{UnwindResult::kAborted, {1u}}}));
@@ -547,8 +549,8 @@ TEST_F(StackSamplerTest, WalkStack_Aborted) {
 
 TEST_F(StackSamplerTest, WalkStack_NotUnwound) {
   RegisterContext thread_context;
-  RegisterContextInstructionPointer(&thread_context) =
-      GetTestInstructionPointer();
+  SetRegisterContextInstructionPointer(&thread_context,
+                                       GetTestInstructionPointer());
   auto native_unwinder = WrapUnique(
       new FakeTestUnwinder({{UnwindResult::kUnrecognizedFrame, {}}}));
   native_unwinder->Initialize(&module_cache_);
@@ -562,8 +564,8 @@ TEST_F(StackSamplerTest, WalkStack_NotUnwound) {
 
 TEST_F(StackSamplerTest, WalkStack_AuxUnwind) {
   RegisterContext thread_context;
-  RegisterContextInstructionPointer(&thread_context) =
-      GetTestInstructionPointer();
+  SetRegisterContextInstructionPointer(&thread_context,
+                                       GetTestInstructionPointer());
 
   // Treat the context instruction pointer as being in the aux unwinder's
   // non-native module.
@@ -585,7 +587,7 @@ TEST_F(StackSamplerTest, WalkStack_AuxUnwind) {
 
 TEST_F(StackSamplerTest, WalkStack_AuxThenNative) {
   RegisterContext thread_context;
-  RegisterContextInstructionPointer(&thread_context) = 0u;
+  SetRegisterContextInstructionPointer(&thread_context, 0u);
 
   // Treat the context instruction pointer as being in the aux unwinder's
   // non-native module.
@@ -614,7 +616,7 @@ TEST_F(StackSamplerTest, WalkStack_AuxThenNative) {
 
 TEST_F(StackSamplerTest, WalkStack_NativeThenAux) {
   RegisterContext thread_context;
-  RegisterContextInstructionPointer(&thread_context) = 0u;
+  SetRegisterContextInstructionPointer(&thread_context, 0u);
 
   // Inject fake native modules for the instruction pointer from the context and
   // the third frame.

@@ -16,6 +16,7 @@
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/types/optional_util.h"
+#include "media/base/agtm.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/stream_parser_buffer.h"
 #include "media/base/timestamp_constants.h"
@@ -35,17 +36,16 @@ enum {
   kMaxDurationEstimateLogs = 10,
 };
 
-WebMClusterParser::WebMClusterParser(
-    int64_t timecode_scale_ns,
-    int audio_track_num,
-    base::TimeDelta audio_default_duration,
-    int video_track_num,
-    base::TimeDelta video_default_duration,
-    const std::set<int64_t>& ignored_tracks,
-    const std::string& audio_encryption_key_id,
-    const std::string& video_encryption_key_id,
-    const AudioCodec audio_codec,
-    MediaLog* media_log)
+WebMClusterParser::WebMClusterParser(int64_t timecode_scale_ns,
+                                     int audio_track_num,
+                                     base::TimeDelta audio_default_duration,
+                                     int video_track_num,
+                                     base::TimeDelta video_default_duration,
+                                     const std::set<int64_t>& ignored_tracks,
+                                     const std::string& audio_encryption_key_id,
+                                     const std::string& video_encryption_key_id,
+                                     const AudioCodec audio_codec,
+                                     MediaLog* media_log)
     : timecode_multiplier_(timecode_scale_ns / 1000.0),
       ignored_tracks_(ignored_tracks),
       audio_encryption_key_id_(audio_encryption_key_id),
@@ -62,8 +62,7 @@ WebMClusterParser::WebMClusterParser(
              video_default_duration,
              media_log),
       ready_buffer_upper_bound_(kNoDecodeTimestamp),
-      media_log_(media_log) {
-}
+      media_log_(MediaLog::CloneSafely(media_log)) {}
 
 WebMClusterParser::~WebMClusterParser() = default;
 
@@ -78,12 +77,12 @@ void WebMClusterParser::Reset() {
   ready_buffer_upper_bound_ = kNoDecodeTimestamp;
 }
 
-int WebMClusterParser::Parse(const uint8_t* buf, int size) {
+int WebMClusterParser::Parse(base::span<const uint8_t> buf) {
   audio_.ClearReadyBuffers();
   video_.ClearReadyBuffers();
   ready_buffer_upper_bound_ = kNoDecodeTimestamp;
 
-  int result = parser_.Parse(buf, size);
+  int result = parser_.Parse(buf);
 
   if (result < 0) {
     cluster_ended_ = false;
@@ -344,11 +343,7 @@ bool WebMClusterParser::ParseBlock(bool is_simple_block,
                  additional, discard_padding, is_keyframe);
 }
 
-bool WebMClusterParser::OnBinary(int id, const uint8_t* data_ptr, int size) {
-  auto data =
-      // TODO(crbug.com/40284755): This function should receive a span, not a
-      // pointer/size pair.
-      UNSAFE_TODO(base::span(data_ptr, base::checked_cast<size_t>(size)));
+bool WebMClusterParser::OnBinary(int id, base::span<const uint8_t> data) {
   switch (id) {
     case kWebMIdSimpleBlock:
       return ParseBlock(true, data, {}, -1, 0, false);
@@ -455,8 +450,13 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
 
   int64_t microseconds;
 
-  if (!base::CheckMul(base::CheckAdd(cluster_timecode_, timecode),
-                      timecode_multiplier_)
+  auto checked_add = base::CheckAdd(cluster_timecode_, timecode);
+  if (!checked_add.IsValid()) {
+    MEDIA_LOG(ERROR, media_log_) << "Invalid cluster timecode.";
+    return false;
+  }
+
+  if (!base::CheckMul(checked_add, timecode_multiplier_)
            .AssignIfValid(&microseconds)) {
     MEDIA_LOG(ERROR, media_log_) << "Invalid cluster timecode.";
     return false;
@@ -474,10 +474,8 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
   std::unique_ptr<DecryptConfig> decrypt_config;
   size_t data_offset = 0;
   if (!encryption_key_id.empty() &&
-      !WebMCreateDecryptConfig(
-          data.data(), data.size(),
-          reinterpret_cast<const uint8_t*>(encryption_key_id.data()),
-          encryption_key_id.size(), &decrypt_config, &data_offset)) {
+      !WebMCreateDecryptConfig(data, base::as_byte_span(encryption_key_id),
+                               &decrypt_config, &data_offset)) {
     MEDIA_LOG(ERROR, media_log_) << "Failed to extract decrypt config.";
     return false;
   }
@@ -498,8 +496,8 @@ bool WebMClusterParser::OnBlock(bool is_simple_block,
       buffer->WritableSideData().alpha_data =
           base::HeapArray<uint8_t>::CopiedFrom(side_data.subspan(8u));
     } else if (side_data_id == 4) {
-      buffer->WritableSideData().itu_t35_data =
-          base::HeapArray<uint8_t>::CopiedFrom(side_data.subspan(8u));
+      SetAgtmFromT35(buffer->WritableSideData().hdr_metadata,
+                     side_data.subspan(8u));
     }
   }
 

@@ -10,6 +10,7 @@
 #include "base/memory/raw_ref.h"
 #include "components/autofill/content/renderer/form_tracker.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
@@ -21,14 +22,20 @@ class FormTrackerTestApi {
     return form_tracker_->DidFinishSameDocumentNavigation();
   }
 
-  void FireProbablyFormSubmitted() {
-    form_tracker_->FireFormSubmission(
-        mojom::SubmissionSource::PROBABLY_FORM_SUBMITTED, std::nullopt,
-        /*reset_last_interacted_elements=*/false);
+  void DidStartNavigation(
+      std::optional<blink::WebNavigationType> navigation_type) {
+    form_tracker_->DidStartNavigation(GURL(), navigation_type);
   }
 
   std::optional<FormData> provisionally_saved_form() {
     return form_tracker_->provisionally_saved_form();
+  }
+
+  void FireFormSubmission(
+      mojom::SubmissionSource source,
+      std::optional<blink::WebFormElement> submitted_form_element) {
+    form_tracker_->FormTracker::FireFormSubmission(source,
+                                                   submitted_form_element);
   }
 
  private:

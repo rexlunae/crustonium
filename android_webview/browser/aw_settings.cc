@@ -57,6 +57,8 @@ namespace android_webview {
 
 namespace {
 
+bool g_should_download_favicons = false;
+
 // Metrics on the count of difference cases when we populate the user-agent
 // metadata. These values are persisted to logs. Entries should not be
 // renumbered and numeric values should never be reused.
@@ -78,8 +80,6 @@ void PopulateFixedWebPreferences(WebPreferences* web_prefs) {
   web_prefs->viewport_meta_enabled = true;
   web_prefs->picture_in_picture_enabled = false;
   web_prefs->disable_accelerated_small_canvases = true;
-  // WebView has historically not adjusted font scale for text autosizing.
-  web_prefs->device_scale_adjustment = 1.0;
   web_prefs->scale_all_fonts_if_no_meta_text_scale_tag = true;
 }
 
@@ -139,10 +139,6 @@ bool AwSettings::GetJavaScriptEnabled() {
 
 AwSettings::MixedContentMode AwSettings::GetMixedContentMode() {
   return mixed_content_mode_;
-}
-
-AwSettings::AttributionBehavior AwSettings::GetAttributionBehavior() {
-  return attribution_behavior_;
 }
 
 bool AwSettings::IsPrerender2Allowed() {
@@ -207,11 +203,12 @@ void AwSettings::UpdateEverythingLocked(JNIEnv* env,
   UpdateJavaScriptPolicyLocked(env, obj);
   UpdateAllowFileAccessLocked(env, obj);
   UpdateMixedContentModeLocked(env, obj);
-  UpdateAttributionBehaviorLocked(env, obj);
   UpdateSpeculativeLoadingAllowedLocked(env, obj);
+  UpdateDownloadFaviconsEnabledLocked(env, obj);
   UpdateBackForwardCacheEnabledLocked(env, obj);
   UpdateBackForwardCacheSettingsTimeoutLocked(env, obj);
   UpdateBackForwardCacheSettingsMaxPagesInCacheLocked(env, obj);
+  UpdateBackForwardCacheSettingsKeepForwardEntriesLocked(env, obj);
   UpdateGeolocationEnabledLocked(env, obj);
 }
 
@@ -389,6 +386,17 @@ void AwSettings::UpdateOffscreenPreRasterLocked(JNIEnv* env,
   }
 }
 
+void AwSettings::UpdateDownloadFaviconsEnabledLocked(
+    JNIEnv* env,
+    const JavaRef<jobject>& obj) {
+  if (!web_contents()) {
+    return;
+  }
+
+  download_favicons_ =
+      Java_AwSettings_getDownloadFaviconsEnabledLocked(env, obj);
+}
+
 void AwSettings::UpdateAllowFileAccessLocked(JNIEnv* env,
                                              const JavaRef<jobject>& obj) {
   if (!web_contents())
@@ -404,28 +412,6 @@ void AwSettings::UpdateMixedContentModeLocked(JNIEnv* env,
 
   mixed_content_mode_ = static_cast<MixedContentMode>(
       Java_AwSettings_getMixedContentMode(env, obj));
-}
-
-void AwSettings::UpdateAttributionBehaviorLocked(JNIEnv* env,
-                                                 const JavaRef<jobject>& obj) {
-  if (!web_contents()) {
-    return;
-  }
-
-  AttributionBehavior previous = attribution_behavior_;
-  attribution_behavior_ = static_cast<AttributionBehavior>(
-      Java_AwSettings_getAttributionBehavior(env, obj));
-
-  base::UmaHistogramEnumeration("Conversions.AttributionBehavior",
-                                attribution_behavior_);
-
-  // If attribution was previously disabled or has now been disabled, then
-  // we need to update attribution support values in the renderer.
-  if (previous != attribution_behavior_ &&
-      (previous == AwSettings::AttributionBehavior::DISABLED ||
-       attribution_behavior_ == AwSettings::AttributionBehavior::DISABLED)) {
-    web_contents()->UpdateAttributionSupportRenderer();
-  }
 }
 
 void AwSettings::UpdateSpeculativeLoadingAllowedLocked(
@@ -544,6 +530,22 @@ void AwSettings::UpdateBackForwardCacheSettingsMaxPagesInCacheLocked(
   back_forward_cache_max_pages_in_cache_ = max_pages_in_cache;
 }
 
+void AwSettings::UpdateBackForwardCacheSettingsKeepForwardEntriesLocked(
+    JNIEnv* env,
+    const JavaRef<jobject>& obj) {
+  bool keep_forward_entries =
+      Java_AwSettings_getBackForwardCacheSettingsKeepForwardEntries(env, obj);
+  if (web_contents()) {
+    if (keep_forward_entries != back_forward_cache_keep_forward_entries_) {
+      web_contents()
+          ->GetController()
+          .GetBackForwardCache()
+          .SetEmbedderSuppliedCacheForwardEntriesAllowed(keep_forward_entries);
+    }
+  }
+  back_forward_cache_keep_forward_entries_ = keep_forward_entries;
+}
+
 void AwSettings::UpdateGeolocationEnabledLocked(JNIEnv* env,
                                                 const JavaRef<jobject>& obj) {
   if (!web_contents()) {
@@ -575,6 +577,14 @@ void AwSettings::PopulateWebPreferences(WebPreferences* web_prefs) {
                                          reinterpret_cast<int64_t>(web_prefs));
 }
 
+bool AwSettings::GetShouldDownloadFaviconsOnNavigation(JNIEnv* env) {
+  return ShouldDownloadFavicon();
+}
+
+bool AwSettings::ShouldDownloadFavicon() {
+  return g_should_download_favicons && download_favicons_;
+}
+
 void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
                                               const JavaRef<jobject>& obj,
                                               int64_t web_prefs_ptr) {
@@ -585,20 +595,23 @@ void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
   WebPreferences* web_prefs = reinterpret_cast<WebPreferences*>(web_prefs_ptr);
   PopulateFixedWebPreferences(web_prefs);
 
-  web_prefs->text_autosizing_enabled =
-      Java_AwSettings_getTextAutosizingEnabledLocked(env, obj) &&
-      !base::FeatureList::IsEnabled(blink::features::kForceOffTextAutosizing);
-
-  int text_size_percent = Java_AwSettings_getTextSizePercentLocked(env, obj);
-  web_prefs->font_scale_factor = text_size_percent / 100.0f;
-  if (web_prefs->text_autosizing_enabled) {
-    web_prefs->force_enable_zoom = text_size_percent >= 130;
-    // Use the default zoom factor value when Text Autosizer is turned on.
-    render_view_host_ext->SetTextZoomFactor(1);
+  if (base::FeatureList::IsEnabled(
+          android_webview::features::
+              kWebViewGateTextSizeAdjustOnTextAutosizing)) {
+    web_prefs->text_size_adjust_enabled =
+        Java_AwSettings_getTextAutosizingEnabledLocked(env, obj);
   } else {
-    web_prefs->force_enable_zoom = false;
-    render_view_host_ext->SetTextZoomFactor(text_size_percent / 100.0f);
+    // Keep the regressed behavior (always enabled) if flag is disabled.
+    web_prefs->text_size_adjust_enabled = true;
   }
+
+  const float font_scale_factor =
+      Java_AwSettings_getTextSizePercentLocked(env, obj) / 100.0f;
+  web_prefs->font_scale_factor = font_scale_factor;
+  // By default, WebView scales all fonts by the user's Android font preference,
+  // and has for many years.
+  render_view_host_ext->SetTextZoomFactor(font_scale_factor);
+  web_prefs->force_enable_zoom = false;
 
   web_prefs->standard_font_family_map[blink::web_pref::kCommonScript] =
       ConvertJavaStringToUTF16(
@@ -768,6 +781,7 @@ void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
   web_prefs->allow_mixed_content_upgrades =
       Java_AwSettings_getAllowMixedContentAutoupgradesLocked(env, obj);
 
+
   if (AwDarkMode* aw_dark_mode = AwDarkMode::FromWebContents(web_contents())) {
     aw_dark_mode->PopulateWebPreferences(
         web_prefs, Java_AwSettings_getForceDarkModeLocked(env, obj),
@@ -853,6 +867,10 @@ static ScopedJavaLocalRef<jobject> JNI_AwSettings_FromWebContents(
 static ScopedJavaLocalRef<jstring> JNI_AwSettings_GetDefaultUserAgent(
     JNIEnv* env) {
   return base::android::ConvertUTF8ToJavaString(env, GetUserAgent());
+}
+
+void JNI_AwSettings_SetShouldDownloadFaviconsGlobal(JNIEnv* env) {
+  g_should_download_favicons = true;
 }
 
 static ScopedJavaLocalRef<jobject> JNI_AwSettings_GetDefaultUserAgentMetadata(

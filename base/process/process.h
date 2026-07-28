@@ -5,6 +5,7 @@
 #ifndef BASE_PROCESS_PROCESS_H_
 #define BASE_PROCESS_PROCESS_H_
 
+#include <iosfwd>
 #include <string_view>
 
 #include "base/base_export.h"
@@ -33,12 +34,6 @@
 namespace base {
 
 #if BUILDFLAG(IS_CHROMEOS)
-// Set all threads of a background process as backgrounded, which changes the
-// thread attributes including c-group, latency sensitivity. But the nice value
-// is unchanged, since background process is under the spell of the background
-// CPU c-group (via cgroup.procs).
-BASE_EXPORT BASE_DECLARE_FEATURE(kSetThreadBgForBgProcess);
-
 // FlattenCpuCgroups feature uses /sys/fs/cgroup/cpu/chrome_renderers and
 // /sys/fs/cgroup/cpu/chrome_renderers_background cpu cgroups for renderer
 // processes instead of nested cpu cgroups. Nested cpu cgroups has an overhead
@@ -337,6 +332,9 @@ class BASE_EXPORT Process {
 
 BASE_EXPORT const char* ProcessPriorityToString(
     Process::Priority process_priority);
+
+BASE_EXPORT std::ostream& operator<<(std::ostream& os,
+                                     Process::Priority priority);
 
 #if BUILDFLAG(IS_CHROMEOS)
 // Exposed for testing.

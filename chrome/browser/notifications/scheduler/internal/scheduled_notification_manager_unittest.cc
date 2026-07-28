@@ -15,8 +15,8 @@
 #include "base/uuid.h"
 #include "chrome/browser/notifications/scheduler/internal/collection_store.h"
 #include "chrome/browser/notifications/scheduler/internal/icon_store.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/internal/scheduler_config.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_constant.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -476,7 +476,7 @@ TEST_F(ScheduledNotificationManagerTest, GetAllNotifications) {
 TEST_F(ScheduledNotificationManagerTest, GetNotifications) {
   auto entry = CreateNotificationEntry(SchedulerClientType::kTest1);
   InitWithData(std::vector<NotificationEntry>({entry}));
-  std::vector<const NotificationEntry*> entries;
+  std::vector<raw_ptr<const NotificationEntry>> entries;
   manager()->GetNotifications(SchedulerClientType::kTest2, &entries);
   EXPECT_TRUE(entries.empty());
 

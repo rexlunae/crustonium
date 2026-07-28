@@ -47,7 +47,6 @@
 #include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/install_util.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/win/atl_module.h"
 
 namespace {
 
@@ -538,9 +537,6 @@ UpdateCheckResult UpdateCheckDriver::BeginUpdateCheckInternal() {
 
     system_level_install_ = !InstallUtil::IsPerUserInstall();
 
-    // Make sure ATL is initialized in this module.
-    ui::win::CreateATLModuleIfNeeded();
-
     const GoogleUpdateErrorCode error_code =
         CanUpdateCurrentChrome(chrome_exe, system_level_install_);
     if (error_code != GOOGLE_UPDATE_NO_ERROR) {
@@ -980,7 +976,7 @@ void SetGoogleUpdateFactoryForTesting(
 }
 
 // TODO(calamity): Remove once a MockTimer is implemented in
-// TaskEnvironment. See https://crbug.com/708584.
+// TaskEnvironment. See https://crbug.com/40514143.
 void SetUpdateDriverTaskRunnerForTesting(
     base::SingleThreadTaskRunner* task_runner) {
   g_update_driver_task_runner = task_runner;

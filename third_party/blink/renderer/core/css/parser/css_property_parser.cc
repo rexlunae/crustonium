@@ -91,24 +91,30 @@ bool CSSPropertyParser::ParseValue(
 
   // This doesn't count UA style sheets
   if (parse_success) {
-    context->Count(context->Mode(), unresolved_property);
+    context->Count(unresolved_property);
   }
 
   return parse_success;
 }
 
 // NOTE: “stream” cannot include !important; this is for setting properties
-// from CSSOM or similar.
+// from CSSOM or similar. |unresolved_property| may be an alias (e.g.,
+// kWebkitBackgroundClip); it is resolved internally but the unresolved ID is
+// preserved in the local context so that UseAliasParsing() works correctly.
 const CSSValue* CSSPropertyParser::ParseSingleValue(
-    CSSPropertyID property,
+    CSSPropertyID unresolved_property,
     CSSParserTokenStream& stream,
     const CSSParserContext* context) {
   DCHECK(context);
   stream.ConsumeWhitespace();
 
-  const CSSValue* value = css_parsing_utils::ConsumeCSSWideKeyword(stream);
+  const CSSValue* value =
+      css_parsing_utils::ConsumeCSSWideKeyword(stream, *context);
   if (!value) {
-    value = ParseLonghand(property, CSSPropertyID::kInvalid, *context, stream);
+    auto local_context = CSSParserLocalContext(
+        CSSPropertyName(unresolved_property), CSSPropertyID::kInvalid,
+        /*custom_function_name=*/g_null_atom);
+    value = ParseLonghand(unresolved_property, *context, local_context, stream);
   }
   if (!value || !stream.AtEnd()) {
     return nullptr;
@@ -118,8 +124,9 @@ const CSSValue* CSSPropertyParser::ParseSingleValue(
 
 StringView StripInitialWhitespace(StringView value) {
   wtf_size_t initial_whitespace_len = 0;
+  // SAFETY: index checked against length prior to use via &&-expression.
   while (initial_whitespace_len < value.length() &&
-         IsHTMLSpace(value[initial_whitespace_len])) {
+         IsHTMLSpace(UNSAFE_BUFFERS(value[initial_whitespace_len]))) {
     ++initial_whitespace_len;
   }
   return StringView(value, initial_whitespace_len);
@@ -148,15 +155,16 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
 
   bool is_shorthand = property.IsShorthand();
   DCHECK(context_);
+  CSSParserLocalContext local_context(CSSPropertyName(unresolved_property),
+                                      CSSPropertyID::kInvalid,
+                                      /*custom_function_name=*/g_null_atom);
 
   // NOTE: The first branch of the if here uses the tokenized form,
   // and the second uses the streaming parser. This is only allowed
   // since they start from the same place and we reset both below,
   // so they cannot go out of sync.
   if (is_shorthand) {
-    auto local_context =
-        CSSParserLocalContext(CSSPropertyName(unresolved_property))
-            .WithCurrentShorthand(property_id);
+    local_context.SetCurrentShorthand(property_id);
     // Variable references will fail to parse here and will fall out to the
     // variable ref parser below.
     //
@@ -185,7 +193,7 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
     parsed_properties_->Shrink(parsed_properties_size);
   } else {
     if (const CSSValue* parsed_value = ParseLonghand(
-            unresolved_property, CSSPropertyID::kInvalid, *context_, stream_)) {
+            unresolved_property, *context_, local_context, stream_)) {
       bool important = css_parsing_utils::MaybeConsumeImportant(
           stream_, allow_important_annotation);
       if (stream_.AtEnd()) {
@@ -254,7 +262,7 @@ static inline bool QuasiLowercaseIntoBuffer(base::span<const UChar> chars,
     if (c == 0 || c >= 0x7F) {  // illegal character
       return false;
     }
-    UNSAFE_BUFFERS(dst[i++]) = ToASCIILower(c);
+    UNSAFE_BUFFERS(dst[i++]) = ToAsciiLower(c);
   }
   return true;
 }
@@ -263,7 +271,7 @@ static inline bool QuasiLowercaseIntoBuffer(base::span<const UChar> chars,
 // CSS properties and values are restricted to [a-zA-Z0-9-]. Crucially,
 // this means we can do whatever we want to the six characters @[\]^_,
 // because they cannot match any known values anyway. We use this to
-// get a faster lowercasing than ToASCIILower() (which uses a table)
+// get a faster lowercasing than ToAsciiLower() (which uses a table)
 // can give us; we take anything in the range [0x40, 0x7f] and just
 // set the 0x20 bit. This converts A-Z to a-z and messes up @[\]^_
 // (so that they become `{|}~<DEL>, respectively). Things outside this
@@ -344,7 +352,7 @@ static CSSPropertyID UnresolvedCSSPropertyID(
 #if DCHECK_IS_ON()
   // Verify that we get the same answer with standard lowercasing.
   for (unsigned i = 0; i < length; ++i) {
-    UNSAFE_BUFFERS(buffer[i] = ToASCIILower(property_name[i]));
+    UNSAFE_BUFFERS(buffer[i] = ToAsciiLower(property_name[i]));
   }
   DCHECK_EQ(hash_table_entry, FindProperty(buffer, length));
 #endif
@@ -389,7 +397,7 @@ static CSSValueID CssValueKeywordID(
 #if DCHECK_IS_ON()
   // Verify that we get the same answer with standard lowercasing.
   for (unsigned i = 0; i < length; ++i) {
-    UNSAFE_BUFFERS(buffer[i] = ToASCIILower(value_keyword[i]));
+    UNSAFE_BUFFERS(buffer[i] = ToAsciiLower(value_keyword[i]));
   }
   DCHECK_EQ(hash_table_entry, FindValue(buffer, length));
 #endif
@@ -412,11 +420,13 @@ CSSValueID CssValueKeywordID(StringView string) {
 
 const CSSValue* CSSPropertyParser::ConsumeCSSWideKeyword(
     CSSParserTokenStream& stream,
+    const CSSParserContext& context,
     bool allow_important_annotation,
     bool& important) {
   CSSParserTokenStream::State savepoint = stream.Save();
 
-  const CSSValue* value = css_parsing_utils::ConsumeCSSWideKeyword(stream);
+  const CSSValue* value =
+      css_parsing_utils::ConsumeCSSWideKeyword(stream, context);
   if (!value) {
     // No need to Restore(), we are at the right spot anyway.
     // (We do this instead of relying on CSSParserTokenStream's
@@ -437,8 +447,8 @@ const CSSValue* CSSPropertyParser::ConsumeCSSWideKeyword(
 bool CSSPropertyParser::ParseCSSWideKeyword(CSSPropertyID unresolved_property,
                                             bool allow_important_annotation) {
   bool important;
-  const CSSValue* value =
-      ConsumeCSSWideKeyword(stream_, allow_important_annotation, important);
+  const CSSValue* value = ConsumeCSSWideKeyword(
+      stream_, *context_, allow_important_annotation, important);
   if (!value) {
     return false;
   }

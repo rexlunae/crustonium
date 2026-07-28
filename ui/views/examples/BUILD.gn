@@ -46,6 +46,8 @@ component("views_examples_lib") {
     "create_examples.h",
     "designer_example.cc",
     "designer_example.h",
+    "designer_property_editor.cc",
+    "designer_property_editor.h",
     "dialog_example.cc",
     "dialog_example.h",
     "dialog_model_example.cc",
@@ -64,6 +66,8 @@ component("views_examples_lib") {
     "fade_animation.h",
     "flex_layout_example.cc",
     "flex_layout_example.h",
+    "flex_layout_multiple_order_example.cc",
+    "flex_layout_multiple_order_example.h",
     "ink_drop_example.cc",
     "ink_drop_example.h",
     "label_example.cc",
@@ -283,6 +287,7 @@ if (is_mac) {
       ":views_examples_framework_bundle_data",
       ":views_examples_main_header",
       ":views_examples_resources_bundle_data",
+      "//base:compiler_specific",
     ]
 
     if (is_component_build) {
@@ -353,9 +358,10 @@ if (is_mac) {
           [ "-Wl,-install_name,@rpath/$output_name.framework/$output_name" ]
 
       # Set up the rpath for the framework so that it can find dylibs in the
-      # root output directory. The framework is at
-      # Views Examples.app/Contents/Frameworks/Views Examples Framework.framework/Versions/[views_examples_version]/Views Examples Framework
-      # so use loader_path to go back to the root output directory.
+      # root output directory. The framework is at Views
+      # Examples.app/Contents/Frameworks/Views Examples
+      # Framework.framework/Versions/[views_examples_version]/Views Examples
+      # Framework so use loader_path to go back to the root output directory.
       ldflags += [ "-Wl,-rpath,@loader_path/../../../../../.." ]
     } else {
       # Specify a sensible install_name for static builds. The library is
@@ -533,4 +539,35 @@ test("views_examples_unittests") {
   ]
 
   data = [ "$root_out_dir/views_examples_resources.pak" ]
+}
+
+executable("vector_icon_viewer") {
+  testonly = true
+  sources = [ "vector_icon_viewer.cc" ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views/examples:views_examples_lib",
+    "//ui/views/examples:views_examples_proc",
+  ]
+}
+
+executable("lottie_viewer") {
+  testonly = true
+  sources = [ "lottie_viewer.cc" ]
+  deps = [
+    ":views_examples_lib",
+    ":views_examples_proc",
+    "//base",
+    "//base/test:test_support",
+    "//cc/paint",
+    "//skia",
+    "//ui/base",
+    "//ui/gfx",
+    "//ui/gfx/geometry",
+    "//ui/lottie",
+    "//ui/views",
+  ]
 }

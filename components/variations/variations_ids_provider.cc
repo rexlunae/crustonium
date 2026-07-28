@@ -8,6 +8,7 @@
 
 #include "base/base64.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/observer_list.h"
@@ -334,7 +335,7 @@ void VariationsIdsProvider::MaybeUpdateVariationIDsAndHeaders() {
   // Check if an update is needed. If not, return early (the currently cached
   // values are still valid), otherwise, update the cached values and notify
   // observers.  See `UpdateIsNeeded()` for more details.
-  const base::Time current_time = clock_->Now();
+  const base::Time current_time = GetCurrentTime();
   if (!UpdateIsNeeded(current_time)) {
     return;
   }
@@ -368,7 +369,7 @@ void VariationsIdsProvider::MaybeUpdateVariationIDsAndHeaders() {
   }
 
   // Notify observers that the variation IDs header has been updated.
-  for (auto* observer : observer_list_) {
+  for (variations::VariationsIdsProvider::Observer* observer : observer_list_) {
     observer->VariationIdsHeaderUpdated();
   }
 }

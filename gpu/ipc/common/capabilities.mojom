@@ -10,30 +10,26 @@ import "services/viz/public/mojom/compositing/shared_image_format.mojom";
 struct Capabilities {
   int32 max_texture_size;
   bool egl_image_external;
-  // TODO(crbug.com/445900186): Add mojo support for this bool.
+  // TODO(crbug.com/477164718): Add mojo support for this bool.
   // bool egl_image_external_essl3;
   bool texture_format_bgra8888;
   bool texture_format_etc1_npot;
+  bool disable_mac_swangle_rgbx;
   bool sync_query;
   bool texture_rg;
   bool texture_norm16;
   bool texture_half_float_linear;
-  bool image_ycbcr_420v;
   bool image_ar30;
   bool image_ab30;
-  bool image_ycbcr_p010;
   bool render_buffer_format_bgra8888;
   bool msaa_is_slow;
-  bool disable_one_component_textures;
   bool avoid_stencil_buffers;
-  bool disable_2d_canvas_copy_on_write;
   bool supports_rgb_to_yuv_conversion;
   bool supports_yuv_readback;
-  bool chromium_gpu_fence;
   bool mesa_framebuffer_flip_y;
   bool context_supports_distance_field_text;
   bool using_vulkan_context;
-  array<viz.mojom.SharedImageFormat> mappable_formats;
+  bool use_deferred_graphite_submit;
   map<uint32, array<uint64>> drm_formats_and_modifiers;
   uint64 drm_device_id;
 };
@@ -97,9 +93,6 @@ struct GLCapabilities {
   int32 max_transform_feedback_separate_components;
   int64 max_uniform_block_size;
   int32 max_uniform_buffer_bindings;
-  int32 max_atomic_counter_buffer_bindings;
-  int32 max_shader_storage_buffer_bindings;
-  int32 shader_storage_buffer_offset_alignment;
   int32 max_varying_components;
   int32 max_vertex_output_components;
   int32 max_vertex_uniform_blocks;

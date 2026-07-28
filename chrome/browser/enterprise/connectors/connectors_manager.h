@@ -21,9 +21,9 @@
 
 #if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"  // nogncheck crbug.com/40147906
 #endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 
 class BrowserWindowInterface;
@@ -100,14 +100,7 @@ class ConnectorsManager : public ConnectorsManagerBase {
 
   // Re-cache analysis connector policy and update local agent connection if
   // needed.
-  void OnPrefChanged(AnalysisConnector connector);
-
-  // Sets up |pref_change_registrar_|. Used by the constructor and
-  // SetUpForTesting.
-  void StartObservingPref(AnalysisConnector connector);
-
-  // ConnectorsManagerBase overrides:
-  void StartObservingPrefs(PrefService* pref_service) override;
+  void OnAnalysisPrefChanged(AnalysisConnector connector) override;
 };
 
 }  // namespace enterprise_connectors

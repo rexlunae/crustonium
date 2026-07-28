@@ -17,8 +17,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilterObserver;
+import org.chromium.chrome.browser.tabmodel.TabGroupObserver;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabModelObserver;
@@ -29,15 +28,15 @@ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import java.util.Locale;
 
 /**
- * A controller that listens to {@link TabGroupModelFilterObserver#showUndoGroupSnackbar} and shows
- * a undo snackbar.
+ * A controller that listens to {@link TabGroupObserver#showUndoGroupSnackbar} and shows a undo
+ * snackbar.
  */
 @NullMarked
 public class UndoGroupSnackbarController implements SnackbarManager.SnackbarController {
     private final Context mContext;
     private final TabModelSelector mTabModelSelector;
     private final SnackbarManager mSnackbarManager;
-    private final TabGroupModelFilterObserver mTabGroupModelFilterObserver;
+    private final TabGroupObserver mTabGroupObserver;
     private final Callback<TabModel> mCurrentTabModelObserver;
     private final TabModelSelectorTabModelObserver mTabModelSelectorTabModelObserver;
 
@@ -51,8 +50,8 @@ public class UndoGroupSnackbarController implements SnackbarManager.SnackbarCont
         mContext = context;
         mTabModelSelector = tabModelSelector;
         mSnackbarManager = snackbarManager;
-        mTabGroupModelFilterObserver =
-                new TabGroupModelFilterObserver() {
+        mTabGroupObserver =
+                new TabGroupObserver() {
                     @Override
                     public void willMoveTabOutOfGroup(
                             Tab movedTab, @Nullable Token destinationTabGroupId) {
@@ -68,12 +67,14 @@ public class UndoGroupSnackbarController implements SnackbarManager.SnackbarCont
                     }
                 };
 
-        getFilter(/* isIncognito= */ false).addTabGroupObserver(mTabGroupModelFilterObserver);
-        getFilter(/* isIncognito= */ true).addTabGroupObserver(mTabGroupModelFilterObserver);
+        getTabModel(/* isIncognito= */ false).addTabGroupObserver(mTabGroupObserver);
+        getTabModel(/* isIncognito= */ true).addTabGroupObserver(mTabGroupObserver);
 
         mCurrentTabModelObserver = (tabModel) -> dismissSnackbars();
 
-        mTabModelSelector.getCurrentTabModelSupplier().addObserver(mCurrentTabModelObserver);
+        mTabModelSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
 
         mTabModelSelectorTabModelObserver =
                 new TabModelSelectorTabModelObserver(mTabModelSelector) {
@@ -101,15 +102,14 @@ public class UndoGroupSnackbarController implements SnackbarManager.SnackbarCont
 
     /**
      * Cleans up this class, removes {@link Callback<TabModel>} from {@link
-     * TabModelSelector#getCurrentTabModelSupplier()} and {@link TabGroupModelFilterObserver} from
-     * {@link TabGroupModelFilter}.
+     * TabModelSelector#getCurrentTabModelSupplier()} and {@link TabGroupObserver} from {@link
+     * TabModel}.
      */
     public void destroy() {
         if (mTabModelSelector != null) {
             mTabModelSelector.getCurrentTabModelSupplier().removeObserver(mCurrentTabModelObserver);
-            getFilter(/* isIncognito= */ false)
-                    .removeTabGroupObserver(mTabGroupModelFilterObserver);
-            getFilter(/* isIncognito= */ true).removeTabGroupObserver(mTabGroupModelFilterObserver);
+            getTabModel(/* isIncognito= */ false).removeTabGroupObserver(mTabGroupObserver);
+            getTabModel(/* isIncognito= */ true).removeTabGroupObserver(mTabGroupObserver);
         }
         mTabModelSelectorTabModelObserver.destroy();
     }
@@ -119,8 +119,8 @@ public class UndoGroupSnackbarController implements SnackbarManager.SnackbarCont
     }
 
     private void showUndoGroupSnackbarInternal(UndoGroupMetadata undoGroupMetadata) {
-        TabGroupModelFilter filter = getFilter(undoGroupMetadata.isIncognito());
-        int mergedGroupSize = filter.getTabCountForGroup(undoGroupMetadata.getTabGroupId());
+        TabModel tabModel = getTabModel(undoGroupMetadata.isIncognito());
+        int mergedGroupSize = tabModel.getTabCountForGroup(undoGroupMetadata.getTabGroupId());
 
         String content = String.format(Locale.getDefault(), "%d", mergedGroupSize);
         String templateText;
@@ -143,19 +143,19 @@ public class UndoGroupSnackbarController implements SnackbarManager.SnackbarCont
     public void onAction(@Nullable Object actionData) {
         assumeNonNull(actionData);
         UndoGroupMetadata undoGroupMetadata = (UndoGroupMetadata) actionData;
-        TabGroupModelFilter filter = getFilter(undoGroupMetadata.isIncognito());
-        filter.performUndoGroupOperation(undoGroupMetadata);
+        TabModel tabModel = getTabModel(undoGroupMetadata.isIncognito());
+        tabModel.performUndoGroupOperation(undoGroupMetadata);
     }
 
     @Override
     public void onDismissNoAction(@Nullable Object actionData) {
         assumeNonNull(actionData);
         UndoGroupMetadata undoGroupMetadata = (UndoGroupMetadata) actionData;
-        TabGroupModelFilter filter = getFilter(undoGroupMetadata.isIncognito());
-        filter.undoGroupOperationExpired(undoGroupMetadata);
+        TabModel tabModel = getTabModel(undoGroupMetadata.isIncognito());
+        tabModel.undoGroupOperationExpired(undoGroupMetadata);
     }
 
-    private TabGroupModelFilter getFilter(boolean isIncognito) {
-        return assumeNonNull(mTabModelSelector.getTabGroupModelFilter(isIncognito));
+    private TabModel getTabModel(boolean isIncognito) {
+        return mTabModelSelector.getModel(isIncognito);
     }
 }

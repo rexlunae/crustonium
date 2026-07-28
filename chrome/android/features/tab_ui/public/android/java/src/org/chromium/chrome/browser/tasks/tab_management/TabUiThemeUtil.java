@@ -129,6 +129,16 @@ public class TabUiThemeUtil {
                         : R.color.compositor_tab_title_bar_text);
     }
 
+    /** Returns the color for the tab strip tab underline gradient start. */
+    public static @ColorInt int getTabUnderlineGradientStart(Context context) {
+        return context.getColor(R.color.material_primary_50);
+    }
+
+    /** Returns the color for the tab strip tab underline gradient end. */
+    public static @ColorInt int getTabUnderlineGradientEnd(Context context) {
+        return context.getColor(R.color.material_primary_70);
+    }
+
     /**
      * Returns the mini thumbnail placeholder color for the given group color.
      *
@@ -207,7 +217,7 @@ public class TabUiThemeUtil {
             // component of the {@code @ColorInt}, since it is ignored when loading resources
             // with a specified tint in the CC layer (instead retaining the alpha of the original
             // image). Instead, this is reflected by setting the opacity of the divider itself.
-            // See https://crbug.com/1373634.
+            // See https://crbug.com/40871850.
             return ColorUtils.setAlphaComponentWithFloat(
                     SemanticColorUtils.getDefaultIconColorAccent1(context),
                     DIVIDER_FOLIO_LIGHT_OPACITY);
@@ -234,6 +244,11 @@ public class TabUiThemeUtil {
     /** {@return The {@link DrawableRes} for the close button keyboard focus ring} */
     public static @DrawableRes int getCircularButtonKeyboardFocusDrawableRes() {
         return R.drawable.circular_button_keyfocus;
+    }
+
+    /** {@return The {@link DrawableRes} for the Glic button keyboard focus ring} */
+    public static @DrawableRes int getGlicButtonKeyboardFocusDrawableRes(boolean isSplit) {
+        return isSplit ? R.drawable.glic_split_button_keyfocus : R.drawable.glic_button_keyfocus;
     }
 
     /** {@return The keyboard focus ring's offset in px} */

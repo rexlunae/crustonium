@@ -11,6 +11,7 @@
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
@@ -195,7 +196,13 @@ bool WorkletGlobalScope::IsContextThread() const {
 void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
                                                bool discard_duplicates) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     frame_->Console().AddMessage(console_message, discard_duplicates);
+    return;
+  }
+  if (!worker_thread_) {
     return;
   }
   worker_thread_->GetWorkerReportingProxy().ReportConsoleMessage(
@@ -207,8 +214,14 @@ void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
 
 void WorkletGlobalScope::AddInspectorIssue(AuditsIssue issue) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     frame_->DomWindow()->AddInspectorIssue(std::move(issue));
   } else {
+    if (!worker_thread_) {
+      return;
+    }
     worker_thread_->GetInspectorIssueStorage()->AddInspectorIssue(
         this, std::move(issue));
   }
@@ -216,12 +229,18 @@ void WorkletGlobalScope::AddInspectorIssue(AuditsIssue issue) {
 
 void WorkletGlobalScope::ExceptionThrown(ErrorEvent* error_event) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     MainThreadDebugger::Instance(GetIsolate())
         ->ExceptionThrown(this, error_event);
     return;
   }
+  if (!worker_thread_) {
+    return;
+  }
   if (WorkerThreadDebugger* debugger =
-          WorkerThreadDebugger::From(GetThread()->GetIsolate())) {
+          WorkerThreadDebugger::From(worker_thread_->GetIsolate())) {
     debugger->ExceptionThrown(worker_thread_, error_event);
   }
 }

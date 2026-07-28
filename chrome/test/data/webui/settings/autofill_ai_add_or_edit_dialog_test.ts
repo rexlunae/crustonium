@@ -7,6 +7,7 @@ import 'chrome://settings/lazy_load.js';
 
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {loadTimeData} from 'chrome://settings/settings.js';
 import type {CrButtonElement, CrInputElement, SettingsAutofillAiAddOrEditDialogElement} from 'chrome://settings/lazy_load.js';
 import {EntityDataManagerProxyImpl} from 'chrome://settings/lazy_load.js';
 import {eventToPromise, isVisible} from 'chrome://webui-test/test_util.js';
@@ -36,7 +37,8 @@ suite('AutofillAiAddOrEditDialogUiTest', function() {
         addEntityTypeString: 'Add vehicle',
         editEntityTypeString: 'Edit vehicle',
         deleteEntityTypeString: 'Delete vehicle',
-        supportsWalletStorage: false,
+        supportsWalletStorage: true,
+        passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
       },
       attributeInstances: [
         {
@@ -194,8 +196,15 @@ suite('AutofillAiAddOrEditDialogUiTest', function() {
               dialog.shadowRoot!.querySelector<HTMLElement>('.action-button');
           assertTrue(!!saveButton);
 
-          const dialogConfirmedPromise =
-              eventToPromise('autofill-ai-add-or-edit-done', dialog);
+          // Expect storedInWallet to be set if supportsWalletStorage is true
+          // and only when new entities.
+          if (params.add && testEntityInstance.type.supportsWalletStorage) {
+            expectedEntityInstance.storedInWallet = true;
+          }
+
+          const dialogConfirmedPromise = eventToPromise<
+              CustomEvent<chrome.autofillPrivate.EntityInstance>>(
+              'autofill-ai-add-or-edit-done', dialog);
           saveButton.click();
 
           const dialogConfirmedEvent = await dialogConfirmedPromise;
@@ -230,7 +239,7 @@ suite('AutofillAiAddOrEditDialogUiTest', function() {
     // The validation error should not be visible yet and the save button
     // should be enabled.
     const validationError =
-        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error');
+        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error-top');
     const saveButton =
         dialog.shadowRoot!.querySelector<CrButtonElement>('.action-button');
     assertTrue(!!validationError);
@@ -300,7 +309,7 @@ suite('AutofillAiAddOrEditDialogUiTest', function() {
     const saveButton =
         dialog.shadowRoot!.querySelector<CrButtonElement>('.action-button');
     const validationError =
-        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error');
+        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error-top');
     const inputs = dialog.shadowRoot!.querySelectorAll<CrInputElement>(
         '#attribute-instance-field');
 
@@ -354,6 +363,128 @@ suite('AutofillAiAddOrEditDialogUiTest', function() {
     assertFalse(isVisible(validationError));
     assertFalse(
         inputs[0]!.invalid, 'Required field should be valid after input');
+  });
+
+  test('FooterVisibleForEligibleEntityWithEmail', async function() {
+    const userEmail = 'test@example.com';
+    const originalGetAccountInfo = chrome.autofillPrivate.getAccountInfo;
+    chrome.autofillPrivate.getAccountInfo = () => Promise.resolve({
+      email: userEmail,
+      isSyncEnabledForAutofillProfiles: true,
+      isEligibleForAddressAccountStorage: true,
+      isAutofillSyncToggleEnabled: true,
+      isAutofillSyncToggleAvailable: true,
+    });
+
+    try {
+      // Use the test entity which has supportsWalletStorage set to true.
+      const newEntity = structuredClone(testEntityInstance);
+      newEntity.guid = '';
+      dialog.entityInstance = newEntity;
+      loadTimeData.overrideValues({
+        saveInfoToWalletAccountNotice: 'Save to $1 using $2',
+        googleWalletTitle: 'Google Wallet',
+      });
+
+      document.body.appendChild(dialog);
+      await entityDataManager.whenCalled(
+          'getAllAttributeTypesForEntityTypeName');
+      await flushTasks();
+
+      const footer = dialog.shadowRoot!.querySelector<HTMLElement>('#footer');
+      assertTrue(!!footer);
+      assertFalse(
+          footer.hidden, 'Footer should be visible for eligible entity');
+    } finally {
+      // Restore to its original state so that it doesn't affect other tests.
+      chrome.autofillPrivate.getAccountInfo = originalGetAccountInfo;
+    }
+  });
+
+  test('FooterVisibleForIneligibleEntity', async function() {
+    const originalGetAccountInfo = chrome.autofillPrivate.getAccountInfo;
+    chrome.autofillPrivate.getAccountInfo = () => Promise.resolve({
+      email: 'test@example.com',
+      isSyncEnabledForAutofillProfiles: true,
+      isEligibleForAddressAccountStorage: true,
+      isAutofillSyncToggleEnabled: true,
+      isAutofillSyncToggleAvailable: true,
+    });
+
+    try {
+      // Create ineligible entity.
+      const ineligibleEntity = structuredClone(testEntityInstance);
+      ineligibleEntity.type.supportsWalletStorage = false;
+      ineligibleEntity.guid = '';
+
+      dialog.entityInstance = ineligibleEntity;
+      loadTimeData.overrideValues({
+        autofillAiSaveOrUpdateLocalEntitySourceNotice:
+            'Your info is saved to your device',
+      });
+
+      document.body.appendChild(dialog);
+      await entityDataManager.whenCalled(
+          'getAllAttributeTypesForEntityTypeName');
+      await flushTasks();
+
+      const footer = dialog.shadowRoot!.querySelector<HTMLElement>('#footer');
+      assertTrue(!!footer);
+      assertFalse(
+          footer.hidden, 'Footer should be visible for ineligible entity');
+      assertTrue(
+          footer.innerText.includes('Your info is saved to your device'));
+    } finally {
+      chrome.autofillPrivate.getAccountInfo = originalGetAccountInfo;
+    }
+  });
+
+  test('AsyncSave_ShowsSpinnerAndDisablesButton', async function() {
+    loadTimeData.overrideValues({enableAutofillAiWalletPrivatePasses: true});
+
+    // Disable auto-resolve to test the pending state
+    entityDataManager.setAutoResolveSave(false);
+
+    dialog = document.createElement('settings-autofill-ai-add-or-edit-dialog');
+
+    // Initialize empty dialog to ensure that none of the fields are filled.
+    dialog.entityInstance = {
+      type: testEntityInstance.type,
+      attributeInstances: [{type: testAttributeTypes[0]!, value: 'Test Value'}],
+      guid: '',
+      nickname: '',
+    };
+    dialog.entityInstance.type.supportsWalletStorage = true;
+    document.body.appendChild(dialog);
+
+    await Promise.all([
+      entityDataManager.whenCalled('getAllAttributeTypesForEntityTypeName'),
+      entityDataManager.whenCalled(
+          'getRequiredAttributeTypesForEntityTypeName'),
+    ]);
+    await flushTasks();
+
+    const saveButton =
+        dialog.shadowRoot!.querySelector<CrButtonElement>('.action-button');
+    const spinner = dialog.shadowRoot!.querySelector<HTMLElement>('.spinner');
+
+    assertTrue(!!saveButton);
+    assertTrue(!!spinner);
+
+    assertFalse(isVisible(spinner));
+    assertTrue(saveButton.innerText.includes('Save'));
+
+    saveButton.click();
+    await flushTasks();
+
+    // The proxy should hold the promise in pending state.
+    assertTrue(isVisible(spinner));
+
+    entityDataManager.resolveSave();
+
+    // Verify Dialog closes.
+    await flushTasks();
+    assertFalse(dialog.$.dialog.getNative().open);
   });
 });
 
@@ -424,6 +555,7 @@ suite('AutofillAiAddOrEditDialogSelectElementUiTest', function() {
         editEntityTypeString: 'Edit passport',
         deleteEntityTypeString: 'Delete passport',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
       },
       attributeInstances: [],
       guid: 'e4bbe384-ee63-45a4-8df3-713a58fdc181',
@@ -519,7 +651,8 @@ suite('AutofillAiAddOrEditDialogSelectElementUiTest', function() {
         assertTrue(!!saveButton);
 
         const dialogConfirmedPromise =
-            eventToPromise('autofill-ai-add-or-edit-done', dialog);
+            eventToPromise<CustomEvent<chrome.autofillPrivate.EntityInstance>>(
+                'autofill-ai-add-or-edit-done', dialog);
         saveButton.click();
 
         const dialogConfirmedEvent = await dialogConfirmedPromise;
@@ -622,7 +755,8 @@ suite('AutofillAiAddOrEditDialogSelectElementUiTest', function() {
         assertTrue(!!saveButton);
 
         const dialogConfirmedPromise =
-            eventToPromise('autofill-ai-add-or-edit-done', dialog);
+            eventToPromise<CustomEvent<chrome.autofillPrivate.EntityInstance>>(
+                'autofill-ai-add-or-edit-done', dialog);
         saveButton.click();
 
         const dialogConfirmedEvent = await dialogConfirmedPromise;
@@ -687,7 +821,7 @@ suite('AutofillAiAddOrEditDialogSelectElementUiTest', function() {
     // The validation error should not be visible yet and the save button
     // should be enabled.
     const validationError =
-        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error');
+        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error-top');
     const saveButton =
         dialog.shadowRoot!.querySelector<CrButtonElement>('.action-button');
     assertTrue(!!validationError);
@@ -742,7 +876,7 @@ suite('AutofillAiAddOrEditDialogSelectElementUiTest', function() {
     const dateValidationError =
         dialog.shadowRoot!.querySelector<HTMLElement>('#date-validation-error');
     const regularValidationError =
-        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error');
+        dialog.shadowRoot!.querySelector<HTMLElement>('#validation-error-top');
     const saveButton =
         dialog.shadowRoot!.querySelector<CrButtonElement>('.action-button');
     assertTrue(!!dateSelectLabel);

@@ -12,10 +12,12 @@
 #import "base/test/ios/wait_util.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/autofill/core/common/autofill_constants.h"
+#import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/ios/browser/autofill_java_script_feature.h"
 #import "components/autofill/ios/browser/autofill_util.h"
 #import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/form_util/autofill_form_features_java_script_feature.h"
+#import "components/autofill/ios/form_util/autofill_test_with_web_state.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/web/model/chrome_web_client.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -47,14 +49,6 @@ struct ElementByName {
   // The option index if the element is a select, -1 otherwise.
   const int option_index;
 };
-
-NSString* GetDefaultMaxLengthString() {
-  return @"524288";
-}
-
-NSNumber* GetDefaultMaxLength() {
-  return @524288;
-}
 
 // Generates the JavaScript that gets an element by name.
 NSString* GetElementByNameJavaScript(ElementByName element) {
@@ -91,6 +85,7 @@ NSString* const kHTMLForTestingElements = @"<html><body>"
     "  <input type='tel' name='phone'>"
     "  <input type='url' autocomplete='off' name='blog'>"
     "  <input type='number' name='expected number of clicks'>"
+    "  <input type='date' name='bday'>"
     "  <input type='password' autocomplete='off' name='pwd'>"
     "  <input type='checkbox' name='vehicle' value='Bike'>"
     "  <input type='checkbox' name='vehicle' value='Car'>"
@@ -170,7 +165,7 @@ NSArray* GetTestFormInputElementWithLabelFromPrevious() {
           @"'firstname'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -192,7 +187,7 @@ NSArray* GetTestFormInputElementWithLabelFromEnclosingLabelBefore() {
           @"'firstname'", @"identifier",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -212,7 +207,7 @@ NSArray* GetTestFormInputElementWithLabelFromPreviousSpan() {
           @"'lastname'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -233,7 +228,7 @@ NSArray* GetTestFormInputElementWithLabelFromPreviousParagraph() {
           @"'email'", @"name",
           @"'email'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'john@example.com'", @"value",
@@ -253,7 +248,7 @@ NSArray* GetTestFormInputElementWithLabelFromPreviousLabel() {
           @"'telephone'", @"name",
           @"'tel'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'12345678'", @"value",
@@ -274,7 +269,7 @@ NSArray* GetTestFormInputElementWithLabelFromPreviousLabelOtherIgnored() {
           @"'blog'", @"name",
           @"'url'", @"form_control_type",
           @"'off'", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"false", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'www.jogh.blog'", @"value",
@@ -295,7 +290,7 @@ NSArray* GetTestFormInputElementWithLabelFromPreviousTextSpanBr() {
           @"'expected number of clicks'", @"name",
           @"'number'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"''", @"value",
@@ -315,7 +310,7 @@ NSArray* GetTestFormInputElementWithLabelFromPreviousTextBrAndSpan() {
           @"'pwd'", @"name",
           @"'password'", @"form_control_type",
           @"'off'", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"false", @"should_autocomplete",
           @"false", @"is_checkable",
           @"''", @"value",
@@ -339,7 +334,7 @@ NSArray* GetTestFormInputElementWithLabelFromListItem() {
           @"'first code'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'415'", @"value",
@@ -353,7 +348,7 @@ NSArray* GetTestFormInputElementWithLabelFromListItem() {
           @"'middle code'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'555'", @"value",
@@ -367,7 +362,7 @@ NSArray* GetTestFormInputElementWithLabelFromListItem() {
           @"'last code'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'1212'", @"value",
@@ -396,7 +391,7 @@ NSArray* GetTestFormInputElementWithLabelFromTableColumnTD() {
           @"'tabletdname'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -410,7 +405,7 @@ NSArray* GetTestFormInputElementWithLabelFromTableColumnTD() {
           @"'tabletdemail'", @"name",
           @"'email'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'john@example.com'", @"value",
@@ -440,7 +435,7 @@ NSArray* GetTestFormInputElementWithLabelFromTableColumnTH() {
           @"'nameintableth'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -454,7 +449,7 @@ NSArray* GetTestFormInputElementWithLabelFromTableColumnTH() {
           @"'emailtableth'",  @"name",
           @"'email'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'john@example.com'", @"value",
@@ -478,7 +473,7 @@ NSArray* GetTestFormInputElementWithLabelFromTableNested() {
           @"'nametablenested'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -505,7 +500,7 @@ NSArray* GetTestFormInputElementWithLabelFromTableRow() {
           @"'nametablerow'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -529,7 +524,7 @@ NSArray* GetTestFormInputElementWithLabelFromDivTable() {
           @"'namedivtable'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'John'", @"value",
@@ -563,7 +558,7 @@ NSArray* GetTestFormInputElementWithLabelFromDefinitionList() {
           @"'sport'", @"name",
           @"'text'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          GetDefaultMaxLengthString(), @"max_length",
+          @"undefined", @"max_length",
           @"true", @"should_autocomplete",
           @"false", @"is_checkable",
           @"'Tennis'", @"value",
@@ -587,7 +582,7 @@ NSArray* GetTestFormSelectElement() {
           @"'state'", @"name",
           @"'select-one'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          @"undefined", @"max_length",
+          @"0", @"max_length",
           @"true", @"should_autocomplete",
           @"undefined", @"is_checkable",
           @"'CA'", @"value",
@@ -617,7 +612,7 @@ NSArray* GetTestFormSelectElementWithOptgroup() {
           @"'course'", @"name",
           @"'select-one'", @"form_control_type",
           @"undefined", @"autocomplete_attribute",
-          @"undefined", @"max_length",
+          @"0", @"max_length",
           @"true", @"should_autocomplete",
           @"undefined", @"is_checkable",
           @"'8.01.1'", @"value",
@@ -732,6 +727,14 @@ class AutofillControllerJsTest : public web::JavascriptTest {
   void SetUp() override {
     JavascriptTest::SetUp();
 
+    // Inject default feature flag placeholders before loading scripts.
+    NSString* const placeholders = autofill::test::GetAutofillTestPlaceholders();
+    WKUserScript* script = [[WKUserScript alloc]
+          initWithSource:placeholders
+           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:NO];
+    [web_view().configuration.userContentController addUserScript:script];
+
     AddGCrWebScript();
     AddUserScript(@"autofill_form_features");
     AddUserScript(@"fill_util_test");
@@ -816,6 +819,10 @@ class AutofillControllerJsTest : public web::JavascriptTest {
   // one NSString.
   NSString* RollupJavaScriptWithUserScript(NSString* java_script,
                                            NSString* user_script);
+
+  // Re-injects user scripts with specific feature flag placeholder values.
+  void InjectUserScriptsWithPlaceholders(
+      const autofill::test::AutofillPlaceholderConfig& config);
 
   web::ScopedTestingWebClient web_client_;
   web::WebTaskEnvironment task_environment_;
@@ -906,6 +913,23 @@ NSString* AutofillControllerJsTest::RollupJavaScriptWithUserScript(
   }
   [rollup_script appendString:java_script];
   return rollup_script;
+}
+
+void AutofillControllerJsTest::InjectUserScriptsWithPlaceholders(
+    const autofill::test::AutofillPlaceholderConfig& config) {
+  [web_view().configuration.userContentController removeAllUserScripts];
+
+  NSString* const placeholders =
+      autofill::test::GetAutofillTestPlaceholders(config);
+  WKUserScript* script = [[WKUserScript alloc]
+        initWithSource:placeholders
+         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+      forMainFrameOnly:NO];
+  [web_view().configuration.userContentController addUserScript:script];
+
+  AddGCrWebScript();
+  AddUserScript(@"autofill_form_features");
+  AddUserScript(@"fill_util_test");
 }
 
 TEST_F(AutofillControllerJsTest, HasTagName) {
@@ -1102,7 +1126,8 @@ TEST_F(AutofillControllerJsTest, InferLabelFromDivTable) {
 
 TEST_F(AutofillControllerJsTest, InferLabelFromDefinitionList) {
   TestInputElementDataEvaluation(
-      @"__gCrWeb.getRegisteredApi('fill_test_api').getFunction('inferLabelFromDefinitionList')",
+      @"__gCrWeb.getRegisteredApi('fill_test_api').getFunction('"
+      @"inferLabelFromDefinitionList')",
       @"label", GetTestFormInputElementWithLabelFromDefinitionList(), @"input");
 }
 
@@ -1125,9 +1150,10 @@ TEST_F(AutofillControllerJsTest, InferLabelForElement) {
     GetTestFormInputElementWithLabelFromDefinitionList(),
   ];
   for (NSArray* testingElement in testingElements) {
-    TestInputElementDataEvaluation(@"__gCrWeb.getRegisteredApi('fill_test_api')."
-                                   @"getFunction('inferLabelForElement')",
-                                   @"label", testingElement, @"input");
+    TestInputElementDataEvaluation(
+        @"__gCrWeb.getRegisteredApi('fill_test_api')."
+        @"getFunction('inferLabelForElement')",
+        @"label", testingElement, @"input");
   }
 
   TestInputElementDataEvaluation(@"__gCrWeb.getRegisteredApi('fill_test_api')."
@@ -1247,6 +1273,50 @@ TEST_F(AutofillControllerJsTest, IsSelectElement) {
       @"__gCrWeb.getRegisteredApi('fill_test_api')."
       @"getFunction('isSelectElement')(%@)",
       kElementsExpectingTrue);
+}
+
+TEST_F(AutofillControllerJsTest, ExtractAutofillableElements_Date) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kAutofillSupportDateInput);
+
+  autofill::test::AutofillPlaceholderConfig config;
+  config.autofill_support_date_input = true;
+  InjectUserScriptsWithPlaceholders(config);
+
+  NSString* html = @"<html><body><form><input type='date' name='bday' "
+                   @"id='bday'></form></body></html>";
+  web::test::LoadHtml(html, web_state());
+
+  NSString* parameter = @"window.document.getElementsByTagName('form')[0]";
+  id result = ExecuteJavaScript([NSString
+      stringWithFormat:@"var controlElements="
+                        "__gCrWeb.getRegisteredApi('autofill')."
+                        "getFunction('extractAutofillableElementsInForm')(%@);"
+                        "controlElements[0].id === 'bday'",
+                       parameter]);
+  EXPECT_NSEQ(@YES, result);
+}
+
+TEST_F(AutofillControllerJsTest, ExtractAutofillableElements_Date_Disabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(kAutofillSupportDateInput);
+
+  autofill::test::AutofillPlaceholderConfig config;
+  config.autofill_support_date_input = false;
+  InjectUserScriptsWithPlaceholders(config);
+
+  NSString* html = @"<html><body><form><input type='date' name='bday' "
+                   @"id='bday'></form></body></html>";
+  web::test::LoadHtml(html, web_state());
+
+  NSString* parameter = @"window.document.getElementsByTagName('form')[0]";
+  id result = ExecuteJavaScript([NSString
+      stringWithFormat:@"var controlElements="
+                        "__gCrWeb.getRegisteredApi('autofill')."
+                        "getFunction('extractAutofillableElementsInForm')(%@);"
+                        "controlElements.length === 0",
+                       parameter]);
+  EXPECT_NSEQ(@YES, result);
 }
 
 TEST_F(AutofillControllerJsTest, IsAutofillableInputElement) {
@@ -1628,13 +1698,12 @@ TEST_F(AutofillControllerJsTest, ExtractForms) {
         @"identifier" : @"firstname",
         @"renderer_id" : @"2",
         @"form_control_type" : @"text",
-        @"max_length" : GetDefaultMaxLength(),
         @"pattern_attribute" : @".*",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"John",
         @"label" : @"* First name:"
       },
@@ -1649,11 +1718,10 @@ TEST_F(AutofillControllerJsTest, ExtractForms) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"John",
         @"label" : @"* First name:"
       },
@@ -1668,11 +1736,10 @@ TEST_F(AutofillControllerJsTest, ExtractForms) {
         @"form_control_type" : @"email",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"john@example.com",
         @"label" : @"Email:"
       },
@@ -1688,11 +1755,10 @@ TEST_F(AutofillControllerJsTest, ExtractForms) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"autocomplete_attribute" : @"off",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @false,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"* Password:"
       },
@@ -1707,8 +1773,9 @@ TEST_F(AutofillControllerJsTest, ExtractForms) {
         @"form_control_type" : @"select-one",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
+        @"max_length" : @0,
         @"is_focusable" : @1,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"option_values" : @[ @"CA", @"TX" ],
         @"option_texts" : @[ @"California", @"Texas" ],
         @"should_autocomplete" : @1,
@@ -1769,11 +1836,11 @@ TEST_F(AutofillControllerJsTest, ExtractForms) {
   }];
 }
 
-// Test that the is_user_edited bit is correctly set in the extracted fields
-// when the fix is enabled. This test is limited as it can't test if
-// is_user_edited can be set to true because there is no way to emulate an
-// input from the user in the unittest (i.e. Event.isTrusted set to true) - this
-// would required popping up a keyboard.
+// Test that the is_user_edited_deprecated bit is correctly set in the extracted
+// fields when the fix is enabled. This test is limited as it can't test if
+// is_user_edited_deprecated can be set to true because there is no way to
+// emulate an input from the user in the unittest (i.e. Event.isTrusted set to
+// true) - this would required popping up a keyboard.
 TEST_F(AutofillControllerJsTest, ExtractForms_UserEdited_FixEnabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(kAutofillCorrectUserEditedBitInParsedField);
@@ -1788,22 +1855,19 @@ TEST_F(AutofillControllerJsTest, ExtractForms_UserEdited_FixEnabled) {
                     "</body></html>";
   web::test::LoadHtml(html, web_state());
 
-  // Enable the fix for the is_user_edited bit once the frame is loaded.
-  autofill::AutofillFormFeaturesJavaScriptFeature::GetInstance()
-      ->SetAutofillCorrectUserEditedBitInParsedField(WaitForMainFrame(),
-                                                     /*enabled=*/true);
-
   // Emulate a user input on the first input element.
   EXPECT_NSEQ(@YES, ExecuteJavaScript(
                         @"document.getElementById('input1').dispatchEvent(new "
                         @"Event('input', { bubbles: true }))"));
 
   // Verify that the first <input> element that received the scripted input
-  // event has is_user_edited still set to false because the user input wasn't
-  // trusted, and that the second <input> has is_user_edited set to false
-  // because it didn't receive any user input event.
-  NSString* verifying_javascript = @"!forms[0].fields[0].is_user_edited && "
-                                   @"!forms[0].fields[1].is_user_edited;";
+  // event has is_user_edited_deprecated still set to false because the user
+  // input wasn't trusted, and that the second <input> has
+  // is_user_edited_deprecated set to false because it didn't receive any user
+  // input event.
+  NSString* verifying_javascript =
+      @"!forms[0].fields[0].is_user_edited_deprecated && "
+      @"!forms[0].fields[1].is_user_edited_deprecated;";
   EXPECT_NSEQ(@YES,
               ExecuteJavaScript([NSString
                   stringWithFormat:@"var forms = "
@@ -1823,9 +1887,6 @@ TEST_F(AutofillControllerJsTest,
                     "</form>"
                     "</body></html>";
   web::test::LoadHtml(html, web_state());
-
-  autofill::AutofillFormFeaturesJavaScriptFeature::GetInstance()
-      ->SetAutofillAcrossIframes(WaitForMainFrame(), /*enabled=*/true);
 
   // Verify that the form with child frames was extracted.
   NSString* verifying_javascript =
@@ -1850,9 +1911,6 @@ TEST_F(AutofillControllerJsTest,
                     "</body></html>";
   web::test::LoadHtml(html, web_state());
 
-  autofill::AutofillFormFeaturesJavaScriptFeature::GetInstance()
-      ->SetAutofillAcrossIframes(WaitForMainFrame(), /*enabled=*/true);
-
   // Verify that the form with child frames was extracted.
   NSString* verifying_javascript =
       @"forms.length === 1 && forms[0].child_frames.length === 1;";
@@ -1863,8 +1921,6 @@ TEST_F(AutofillControllerJsTest,
                                     "getFunction('extractNewForms')(false); %@",
                                    verifying_javascript]));
 }
-
-
 
 TEST_F(AutofillControllerJsTest, FillActiveFormField) {
   web::test::LoadHtml(kHTMLForTestingElements, web_state());

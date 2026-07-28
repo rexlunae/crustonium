@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/feature_list.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
@@ -145,8 +144,7 @@ TEST_F(BatchUploadServiceTest, SignedPending) {
 }
 
 TEST_F(BatchUploadServiceTest, Syncing) {
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     GTEST_SKIP() << "Sync is deprecated";
   }
   SigninWithFullInfo();
@@ -465,6 +463,7 @@ TEST_F(BatchUploadServiceTest,
   EXPECT_FALSE(service.IsDialogOpened());
 }
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 struct AvatarEntryPointParam {
   signin::ProfileMenuAvatarButtonPromoInfo::Type promo_type;
   BatchUploadService::EntryPoint batch_upload_entry_point;
@@ -523,11 +522,11 @@ TEST_P(BatchUploadServiceWithAvatarPromoEntryPointTest,
   SigninWithFullInfo();
 
   // Simulate the promo being shown twice.
-  signin::SyncPromoIdentityPillManager pill_manager(&identity_manager(),
-                                                    &pref_service());
+  signin::AvatarButtonPromoManager avatar_promo_manager(&identity_manager(),
+                                                        &pref_service());
   const int avatar_promo_shown_count = 2;
   for (int i = 0; i < avatar_promo_shown_count; ++i) {
-    pill_manager.RecordPromoShown(GetParam().promo_type);
+    avatar_promo_manager.RecordPromoShown(GetParam().promo_type);
   }
 
   BatchUploadService& service = CreateService();
@@ -572,3 +571,4 @@ TEST_P(BatchUploadServiceWithAvatarPromoEntryPointTest,
 INSTANTIATE_TEST_SUITE_P(,
                          BatchUploadServiceWithAvatarPromoEntryPointTest,
                          testing::ValuesIn(kAvatarEntryPointTestParams));
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)

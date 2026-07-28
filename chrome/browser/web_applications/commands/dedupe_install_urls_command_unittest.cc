@@ -16,6 +16,7 @@
 #include "chrome/browser/web_applications/test/web_app_test.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -145,8 +146,8 @@ class DedupeInstallUrlsCommandTest : public WebAppTest {
 
 TEST_F(DedupeInstallUrlsCommandTest,
        PolicyUpgradePlaceholderWithTwoInstallSources) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a placeholder web app installed with kPolicy and kDefault install
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a placeholder web app installed with kPolicy and kDefault install
   // sources.
   // They got into this state by the following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
@@ -231,8 +232,8 @@ TEST_F(DedupeInstallUrlsCommandTest,
 
 TEST_F(DedupeInstallUrlsCommandTest,
        PreinstallUpgradePlaceholderWithTwoInstallSources) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a placeholder web app installed with kPolicy and kDefault install
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a placeholder web app installed with kPolicy and kDefault install
   // sources.
   // They got into this state by the following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
@@ -305,10 +306,10 @@ TEST_F(DedupeInstallUrlsCommandTest,
 }
 
 TEST_F(DedupeInstallUrlsCommandTest, SameInstallUrlForRealAndPlaceholder) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a kDefault placeholder-like app (placeholder in appearance but not in
-  // configuration) and kPolicy real app.
-  // They got into this state by the following steps:
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a kDefault placeholder-like app (placeholder in appearance but
+  // not in configuration) and kPolicy real app. They got into this state by the
+  // following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
   //   placeholder P for install URL A.
   // - A web app preinstall installed install URL A, saw the placeholder P and
@@ -410,9 +411,9 @@ TEST_F(DedupeInstallUrlsCommandTest, SameInstallUrlForRealAndPlaceholder) {
 }
 
 TEST_F(DedupeInstallUrlsCommandTest, DefaultPlaceholderForceReinstalled) {
-  // This tests for users affected by crbug.com/1427340, specifically those left
-  // with a kDefault placeholder-like app (placeholder in appearance but not in
-  // configuration) and kPolicy real app for a different install URL.
+  // This tests for users affected by crbug.com/40261748, specifically those
+  // left with a kDefault placeholder-like app (placeholder in appearance but
+  // not in configuration) and kPolicy real app for a different install URL.
   // They got into this state by the following steps:
   // - A web app policy installed install URL A, was unsuccessful and created
   //   placeholder P for install URL A.

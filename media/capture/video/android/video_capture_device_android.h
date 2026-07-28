@@ -12,11 +12,15 @@
 
 #include "base/android/scoped_java_ref.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/heap_array.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_checker.h"
 #include "base/time/time.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
+#include "gpu/vulkan/vulkan_device_queue.h"
+#include "gpu/vulkan/vulkan_implementation.h"
+#include "gpu/vulkan/vulkan_ycbcr_info.h"
 #include "media/capture/capture_export.h"
 #include "media/capture/video/video_capture_device.h"
 
@@ -71,8 +75,9 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
 
   VideoCaptureDeviceAndroid() = delete;
 
-  explicit VideoCaptureDeviceAndroid(
-      const VideoCaptureDeviceDescriptor& device_descriptor);
+  VideoCaptureDeviceAndroid(
+      const VideoCaptureDeviceDescriptor& device_descriptor,
+      const gpu::GpuDriverBugWorkarounds& gpu_workarounds);
 
   VideoCaptureDeviceAndroid(const VideoCaptureDeviceAndroid&) = delete;
   VideoCaptureDeviceAndroid& operator=(const VideoCaptureDeviceAndroid&) =
@@ -86,7 +91,7 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   // Registers the Java VideoCaptureDevice pointer, used by the rest of the
   // methods of the class to operate the Java capture code. This method must be
   // called after the class constructor and before AllocateAndStart().
-  bool Init();
+  void Init();
 
   // VideoCaptureDevice implementation.
   void AllocateAndStart(const VideoCaptureParams& params,
@@ -99,14 +104,9 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
 
   void OnHardwareBufferAvailableOnMainThread(
       base::android::ScopedHardwareBufferHandle ahb_handle,
+      int32_t data_space,
       int32_t rotation,
       int64_t timestamp);
-
-  // Implement org.chromium.media.VideoCapture.Natives.OnFrameAvailable.
-  void OnFrameAvailable(JNIEnv* env,
-                        const base::android::JavaRef<jbyteArray>& data,
-                        int32_t length,
-                        int32_t rotation);
 
   // Implement org.chromium.media.VideoCapture.Natives.OnI420FrameAvailable.
   void OnI420FrameAvailable(JNIEnv* env,
@@ -119,13 +119,15 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
                             int32_t width,
                             int32_t height,
                             int32_t rotation,
-                            int64_t timestamp);
+                            int64_t timestamp,
+                            int32_t data_space);
 
   // Implement
   // org.chromium.media.VideoCapture.Natives.onHardwareBufferAvailable.
   void OnHardwareBufferAvailable(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& hardwareBuffer,
+      int32_t data_space,
       int32_t rotation,
       int64_t timestamp);
 
@@ -148,14 +150,16 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
                     int64_t callback_id,
                     const base::android::JavaRef<jbyteArray>& data);
 
-  // Implement org.chromium.media.VideoCapture.nativeOnStarted.
+  // Implement org.chromium.media.VideoCapture.Natives.onStarted.
   void OnStarted(JNIEnv* env);
 
   // Implement
-  // org.chromium.media.VideoCapture.nativeDCheckCurrentlyOnIncomingTaskRunner.
-  void DCheckCurrentlyOnIncomingTaskRunner(JNIEnv* env);
+  // org.chromium.media.VideoCapture.Natives.onInteractiveStateChanged.
+  void OnInteractiveStateChanged(JNIEnv* env, bool is_interactive);
 
-  void ConfigureForTesting();
+  // Implement
+  // org.chromium.media.VideoCapture.Natives.dCheckCurrentlyOnIncomingTaskRunner.
+  void DCheckCurrentlyOnIncomingTaskRunner(JNIEnv* env);
 
  protected:
   // Helper code executed when the frame is available; if it is the first frame,
@@ -173,7 +177,8 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
                                 int length,
                                 int rotation,
                                 base::TimeTicks reference_time,
-                                base::TimeDelta timestamp);
+                                base::TimeDelta timestamp,
+                                gfx::ColorSpace color_space);
 
  private:
   enum InternalState {
@@ -182,10 +187,12 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
     kError        // Hit error. User needs to recover by destroying the object.
   };
 
-  VideoPixelFormat GetColorspace();
+  VideoPixelFormat GetPixelFormat();
   void SetErrorState(media::VideoCaptureError error,
                      const base::Location& from_here,
                      const std::string& reason);
+
+  void OnInteractiveStateChangedOnMainThread(bool is_interactive);
 
   void DoGetPhotoState(GetPhotoStateCallback callback);
   void DoSetPhotoOptions(mojom::PhotoSettingsPtr settings,
@@ -216,10 +223,19 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
 
   const VideoCaptureDeviceDescriptor device_descriptor_;
   VideoCaptureFormat capture_format_;
-  gfx::ColorSpace capture_color_space_;
+
+  // Buffer used for copying I420 frame data, to avoid allocations on every frame.
+  base::HeapArray<uint8_t> i420_buffer_;
 
   // Java VideoCaptureAndroid instance.
   base::android::ScopedJavaLocalRef<jobject> j_capture_;
+
+  const gpu::GpuDriverBugWorkarounds gpu_workarounds_;
+
+  std::optional<bool> need_ycbcr_info_;
+  std::optional<gpu::VulkanYCbCrInfo> ycbcr_info_;
+
+  base::TimeTicks first_failed_shared_image_time_;
 
   base::WeakPtrFactory<VideoCaptureDeviceAndroid> weak_ptr_factory_{this};
 };

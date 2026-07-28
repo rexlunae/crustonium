@@ -152,7 +152,7 @@ SuggestionInfosWithNodeAndHighlightColor ComputeSuggestionInfos(
   suggestion_infos_with_node_and_highlight_color.highlight_color =
       (first_suggestion_marker->SuggestionHighlightColor() ==
        Color::kTransparent)
-          ? LayoutTheme::TapHighlightColor()
+          ? LayoutTheme::GetTheme().TapHighlightColor()
           : first_suggestion_marker->SuggestionHighlightColor();
 
   Vector<TextSuggestionInfo>& suggestion_infos =
@@ -439,8 +439,7 @@ void TextSuggestionController::ShowSpellCheckMenu(
       ui::mojom::ImeTextSpanUnderlineStyle::kSolid, Color::kTransparent,
       LayoutTheme::GetTheme().PlatformActiveSpellingMarkerHighlightColor());
 
-  Vector<String> suggestions;
-  description.Split('\n', suggestions);
+  Vector<String> suggestions = description.SplitSkippingEmpty('\n');
 
   Vector<mojom::blink::SpellCheckSuggestionPtr> suggestion_ptrs;
   for (const String& suggestion : suggestions) {
@@ -635,7 +634,7 @@ void TextSuggestionController::AttemptToDeleteActiveSuggestionRange() {
 void TextSuggestionController::ReplaceRangeWithText(const EphemeralRange& range,
                                                     const String& replacement) {
   GetFrame().Selection().SetSelectionAndEndTyping(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build());
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build());
 
   InsertTextAndSendInputEventsOfTypeInsertReplacementText(GetFrame(),
                                                           replacement);

@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
@@ -53,7 +52,7 @@ constexpr bool UseMinorModeRestrictions() {
 }
 
 inline bool ScreenModeIsPending(const AccountInfo& primary_account_info) {
-  return GetScreenMode(primary_account_info.capabilities) ==
+  return GetScreenMode(primary_account_info.GetAccountCapabilities()) ==
          SyncConfirmationScreenMode::kPending;
 }
 
@@ -310,7 +309,7 @@ void SyncConfirmationHandler::DispatchAccountInfoUpdate(
     return;
   }
 
-  OnScreenModeChanged(GetScreenMode(info.capabilities));
+  OnScreenModeChanged(GetScreenMode(info.GetAccountCapabilities()));
 }
 
 void SyncConfirmationHandler::OnExtendedAccountInfoUpdated(

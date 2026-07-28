@@ -20,11 +20,9 @@
 #include "base/functional/callback.h"
 #include "base/json/values_util.h"
 #include "base/logging.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -49,6 +47,7 @@
 #include "components/crash/core/common/crash_key.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/update_client/update_client_errors.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace updater {
 
@@ -215,7 +214,7 @@ void PolicyService::FetchPoliciesDone(
             << GetAllPoliciesAsString();
   } else {
     event.AddError(
-        {.category = static_cast<int>(update_client::ErrorCategory::kService),
+        {.category = std::to_underlying(update_client::ErrorCategory::kService),
          .code = result});
     VLOG(1) << "Failed to refresh policies: " << result;
   }
@@ -325,7 +324,7 @@ PolicyStatus<int> PolicyService::GetMajorVersionRolloutPolicy(
 PolicyStatus<int> PolicyService::GetMinorVersionRolloutPolicy(
     const std::string& app_id) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return QueryAppPolicy(&PolicyManagerInterface::GetMajorVersionRolloutPolicy,
+  return QueryAppPolicy(&PolicyManagerInterface::GetMinorVersionRolloutPolicy,
                         app_id);
 }
 
@@ -408,47 +407,33 @@ std::string PolicyService::GetAllPoliciesAsString() const {
   std::vector<std::string> policies;
   for (const auto& [policy, value] :
        GetUpdaterPolicies<base::flat_map<std::string, PolicyValue>>()) {
-    policies.push_back(base::StringPrintf("%s = %s (%s)", policy.c_str(),
-                                          value.policy_value.c_str(),
-                                          value.policy_source.c_str()));
+    policies.push_back(absl::StrFormat(
+        "%s = %s (%s)", policy, value.policy_value, value.policy_source));
   }
 
   for (const auto& [app_id, app_policy_values] :
        GetAppPolicies<base::flat_map<std::string, PolicyValue>>()) {
     std::vector<std::string> app_policies;
     for (const auto& [policy, value] : app_policy_values) {
-      app_policies.push_back(base::StringPrintf("%s = %s (%s)", policy.c_str(),
-                                                value.policy_value.c_str(),
-                                                value.policy_source.c_str()));
+      app_policies.push_back(absl::StrFormat(
+          "%s = %s (%s)", policy, value.policy_value, value.policy_source));
     }
     policies.push_back(
-        base::StringPrintf("\"%s\": {\n    %s\n  }", app_id.c_str(),
-                           base::JoinString(app_policies, "\n    ").c_str()));
+        absl::StrFormat("\"%s\": {\n    %s\n  }", app_id,
+                        base::JoinString(app_policies, "\n    ")));
   }
 
-  return base::StringPrintf("{\n  %s\n}\n",
-                            base::JoinString(policies, "\n  ").c_str());
+  return absl::StrFormat("{\n  %s\n}\n", base::JoinString(policies, "\n  "));
 }
 
-bool PolicyService::AreUpdatesSuppressedNow(base::Time now) const {
+bool PolicyService::AreUpdatesSuppressed(base::Time time) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const PolicyStatus<UpdatesSuppressedTimes> suppression =
       GetUpdatesSuppressedTimes();
-  if (!suppression || !suppression.policy().valid()) {
-    return false;
-  }
-  base::Time::Exploded now_local;
-  now.LocalExplode(&now_local);
-  const bool are_updates_suppressed =
-      suppression.policy().contains(now_local.hour, now_local.minute);
-  VLOG(0) << __func__ << ": Updates are "
-          << (are_updates_suppressed ? "" : "not ") << "suppressed: now=" << now
-          << ": UpdatesSuppressedTimes: start_hour_:"
-          << suppression.policy().start_hour_
-          << ": start_minute_:" << suppression.policy().start_minute_
-          << ": duration_minute_:" << suppression.policy().duration_minute_;
-  return are_updates_suppressed;
+  return suppression
+             ? ::updater::AreUpdatesSuppressed(suppression.policy(), time)
+             : false;
 }
 
 template <typename T, typename U>
@@ -563,6 +548,25 @@ bool IsCloudManaged() {
   return dm_storage && (dm_storage->IsValidDMToken() ||
                         (!dm_storage->GetEnrollmentToken().empty() &&
                          !dm_storage->IsDeviceDeregistered()));
+}
+
+bool AreUpdatesSuppressed(UpdatesSuppressedTimes updates_suppressed_times,
+                          base::Time time) {
+  if (!updates_suppressed_times.valid()) {
+    return false;
+  }
+  base::Time::Exploded time_local;
+  time.LocalExplode(&time_local);
+  const bool are_updates_suppressed =
+      updates_suppressed_times.contains(time_local.hour, time_local.minute);
+  VLOG(0) << __func__ << ": Updates are "
+          << (are_updates_suppressed ? "" : "not ")
+          << "suppressed: time=" << time
+          << ": UpdatesSuppressedTimes: start_hour_:"
+          << updates_suppressed_times.start_hour_
+          << ": start_minute_:" << updates_suppressed_times.start_minute_
+          << ": duration_minute_:" << updates_suppressed_times.duration_minute_;
+  return are_updates_suppressed;
 }
 
 }  // namespace updater

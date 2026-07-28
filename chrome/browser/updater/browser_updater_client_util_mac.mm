@@ -26,6 +26,7 @@
 #include "base/mac/authorization_util.h"
 #include "base/mac/scoped_authorizationref.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/strings/strcat.h"
@@ -53,6 +54,13 @@ namespace updater {
 namespace {
 
 constexpr char kInstallCommand[] = "install";
+
+// Return whether the app bundle's Info.plist contains a KSProductID value. May
+// block.
+bool BrowserHasKSProductID() {
+  return [base::apple::OuterBundle()
+             objectForInfoDictionaryKey:@"KSProductID"] != nil;
+}
 
 base::FilePath GetUpdaterExecutablePath() {
   return base::FilePath(base::StrCat({kUpdaterName, ".app"}))
@@ -258,12 +266,22 @@ void EnsureUpdater(base::TaskPriority priority,
       FROM_HERE,
       {base::MayBlock(), priority,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(&GetBrowserUpdaterScope),
+      base::BindOnce([] {
+        return BrowserHasKSProductID()
+                   ? std::make_optional(GetBrowserUpdaterScope())
+                   : std::nullopt;
+      }),
       base::BindOnce(
           [](base::TaskPriority priority, base::OnceClosure prompt,
-             base::OnceClosure complete, UpdaterScope scope) {
+             base::OnceClosure complete, std::optional<UpdaterScope> scope) {
+            if (!scope) {
+              // In the case of missing KSProductID, skip integration with
+              // the updater altogether.
+              std::move(complete).Run();
+              return;
+            }
             scoped_refptr<BrowserUpdaterClient> client =
-                BrowserUpdaterClient::Create(scope);
+                BrowserUpdaterClient::Create(*scope);
             client->IsBrowserRegistered(base::BindOnce(
                 [](scoped_refptr<BrowserUpdaterClient> client,
                    base::TaskPriority priority, base::OnceClosure prompt,
@@ -309,6 +327,8 @@ void EnsureUpdater(base::TaskPriority priority,
 }
 
 void SetUpSystemUpdater() {
+  base::UmaHistogramBoolean("GoogleUpdate.MacOS.SetUpSystemUpdaterCalled",
+                            true);
   NSString* prompt = l10n_util::GetNSStringFWithFixup(
       IDS_PROMOTE_AUTHENTICATION_PROMPT,
       l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
@@ -321,10 +341,15 @@ void SetUpSystemUpdater() {
   }
 
   base::apple::ScopedCFTypeRef<CFErrorRef> error;
-  Boolean result =
-      SMJobBless(kSMDomainSystemLaunchd,
-                 base::SysUTF8ToCFStringRef(kPrivilegedHelperName).get(),
-                 authorization, error.InitializeInto());
+  Boolean result = false;
+  // TODO(crbug.com/519500401): Migrate away from SMJobBless, which was
+  // deprecated in macOS 13.0, and use SMAppService instead.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  result = SMJobBless(kSMDomainSystemLaunchd,
+                      base::SysUTF8ToCFStringRef(kPrivilegedHelperName).get(),
+                      authorization, error.InitializeInto());
+#pragma clang diagnostic pop
   if (!result) {
     base::apple::ScopedCFTypeRef<CFStringRef> desc(
         CFErrorCopyDescription(error.get()));

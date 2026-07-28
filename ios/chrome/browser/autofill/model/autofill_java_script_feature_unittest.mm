@@ -8,9 +8,11 @@
 
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "base/test/scoped_feature_list.h"
 #import "base/test/test_future.h"
 #import "base/test/test_timeouts.h"
 #import "components/autofill/core/common/autofill_features.h"
+#import "components/autofill/ios/common/features.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/web/model/chrome_web_client.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -63,10 +65,6 @@ NSString* const kUnownedUntitledFormHtml =
      "<TEXTAREA id='textarea'></TEXTAREA>"
      "<TEXTAREA id='textarea-nonempty'>Go&#10;away!</TEXTAREA>"
      "<INPUT type='submit' name='reply-send' value='Send'/>";
-
-NSNumber* GetDefaultMaxLength() {
-  return @524288;
-}
 
 using base::test::ios::kWaitForJSCompletionTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
@@ -176,11 +174,10 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -195,11 +192,10 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -214,11 +210,10 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"form_control_type" : @"email",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -278,11 +273,10 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -297,11 +291,10 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -316,11 +309,10 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"form_control_type" : @"email",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -584,7 +576,7 @@ TEST_F(AutofillJavaScriptFeatureTest, FillFormUsingRendererIDs) {
 
   base::test::TestFuture<NSString*> future;
   feature()->FillForm(main_web_frame(), std::move(autofillData),
-                      FieldRendererId(2), future.GetCallback());
+                      future.GetCallback());
   EXPECT_TRUE(future.Wait());
   NSString* filling_result = future.Get();
   EXPECT_NSEQ(@"{\"2\":\"Cool User\",\"3\":\"coolemail@com\"}", filling_result);
@@ -616,12 +608,12 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   // Autofills the form so that we can test the value and attribute
   // after the undo fill.
-  base::Value::Dict autofillData;
+  base::DictValue autofillData;
   autofillData.Set("formName", "testform");
   autofillData.Set("formRendererID", 1);
 
-  base::Value::Dict fieldsData;
-  base::Value::Dict firstFieldData;
+  base::DictValue fieldsData;
+  base::DictValue firstFieldData;
   firstFieldData.Set("name", "firstname");
   firstFieldData.Set("identifier", "firstname");
   firstFieldData.Set("value", "Cool User");
@@ -632,7 +624,7 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   base::test::TestFuture<NSString*> future;
   feature()->FillForm(main_web_frame(), std::move(autofillData),
-                      FieldRendererId(2), future.GetCallback());
+                      future.GetCallback());
   EXPECT_TRUE(future.Wait());
 
   // Check that the input has the autofilled attribute so that we can
@@ -649,12 +641,12 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
       }));
 
   // Simulates the undo by filling an empty string with isAutofilled = NO.
-  base::Value::Dict undoAutofillData;
+  base::DictValue undoAutofillData;
   undoAutofillData.Set("formName", "testform");
   undoAutofillData.Set("formRendererID", 1);
 
-  base::Value::Dict undoFieldsData;
-  base::Value::Dict undoFirstFieldData;
+  base::DictValue undoFieldsData;
+  base::DictValue undoFirstFieldData;
   undoFirstFieldData.Set("name", "firstname");
   undoFirstFieldData.Set("identifier", "firstname");
   undoFirstFieldData.Set("value", "");
@@ -665,7 +657,7 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   base::test::TestFuture<NSString*> undo_future;
   feature()->FillForm(main_web_frame(), std::move(undoAutofillData),
-                      FieldRendererId(2), undo_future.GetCallback());
+                      undo_future.GetCallback());
   EXPECT_TRUE(undo_future.Wait());
 
   EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
@@ -686,6 +678,9 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 // Tests form clearing (clearAutofilledFieldsForForm:formUniqueID:
 // fieldUniqueID:inFrame:completionHandler:) method.
 TEST_F(AutofillJavaScriptFeatureTest, ClearForm) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(kAutofillUndoIos);
+
   LoadHtml(@"<html><body><form name='testform' method='post'>"
             "<input type='text' id='firstname' name='firstname'/>"
             "<input type='email' id='email' name='email'/>"

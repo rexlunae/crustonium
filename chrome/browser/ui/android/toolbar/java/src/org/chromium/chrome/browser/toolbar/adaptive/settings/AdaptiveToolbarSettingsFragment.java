@@ -24,6 +24,7 @@ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarPrefs;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarStatePredictor;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarStatePredictor.UiState;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarStats;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.ui.permissions.ActivityAndroidPermissionDelegate;
@@ -70,27 +71,37 @@ public class AdaptiveToolbarSettingsFragment extends ChromeBaseSettingsFragment 
                     return true;
                 });
 
-        mRadioButtonGroup =
-                (RadioButtonGroupAdaptiveToolbarPreference)
-                        findPreference(PREF_ADAPTIVE_RADIO_GROUP);
-        mRadioButtonGroup.setCanUseVoiceSearch(getCanUseVoiceSearch());
-        mRadioButtonGroup.setCanUseReadAloud(
-                AdaptiveToolbarFeatures.isAdaptiveToolbarReadAloudEnabled(getProfile()));
-        mRadioButtonGroup.setCanUsePageSummary(
-                AdaptiveToolbarFeatures.isAdaptiveToolbarPageSummaryEnabled());
-        maybeSetUiStateFromBundleArgs();
-        mRadioButtonGroup.setStatePredictor(
-                new AdaptiveToolbarStatePredictor(
-                        getContext(),
-                        getProfile(),
-                        new ActivityAndroidPermissionDelegate(new WeakReference(getActivity())),
-                        /* behavior= */ null));
-        mRadioButtonGroup.setOnPreferenceChangeListener(
-                (preference, newValue) -> {
-                    AdaptiveToolbarPrefs.saveToolbarButtonManualOverride((int) newValue);
-                    return true;
-                });
-        mRadioButtonGroup.setEnabled(AdaptiveToolbarPrefs.isCustomizationPreferenceEnabled());
+        mRadioButtonGroup = findPreference(PREF_ADAPTIVE_RADIO_GROUP);
+        if (mRadioButtonGroup != null) {
+            var profile = getProfile();
+            var context = getContext();
+            // When the bottom bar is enabled, the new tab and glic buttons are available there
+            // instead.
+            boolean isBottomBarEnabled = BottomBarConfigUtils.isBottomBarEnabled(context);
+            mRadioButtonGroup.setCanUseNewTab(!isBottomBarEnabled);
+            mRadioButtonGroup.setOnComponentUpdatedListener(this::notifyPreferencesUpdated);
+            mRadioButtonGroup.setCanUseVoiceSearch(getCanUseVoiceSearch());
+            mRadioButtonGroup.setCanUseReadAloud(
+                    AdaptiveToolbarFeatures.isAdaptiveToolbarReadAloudEnabled(profile));
+            mRadioButtonGroup.setCanUseTranslate(
+                    AdaptiveToolbarFeatures.isTranslateEnabled(profile));
+            mRadioButtonGroup.setCanUseGlic(
+                    AdaptiveToolbarFeatures.isGlicEnabledForAdaptiveToolbar(context, profile));
+            maybeSetUiStateFromBundleArgs();
+            mRadioButtonGroup.setStatePredictor(
+                    new AdaptiveToolbarStatePredictor(
+                            context,
+                            profile,
+                            new ActivityAndroidPermissionDelegate(
+                                    new WeakReference<>(getActivity())),
+                            /* behavior= */ null));
+            mRadioButtonGroup.setOnPreferenceChangeListener(
+                    (preference, newValue) -> {
+                        AdaptiveToolbarPrefs.saveToolbarButtonManualOverride((int) newValue);
+                        return true;
+                    });
+            mRadioButtonGroup.setEnabled(AdaptiveToolbarPrefs.isCustomizationPreferenceEnabled());
+        }
         AdaptiveToolbarStats.recordToolbarShortcutToggleState(/* onStartup= */ true);
     }
 
@@ -134,7 +145,7 @@ public class AdaptiveToolbarSettingsFragment extends ChromeBaseSettingsFragment 
         Activity activity = getActivity();
         if (activity == null) return false;
         AndroidPermissionDelegate permissionDelegate =
-                new ActivityAndroidPermissionDelegate(new WeakReference(activity));
+                new ActivityAndroidPermissionDelegate(new WeakReference<>(activity));
         return VoiceRecognitionUtil.isVoiceSearchEnabled(permissionDelegate);
     }
 

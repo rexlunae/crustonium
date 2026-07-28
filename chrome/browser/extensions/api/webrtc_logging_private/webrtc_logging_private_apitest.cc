@@ -25,7 +25,6 @@
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager_common.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -41,6 +40,7 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "third_party/zlib/google/compression_utils.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -57,7 +57,6 @@ using extensions::WebrtcLoggingPrivateStopFunction;
 using extensions::WebrtcLoggingPrivateStopRtpDumpFunction;
 using extensions::WebrtcLoggingPrivateStoreFunction;
 using extensions::WebrtcLoggingPrivateUploadFunction;
-using extensions::WebrtcLoggingPrivateUploadStoredFunction;
 using webrtc_event_logging::kMaxOutputPeriodMs;
 using webrtc_event_logging::kMaxRemoteLogFileSizeBytes;
 using webrtc_event_logging::kStartRemoteLoggingFailureAlreadyLogging;
@@ -314,24 +313,6 @@ class WebrtcLoggingPrivateApiTest : public extensions::ExtensionApiTest {
   // initiated otherwise).
   // Returns whether the function that was run returned a value, or avoided
   // returning a value, according to expectation.
-  bool UploadStoredLog(const std::string& log_id, std::string* report_id) {
-    base::ListValue params;
-    AppendTabIdAndUrl(params);
-    params.Append(log_id);
-    constexpr bool value_expected = true;
-    std::optional<base::Value> value =
-        RunFunction<WebrtcLoggingPrivateUploadStoredFunction>(params);
-    const bool value_returned = value.has_value();
-    if (value_returned) {
-      *report_id = *value->GetDict().FindString("reportId");
-    }
-    return value_expected == value_returned;
-  }
-
-  // This function implicitly expects the function to succeed (test failure
-  // initiated otherwise).
-  // Returns whether the function that was run returned a value, or avoided
-  // returning a value, according to expectation.
   bool StartAudioDebugRecordings(int seconds) {
     base::ListValue params;
     AppendTabIdAndUrl(params);
@@ -423,7 +404,8 @@ class WebrtcLoggingPrivateApiTest : public extensions::ExtensionApiTest {
                                    /*rtc_configuration=*/std::string());
 
     if (!session_id.empty()) {
-      manager->OnPeerConnectionSessionIdSet(frame_id, lid, session_id);
+      manager->OnPeerConnectionSessionIdSet(frame_id, lid, session_id,
+                                            base::DoNothing());
     }
     return true;
   }
@@ -441,6 +423,30 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopDiscard) {
   EXPECT_TRUE(StartLogging());
   EXPECT_TRUE(StopLogging());
   EXPECT_TRUE(DiscardLog());
+}
+
+// A function dispatched in the on-the-record profile without incognito access
+// must not resolve a tab that lives in the incognito profile.
+IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
+                       CannotResolveIncognitoTabWithoutIncognitoAccess) {
+  content::WebContents* incognito_contents =
+      PlatformOpenURLOffTheRecord(profile(), GURL("chrome://version"));
+  ASSERT_TRUE(incognito_contents);
+
+  base::ListValue parameters;
+  base::DictValue request_info;
+  request_info.Set("tabId",
+                   extensions::ExtensionTabUtil::GetTabId(incognito_contents));
+  parameters.Append(std::move(request_info));
+  parameters.Append(
+      url::Origin::Create(incognito_contents->GetLastCommittedURL())
+          .GetURL()
+          .spec());
+
+  // RunFunctionAndExpectError() uses GetProfile() which returns the
+  // on-the-record profile. So the incognito tab must not be found.
+  RunFunctionAndExpectError<WebrtcLoggingPrivateStartFunction>(
+      parameters, "No tab with id: *.");
 }
 
 // Tests WebRTC diagnostic logging. Sets up the browser to save the multipart
@@ -606,24 +612,16 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopStore) {
   EXPECT_TRUE(StoreLog("MyLogID"));
 }
 
-IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
-                       TestStartStopStoreAndUpload) {
+IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopAndStore) {
   ASSERT_TRUE(SetupTestServerLogUploading());
 
   static const char kLogId[] = "TestStartStopStoreAndUpload";
   ASSERT_TRUE(StartLogging());
   ASSERT_TRUE(StopLogging());
   ASSERT_TRUE(StoreLog(kLogId));
-
-  std::string report_id;
-  EXPECT_TRUE(UploadStoredLog(kLogId, &report_id));
-  EXPECT_NE(std::string::npos,
-            upload_request_content_.find("filename=\"webrtc_log.gz\""));
-  EXPECT_STREQ(kTestReportId, report_id.c_str());
 }
 
-IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
-                       TestStartStopStoreAndUploadWithRtp) {
+IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopStoreWithRtp) {
   ASSERT_TRUE(SetupTestServerLogUploading());
 
   static const char kLogId[] = "TestStartStopStoreAndUploadWithRtp";
@@ -632,16 +630,10 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
   ASSERT_TRUE(StopLogging());
   ASSERT_TRUE(StopRtpDump(true, true));
   ASSERT_TRUE(StoreLog(kLogId));
-
-  std::string report_id;
-  EXPECT_TRUE(UploadStoredLog(kLogId, &report_id));
-  EXPECT_NE(std::string::npos,
-            upload_request_content_.find("filename=\"webrtc_log.gz\""));
-  EXPECT_STREQ(kTestReportId, report_id.c_str());
 }
 
 IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
-                       TestStartStopStoreAndUploadWithMetaData) {
+                       TestStartStopAndStoreWithMetaData) {
   ASSERT_TRUE(SetupTestServerLogUploading());
 
   static const char kLogId[] = "TestStartStopStoreAndUploadWithRtp";
@@ -654,20 +646,13 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
 
   ASSERT_TRUE(StopLogging());
   ASSERT_TRUE(StoreLog(kLogId));
-
-  std::string report_id;
-  EXPECT_TRUE(UploadStoredLog(kLogId, &report_id));
-  EXPECT_NE(std::string::npos,
-            upload_request_content_.find("filename=\"webrtc_log.gz\""));
-  EXPECT_NE(std::string::npos, upload_request_content_.find(kTestLoggingUrl));
-  EXPECT_STREQ(kTestReportId, report_id.c_str());
 }
 
 IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
                        TestStartStopAudioDebugRecordings) {
   // TODO(guidou): These tests are missing verification of the actual AEC dump
   // data. This will be fixed with a separate browser test.
-  // See crbug.com/569957.
+  // See crbug.com/41228932.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kEnableAudioDebugRecordingsFromExtension);
   ASSERT_TRUE(StartAudioDebugRecordings(0));

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/functional/callback_helpers.h"
 
 namespace variations {
 
@@ -23,6 +24,18 @@ COMPONENT_EXPORT(VARIATIONS) extern const char kNumExperimentsKey[];
 // experiment is listed as two hex numbers: trial ID and group ID, separated by
 // a dash. The experiments are separated by a comma.
 COMPONENT_EXPORT(VARIATIONS) extern const char kExperimentListKey[];
+
+// The keys used in crash reports to list the full history of runtime
+// FieldTrial overrides in chronological order. Each override is listed as four
+// hex numbers: override trial name, override group name, overridden trial name,
+// and previous override trial name, separated by a dash. The overrides are
+// separated by a comma. E.g. "FFFFFFFF-FFFFFFFF-FFFFFFFF-FFFFFFFF,". For the
+// overridden trial name and previous override trial name, NULL cases will be
+// represented by 0, e.g. "FFFFFFFF-FFFFFFFF-0-0,".
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kRuntimeFieldTrialOverridesKey[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kNumRuntimeFieldTrialOverridesKey[];
 
 COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSeedVersionKey[];
 
@@ -46,7 +59,12 @@ void UpdateCrashKeysWithSyntheticTrials(
 
 // Sets the crash key for the variations seed version.
 COMPONENT_EXPORT(VARIATIONS)
-void SetVariationsSeedVersionCrashKey(const std::string& seed_version);
+void SetVariationsSeedVersionCrashKey(std::string_view seed_version);
+
+// Wrapper around variations::InitCrashKeys() returning a ScopedClosureRunner
+// that will ensure the global state is cleared when it is destructed.
+COMPONENT_EXPORT(VARIATIONS)
+base::ScopedClosureRunner InitCrashKeysForTesting();
 
 // Clears the internal instance, for testing.
 COMPONENT_EXPORT(VARIATIONS) void ClearCrashKeysInstanceForTesting();

@@ -67,6 +67,34 @@
           {
             "builder_id": {
               "bucket": "ci",
+              "builder": "linux-no-initial-webui-rel",
+              "project": "chromium"
+            },
+            "builder_spec": {
+              "builder_group": "chromium.linux",
+              "execution_mode": "TEST",
+              "legacy_chromium_config": {
+                "apply_configs": [
+                  "mb"
+                ],
+                "build_config": "Release",
+                "config": "chromium",
+                "target_bits": 64,
+                "target_platform": "linux"
+              },
+              "legacy_gclient_config": {
+                "config": "chromium"
+              },
+              "parent": {
+                "bucket": "ci",
+                "builder": "Linux Builder",
+                "project": "chromium"
+              }
+            }
+          },
+          {
+            "builder_id": {
+              "bucket": "ci",
               "builder": "linux-oi-rel",
               "project": "chromium"
             },
@@ -112,6 +140,11 @@
         },
         {
           "bucket": "ci",
+          "builder": "linux-no-initial-webui-rel",
+          "project": "chromium"
+        },
+        {
+          "bucket": "ci",
           "builder": "linux-oi-rel",
           "project": "chromium"
         }
@@ -126,15 +159,15 @@
           "group": "tryserver.chromium.linux"
         },
         {
+          "builder": "linux-no-initial-webui-rel",
+          "group": "tryserver.chromium.linux"
+        },
+        {
           "builder": "linux-oi-rel",
           "group": "tryserver.chromium.linux"
         },
         {
           "builder": "linux-rel",
-          "group": "tryserver.chromium.linux"
-        },
-        {
-          "builder": "linux-rel-test-selection",
           "group": "tryserver.chromium.linux"
         },
         {

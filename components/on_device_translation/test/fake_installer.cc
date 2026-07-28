@@ -4,33 +4,41 @@
 
 #include "components/on_device_translation/test/fake_installer.h"
 
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/threading/thread_restrictions.h"
 #include "components/on_device_translation/installer.h"
 #include "components/on_device_translation/public/language_pack.h"
-#include "components/on_device_translation/public/pref_names.h"
-#include "components/prefs/pref_service.h"
 
 namespace on_device_translation {
 
 FakeOnDeviceTranslationInstaller::~FakeOnDeviceTranslationInstaller() = default;
-FakeOnDeviceTranslationInstaller::FakeOnDeviceTranslationInstaller() = default;
+FakeOnDeviceTranslationInstaller::FakeOnDeviceTranslationInstaller(
+    base::FilePath fake_install_dir)
+    : fake_install_dir_(fake_install_dir) {}
 
-bool FakeOnDeviceTranslationInstaller::IsInit(PrefService* prefs) const {
+bool FakeOnDeviceTranslationInstaller::IsInit() const {
   return is_init_;
 }
 std::set<LanguagePackKey>
-FakeOnDeviceTranslationInstaller::RegisteredLanguagePacks(
-    PrefService* prefs) const {
+FakeOnDeviceTranslationInstaller::RegisteredLanguagePacks() const {
   return registered_lang_packs_;
 }
 std::set<LanguagePackKey>
-FakeOnDeviceTranslationInstaller::InstalledLanguagePacks(
-    PrefService* prefs) const {
+FakeOnDeviceTranslationInstaller::InstalledLanguagePacks() const {
   return installed_lang_packs_;
+}
+base::FilePath FakeOnDeviceTranslationInstaller::GetLibraryPath() const {
+  return fake_install_dir_.AppendASCII("fake_installation.so");
+}
+
+base::FilePath FakeOnDeviceTranslationInstaller::GetLanguagePackPath(
+    LanguagePackKey language_pack) const {
+  return fake_install_dir_.AppendASCII(GetPackageInstallDirName(language_pack));
 }
 
 void FakeOnDeviceTranslationInstaller::Init(
-    PrefService* pref_service,
     base::RepeatingClosure on_ready_callback) {
   if (is_init_) {
     on_ready_callback.Run();
@@ -45,38 +53,45 @@ void FakeOnDeviceTranslationInstaller::Init(
 void FakeOnDeviceTranslationInstaller::InitNow(
     base::RepeatingClosure on_ready_callback) {
   is_init_ = true;
+  for (Observer& observer : observers_) {
+    observer.OnInstallationChanged();
+  }
   if (on_ready_callback) {
     on_ready_callback.Run();
   }
 }
-bool FakeOnDeviceTranslationInstaller::InstallLanguagePack(
-    LanguagePackKey language_pack,
-    PrefService* pref_service) {
+void FakeOnDeviceTranslationInstaller::InstallLanguagePack(
+    LanguagePackKey language_pack) {
   registered_lang_packs_.insert(language_pack);
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FakeOnDeviceTranslationInstaller::InstallLanguagePackNow,
                      weak_ptr_factory_.GetWeakPtr(), language_pack));
-  return true;
 }
 void FakeOnDeviceTranslationInstaller::InstallLanguagePackNow(
     LanguagePackKey language_pack) {
   registered_lang_packs_.insert(language_pack);
   installed_lang_packs_.insert(language_pack);
   for (Observer& observer : observers_) {
+    observer.OnLanguagePackInstallationChanged(language_pack);
     observer.OnLanguagePackInstalled(language_pack);
   }
 }
-bool FakeOnDeviceTranslationInstaller::UnInstallLanguagePack(
-    LanguagePackKey language_pack,
-    PrefService* pref_service) {
+void FakeOnDeviceTranslationInstaller::UnInstallLanguagePack(
+    LanguagePackKey language_pack) {
   registered_lang_packs_.erase(language_pack);
   installed_lang_packs_.erase(language_pack);
-  return true;
+  for (Observer& observer : observers_) {
+    observer.OnLanguagePackInstallationChanged(language_pack);
+  }
 }
 
-void FakeOnDeviceTranslationInstaller::AddOserver(Observer* observer) {
+void FakeOnDeviceTranslationInstaller::AddObserver(Observer* observer) {
   observers_.AddObserver(observer);
+}
+
+void FakeOnDeviceTranslationInstaller::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 }  // namespace on_device_translation

@@ -11,10 +11,12 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_client_types.h"
+#include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "extensions/browser/disable_reason.h"
@@ -38,6 +40,7 @@ class ExtensionInstallPolicyService
  public:
   class Observer : public base::CheckedObserver {
    public:
+    virtual void OnManagerInitializationComplete(CloudPolicyManager* manager);
     virtual void OnExtensionInstallPolicyUpdated() = 0;
   };
 
@@ -51,7 +54,7 @@ class ExtensionInstallPolicyService
   // as "id@version".
   virtual void CanInstallExtension(
       const ExtensionIdAndVersion& extension_id_and_version,
-      base::OnceCallback<void(bool)>) const = 0;
+      base::OnceCallback<void(bool, std::u16string blocked_message)>) const = 0;
 
   virtual std::optional<bool> IsExtensionAllowed(
       const ExtensionIdAndVersion& extension_id_and_version) const = 0;
@@ -74,7 +77,8 @@ class ExtensionInstallPolicyServiceImpl
   // ExtensionInstallPolicyService impl:
   void CanInstallExtension(
       const ExtensionIdAndVersion& extension_id_and_version,
-      base::OnceCallback<void(bool)>) const override;
+      base::OnceCallback<void(bool, std::u16string blocked_message)>)
+      const override;
   std::optional<bool> IsExtensionAllowed(
       const ExtensionIdAndVersion& extension_id_and_version) const override;
 
@@ -90,6 +94,9 @@ class ExtensionInstallPolicyServiceImpl
       const extensions::Extension* extension,
       extensions::disable_reason::DisableReason* reason) const override;
 
+  void SetExtensionsForTesting(
+      std::optional<std::set<ExtensionIdAndVersion>> extensions);
+
   // PolicyTypeToFetch::ExtensionsProvider:
   std::set<ExtensionIdAndVersion> GetExtensions() override;
 
@@ -98,6 +105,8 @@ class ExtensionInstallPolicyServiceImpl
       ExtensionInstallPolicyService::Observer* observer) override;
 
   // PolicyService::Observer impl:
+  void OnPolicyServiceInitialized(PolicyDomain domain) override;
+  void OnFirstPoliciesLoaded(PolicyDomain domain) override;
   void OnPolicyUpdated(const PolicyNamespace& ns,
                        const PolicyMap& previous,
                        const PolicyMap& current) override;
@@ -106,7 +115,15 @@ class ExtensionInstallPolicyServiceImpl
   void Shutdown() override;
 
  private:
-  CloudPolicyManager* GetUserCloudPolicyManagerIfConnected() const;
+  class ClientInitializationWaiter;
+
+  struct PolicyManagerInfo {
+    raw_ref<CloudPolicyManager> manager;
+    std::string policy_type;
+  };
+
+  std::vector<PolicyManagerInfo> GetPolicyManagerInfos() const;
+  std::vector<PolicyManagerInfo> GetConnectedPolicyManagerInfos() const;
 
   // Adds or removes from CloudPolicyClient::types_to_fetch_ based on
   // the current value of the pref
@@ -115,10 +132,18 @@ class ExtensionInstallPolicyServiceImpl
 
   void NotifyExtensionInstallPolicyUpdated();
 
+  void OnCloudPolicyManagerReady(CloudPolicyManager* manager);
+
   base::ObserverList<ExtensionInstallPolicyService::Observer> observers_;
-  raw_ptr<Profile> profile_;
+  raw_ref<Profile> profile_;
+  std::optional<std::set<ExtensionIdAndVersion>> extensions_for_testing_;
+
+  base::flat_map<CloudPolicyManager*,
+                 std::unique_ptr<ClientInitializationWaiter>>
+      initialization_waiters_;
 
   PrefChangeRegistrar pref_change_registrar_;
+  PrefChangeRegistrar local_state_change_registrar_;
 };
 
 }  // namespace policy

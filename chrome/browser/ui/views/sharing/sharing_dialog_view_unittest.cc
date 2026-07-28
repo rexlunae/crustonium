@@ -16,8 +16,8 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/grit/branded_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "components/sharing_message/fake_device_info.h"
 #include "components/sharing_message/sharing_app.h"
 #include "components/sharing_message/sharing_metrics.h"
 #include "components/sharing_message/sharing_target_device_info.h"
@@ -26,6 +26,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
 #include "ui/strings/grit/ui_strings.h"
@@ -80,16 +81,18 @@ class SharingDialogViewTest : public TestWithBrowserView {
   std::vector<SharingApp> CreateApps(int count) {
     std::vector<SharingApp> apps;
     for (int i = 0; i < count; ++i) {
-      apps.emplace_back(&kOpenInNewIcon, gfx::Image(),
-                        base::UTF8ToUTF16("app" + base::NumberToString(i)),
-                        "app_id_" + base::NumberToString(i));
+      apps.emplace_back(
+          &(features::IsRoundedIconsEnabled() ? kOpenInNewIcon
+                                              : kOpenInNewOldIcon),
+          gfx::Image(), base::UTF8ToUTF16("app" + base::NumberToString(i)),
+          "app_id_" + base::NumberToString(i));
     }
     return apps;
   }
 
   void CreateDialogView(SharingDialogData dialog_data) {
-    dialog_ = new SharingDialogView(browser_view(), web_contents_,
-                                    std::move(dialog_data));
+    dialog_ = new SharingDialogView(views::BubbleAnchor(browser_view()),
+                                    web_contents_, std::move(dialog_data));
     views::BubbleDialogDelegateView::CreateBubble(dialog_);
   }
 
@@ -104,16 +107,13 @@ class SharingDialogViewTest : public TestWithBrowserView {
       data.type = SharingDialogType::kEducationalDialog;
     }
 
-    data.prefix = SharingFeatureName::kClickToCall;
+    data.prefix = SharingFeatureName::kSmsRemoteFetcher;
     data.devices = CreateDevices(devices);
     data.apps = CreateApps(apps);
 
-    data.help_text_id =
-        IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_HELP_TEXT_NO_DEVICES;
-    data.help_text_origin_id =
-        IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_HELP_TEXT_NO_DEVICES_ORIGIN;
-    data.origin_text_id =
-        IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_INITIATING_ORIGIN;
+    data.help_text_id = IDS_INTENT_PICKER_BUBBLE_VIEW_INITIATING_ORIGIN;
+    data.help_text_origin_id = IDS_INTENT_PICKER_BUBBLE_VIEW_INITIATING_ORIGIN;
+    data.origin_text_id = IDS_INTENT_PICKER_BUBBLE_VIEW_INITIATING_ORIGIN;
 
     data.device_callback =
         base::BindLambdaForTesting([&](const SharingTargetDeviceInfo& device) {
@@ -158,7 +158,9 @@ TEST_F(SharingDialogViewTest, DevicePressed) {
 }
 
 TEST_F(SharingDialogViewTest, AppPressed) {
-  SharingApp app(&kOpenInNewIcon, gfx::Image(), u"app0", std::string());
+  SharingApp app(
+      &(features::IsRoundedIconsEnabled() ? kOpenInNewIcon : kOpenInNewOldIcon),
+      gfx::Image(), u"app0", std::string());
   EXPECT_CALL(app_callback_, Call(AppEquals(&app)));
 
   auto dialog_data = CreateDialogData(/*devices=*/3, /*apps=*/2);
@@ -180,7 +182,7 @@ TEST_F(SharingDialogViewTest, ThemeChangedEmptyList) {
 
   EXPECT_EQ(SharingDialogType::kErrorDialog, dialog()->GetDialogType());
 
-  // Regression test for crbug.com/1001112
+  // Regression test for crbug.com/40097563
   dialog()->GetWidget()->ThemeChanged();
 }
 
@@ -208,49 +210,4 @@ TEST_F(SharingDialogViewTest, FootnoteOtherOrigin) {
   // Origin should be shown in the footnote if the initiating origin does not
   // match the main frame origin.
   EXPECT_NE(nullptr, dialog()->GetFootnoteViewForTesting());
-}
-
-TEST_F(SharingDialogViewTest, HelpTextNoOrigin) {
-  std::u16string expected_default = l10n_util::GetStringUTF16(
-      IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_HELP_TEXT_NO_DEVICES);
-
-  // Expect default help text if no initiating origin is set.
-  auto dialog_data = CreateDialogData(/*devices=*/0, /*apps=*/1);
-  CreateDialogView(std::move(dialog_data));
-  EXPECT_EQ(expected_default, static_cast<views::StyledLabel*>(
-                                  dialog()->GetFootnoteViewForTesting())
-                                  ->GetText());
-}
-
-TEST_F(SharingDialogViewTest, HelpTextCurrentOrigin) {
-  std::u16string expected_default = l10n_util::GetStringUTF16(
-      IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_HELP_TEXT_NO_DEVICES);
-
-  // Expect default help text if the initiating origin matches the main frame
-  // origin.
-  auto dialog_data = CreateDialogData(/*devices=*/0, /*apps=*/1);
-  dialog_data.initiating_origin =
-      url::Origin::Create(GURL("https://google.com"));
-  CreateDialogView(std::move(dialog_data));
-  EXPECT_EQ(expected_default, static_cast<views::StyledLabel*>(
-                                  dialog()->GetFootnoteViewForTesting())
-                                  ->GetText());
-}
-
-TEST_F(SharingDialogViewTest, HelpTextOtherOrigin) {
-  url::Origin other_origin = url::Origin::Create(GURL("https://example.com"));
-  std::u16string origin_text = url_formatter::FormatOriginForSecurityDisplay(
-      other_origin, url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
-  std::u16string expected_origin = l10n_util::GetStringFUTF16(
-      IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_HELP_TEXT_NO_DEVICES_ORIGIN,
-      origin_text);
-
-  // Expect the origin to be included in the help text if it does not match the
-  // main frame origin.
-  auto dialog_data = CreateDialogData(/*devices=*/0, /*apps=*/1);
-  dialog_data.initiating_origin = other_origin;
-  CreateDialogView(std::move(dialog_data));
-  EXPECT_EQ(expected_origin, static_cast<views::StyledLabel*>(
-                                 dialog()->GetFootnoteViewForTesting())
-                                 ->GetText());
 }

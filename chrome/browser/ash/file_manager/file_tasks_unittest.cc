@@ -51,7 +51,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
@@ -59,7 +58,6 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/services/app_service/public/cpp/file_handler_info.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -277,7 +275,7 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
       pref_dict.Set(file_extension, policy_id);
     }
     profile()->GetTestingPrefService()->SetDict(
-        prefs::kDefaultHandlersForFileExtensions, std::move(pref_dict));
+        ash::prefs::kDefaultHandlersForFileExtensions, std::move(pref_dict));
   }
 
   ResultingTasks* resulting_tasks() { return resulting_tasks_.get(); }
@@ -563,26 +561,27 @@ class FileManagerFileTaskPreferencesTest
   // Used for testing ChooseAndSetDefaultTask.
   void UpdateDefaultTaskPreferences(const base::DictValue& mime_types,
                                     const base::DictValue& suffixes) {
-    profile()->GetTestingPrefService()->SetDict(prefs::kDefaultTasksByMimeType,
-                                                mime_types.Clone());
-    profile()->GetTestingPrefService()->SetDict(prefs::kDefaultTasksBySuffix,
-                                                suffixes.Clone());
+    profile()->GetTestingPrefService()->SetDict(
+        ash::prefs::kDefaultTasksByMimeType, mime_types.Clone());
+    profile()->GetTestingPrefService()->SetDict(
+        ash::prefs::kDefaultTasksBySuffix, suffixes.Clone());
   }  // namespace file_manager::file_tasks
 
   const base::DictValue& tasks_by_mime_type() {
     return profile()->GetTestingPrefService()->GetDict(
-        prefs::kDefaultTasksByMimeType);
+        ash::prefs::kDefaultTasksByMimeType);
   }
 
   const base::DictValue& tasks_by_suffix() {
     return profile()->GetTestingPrefService()->GetDict(
-        prefs::kDefaultTasksBySuffix);
+        ash::prefs::kDefaultTasksBySuffix);
   }
 
   void ClearPrefs() {
     profile()->GetTestingPrefService()->ClearPref(
-        prefs::kDefaultTasksByMimeType);
-    profile()->GetTestingPrefService()->ClearPref(prefs::kDefaultTasksBySuffix);
+        ash::prefs::kDefaultTasksByMimeType);
+    profile()->GetTestingPrefService()->ClearPref(
+        ash::prefs::kDefaultTasksBySuffix);
   }
 };
 

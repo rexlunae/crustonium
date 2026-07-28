@@ -6,22 +6,24 @@
 
 #include <algorithm>
 #include <map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "base/containers/enum_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/notifications/scheduler/internal/icon_store.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/internal/scheduler_config.h"
 #include "chrome/browser/notifications/scheduler/internal/scheduler_utils.h"
 #include "chrome/browser/notifications/scheduler/internal/stats.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_constant.h"
 #include "chrome/grit/generated_resources.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace notifications {
@@ -48,14 +50,15 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
  public:
   using NotificationStore = std::unique_ptr<CollectionStore<NotificationEntry>>;
 
-  ScheduledNotificationManagerImpl(
-      NotificationStore notification_store,
-      std::unique_ptr<IconStore> icon_store,
-      const std::vector<SchedulerClientType>& clients,
-      const SchedulerConfig& config)
+  using SchedulerClientTypeEnumSet = base::EnumSet<SchedulerClientType>;
+
+  ScheduledNotificationManagerImpl(NotificationStore notification_store,
+                                   std::unique_ptr<IconStore> icon_store,
+                                   const SchedulerClientTypeEnumSet clients,
+                                   const SchedulerConfig& config)
       : notification_store_(std::move(notification_store)),
         icon_store_(std::move(icon_store)),
-        clients_(clients.begin(), clients.end()),
+        clients_(clients),
         config_(config) {}
   ScheduledNotificationManagerImpl(const ScheduledNotificationManagerImpl&) =
       delete;
@@ -80,7 +83,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
     stats::LogNotificationLifeCycleEvent(
         stats::NotificationLifeCycleEvent::kScheduleRequest, type);
 
-    if (!clients_.count(type) ||
+    if (!clients_.Has(type) ||
         (notifications_.count(type) && notifications_[type].count(guid))) {
       // TODO(xingliu): Report duplicate guid failure.
       std::move(callback).Run(false);
@@ -156,9 +159,9 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
     }
   }
 
-  void GetNotifications(
-      SchedulerClientType type,
-      std::vector<const NotificationEntry*>* notifications) const override {
+  void GetNotifications(SchedulerClientType type,
+                        std::vector<raw_ptr<const NotificationEntry>>*
+                            notifications) const override {
     DCHECK(notifications);
     notifications->clear();
     const auto it = notifications_.find(type);
@@ -212,7 +215,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
 
   void FilterIconEntries(
       std::unique_ptr<std::vector<std::string>> uuids_from_icon_store) {
-    std::unordered_set<std::string> icons_uuid_from_entries;
+    absl::flat_hash_set<std::string> icons_uuid_from_entries;
     for (const auto& client_pair : notifications_) {
       for (const auto& notification : client_pair.second) {
         for (const auto& icon : notification.second->icons_uuid) {
@@ -238,7 +241,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
       bool expired = entry->create_time + config_->notification_expiration <=
                      base::Time::Now();
       bool valid = ValidateNotificationEntry(*entry);
-      bool deprecated_client = !clients_.contains(entry->type);
+      bool deprecated_client = !clients_.Has(entry->type);
       if (expired || deprecated_client || !valid) {
         DeleteNotification(*entry, false /*should_delete_in_memory*/);
       } else {
@@ -407,7 +410,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
 
   NotificationStore notification_store_;
   std::unique_ptr<IconStore> icon_store_;
-  const std::unordered_set<SchedulerClientType> clients_;
+  const SchedulerClientTypeEnumSet clients_;
   std::map<SchedulerClientType,
            std::map<std::string, std::unique_ptr<NotificationEntry>>>
       notifications_;
@@ -425,8 +428,13 @@ ScheduledNotificationManager::Create(
     std::unique_ptr<IconStore> icon_store,
     const std::vector<SchedulerClientType>& clients,
     const SchedulerConfig& config) {
+  ScheduledNotificationManagerImpl::SchedulerClientTypeEnumSet clients_set;
+  for (const auto& client : clients) {
+    clients_set.Put(client);
+  }
   return std::make_unique<ScheduledNotificationManagerImpl>(
-      std::move(notification_store), std::move(icon_store), clients, config);
+      std::move(notification_store), std::move(icon_store), clients_set,
+      config);
 }
 
 ScheduledNotificationManager::ScheduledNotificationManager() = default;

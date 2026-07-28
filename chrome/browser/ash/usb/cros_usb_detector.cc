@@ -14,6 +14,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "base/check_deref.h"
 #include "base/files/file_util.h"
@@ -35,14 +36,14 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/disks/disk.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/vector_icons/vector_icons.h"
@@ -50,6 +51,7 @@
 #include "services/device/public/cpp/usb/usb_utils.h"
 #include "services/device/public/mojom/usb_enumeration_options.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/paint_vector_icon.h"
 
@@ -93,19 +95,20 @@ uint32_t ClearMatchingInterfaces(
   for (auto& config : device_info.configurations) {
     for (auto& iface : config->interfaces) {
       for (auto& alternate_info : iface->alternates) {
-        if (filter.has_class_code &&
-            alternate_info->class_code != filter.class_code) {
+        if (filter.class_code.has_value() &&
+            alternate_info->class_code != filter.class_code.value()) {
           continue;
         }
-        if (filter.has_subclass_code &&
-            alternate_info->subclass_code != filter.subclass_code) {
+        if (filter.subclass_code.has_value() &&
+            alternate_info->subclass_code != filter.subclass_code.value()) {
           continue;
         }
-        if (filter.has_protocol_code &&
-            alternate_info->protocol_code != filter.protocol_code) {
+        if (filter.protocol_code.has_value() &&
+            alternate_info->protocol_code != filter.protocol_code.value()) {
           continue;
         }
-        if (filter.has_vendor_id && device_info.vendor_id != filter.vendor_id) {
+        if (filter.vendor_id.has_value() &&
+            device_info.vendor_id != filter.vendor_id.value()) {
           continue;
         }
         if (iface->interface_number >= 32) {
@@ -161,15 +164,12 @@ crostini::CrostiniManager* manager() {
 class CrosUsbNotificationDelegate
     : public message_center::NotificationDelegate {
  public:
-  explicit CrosUsbNotificationDelegate(const std::string& notification_id,
-                                       std::string guid,
+  explicit CrosUsbNotificationDelegate(std::string guid,
                                        std::vector<std::string> vm_names,
                                        std::string settings_sub_page)
-      : notification_id_(notification_id),
-        guid_(std::move(guid)),
+      : guid_(std::move(guid)),
         vm_names_(std::move(vm_names)),
-        settings_sub_page_(std::move(settings_sub_page)),
-        disposition_(CrosUsbNotificationClosed::kUnknown) {}
+        settings_sub_page_(std::move(settings_sub_page)) {}
 
   CrosUsbNotificationDelegate(const CrosUsbNotificationDelegate&) = delete;
   CrosUsbNotificationDelegate& operator=(const CrosUsbNotificationDelegate&) =
@@ -177,7 +177,6 @@ class CrosUsbNotificationDelegate
 
   void Click(const std::optional<int>& button_index,
              const std::optional<std::u16string>& reply) override {
-    disposition_ = CrosUsbNotificationClosed::kUnknown;
     if (button_index && *button_index < static_cast<int>(vm_names_.size())) {
       LOG(WARNING)
           << "Share USB device with [some guest] notification was clicked";
@@ -191,24 +190,15 @@ class CrosUsbNotificationDelegate
     }
   }
 
-  void Close(bool by_user) override {
-    if (by_user) {
-      disposition_ = CrosUsbNotificationClosed::kByUser;
-    }
-  }
-
  private:
   ~CrosUsbNotificationDelegate() override = default;
   void HandleConnectToGuest(const guest_os::GuestId& guest_id) {
-    disposition_ = CrosUsbNotificationClosed::kConnectToLinux;
     CrosUsbDetector* detector = CrosUsbDetector::Get();
     if (detector) {
       LOG(WARNING)
           << "Handling guest connection, will attach USB device to guest";
       detector->AttachUsbDeviceToGuest(guest_id, guid_, base::DoNothing());
-      return;
     }
-    Close(false);
   }
 
   void HandleConnectToGuest(const std::string& vm_name) {
@@ -216,23 +206,24 @@ class CrosUsbNotificationDelegate
   }
 
   void HandleShowSettings(const std::string& sub_page) {
-    chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(profile(),
-                                                                 sub_page);
-    Close(false);
+    auto* user =
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile());
+    if (user) {
+      // TODO(crbug.com/447287122): Revisit here to see if we always have the
+      // user.
+      ash::SettingsAppManager::Get()->Open(*user, {.sub_page = sub_page});
+    }
   }
 
-  std::string notification_id_;
   std::string guid_;
   std::vector<std::string> vm_names_;
   std::string settings_sub_page_;
-  CrosUsbNotificationClosed disposition_;
   base::WeakPtrFactory<CrosUsbNotificationDelegate> weak_ptr_factory_{this};
 };
 
 device::mojom::UsbDeviceFilterPtr UsbFilterByClassCode(
     UsbClassCode device_class) {
   auto filter = device::mojom::UsbDeviceFilter::New();
-  filter->has_class_code = true;
   filter->class_code = device_class;
   return filter;
 }
@@ -241,16 +232,13 @@ device::mojom::UsbDeviceFilterPtr UsbFilterByClassAndSubclassCode(
     UsbClassCode device_class,
     UsbSubclassCode device_subclass) {
   auto filter = device::mojom::UsbDeviceFilter::New();
-  filter->has_class_code = true;
   filter->class_code = device_class;
-  filter->has_subclass_code = true;
   filter->subclass_code = device_subclass;
   return filter;
 }
 
 device::mojom::UsbDeviceFilterPtr UsbFilterByVendorId(uint16_t vendor_id) {
   auto filter = device::mojom::UsbDeviceFilter::New();
-  filter->has_vendor_id = true;
   filter->vendor_id = vendor_id;
   return filter;
 }
@@ -283,8 +271,10 @@ void ShowNotificationForDevice(const std::string& guid,
   std::u16string vm_name;
   std::u16string vm_name_button_text;
   std::vector<std::u16string> vm_names_in_notification;
-  rich_notification_data.small_image = gfx::Image(
-      gfx::CreateVectorIcon(vector_icons::kUsbIcon, 64, gfx::kGoogleBlue800));
+  rich_notification_data.small_image = gfx::Image(gfx::CreateVectorIcon(
+      ::features::IsRoundedIconsEnabled() ? vector_icons::kUsbIcon
+                                          : vector_icons::kUsbOldIcon,
+      64, gfx::kGoogleBlue800));
 
   rich_notification_data.accent_color_id = cros_tokens::kCrosSysPrimary;
 
@@ -355,8 +345,7 @@ void ShowNotificationForDevice(const std::string& guid,
                                  NotificationCatalogName::kCrosUSBDetector),
       rich_notification_data,
       base::MakeRefCounted<CrosUsbNotificationDelegate>(
-          notification_id, guid, std::move(vm_names),
-          std::move(settings_sub_page)));
+          guid, std::move(vm_names), std::move(settings_sub_page)));
   SystemNotificationHelper::GetInstance()->Display(notification);
 }
 

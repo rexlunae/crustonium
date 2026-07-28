@@ -13,6 +13,7 @@ import android.widget.TextView;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -22,19 +23,19 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter.MergeNotificationType;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -57,7 +58,6 @@ public class UndoBarControllerTest {
     private WebPageStation mPage;
     private SnackbarManager mSnackbarManager;
     private TabModel mTabModel;
-    private TabGroupModelFilter mTabGroupModelFilter;
 
     @Before
     public void setUp() throws Exception {
@@ -68,8 +68,77 @@ public class UndoBarControllerTest {
                     mSnackbarManager.dismissAllSnackbars();
                 });
 
-        mTabGroupModelFilter = mPage.getTabGroupModelFilter();
         mTabModel = mPage.getTabModel();
+    }
+
+    @After
+    public void tearDown() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(null);
+                });
+    }
+
+    @Test
+    @SmallTest
+    public void testCloseSingleTab_Undo() throws Exception {
+        ChromeTabUtils.newTabFromMenu(
+                InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_UNDO);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(TabClosureParams.closeTab(mTabModel.getTabAt(1)).build());
+                });
+
+        Snackbar currentSnackbar = getCurrentSnackbar();
+        assertSnackbarTextEqualsAllowingTruncation("Closed New tab");
+        assertTrue(currentSnackbar.getController() instanceof UndoBarController);
+        assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        clickSnackbar();
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    public void testCloseSingleTab_Dismiss() throws Exception {
+        ChromeTabUtils.newTabFromMenu(
+                InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Dismissed", Snackbar.UMA_TAB_CLOSE_UNDO);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(TabClosureParams.closeTab(mTabModel.getTabAt(1)).build());
+                });
+
+        Snackbar currentSnackbar = getCurrentSnackbar();
+        assertSnackbarTextEqualsAllowingTruncation("Closed New tab");
+        assertTrue(currentSnackbar.getController() instanceof UndoBarController);
+        assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        dismissSnackbars();
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -77,6 +146,10 @@ public class UndoBarControllerTest {
     public void testCloseAll_SingleTab_Undo() throws Exception {
         assertNull(getCurrentSnackbar());
         assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_ALL_UNDO);
 
         ChromeTabUtils.closeAllTabs(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
@@ -90,6 +163,8 @@ public class UndoBarControllerTest {
 
         assertNull(getCurrentSnackbar());
         assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -97,6 +172,10 @@ public class UndoBarControllerTest {
     public void testCloseAll_SingleTab_Dismiss() throws Exception {
         assertNull(getCurrentSnackbar());
         assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Dismissed", Snackbar.UMA_TAB_CLOSE_ALL_UNDO);
 
         ChromeTabUtils.closeAllTabs(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
@@ -110,6 +189,8 @@ public class UndoBarControllerTest {
 
         assertNull(getCurrentSnackbar());
         assertEquals(0, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -121,6 +202,10 @@ public class UndoBarControllerTest {
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
 
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_ALL_UNDO);
+
         ChromeTabUtils.closeAllTabs(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
 
@@ -133,6 +218,8 @@ public class UndoBarControllerTest {
 
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -143,6 +230,10 @@ public class UndoBarControllerTest {
 
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Dismissed", Snackbar.UMA_TAB_CLOSE_ALL_UNDO);
 
         ChromeTabUtils.closeAllTabs(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
@@ -156,6 +247,8 @@ public class UndoBarControllerTest {
 
         assertNull(getCurrentSnackbar());
         assertEquals(0, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -166,17 +259,20 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(mTabModel.getTabAt(0), mTabModel.getTabAt(1)),
                             mTabModel.getTabAt(0),
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
-                    mTabGroupModelFilter.setTabGroupTitle(
-                            mTabModel.getTabAt(0).getTabGroupId(), "My group");
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
+                    mTabModel.setTabGroupTitle(mTabModel.getTabAt(0).getTabGroupId(), "My group");
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_MULTIPLE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -200,9 +296,10 @@ public class UndoBarControllerTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.setTabGroupTitle(
-                            mTabModel.getTabAt(0).getTabGroupId(), null);
+                    mTabModel.setTabGroupTitle(mTabModel.getTabAt(0).getTabGroupId(), null);
                 });
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -213,17 +310,20 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(mTabModel.getTabAt(0), mTabModel.getTabAt(1)),
                             mTabModel.getTabAt(0),
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
-                    mTabGroupModelFilter.setTabGroupTitle(
-                            mTabModel.getTabAt(0).getTabGroupId(), "");
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
+                    mTabModel.setTabGroupTitle(mTabModel.getTabAt(0).getTabGroupId(), "");
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_MULTIPLE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -247,9 +347,10 @@ public class UndoBarControllerTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.setTabGroupTitle(
-                            mTabModel.getTabAt(0).getTabGroupId(), null);
+                    mTabModel.setTabGroupTitle(mTabModel.getTabAt(0).getTabGroupId(), null);
                 });
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -260,15 +361,19 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(mTabModel.getTabAt(0), mTabModel.getTabAt(1)),
                             mTabModel.getTabAt(0),
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_GROUP_DELETE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -288,6 +393,8 @@ public class UndoBarControllerTest {
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -300,12 +407,16 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(0));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(0));
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(3, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_GROUP_DELETE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -328,6 +439,8 @@ public class UndoBarControllerTest {
         assertNull(getCurrentSnackbar());
         assertEquals(3, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -340,13 +453,17 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(0));
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(1));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(0));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(1));
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(3, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(2, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_MULTIPLE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -370,6 +487,8 @@ public class UndoBarControllerTest {
         assertNull(getCurrentSnackbar());
         assertEquals(3, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(2, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -381,18 +500,22 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(
                                     mTabModel.getTabAt(0),
                                     mTabModel.getTabAt(1),
                                     mTabModel.getTabAt(2)),
                             mTabModel.getTabAt(0),
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(3, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_CLOSE_MULTIPLE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -412,23 +535,28 @@ public class UndoBarControllerTest {
         assertNull(getCurrentSnackbar());
         assertEquals(3, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(1, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
-    @DisableIf.Device(DeviceFormFactor.DESKTOP)
     public void testDeleteTabGroups_Undo() throws Exception {
         ChromeTabUtils.newTabFromMenu(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(0));
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(1));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(0));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(1));
                 });
 
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(2, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_TAB_GROUP_DELETE_UNDO);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -448,6 +576,86 @@ public class UndoBarControllerTest {
         assertNull(getCurrentSnackbar());
         assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
         assertEquals(2, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Restriction(DeviceFormFactor.PHONE_OR_TABLET)
+    public void testDeleteSingleTabGroup_Undo() throws Exception {
+        ChromeTabUtils.newTabFromMenu(
+                InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(0));
+                });
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+        assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Undone", Snackbar.UMA_SINGLE_TAB_GROUP_DELETE_UNDO);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(TabClosureParams.closeTab(mTabModel.getTabAt(0)).build());
+                });
+
+        Snackbar currentSnackbar = getCurrentSnackbar();
+        assertSnackbarTextEqualsAllowingTruncation("1 tab tab group deleted");
+        assertTrue(currentSnackbar.getController() instanceof UndoBarController);
+        assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+        assertEquals(0, getTabGroupCount());
+
+        clickSnackbar();
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+        assertEquals(1, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Restriction(DeviceFormFactor.PHONE_OR_TABLET)
+    public void testDeleteSingleTabGroup_Dismiss() throws Exception {
+        ChromeTabUtils.newTabFromMenu(
+                InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(0));
+                });
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(2, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+        assertEquals(1, getTabGroupCount());
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Tab.CloseUndoBar.Dismissed", Snackbar.UMA_SINGLE_TAB_GROUP_DELETE_UNDO);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    closeTabs(TabClosureParams.closeTab(mTabModel.getTabAt(0)).build());
+                });
+
+        Snackbar currentSnackbar = getCurrentSnackbar();
+        assertSnackbarTextEqualsAllowingTruncation("1 tab tab group deleted");
+        assertTrue(currentSnackbar.getController() instanceof UndoBarController);
+        assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+        assertEquals(0, getTabGroupCount());
+
+        dismissSnackbars();
+
+        assertNull(getCurrentSnackbar());
+        assertEquals(1, ChromeTabUtils.getTabCountOnUiThread(mTabModel));
+        assertEquals(0, getTabGroupCount());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -458,8 +666,8 @@ public class UndoBarControllerTest {
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(0));
-                    mTabGroupModelFilter.createSingleTabGroup(mTabModel.getTabAt(1));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(0));
+                    mTabModel.createSingleTabGroup(mTabModel.getTabAt(1));
                 });
 
         assertNull(getCurrentSnackbar());
@@ -499,10 +707,10 @@ public class UndoBarControllerTest {
         Tab tab2 = ThreadUtils.runOnUiThreadBlocking(() -> mTabModel.getTabAt(2));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(tab1, tab2),
                             tab1,
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
 
         assertNull(getCurrentSnackbar());
@@ -544,10 +752,10 @@ public class UndoBarControllerTest {
         Tab tab2 = ThreadUtils.runOnUiThreadBlocking(() -> mTabModel.getTabAt(2));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(tab1, tab2),
                             tab1,
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
 
         assertNull(getCurrentSnackbar());
@@ -593,10 +801,10 @@ public class UndoBarControllerTest {
         Tab tab2 = ThreadUtils.runOnUiThreadBlocking(() -> mTabModel.getTabAt(2));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(tab1, tab2),
                             tab1,
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
 
         assertNull(getCurrentSnackbar());
@@ -635,10 +843,10 @@ public class UndoBarControllerTest {
         Tab tab2 = ThreadUtils.runOnUiThreadBlocking(() -> mTabModel.getTabAt(2));
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTabGroupModelFilter.mergeListOfTabsToGroup(
+                    mTabModel.mergeListOfTabsToGroup(
                             List.of(tab1, tab2),
                             tab1,
-                            /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                            /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
 
         assertNull(getCurrentSnackbar());
@@ -769,7 +977,7 @@ public class UndoBarControllerTest {
     }
 
     private int getTabGroupCount() {
-        return ThreadUtils.runOnUiThreadBlocking(() -> mTabGroupModelFilter.getTabGroupCount());
+        return ThreadUtils.runOnUiThreadBlocking(() -> mTabModel.getTabGroupCount());
     }
 
     private void closeTabs(TabClosureParams params) {

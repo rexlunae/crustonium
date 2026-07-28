@@ -3,7 +3,6 @@
 # found in the LICENSE file.
 """Definitions of builders in the chromium.chromiumos builder group."""
 
-load("@chromium-luci//args.star", "args")
 load("@chromium-luci//branches.star", "branches")
 load("@chromium-luci//builder_config.star", "builder_config")
 load("@chromium-luci//builder_health_indicators.star", "health_spec")
@@ -305,12 +304,10 @@ ci.thin_tester(
     targets = targets.bundle(
         targets = [
             "gpu_chromeos_telemetry_tests",
-            "chromeos_vm_gtests",
             "chromeos_isolated_scripts",
         ],
         mixins = [
             "chromeos-generic-vm",
-            "retry_only_failed_tests",
         ],
     ),
     targets_settings = targets.settings(
@@ -325,64 +322,6 @@ ci.thin_tester(
     cq_mirrors_console_view = "mirrors",
     contact_team_email = "chromeos-chrome-build@google.com",
     notifies = ["chrome-fake-vaapi-test"],
-    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.thin_tester(
-    name = "chromeos-amd64-generic-rel-tast",
-    branch_selector = branches.selector.CROS_LTS_BRANCHES,
-    description_html = "This is a tester builder for Ash chrome." +
-                       " This builder only run tast tests. If you see" +
-                       " test failures, please contact ChromeOS gardeners" +
-                       " for help.",
-    parent = "ci/chromeos-amd64-generic-rel",
-    builder_spec = builder_config.builder_spec(
-        execution_mode = builder_config.execution_mode.TEST,
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = ["chromeos"],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = ["mb"],
-            build_config = builder_config.build_config.RELEASE,
-            target_arch = builder_config.target_arch.INTEL,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.CHROMEOS,
-            target_cros_boards = [
-                "amd64-generic",
-            ],
-            cros_boards_with_qemu_images = "amd64-generic-vm",
-        ),
-    ),
-    targets = targets.bundle(
-        targets = [
-            "chromeos_vm_tast",
-        ],
-        mixins = [
-            "chromeos-generic-vm",
-        ],
-        per_test_modifications = {
-            "chrome_all_tast_tests": targets.mixin(
-                args = [
-                    "--tast-shard-method=hash",
-                ],
-            ),
-        },
-    ),
-    targets_settings = targets.settings(
-        browser_config = targets.browser_config.CROS_CHROME,
-        os_type = targets.os_type.CROS,
-    ),
-    # Tast tests should be monitored by CrOS gardeners, not Chromium gardeners.
-    gardener_rotations = args.ignore_default(gardener_rotations.CHROMIUMOS),
-    console_view_entry = consoles.console_view_entry(
-        category = "simple|release|x64",
-        short_name = "tast",
-    ),
-    main_console_view = "main",
-    cq_mirrors_console_view = "mirrors",
-    contact_team_email = "chromeos-chrome-build@google.com",
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
@@ -529,168 +468,6 @@ ci.builder(
 )
 
 ci.builder(
-    name = "chromeos-jacuzzi-rel",
-    branch_selector = branches.selector.CROS_LTS_BRANCHES,
-    description_html = """\
-This builder builds chromium and tests it on the public CrOS image on skylab DUTs.
-""",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "chromeos",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.RELEASE,
-            target_arch = builder_config.target_arch.ARM,
-            target_bits = 32,
-            target_platform = builder_config.target_platform.CHROMEOS,
-            target_cros_boards = [
-                "jacuzzi",
-            ],
-        ),
-        skylab_upload_location = builder_config.skylab_upload_location(
-            # Both CI and try use the same `chromium-skylab-try` bucket.
-            gs_bucket = "chromium-skylab-try",
-            gs_extra = "ash",
-        ),
-    ),
-    builder_config_settings = builder_config.ci_settings(
-        # Disabling shard-level-retry-on-chromium-recipe for skylab builders,
-        # since a failed shard is retried even on CTP, which is more efficient.
-        retry_failed_shards = False,
-    ),
-    gn_args = gn_args.config(
-        configs = [
-            "chromeos_device",
-            "dcheck_off",
-            "include_unwind_tables",
-            "is_skylab",
-            "jacuzzi",
-            "ozone_headless",
-            "remoteexec",
-            "arm64",
-        ],
-    ),
-    targets = targets.bundle(
-        targets = [
-            targets.bundle(
-                targets = [
-                    "chromeos_jacuzzi_rel_skylab_tests",
-                ],
-                mixins = targets.mixin(
-                    skylab = targets.skylab(
-                        cros_board = "jacuzzi",
-                    ),
-                ),
-            ),
-        ],
-        additional_compile_targets = [
-            "chromiumos_preflight",
-        ],
-    ),
-    targets_settings = targets.settings(
-        os_type = targets.os_type.CROS,
-        use_swarming = False,
-    ),
-    # Tast tests should be monitored by CrOS gardeners, not Chromium gardeners.
-    gardener_rotations = args.ignore_default(gardener_rotations.CHROMIUMOS),
-    console_view_entry = consoles.console_view_entry(
-        category = "simple|release",
-        short_name = "jcz",
-    ),
-    main_console_view = "main",
-    contact_team_email = "chromeos-chrome-build@google.com",
-    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.builder(
-    name = "chromeos-octopus-rel",
-    branch_selector = branches.selector.CROS_LTS_BRANCHES,
-    description_html = """\
-This builder builds chromium and tests it on the public CrOS image on skylab DUTs.
-""",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "chromeos",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.RELEASE,
-            target_arch = builder_config.target_arch.INTEL,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.CHROMEOS,
-            target_cros_boards = [
-                "octopus",
-            ],
-        ),
-        skylab_upload_location = builder_config.skylab_upload_location(
-            # Both CI and try use the same `chromium-skylab-try` bucket.
-            gs_bucket = "chromium-skylab-try",
-            gs_extra = "ash",
-        ),
-    ),
-    builder_config_settings = builder_config.ci_settings(
-        # Disabling shard-level-retry-on-chromium-recipe for skylab builders,
-        # since a failed shard is retried even on CTP, which is more efficient.
-        retry_failed_shards = False,
-    ),
-    gn_args = gn_args.config(
-        configs = [
-            "chromeos_device",
-            "dcheck_off",
-            "include_unwind_tables",
-            "is_skylab",
-            "octopus",
-            "ozone_headless",
-            "remoteexec",
-            "x64",
-        ],
-    ),
-    targets = targets.bundle(
-        targets = [
-            targets.bundle(
-                targets = [
-                    "chromeos_octopus_rel_skylab_tests",
-                ],
-                mixins = targets.mixin(
-                    skylab = targets.skylab(
-                        cros_board = "octopus",
-                    ),
-                ),
-            ),
-        ],
-        additional_compile_targets = [
-            "chromiumos_preflight",
-        ],
-    ),
-    targets_settings = targets.settings(
-        os_type = targets.os_type.CROS,
-        use_swarming = False,
-    ),
-    # Tast tests should be monitored by CrOS gardeners, not Chromium gardeners.
-    gardener_rotations = args.ignore_default(gardener_rotations.CHROMIUMOS),
-    console_view_entry = consoles.console_view_entry(
-        category = "simple|release",
-        short_name = "oct",
-    ),
-    main_console_view = "main",
-    contact_team_email = "chromeos-chrome-build@google.com",
-    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
-)
-
-ci.builder(
     name = "linux-chromeos-dbg",
     branch_selector = branches.selector.CROS_BRANCHES,
     builder_spec = builder_config.builder_spec(
@@ -737,7 +514,7 @@ ci.builder(
             ),
             "browser_tests": targets.mixin(
                 swarming = targets.swarming(
-                    shards = 160,
+                    shards = 200,
                 ),
             ),
             "content_browsertests": targets.mixin(
@@ -757,6 +534,11 @@ ci.builder(
             ),
             "pthreadpool_unittests": targets.remove(
                 reason = "pthreadpool is not built for ChromeOS currently.",
+            ),
+            "sync_integration_tests": targets.mixin(
+                swarming = targets.swarming(
+                    shards = 6,
+                ),
             ),
             "unit_tests": targets.mixin(
                 swarming = targets.swarming(
@@ -834,7 +616,6 @@ ci.builder(
             "x86-64",
             "isolate_profile_data",
             "linux-jammy",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             "absl_hardening_tests": targets.mixin(
@@ -848,10 +629,6 @@ ci.builder(
                 ci_only = True,
             ),
             "browser_tests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                # crbug.com/1473501
-                retry_only_failed_tests = True,
                 swarming = targets.swarming(
                     dimensions = {
                         "kvm": "1",
@@ -860,18 +637,11 @@ ci.builder(
                 ),
             ),
             "content_browsertests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                # crbug.com/1475852
-                retry_only_failed_tests = True,
                 swarming = targets.swarming(
                     shards = 6,
                 ),
             ),
             "interactive_ui_tests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                retry_only_failed_tests = True,
                 swarming = targets.swarming(
                     shards = 5,
                 ),
@@ -885,9 +655,6 @@ ci.builder(
                 ),
             ),
             "unit_tests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning entire
-                # shards.
-                retry_only_failed_tests = True,
                 swarming = targets.swarming(
                     shards = 2,
                 ),

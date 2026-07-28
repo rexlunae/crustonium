@@ -20,6 +20,7 @@ namespace {
 constexpr char kJsonAcceptHeader[] = "application/json,*/*;q=0.5";
 constexpr char kStylesheetAcceptHeader[] = "text/css,*/*;q=0.1";
 constexpr char kWebBundleAcceptHeader[] = "application/webbundle;v=b2";
+constexpr char kTextAcceptHeader[] = "text/plain,*/*;q=0.5";
 
 }  // namespace
 
@@ -36,7 +37,7 @@ bool AlwaysAccessNetwork(
 }
 
 const char* ImageAcceptHeader() {
-#if BUILDFLAG(ENABLE_JXL_DECODER) && BUILDFLAG(ENABLE_AV1_DECODER)
+#if BUILDFLAG(ENABLE_JXL_DECODER) && BUILDFLAG(ENABLE_DAV1D_DECODER)
   if (base::FeatureList::IsEnabled(features::kJXLImageFormat)) {
     return "image/jxl,image/avif,image/webp,image/apng,image/svg+xml,image/*,*/"
            "*;q=0.8";
@@ -47,7 +48,7 @@ const char* ImageAcceptHeader() {
     return "image/jxl,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
   }
   return "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
-#elif BUILDFLAG(ENABLE_AV1_DECODER)
+#elif BUILDFLAG(ENABLE_DAV1D_DECODER)
   return "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 #else
   return "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
@@ -56,10 +57,11 @@ const char* ImageAcceptHeader() {
 
 void SetAcceptHeader(net::HttpRequestHeaders& headers,
                      network::mojom::RequestDestination request_destination) {
-  if (request_destination == network::mojom::RequestDestination::kStyle ||
-      request_destination == network::mojom::RequestDestination::kXslt ||
+  if (request_destination == network::mojom::RequestDestination::kJson ||
+      request_destination == network::mojom::RequestDestination::kStyle ||
+      request_destination == network::mojom::RequestDestination::kText ||
       request_destination == network::mojom::RequestDestination::kWebBundle ||
-      request_destination == network::mojom::RequestDestination::kJson) {
+      request_destination == network::mojom::RequestDestination::kXslt) {
     headers.SetHeader(net::HttpRequestHeaders::kAccept,
                       GetAcceptHeaderForDestination(request_destination));
     return;
@@ -84,6 +86,8 @@ const char* GetAcceptHeaderForDestination(
     return kWebBundleAcceptHeader;
   } else if (request_destination == network::mojom::RequestDestination::kJson) {
     return kJsonAcceptHeader;
+  } else if (request_destination == network::mojom::RequestDestination::kText) {
+    return kTextAcceptHeader;
   } else {
     return network::kDefaultAcceptHeaderValue;
   }

@@ -83,7 +83,7 @@
 - (void)scanFormsInWebState:(web::WebState*)webState
                     inFrame:(web::WebFrame*)webFrame {
 }
-- (void)notifyFormsSeen:(const std::vector<autofill::FormData>&)updatedForms
+- (void)notifyFormsSeen:(std::vector<autofill::FormData>)updatedForms
                 inFrame:(web::WebFrame*)frame {
 }
 - (void)fetchFormsFiltered:(std::optional<std::u16string>)formNameFilter
@@ -301,6 +301,13 @@ TEST_F(AutofillDriverIOSTest, ScanForms_Throttling) {
 
   // Verify that the fetch WAS executed immediately.
   EXPECT_EQ(1, fetch_calls);
+}
+
+TEST_F(AutofillDriverIOSTest, Unregister_InvalidatesWeakPtrs) {
+  auto weak_ptr = main_frame_driver()->GetWeakPtr();
+  ASSERT_TRUE(weak_ptr);
+  main_frame_driver()->Unregister();
+  EXPECT_FALSE(weak_ptr);
 }
 
 }  // namespace

@@ -31,6 +31,10 @@ namespace regional_capabilities {
 class RegionalCapabilitiesService;
 }  // namespace regional_capabilities
 
+namespace metrics {
+class ProfileMetricsService;
+}  // namespace metrics
+
 namespace search_engines {
 
 inline constexpr char
@@ -134,8 +138,9 @@ enum class SearchEngineChoiceWipeReason {
   kInvalidMetadata = 6,
   kMissingDefaultSearchEngine = 7,
   kChoiceRemadeAfterImport = 8,
+  kProgramChanged = 9,
 
-  kMaxValue = kChoiceRemadeAfterImport,
+  kMaxValue = kProgramChanged,
 };
 
 // Exposed for testing.
@@ -249,7 +254,8 @@ class ChoiceScreenData {
 // in the search engine choice screen or in the settings page.
 void RecordChoiceScreenDefaultSearchProviderType(
     SearchEngineType engine_type,
-    ChoiceMadeLocation choice_location);
+    ChoiceMadeLocation choice_location,
+    metrics::ProfileMetricsService& profile_metrics_service);
 
 // Records the index of the search engine that was chosen by the user as it was
 // displayed on the choice screen.
@@ -262,7 +268,8 @@ void RecordChoiceScreenSelectedIndex(int selected_engine_index);
 // Don't call this directly. Instead, go through
 // `SearchEngineChoiceService::MaybeRecordChoiceScreenDisplayState()`.
 void RecordChoiceScreenPositions(
-    const std::vector<SearchEngineType>& displayed_search_engines);
+    const std::vector<SearchEngineType>& displayed_search_engines,
+    metrics::ProfileMetricsService& profile_metrics_service);
 
 // Records whether `RecordChoiceScreenPositions()` had to be skipped due to
 // a mismatch between the Variations/UMA country and the profile/choice

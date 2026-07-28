@@ -6,7 +6,10 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/test/scoped_feature_list.h"
 #import "components/signin/core/browser/account_reconcilor.h"
+#import "components/signin/public/base/signin_switches.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/test/ios/test_utils.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/browser/authentication/consistency_promo_signin/coordinator/consistency_promo_signin_mediator.h"
@@ -22,6 +25,8 @@
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/platform_test.h"
@@ -33,16 +38,16 @@ namespace {
 class ConsistencyPromoSigninCoordinatorTest : public PlatformTest {
  public:
   ConsistencyPromoSigninCoordinatorTest() {
-    // The profile state will receive UI blocker request. They are not tested
-    // here, so it’s a non-strict mock.
-    profile_state_ = OCMClassMock([ProfileState class]);
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    profile_state_ = [[ProfileState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     scene_state_.profileState = profile_state_;
     TestProfileIOS::Builder builder = TestProfileIOS::Builder();
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
         AuthenticationServiceFactory::GetFactoryWithDelegate(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
     base_view_controller_mock_ = OCMStrictClassMock([UIViewController class]);
@@ -52,6 +57,7 @@ class ConsistencyPromoSigninCoordinatorTest : public PlatformTest {
                            browser:browser_.get()
                       contextStyle:SigninContextStyle::kDefault
                        accessPoint:access_point_
+              confirmChangeProfile:nil
               prepareChangeProfile:nil
               continuationProvider:NotReachedContinuationProvider()];
     mediator_mock_ = OCMStrictClassMock([ConsistencyPromoSigninMediator class]);
@@ -66,7 +72,6 @@ class ConsistencyPromoSigninCoordinatorTest : public PlatformTest {
     EXPECT_OCMOCK_VERIFY((id)base_view_controller_mock_);
     EXPECT_OCMOCK_VERIFY((id)consistency_default_account_coordinator_mock_);
     EXPECT_OCMOCK_VERIFY((id)consistency_sheet_navigation_controller_mock_);
-    EXPECT_OCMOCK_VERIFY((id)profile_state_);
     PlatformTest::TearDown();
   }
 
@@ -157,11 +162,11 @@ class ConsistencyPromoSigninCoordinatorTest : public PlatformTest {
   ConsistencySheetNavigationController*
       consistency_sheet_navigation_controller_mock_ = nil;
   SceneState* scene_state_;
+  std::unique_ptr<TestBrowser> browser_;
 
  private:
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
-  std::unique_ptr<TestBrowser> browser_;
   // Required for UI blocker.
   ProfileState* profile_state_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
@@ -183,8 +188,9 @@ TEST_F(ConsistencyPromoSigninCoordinatorTest, StartAndCancel) {
       };
   StartCoordinator();
   // Simulate cancel from the user.
-  OCMExpect([base_view_controller_mock_ dismissViewControllerAnimated:YES
-                                                           completion:nil]);
+  OCMExpect([base_view_controller_mock_
+      dismissViewControllerAnimated:YES
+                         completion:[OCMArg invokeBlock]]);
   // Expect the navigation controller delegates to be reset.
   OCMExpect([consistency_sheet_navigation_controller_mock_ setDelegate:nil]);
   OCMExpect([consistency_sheet_navigation_controller_mock_
@@ -212,4 +218,39 @@ TEST_F(ConsistencyPromoSigninCoordinatorTest, StartAndCancel) {
   EXPECT_FALSE(scene_state_.signinInProgress);
 }
 
+TEST_F(ConsistencyPromoSigninCoordinatorTest, NoAccountWebSigninEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(switches::kNoAccountWebSignin);
+
+  ConsistencyPromoSigninCoordinator* web_signin_coordinator =
+      [ConsistencyPromoSigninCoordinator
+          coordinatorWithBaseViewController:base_view_controller_mock_
+                                    browser:browser_.get()
+                               contextStyle:SigninContextStyle::kDefault
+                                accessPoint:signin_metrics::AccessPoint::
+                                                kWebSignin
+                       confirmChangeProfile:nil
+                       prepareChangeProfile:nil
+                       continuationProvider:NotReachedContinuationProvider()];
+
+  EXPECT_NE(nil, web_signin_coordinator);
+}
+
+TEST_F(ConsistencyPromoSigninCoordinatorTest, NoAccountWebSigninDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(switches::kNoAccountWebSignin);
+
+  ConsistencyPromoSigninCoordinator* web_signin_coordinator =
+      [ConsistencyPromoSigninCoordinator
+          coordinatorWithBaseViewController:base_view_controller_mock_
+                                    browser:browser_.get()
+                               contextStyle:SigninContextStyle::kDefault
+                                accessPoint:signin_metrics::AccessPoint::
+                                                kWebSignin
+                       confirmChangeProfile:nil
+                       prepareChangeProfile:nil
+                       continuationProvider:NotReachedContinuationProvider()];
+
+  EXPECT_EQ(nil, web_signin_coordinator);
+}
 }  // namespace

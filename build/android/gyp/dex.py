@@ -34,6 +34,11 @@ DEFAULT_IGNORE_WARNINGS = (
     r'The companion object Companion could not be found',
     # https://crbug.com/408280256
     r'MethodHandle.invoke',
+    # JDK update warnings
+    r'A terminally deprecated method in sun.misc.Unsafe',
+    r'sun.misc.Unsafe::.* has been called',
+    r'sun.misc.Unsafe::.* will be removed',
+    r'Please consider reporting this to the maintainers of',
 )
 
 _MERGE_SERVICE_ENTRIES = (
@@ -42,6 +47,10 @@ _MERGE_SERVICE_ENTRIES = (
     'META-INF/services/androidx.appsearch.app.AppSearchDocumentClassMap',
     'META-INF/services/kotlinx.coroutines.CoroutineExceptionHandler',
     'META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory',
+    'META-INF/services/org.chromium.base.test.util.LeakCanaryChecker$LeakCanaryConfigProvider',
+    'META-INF/services/org.chromium.base.test.BaseJUnit4ClassRunner$ClassCleanupHook',
+    'META-INF/services/org.chromium.base.test.BaseJUnit4ClassRunner$AfterCleanupCheck',
+    'META-INF/services/org.chromium.on_device_model.AiCoreFactory',
 )
 
 _IGNORE_SERVICE_ENTRIES = (
@@ -80,9 +89,9 @@ def _ParseArgs(args):
   parser.add_argument(
       '--incremental-dir',
       help='Path of directory to put intermediate dex files.')
-  parser.add_argument('--library',
+  parser.add_argument('--intermediate',
                       action='store_true',
-                      help='Allow numerous dex files within output.')
+                      help='Dex must still be merged before being used.')
   parser.add_argument('--r8-jar-path', required=True, help='Path to R8 jar.')
   parser.add_argument('--skip-custom-d8',
                       action='store_true',
@@ -200,8 +209,10 @@ def _RunD8(dex_cmd, input_paths, output_path, warnings_as_errors,
     # Stripped invalid locals information from 1 method.
     try:
       build_utils.CheckOutput(dex_cmd,
+                              print_stdout=is_debug,
                               stderr_filter=stderr_filter,
-                              fail_on_output=warnings_as_errors)
+                              fail_on_output=(warnings_as_errors
+                                              and not is_debug))
     except Exception as e:
       if isinstance(e, build_utils.CalledProcessError):
         output = e.output
@@ -245,7 +256,7 @@ def _CreateServicesMap(service_jars):
           new_lines = z.read(n).decode('utf8').splitlines()
           old_lines.extend(l for l in new_lines if l not in old_lines)
           data = '\n'.join(old_lines) + '\n'
-          if _MERGE_SERVICE_ENTRIES or ret.get(n, data) == data:
+          if n in _MERGE_SERVICE_ENTRIES or ret.get(n, data) == data:
             ret[n] = data
             origins[n] = jar_path
           else:
@@ -274,9 +285,11 @@ def _CreateFinalDex(d8_inputs,
                     options=None,
                     service_jars=None):
   tmp_dex_output = os.path.join(tmp_dir, 'tmp_dex_output.zip')
-  needs_dexing = not all(f.endswith('.dex') for f in d8_inputs)
-  needs_dexmerge = output.endswith('.dex') or not (options and options.library)
   services_map = _CreateServicesMap(service_jars or [])
+
+  needs_dexing = not all(f.endswith('.dex') for f in d8_inputs)
+  needs_dexmerge = output.endswith('.dex') or not (options
+                                                   and options.intermediate)
   if needs_dexing or needs_dexmerge:
     tmp_dex_dir = os.path.join(tmp_dir, 'tmp_dex_dir')
     os.mkdir(tmp_dex_dir)
@@ -380,13 +393,41 @@ def _IsClassFile(path):
   return path.endswith('.class')
 
 
+def _ClassFileNestPrefix(class_path):
+  """Returns the javac nest-host prefix for a .class subpath.
+
+  Nest members follow the binary-name convention "Outer$Member.class"; the
+  nest host's binary name never contains '$'.
+
+  E.g. 'pkg/Outer$Inner.class' -> 'pkg/Outer'
+       'pkg/Outer.class'       -> 'pkg/Outer'
+  """
+  base = class_path[:-len('.class')]
+  slash = base.rfind('/')
+  dollar = base.find('$', slash + 1)
+  if dollar != -1:
+    base = base[:dollar]
+  return base
+
+
 def _ExtractClassFiles(changes, tmp_dir, class_inputs, required_classes_set):
   classes_list = []
   for jar in class_inputs:
     if changes:
-      changed_class_list = (set(changes.IterChangedSubpaths(jar))
-                            | required_classes_set)
-      predicate = lambda x: x in changed_class_list and _IsClassFile(x)  # pylint: disable=cell-var-from-loop
+      changed_class_set = (set(changes.IterChangedSubpaths(jar))
+                           | required_classes_set)
+
+      # D8 nest-based access desugaring requires the entire nest group to be
+      # present, else it aborts with "Class X requires its nest host Y to be
+      # on program or class path." Pull in sibling nestmates by host prefix.
+      nest_prefixes = {
+          _ClassFileNestPrefix(path)
+          for path in changed_class_set if _IsClassFile(path)
+      }
+
+      def predicate(path, nest_prefixes=nest_prefixes):
+        return (_IsClassFile(path)
+                and _ClassFileNestPrefix(path) in nest_prefixes)
     else:
       predicate = _IsClassFile
 
@@ -429,7 +470,7 @@ def _CreateIntermediateDexFiles(changes, options, tmp_dir, dex_cmd):
   # If the only change is deleting a file, class_files will be empty.
   if class_files:
     # Dex necessary classes into intermediate dex files.
-    dex_cmd = dex_cmd + ['--intermediate', '--file-per-class-file']
+    dex_cmd = dex_cmd + ['--file-per-class-file']
     if options.desugar_dependencies and not options.skip_custom_d8:
       # Adding os.sep to remove the entire prefix.
       dex_cmd += ['--file-tmp-prefix', tmp_extract_dir + os.sep]
@@ -462,6 +503,52 @@ def _OnStaleMd5(changes, options, final_dex_inputs, service_jars, dex_cmd):
                     dex_cmd,
                     options=options,
                     service_jars=service_jars)
+
+
+def MergeDexAndServices(src_jars,
+                        dest_zip,
+                        apk_root_dir='',
+                        apk_dex_dir='',
+                        uncompress_dex=False,
+                        compress_level=1):
+  """Merges dex files and services from src_jars into dest_zip.
+
+  Args:
+    src_jars: List of input jar paths.
+    dest_zip: An open zipfile.ZipFile object to write to.
+    apk_root_dir: Prefix for service paths in the zip.
+    apk_dex_dir: Prefix for dex paths in the zip.
+    uncompress_dex: Whether to store dex files uncompressed.
+    compress_level: Compression level for zip entries.
+  """
+  services_map = _CreateServicesMap(src_jars)
+  for path, data in sorted(services_map.items()):
+    zip_helpers.add_to_zip_hermetic(dest_zip,
+                                    apk_root_dir + path,
+                                    data=data.encode('utf8'),
+                                    compress=False,
+                                    alignment=4)
+
+  dex_idx = 0
+  for jar_path in src_jars:
+    with zipfile.ZipFile(jar_path, 'r') as z:
+      dex_names = sorted([n for n in z.namelist() if n.endswith('.dex')])
+      for name in dex_names:
+        data = z.read(name)
+        if len(src_jars) == 1:
+          dest_name = name
+        else:
+          dest_name = 'classes{}.dex'.format(dex_idx + 1 if dex_idx > 0 else '')
+
+        compress = not uncompress_dex
+        alignment = None if compress else 4
+        zip_helpers.add_to_zip_hermetic(dest_zip,
+                                        apk_dex_dir + dest_name,
+                                        data=data,
+                                        compress=compress,
+                                        compress_level=compress_level,
+                                        alignment=alignment)
+        dex_idx += 1
 
 
 def MergeDexForIncrementalInstall(r8_jar_path, src_paths, dest_dex_jar,
@@ -511,6 +598,16 @@ def main(args):
 
   dex_cmd = build_utils.JavaCmd(xmx=_DEX_XMX)
 
+  # As of Feb 2026, a hyperfine benchmark of dexing chrome_java:
+  # Without flags:
+  # Time (mean ± σ): 7.744 s ±  0.177 s   [User: 161.982 s, System: 8.416 s]
+  # With flags:
+  # Time (mean ± σ): 6.579 s ±  0.057 s   [User: 37.612 s, System: 8.015 s]
+  dex_cmd += ['-XX:TieredStopAtLevel=1']
+
+  if logging.getLogger().isEnabledFor(logging.DEBUG):
+    dex_cmd += ['-Dcom.android.tools.r8.printtimes=1']
+
   if options.dump_inputs:
     dex_cmd += ['-Dcom.android.tools.r8.dumpinputtofile=d8inputs.zip']
 
@@ -529,6 +626,8 @@ def main(args):
 
   if options.release:
     dex_cmd += ['--release']
+  elif options.intermediate:
+    dex_cmd += ['--intermediate']
   if options.min_api:
     dex_cmd += ['--min-api', options.min_api]
 

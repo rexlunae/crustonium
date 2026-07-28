@@ -21,6 +21,7 @@
 
 using testing::_;
 using testing::Invoke;
+using testing::VariantWith;
 
 class GlicTabObserverAndroidTest : public ChromeRenderViewHostTestHarness {
  public:
@@ -30,17 +31,19 @@ class GlicTabObserverAndroidTest : public ChromeRenderViewHostTestHarness {
 TEST_F(GlicTabObserverAndroidTest, TabAdditionNotifiesObserver) {
   base::MockCallback<GlicTabObserver::EventCallback> mock_callback;
   OwningTestTabModel tab_model(profile());
-  tab_model.AddEmptyTab(0, /*select=*/true,
-                        TabModel::TabLaunchType::FROM_CHROME_UI);
+  TabAndroid* existing_tab = tab_model.AddEmptyTab(
+      0, /*select=*/true, TabModel::TabLaunchType::FROM_CHROME_UI);
   GlicTabObserverAndroid observer(profile(), mock_callback.Get());
 
-  EXPECT_CALL(mock_callback, Run(_)).WillOnce([](const GlicTabEvent& event) {
-    ASSERT_TRUE(std::holds_alternative<TabCreationEvent>(event));
-    const auto& creation_event = std::get<TabCreationEvent>(event);
-    EXPECT_NE(nullptr, creation_event.new_tab);
-    EXPECT_EQ(nullptr, creation_event.old_tab);
-    EXPECT_EQ(TabCreationType::kUserInitiated, creation_event.creation_type);
-  });
+  EXPECT_CALL(mock_callback, Run(_))
+      .WillOnce([existing_tab](const GlicTabEvent& event) {
+        ASSERT_TRUE(std::holds_alternative<TabCreationEvent>(event));
+        const auto& creation_event = std::get<TabCreationEvent>(event);
+        EXPECT_NE(nullptr, creation_event.new_tab);
+        EXPECT_EQ(existing_tab, creation_event.old_tab);
+        EXPECT_EQ(TabCreationType::kUserInitiated,
+                  creation_event.creation_type);
+      });
 
   std::unique_ptr<content::WebContents> web_contents =
       content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
@@ -75,6 +78,43 @@ TEST_F(GlicTabObserverAndroidTest, TabSelectionNotifiesObserver) {
   });
 
   tab_model.SetActiveIndex(1);
+  TabModelList::RemoveObserver(&observer);
+}
+
+TEST_F(GlicTabObserverAndroidTest,
+       ClosingAllTabsAndOpeningANewOneNotifiesObserver) {
+  base::MockCallback<GlicTabObserver::EventCallback> mock_callback;
+  OwningTestTabModel tab_model(profile());
+  GlicTabObserverAndroid observer(profile(), mock_callback.Get());
+
+  std::unique_ptr<content::WebContents> web_contents1 =
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
+  // Add a tab
+  TabAndroid* tab1 =
+      tab_model.AddTabFromWebContents(std::move(web_contents1), 0, true,
+                                      TabModel::TabLaunchType::FROM_CHROME_UI);
+
+  // Close the tab, now there are no tabs in the model.
+  tab_model.CloseTabAt(0);
+
+  std::unique_ptr<content::WebContents> web_contents2 =
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
+  content::WebContents* web_contents2_ptr = web_contents2.get();
+  EXPECT_CALL(mock_callback, Run(VariantWith<TabCreationEvent>(_)));
+  // After opening a new tab we expect a TabActivationEvent that doesn't point
+  // to the previous tab.
+  EXPECT_CALL(mock_callback, Run(VariantWith<TabActivationEvent>(_)))
+      .WillOnce([&](const GlicTabEvent& event) {
+        ASSERT_TRUE(std::holds_alternative<TabActivationEvent>(event));
+        const auto& activation_event = std::get<TabActivationEvent>(event);
+        EXPECT_EQ(web_contents2_ptr,
+                  activation_event.new_active_tab->GetContents());
+        EXPECT_NE(tab1, activation_event.old_active_tab);
+      });
+
+  // Open a new tab
+  tab_model.AddTabFromWebContents(std::move(web_contents2), 0, true,
+                                  TabModel::TabLaunchType::FROM_CHROME_UI);
   TabModelList::RemoveObserver(&observer);
 }
 

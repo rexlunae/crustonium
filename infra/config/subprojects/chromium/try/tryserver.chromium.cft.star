@@ -42,11 +42,13 @@ try_.builder(
             "no_symbols",
             "devtools_do_typecheck",
             "chrome_for_testing",
+            "chrome_with_codecs",
             "linux",
             "x64",
         ],
     ),
     os = os.LINUX_DEFAULT,
+    siso_remote_linking = True,
 )
 
 try_.builder(
@@ -60,8 +62,9 @@ try_.builder(
             "remoteexec",
             "no_symbols",
             "chrome_for_testing",
+            "chrome_with_codecs",
             "mac",
-            "x64",
+            "arm64",
         ],
     ),
     cores = None,
@@ -83,10 +86,11 @@ try_.builder(
             # is no longer needed.
             "no_resource_allowlisting",
             "chrome_for_testing",
+            "chrome_with_codecs",
             "win",
             "x64",
         ],
     ),
     os = os.WINDOWS_DEFAULT,
-    execution_timeout = 6 * time.hour,
+    siso_remote_linking = True,
 )

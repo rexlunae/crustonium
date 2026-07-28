@@ -139,6 +139,9 @@ class MetricsService {
   int GetOldLowEntropySource();
   int GetPseudoLowEntropySource();
 
+  // Deletes all UMA data, in memory and on disk.
+  void Purge();
+
   // Returns the date at which the current metrics client ID was created as
   // an int64_t containing seconds since the epoch.
   int64_t GetMetricsReportingEnabledDate();
@@ -168,17 +171,14 @@ class MetricsService {
   // Called when the application is going into background mode.
   // If |keep_recording_in_background| is true, UMA is still recorded and
   // reported while in the background.
-  void OnAppEnterBackground(bool keep_recording_in_background = false);
+  void OnAppEnterBackground(bool keep_recording_in_background = false,
+                            bool emit_uma_action = true);
 
   // Called when the application is coming out of background mode.
-  void OnAppEnterForeground(bool force_open_new_log = false);
+  void OnAppEnterForeground(bool force_open_new_log = false,
+                            bool emit_uma_action = true);
 
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-
-  // Flushes state that would be lost if the browser were to be killed. On
-  // Android, this should be called when an Activity pauses, as Android could
-  // suddenly kill the app at that point.
-  void Flush();
 
   // Called when a document first starts loading.
   void OnPageLoadStarted();
@@ -254,16 +254,16 @@ class MetricsService {
   // Returns the current user metrics consent if it should be applied to
   // determine metrics reporting state.
   //
-  // See comments at MetricsServiceClient::GetCurrentUserMetricsConsent() for
+  // See comments at MetricsServiceClient::GetCurrentUserMetricsChoice() for
   // more details.
-  std::optional<bool> GetCurrentUserMetricsConsent() const;
+  std::optional<bool> GetCurrentUserMetricsChoice() const;
 
   // Returns the current logged in user id. See comments at
   // MetricsServiceClient::GetCurrentUserId() for more details.
   std::optional<std::string> GetCurrentUserId() const;
 
   // Updates the current user metrics consent. No-ops if no user has logged in.
-  void UpdateCurrentUserMetricsConsent(bool user_metrics_consent);
+  void UpdateCurrentUserMetricsChoice(bool user_choice);
 
   // Forces the client ID to be reset and generates a new client ID. This will
   // be called when a user re-consents to metrics collection and the user had
@@ -307,6 +307,8 @@ class MetricsService {
   MetricsServiceObserver* logs_event_observer() {
     return logs_event_observer_.get();
   }
+
+  MetricsReportingService* reporting_service() { return &reporting_service_; }
 
   // Creates a new MetricsLog instance with the given |log_type|.
   std::unique_ptr<MetricsLog> CreateLogForTesting(

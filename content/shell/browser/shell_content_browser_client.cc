@@ -44,14 +44,17 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service_factory.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/surface_embed/common/surface_embed.mojom.h"
 #include "components/variations/service/variations_service.h"
 #include "content/public/browser/client_certificate_delegate.h"
+#include "content/public/browser/digital_identity_provider.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
@@ -60,11 +63,13 @@
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/setup_field_trials.h"
+#include "content/shell/browser/rust_test_service_ffi.rs.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/browser/shell_browser_main_parts.h"
 #include "content/shell/browser/shell_devtools_manager_delegate.h"
 #include "content/shell/browser/shell_web_contents_view_delegate_creator.h"
+#include "content/shell/common/rust_test.test-mojom.h"
 #include "content/shell/common/shell_controller.test-mojom.h"
 #include "content/shell/common/shell_paths.h"
 #include "content/shell/common/shell_switches.h"
@@ -84,6 +89,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
@@ -92,6 +98,8 @@
 #include "ui/base/ui_base_switches.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+#include "url/url_canon.h"
+#include "url/url_constants.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/apk_assets.h"
@@ -189,6 +197,15 @@ class ShellControllerImpl : public mojom::ShellController {
   void ShutDown() override { Shell::Shutdown(); }
 };
 
+void BindRustTestServiceReceiver(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<content::rust_test::mojom::RustTestService>
+        receiver) {
+  auto pipe = std::make_unique<mojo::rust::ScopedMessagePipeHandleWrapper>(
+      receiver.PassPipe());
+  content::rust_test::BindRustTestService(std::move(pipe));
+}
+
 void BindNetworkHintsHandler(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<network_hints::mojom::NetworkHintsHandler> receiver) {
@@ -203,9 +220,11 @@ void BindMediaFoundationPreferences(
     mojo::PendingReceiver<media::mojom::MediaFoundationPreferences> receiver) {
   // Passing in a NullCallback since we don't have MediaFoundationServiceMonitor
   // in content.
-  MediaFoundationPreferencesImpl::Create(
-      frame_host->GetSiteInstance()->GetSiteURL(), base::NullCallback(),
-      std::move(receiver));
+  MediaFoundationPreferencesImpl::Create(frame_host->GetSiteInstance()
+                                             ->GetSecurityPrincipal()
+                                             .GetDeprecatedSiteURL(),
+                                         base::NullCallback(),
+                                         std::move(receiver));
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -285,6 +304,39 @@ std::unique_ptr<PrefService> CreateLocalState() {
 bool AreIsolatedWebAppsEnabled() {
   return base::FeatureList::IsEnabled(features::kIsolatedWebApps);
 }
+
+// A dummy DigitalIdentityProvider that hangs (never invokes the callback) to
+// simulate the browser waiting for user interaction on the selection UI.
+// This is the default expectation for Digital Credential APIs in WPTs when
+// no user interaction is simulated.
+class ShellDigitalIdentityProvider : public content::DigitalIdentityProvider {
+ public:
+  ShellDigitalIdentityProvider() = default;
+  ~ShellDigitalIdentityProvider() override = default;
+
+  bool IsLastCommittedOriginLowRisk(
+      content::RenderFrameHost& render_frame_host) const override {
+    return false;
+  }
+
+  DigitalIdentityInterstitialAbortCallback ShowDigitalIdentityInterstitial(
+      content::WebContents& web_contents,
+      const url::Origin& origin,
+      content::DigitalIdentityInterstitialType interstitial_type,
+      DigitalIdentityInterstitialCallback callback) override {
+    return base::OnceClosure();
+  }
+
+  void Get(content::WebContents* web_contents,
+           const url::Origin& origin,
+           base::ValueView request,
+           DigitalIdentityCallback callback) override {}
+
+  void Create(content::WebContents* web_contents,
+              const url::Origin& origin,
+              base::ValueView request,
+              DigitalIdentityCallback callback) override {}
+};
 
 }  // namespace
 
@@ -481,12 +533,15 @@ ShellContentBrowserClient::GetWebContentsViewDelegate(
   return CreateShellWebContentsViewDelegate(web_contents);
 }
 
-bool ShellContentBrowserClient::IsIsolatedContextAllowedForUrl(
+bool ShellContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
     BrowserContext* browser_context,
-    const GURL& lock_url) {
-  static base::flat_set<url::Origin> isolated_context_origins =
-      GetIsolatedContextOriginSetFromFlag();
-  return isolated_context_origins.contains(url::Origin::Create(lock_url));
+    const GURL& url) {
+  static auto kIsolatedContextOrigins = GetIsolatedContextOriginSetFromFlag();
+
+  GURL::Replacements replacements;
+  replacements.ClearPort();
+  return kIsolatedContextOrigins.contains(
+      url::Origin::Create(url.ReplaceComponents(replacements)));
 }
 
 bool ShellContentBrowserClient::IsSharedStorageAllowed(
@@ -505,14 +560,6 @@ bool ShellContentBrowserClient::IsSharedStorageSelectURLAllowed(
     const url::Origin& accessing_origin,
     std::string* out_debug_message,
     bool* out_block_is_site_setting_specific) {
-  return true;
-}
-
-bool ShellContentBrowserClient::IsFencedStorageReadAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin) {
   return true;
 }
 
@@ -608,10 +655,30 @@ void ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
       ->GetBinders()
       .ExposeInterfacesToRenderFrame(map);
   map->Add<network_hints::mojom::NetworkHintsHandler>(&BindNetworkHintsHandler);
+  map->Add<content::rust_test::mojom::RustTestService>(
+      base::BindRepeating(&BindRustTestServiceReceiver));
 #if BUILDFLAG(IS_WIN)
   map->Add<media::mojom::MediaFoundationPreferences>(
       &BindMediaFoundationPreferences);
 #endif  // BUILDFLAG(IS_WIN)
+}
+
+void ShellContentBrowserClient::
+    RegisterAssociatedInterfaceBindersForRenderFrameHost(
+        RenderFrameHost&,
+        blink::AssociatedInterfaceRegistry& associated_registry) {
+  associated_registry.AddInterface<surface_embed::mojom::SurfaceEmbedHost>(
+      base::BindRepeating(
+          [](mojo::PendingAssociatedReceiver<
+              surface_embed::mojom::SurfaceEmbedHost> receiver) {
+            // Since ShellContentRenderClient can try to create a
+            // SurfaceEmbedWebPlugin on any page, we have to handle its binding
+            // on any page, so the renderer doesn't get killed. We don't want
+            // the operation to actually succeed in general, however, so we
+            // just let the endpoint get closed by going out of scope unbound.
+            // Tests that need the functionality can override this method to
+            // provide it.
+          }));
 }
 
 void ShellContentBrowserClient::OpenURL(
@@ -749,7 +816,8 @@ void ShellContentBrowserClient::OnNetworkServiceCreated(
         /*secure_dns_mode=*/net::SecureDnsMode::kAutomatic,
         net::DnsOverHttpsConfig(),
         /*additional_dns_types_enabled=*/true,
-        /*fallback_doh_nameservers=*/{});
+        /*fallback_doh_nameservers=*/{},
+        /*insecure_dns_via_platform_apis_enabled=*/false);
   }
 #endif
 }
@@ -855,16 +923,9 @@ void ShellContentBrowserClient::CreateFeatureListAndFieldTrials() {
   SetupFieldTrials();
 }
 
-std::optional<std::vector<blink::mojom::IsolatedAppPermissionPolicyEntryPtr>>
-ShellContentBrowserClient::GetPermissionsPolicyForIsolatedWebApp(
-    content::BrowserContext* browser_context,
-    const url::Origin& app_origin) {
-  std::vector<blink::mojom::IsolatedAppPermissionPolicyEntryPtr> policy;
-  policy.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
-      "cross-origin-isolated", std::vector<std::string>{"*"}));
-  policy.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
-      "direct-sockets", std::vector<std::string>{"'self'"}));
-  return policy;
+std::unique_ptr<DigitalIdentityProvider>
+ShellContentBrowserClient::CreateDigitalIdentityProvider() {
+  return std::make_unique<ShellDigitalIdentityProvider>();
 }
 
 // Tests may install their own ShellContentBrowserClient, track the list here.

@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.graphics.drawable.ColorDrawable;
+import android.text.SpannableString;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -29,25 +30,20 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Token;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
-import org.chromium.base.task.TaskTraits;
-import org.chromium.base.task.test.ShadowPostTask;
-import org.chromium.base.task.test.ShadowPostTask.TestImpl;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.app.tabmodel.ArchivedTabModelOrchestrator;
@@ -59,14 +55,12 @@ import org.chromium.chrome.browser.hub.PaneManager;
 import org.chromium.chrome.browser.tab.TabArchiveSettings;
 import org.chromium.chrome.browser.tab_ui.OnTabSelectingListener;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
-import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorBase;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorCoordinator.TabListEditorController;
-import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.GridCardOnClickListenerProvider;
+import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.TabListItemOnClickListenerProvider;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
@@ -79,15 +73,16 @@ import org.chromium.components.tab_group_sync.TabGroupUiActionHandler;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
 import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.text.ChromeClickableSpan;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Tests for {@link TabListMediator}. */
+/** Tests for {@link ArchivedTabsDialogCoordinator}. */
 @Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = {ShadowPostTask.class})
+@Config(manifest = Config.NONE)
 public class ArchivedTabsDialogCoordinatorUnitTest {
     private static final Token TAB_GROUP_ID = Token.createRandom();
     private static final String TAB_GROUP_ID_STRING = TAB_GROUP_ID.toString();
@@ -101,7 +96,6 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
 
     @Spy private ViewGroup mRootView;
     @Spy private ViewGroup mTabSwitcherView;
-    @Captor private ArgumentCaptor<TabModelObserver> mTabModelObserverCaptor;
     @Mock private ArchivedTabModelOrchestrator mArchivedTabModelOrchestrator;
     @Mock private TabModelSelectorBase mArchivedTabModelSelector;
     @Mock private TabModel mArchivedTabModel;
@@ -121,7 +115,7 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
     @Mock private PaneManager mPaneManager;
     @Mock private TabSwitcherPaneBase mTabSwitcherPaneBase;
     @Mock private TabGroupUiActionHandler mTabGroupUiActionHandler;
-    @Mock private TabGroupModelFilter mCurrentTabGroupModelFilter;
+    @Mock private TabModel mCurrentTabModel;
 
     private Activity mActivity;
     private ArchivedTabsDialogCoordinator mCoordinator;
@@ -133,8 +127,8 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
             new OneshotSupplierImpl<>();
     private final OneshotSupplierImpl<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier =
             new OneshotSupplierImpl<>();
-    private final SettableMonotonicObservableSupplier<TabGroupModelFilter>
-            mCurrentTabGroupModelFilterSupplier = ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<TabModel> mCurrentTabModelSupplier =
+            ObservableSuppliers.createMonotonic();
 
     @Before
     public void setUp() {
@@ -159,7 +153,7 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
         mTabSwitcherView.addView(recyclerView);
         mPaneManagerSupplier.set(mPaneManager);
         mTabGroupUiActionHandlerSupplier.set(mTabGroupUiActionHandler);
-        mCurrentTabGroupModelFilterSupplier.set(mCurrentTabGroupModelFilter);
+        mCurrentTabModelSupplier.set(mCurrentTabModel);
 
         mCoordinator =
                 new ArchivedTabsDialogCoordinator(
@@ -180,7 +174,7 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
                         mTabGroupSyncService,
                         mPaneManagerSupplier,
                         mTabGroupUiActionHandlerSupplier,
-                        mCurrentTabGroupModelFilterSupplier);
+                        mCurrentTabModelSupplier);
         mCoordinator.setTabListEditorCoordinatorForTesting(mTabListEditorCoordinator);
         recyclerView = new TabListRecyclerView(mActivity, null);
         recyclerView.setId(R.id.tab_list_recycler_view);
@@ -190,16 +184,6 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
     }
 
     private void setUpMocks() {
-        // Run posted tasks immediately.
-        ShadowPostTask.setTestImpl(
-                new TestImpl() {
-                    @Override
-                    public void postDelayedTask(
-                            @TaskTraits int taskTraits, Runnable task, long delay) {
-                        task.run();
-                    }
-                });
-
         when(mArchivedTabModel.iterator()).thenAnswer(inv -> Collections.emptyList().iterator());
         when(mArchivedTabModelOrchestrator.getTabModelSelector())
                 .thenReturn(mArchivedTabModelSelector);
@@ -220,6 +204,8 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
     @Test
     public void testShow() {
         mCoordinator.show(mOnTabSelectingListener);
+        RobolectricUtil.runAllBackgroundAndUi();
+
         verify(mRootView).addView(any());
         verify(mTabListEditorController).show(any(), eq(Collections.emptyList()), eq(null));
         verify(mTabListEditorController).setNavigationProvider(any());
@@ -227,6 +213,7 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
         verify(mBackPressManager).addHandler(any(), eq(BackPressHandler.Type.ARCHIVED_TABS_DIALOG));
 
         mTabCountSupplier.set(2);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mTabListEditorController).setToolbarTitle("2 inactive items");
     }
 
@@ -241,28 +228,33 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
         when(mTabGroupSyncService.getGroup(TAB_GROUP_ID_STRING)).thenReturn(savedTabGroup);
 
         mCoordinator.show(mOnTabSelectingListener);
+        RobolectricUtil.runAllBackgroundAndUi();
+
         verify(mTabListEditorController).show(any(), eq(tabGroupSyncIds), eq(null));
     }
 
     @Test
     public void testAddRemoveTab() {
         mCoordinator.show(mOnTabSelectingListener);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // First verify a tab exists as the base condition for showing.
         verify(mTabListEditorController, times(2)).setToolbarTitle("1 inactive item");
 
         // Then add a second tab.
         mTabCountSupplier.set(2);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mTabListEditorController).setToolbarTitle("2 inactive items");
 
         // Then close both tabs.
         mTabCountSupplier.set(1);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mTabListEditorController, times(3)).setToolbarTitle("1 inactive item");
 
         mTabCountSupplier.set(0);
 
         // Allow animations to finish.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mTabListEditorController).hide();
     }
@@ -270,9 +262,11 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
     @Test
     public void testLifecycleObserverHidesDialog() {
         mCoordinator.show(mOnTabSelectingListener);
+        RobolectricUtil.runAllBackgroundAndUi();
+
         mCoordinator.getTabListEditorLifecycleObserver().willHide();
 
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mRootView).removeView(any());
 
         mCoordinator.getTabListEditorLifecycleObserver().didHide();
@@ -284,10 +278,12 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
     public void testDestroyHidesDialog() {
         when(mTabListEditorController.isVisible()).thenReturn(true);
         mCoordinator.show(mOnTabSelectingListener);
+        RobolectricUtil.runAllBackgroundAndUi();
+
         mCoordinator.destroy();
 
         // Allow animations to finish.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mRootView, atLeastOnce()).removeView(any());
         verify(mTabListEditorController).setLifecycleObserver(null);
@@ -329,23 +325,23 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
                 .thenReturn(savedTabGroupBefore)
                 .thenReturn(savedTabGroupBefore)
                 .thenReturn(savedTabGroupAfter);
-        when(mCurrentTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mCurrentTabGroupModelFilter.getGroupLastShownTabId(TAB_GROUP_ID)).thenReturn(TAB1_ID);
+        when(mCurrentTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mCurrentTabModel.getGroupLastShownTabId(TAB_GROUP_ID)).thenReturn(TAB1_ID);
         when(mTabListEditorController.isVisible()).thenReturn(true);
 
         // Show the dialog.
         mCoordinator.show(mOnTabSelectingListener);
 
         // Run the click listener.
-        GridCardOnClickListenerProvider provider =
-                mCoordinator.getGridCardOnClickListenerProviderForTesting();
-        TabActionListener listener = provider.openTabGridDialog(TAB_GROUP_ID_STRING);
+        TabListItemOnClickListenerProvider provider =
+                mCoordinator.getTabListItemOnClickListenerProviderForTesting();
+        TabActionListener listener = provider.onTabGroupClicked(TAB_GROUP_ID_STRING);
         listener.run(mItemView1, TAB_GROUP_ID_STRING, /* triggeringMotion= */ null);
 
         verify(mTabGroupUiActionHandler).openTabGroup(TAB_GROUP_ID_STRING);
 
         // Assert the dialog is hidden and destroyed.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mRootView, atLeastOnce()).removeView(any());
         verify(mTabListEditorController).setLifecycleObserver(null);
@@ -359,9 +355,33 @@ public class ArchivedTabsDialogCoordinatorUnitTest {
     @DisableFeatures(ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE)
     public void testCloseAllTabsButtonBackgroundColor() {
         mCoordinator.show(mOnTabSelectingListener);
+        RobolectricUtil.runAllBackgroundAndUi();
+
         FrameLayout buttonContainer = mCoordinator.getCloseAllTabsButtonContainer();
         assertEquals(
                 SemanticColorUtils.getColorSurface(mActivity),
                 ((ColorDrawable) buttonContainer.getBackground()).getColor());
+    }
+
+    @Test
+    public void testGetIphDescriptionSpans() {
+        when(mTabArchiveSettings.getArchiveTimeDeltaDays()).thenReturn(7);
+        when(mTabArchiveSettings.getAutoDeleteTimeDeltaMonths()).thenReturn(1);
+        when(mTabArchiveSettings.isAutoDeleteEnabled()).thenReturn(true);
+
+        CharSequence description =
+                ArchivedTabsDialogCoordinator.getIphDescription(
+                        mActivity, mTabArchiveSettings, (view) -> {});
+        assertTrue(description instanceof SpannableString);
+        SpannableString ss = (SpannableString) description;
+
+        String settingsTitle =
+                mActivity.getString(R.string.archived_tab_iph_card_subtitle_settings_title);
+        int start = ss.toString().indexOf(settingsTitle);
+        int end = start + settingsTitle.length();
+
+        // Verify ChromeClickableSpan
+        ChromeClickableSpan[] clickableSpans = ss.getSpans(start, end, ChromeClickableSpan.class);
+        assertEquals(1, clickableSpans.length);
     }
 }

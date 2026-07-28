@@ -36,6 +36,7 @@
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/memory/discardable_memory_allocator.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/test_discardable_memory_allocator.h"
@@ -112,7 +113,7 @@ TestingPlatformSupport::~TestingPlatformSupport() {
 }
 
 WebString TestingPlatformSupport::DefaultLocale() {
-  return WebString::FromUTF8("en-US");
+  return WebString("en-US");
 }
 
 WebData TestingPlatformSupport::GetDataResource(
@@ -131,6 +132,18 @@ std::string TestingPlatformSupport::GetDataResourceString(int resource_id) {
 ThreadSafeBrowserInterfaceBrokerProxy*
 TestingPlatformSupport::GetBrowserInterfaceBroker() {
   return interface_broker_.get();
+}
+
+scoped_refptr<base::SequencedTaskRunner>
+TestingPlatformSupport::MediaThreadTaskRunner() {
+  return old_platform_ ? old_platform_->MediaThreadTaskRunner()
+                       : base::SequencedTaskRunner::GetCurrentDefault();
+}
+
+scoped_refptr<base::SingleThreadTaskRunner>
+TestingPlatformSupport::GetIOTaskRunner() const {
+  return old_platform_ ? old_platform_->GetIOTaskRunner()
+                       : base::SingleThreadTaskRunner::GetCurrentDefault();
 }
 
 // ValueConverter only for simple data types used in tests.
@@ -167,7 +180,7 @@ class V8ValueConverterForTest final : public WebV8ValueConverter {
       v8::Local<v8::Value> operator()(std::string_view value) {
         return v8::String::NewFromUtf8(isolate, value.data(),
                                        v8::NewStringType::kNormal,
-                                       value.length())
+                                       base::checked_cast<int>(value.length()))
             .ToLocalChecked();
       }
 

@@ -9,17 +9,18 @@
 #include <optional>
 #include <ranges>
 #include <string_view>
+#include <variant>
 
 #include "base/base64url.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "device/fido/attestation_object.h"
 #include "device/fido/fido_user_verification_requirement.h"
 #include "device/fido/public/authenticator_selection_criteria.h"
-#include "device/fido/public/cable_discovery_data.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
 #include "device/fido/public/fido_transport_protocol.h"
@@ -92,6 +93,34 @@ std::tuple<bool, std::optional<std::string>> Base64UrlDecodeOptionalStringKey(
 
 std::vector<uint8_t> ToByteVector(const std::string& in) {
   return base::ToVector(base::as_byte_span(in));
+}
+
+// Parses the CMTG key extension from `client_extension_results`.
+// Returns CmtgKeyResponsePtr if present and valid.
+// Returns nullptr if not present.
+// Returns the name of the field that failed to parse on error.
+base::expected<blink::mojom::CmtgKeyResponsePtr, std::string> ParseCmtgKey(
+    const base::DictValue* client_extension_results) {
+  if (!client_extension_results) {
+    return nullptr;
+  }
+  const base::DictValue* cmtg_key =
+      client_extension_results->FindDict("cmtgKey");
+  if (!cmtg_key) {
+    return nullptr;
+  }
+  std::optional<std::string> cmtg_key_val =
+      Base64UrlDecodeStringKey(*cmtg_key, "cmtgKey");
+  if (!cmtg_key_val) {
+    return base::unexpected("cmtgKey.cmtgKey");
+  }
+  std::optional<std::string> signature_val =
+      Base64UrlDecodeStringKey(*cmtg_key, "signature");
+  if (!signature_val) {
+    return base::unexpected("cmtgKey.signature");
+  }
+  return blink::mojom::CmtgKeyResponse::New(ToByteVector(*cmtg_key_val),
+                                            ToByteVector(*signature_val));
 }
 
 base::Value ToValue(const device::PublicKeyCredentialRpEntity& relying_party) {
@@ -237,60 +266,6 @@ base::Value ToValue(const device::LargeBlobSupport large_blob) {
   }
 }
 
-base::Value ToValue(const device::CableDiscoveryData& cable_authentication) {
-  base::DictValue value;
-  switch (cable_authentication.version) {
-    case device::CableDiscoveryData::Version::INVALID:
-      NOTREACHED();
-    case device::CableDiscoveryData::Version::V1:
-      value.Set("version", 1);
-      value.Set("clientEid",
-                Base64UrlEncode(cable_authentication.v1->client_eid));
-      value.Set("authenticatorEid",
-                Base64UrlEncode(cable_authentication.v1->authenticator_eid));
-      value.Set("sessionPreKey",
-                Base64UrlEncode(cable_authentication.v1->session_pre_key));
-      break;
-    case device::CableDiscoveryData::Version::V2:
-      value.Set("version", 2);
-      value.Set("clientEid",
-                Base64UrlEncode(cable_authentication.v2->experiments));
-      value.Set("authenticatorEid", "");
-      value.Set("sessionPreKey",
-                Base64UrlEncode(cable_authentication.v2->server_link_data));
-      break;
-  }
-  return base::Value(std::move(value));
-}
-
-base::Value ToValue(
-    const blink::mojom::SupplementalPubKeysRequestPtr& supplemental_pub_keys) {
-  base::ListValue scopes;
-  if (supplemental_pub_keys->device_scope_requested) {
-    scopes.Append("device");
-  }
-  if (supplemental_pub_keys->provider_scope_requested) {
-    scopes.Append("provider");
-  }
-
-  base::DictValue value;
-  value.Set("scopes", std::move(scopes));
-  if (supplemental_pub_keys->attestation !=
-      device::AttestationConveyancePreference::kIndirect) {
-    value.Set("attestation", ToValue(supplemental_pub_keys->attestation));
-  }
-  if (supplemental_pub_keys->attestation_formats.size()) {
-    base::ListValue formats;
-    for (const std::string& format :
-         supplemental_pub_keys->attestation_formats) {
-      formats.Append(format);
-    }
-    value.Set("attestationFormats", std::move(formats));
-  }
-
-  return base::Value(std::move(value));
-}
-
 base::Value ToValue(const std::vector<std::string>& strings) {
   base::ListValue ret;
   ret.reserve(strings.size());
@@ -328,13 +303,15 @@ OptionalAuthenticatorAttachmentFromValue(const base::Value* value) {
 }
 
 std::pair<blink::mojom::MakeCredentialAuthenticatorResponsePtr, std::string>
-InvalidMakeCredentialField(const char* field_name) {
-  return {nullptr, std::string("field missing or invalid: ") + field_name};
+InvalidMakeCredentialField(std::string_view field_name) {
+  return {nullptr,
+          std::string("field missing or invalid: ").append(field_name)};
 }
 
 std::pair<blink::mojom::GetAssertionAuthenticatorResponsePtr, std::string>
-InvalidGetAssertionField(const char* field_name) {
-  return {nullptr, std::string("field missing or invalid: ") + field_name};
+InvalidGetAssertionField(std::string_view field_name) {
+  return {nullptr,
+          std::string("field missing or invalid: ").append(field_name)};
 }
 
 base::Value ToValue(const blink::mojom::PRFValuesPtr& prf_input) {
@@ -481,6 +458,10 @@ base::Value ToValue(
     extensions.Set("prf", std::move(prf_value));
   }
 
+  if (options->cmtg_key) {
+    extensions.Set("cmtgKey", true);
+  }
+
   // On Android, requests with the payments extension should not be forwarded to
   // CredMan and so shouldn't need to be serialized to JSON. But we might end
   // up sending such requests to an enclave.
@@ -488,11 +469,6 @@ base::Value ToValue(
     base::DictValue payments_value;
     payments_value.Set("isPayment", true);
     extensions.Set("payment", std::move(payments_value));
-  }
-
-  if (options->supplemental_pub_keys) {
-    extensions.Set("supplementalPubKeys",
-                   ToValue(options->supplemental_pub_keys));
   }
 
   if (!extensions.empty()) {
@@ -506,12 +482,7 @@ base::Value ToValue(
     const blink::mojom::PublicKeyCredentialRequestOptionsPtr& options) {
   CHECK(!options->extensions.is_null());
   base::DictValue value;
-  if (options->challenge.has_value()) {
-    value.Set("challenge", Base64UrlEncode(*options->challenge));
-  } else {
-    CHECK(options->challenge_url.has_value());
-    value.Set("challengeUrl", options->challenge_url->spec());
-  }
+  value.Set("challenge", Base64UrlEncode(options->challenge));
   value.Set("rpId", options->relying_party_id);
 
   base::ListValue allow_credentials;
@@ -536,15 +507,6 @@ base::Value ToValue(
 
   if (options->extensions->appid) {
     extensions.Set("appid", *options->extensions->appid);
-  }
-
-  base::ListValue cable_authentication_data;
-  for (const device::CableDiscoveryData& cable :
-       options->extensions->cable_authentication_data) {
-    cable_authentication_data.Append(ToValue(cable));
-  }
-  if (!cable_authentication_data.empty()) {
-    extensions.Set("cableAuthentication", std::move(cable_authentication_data));
   }
 
   if (options->extensions->get_cred_blob) {
@@ -593,9 +555,13 @@ base::Value ToValue(
     extensions.Set("prf", std::move(prf_value));
   }
 
-  if (options->extensions->supplemental_pub_keys) {
-    extensions.Set("supplementalPubKeys",
-                   ToValue(options->extensions->supplemental_pub_keys));
+  if (options->extensions->cross_device_fallback_url) {
+    extensions.Set("crossDeviceFallbackUrl",
+                   options->extensions->cross_device_fallback_url->spec());
+  }
+
+  if (options->extensions->cmtg_key) {
+    extensions.Set("cmtgKey", true);
   }
 
   if (!extensions.empty()) {
@@ -641,30 +607,6 @@ std::optional<blink::mojom::PRFValuesPtr> ParsePRFResults(
       /*id=*/std::nullopt, ToByteVector(*first),
       second ? std::optional<std::vector<uint8_t>>(ToByteVector(*second))
              : std::nullopt);
-}
-
-std::optional<blink::mojom::SupplementalPubKeysResponsePtr>
-ParseSupplementalPubKeys(const base::DictValue* json) {
-  const base::ListValue* signatures = json->FindList("signatures");
-  if (!signatures || signatures->empty()) {
-    return std::nullopt;
-  }
-
-  auto ret = blink::mojom::SupplementalPubKeysResponse::New();
-  for (const base::Value& b64url_signature : *signatures) {
-    if (!b64url_signature.is_string()) {
-      return std::nullopt;
-    }
-    std::optional<std::vector<uint8_t>> signature =
-        Base64UrlDecode(b64url_signature.GetString(),
-                        base::Base64UrlDecodePolicy::DISALLOW_PADDING);
-    if (!signature) {
-      return std::nullopt;
-    }
-    ret->signatures.emplace_back(std::move(*signature));
-  }
-
-  return ret;
 }
 
 std::pair<blink::mojom::MakeCredentialAuthenticatorResponsePtr, std::string>
@@ -846,15 +788,12 @@ MakeCredentialResponseFromValue(const base::Value& value) {
       response->prf_results = std::move(*prf_results);
     }
   }
-  const base::DictValue* supplemental_pub_keys =
-      client_extension_results->FindDict("supplementalPubKeys");
-  if (supplemental_pub_keys) {
-    auto maybe_result = ParseSupplementalPubKeys(supplemental_pub_keys);
-    if (!maybe_result) {
-      return InvalidMakeCredentialField("supplementalPubKeys");
-    }
-    response->supplemental_pub_keys = std::move(*maybe_result);
+
+  auto cmtg_key = ParseCmtgKey(client_extension_results);
+  if (!cmtg_key.has_value()) {
+    return InvalidMakeCredentialField(cmtg_key.error());
   }
+  response->cmtg_key = std::move(cmtg_key.value());
 
   return {std::move(response), ""};
 }
@@ -982,15 +921,19 @@ GetAssertionResponseFromValue(const base::Value& value) {
       response->extensions->prf_results = std::move(*prf_results);
     }
   }
-  const base::DictValue* supplemental_pub_keys =
-      client_extension_results->FindDict("supplementalPubKeys");
-  if (supplemental_pub_keys) {
-    auto maybe_result = ParseSupplementalPubKeys(supplemental_pub_keys);
-    if (!maybe_result) {
-      return InvalidGetAssertionField("supplementalPubKeys");
-    }
-    response->extensions->supplemental_pub_keys = std::move(*maybe_result);
+
+  const std::optional<bool> cross_device_fallback_url =
+      client_extension_results->FindBool("crossDeviceFallbackUrl");
+  if (cross_device_fallback_url) {
+    response->extensions->cross_device_fallback_url =
+        *cross_device_fallback_url;
   }
+
+  auto cmtg_key = ParseCmtgKey(client_extension_results);
+  if (!cmtg_key.has_value()) {
+    return InvalidGetAssertionField(cmtg_key.error());
+  }
+  response->extensions->cmtg_key = std::move(cmtg_key.value());
 
   return {std::move(response), ""};
 }

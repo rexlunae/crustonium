@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.compositor.layouts;
 
+import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
@@ -36,7 +37,7 @@ import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.ControlContainer;
 import org.chromium.chrome.browser.toolbar.ToolbarPositionController;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
@@ -44,6 +45,7 @@ import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.Sc
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.SwipeHandler;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 import org.chromium.ui.util.AccessibilityUtil;
+import org.chromium.ui.util.MotionEventUtils;
 
 import java.util.List;
 import java.util.function.Supplier;
@@ -94,7 +96,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
      *     to create TabSwitcherLayout if it has value.
      * @param tabModelSelectorSupplier Supplier for an interface to talk to the Tab Model Selector.
      * @param tabContentManagerSupplier Supplier of the {@link TabContentManager} instance.
-     * @param topUiThemeColorProvider {@link ThemeColorProvider} for top UI.
+     * @param toolbarThemeColorProvider {@link ThemeColorProvider} for the toolbar.
      * @param hubLayoutDependencyHolder The dependency holder for creating {@link HubLayout}.
      */
     public LayoutManagerChrome(
@@ -103,15 +105,15 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
             Supplier<TabSwitcher> tabSwitcherSupplier,
             Supplier<TabModelSelector> tabModelSelectorSupplier,
             MonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier,
-            Supplier<TopUiThemeColorProvider> topUiThemeColorProvider,
+            Supplier<ToolbarThemeColorProvider> toolbarThemeColorProvider,
             HubLayoutDependencyHolder hubLayoutDependencyHolder) {
-        super(host, contentContainer, tabContentManagerSupplier, topUiThemeColorProvider);
+        super(host, contentContainer, tabContentManagerSupplier, toolbarThemeColorProvider);
         // Build Event Filter Handlers
         mToolbarSwipeHandler =
                 createToolbarSwipeHandler(/* supportsSwipeToShowTabSwitcher= */ true);
 
         mTabContentManagerSupplier = tabContentManagerSupplier;
-        mTabContentManagerSupplier.addObserver(mOnTabContentManager);
+        mTabContentManagerSupplier.addSyncObserverAndPostIfNonNull(mOnTabContentManager);
 
         mTabSwitcherSupplier = tabSwitcherSupplier;
         mTabModelSelectorSupplier = tabModelSelectorSupplier;
@@ -172,7 +174,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
             TabCreatorManager creator,
             @Nullable ControlContainer controlContainer,
             DynamicResourceLoader dynamicResourceLoader,
-            TopUiThemeColorProvider topUiColorProvider,
+            ToolbarThemeColorProvider toolbarThemeColorProvider,
             NonNullObservableSupplier<Integer> bottomControlsOffsetSupplier) {
         Context context = mHost.getContext();
         LayoutRenderHost renderHost = mHost.getLayoutRenderHost();
@@ -187,27 +189,35 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
                         renderHost,
                         browserControlsStateProvider,
                         this,
-                        topUiColorProvider,
+                        toolbarThemeColorProvider,
                         bottomControlsOffsetSupplier,
-                        getContentContainer());
+                        getContentContainer(),
+                        () -> {
+                            if (controlContainer != null) {
+                                controlContainer.doSynchronousLayout(
+                                        /* forceCaptureAfterLayout= */ true);
+                            }
+                        });
 
         super.init(
                 selector,
                 creator,
                 controlContainer,
                 dynamicResourceLoader,
-                topUiColorProvider,
+                toolbarThemeColorProvider,
                 bottomControlsOffsetSupplier);
 
-        // Initialize Layouts
-        TabContentManager content = mTabContentManagerSupplier.get();
+        // Initialize Layouts.
+        TabContentManager content = assertNonNull(mTabContentManagerSupplier.get());
         mToolbarSwipeLayout.setTabModelSelector(selector);
         mToolbarSwipeLayout.setTabContentManager(content);
+
         if (mHubLayout != null) {
             mHubLayout.setTabModelSelector(selector);
             mHubLayout.setTabContentManager(content);
             mHubLayout.onFinishNativeInitialization();
         }
+
         mFinishNativeInitialization = true;
     }
 
@@ -215,8 +225,8 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
     public void showLayout(int layoutType, boolean animate) {
         if (mDestroyChecker.isDestroyed()) return;
 
-        if (layoutType == LayoutType.TAB_SWITCHER && mHubLayout == null) {
-            initTabSwitcher();
+        if (layoutType == LayoutType.HUB && mHubLayout == null) {
+            initHubLayout();
         }
         super.showLayout(layoutType, animate);
     }
@@ -225,7 +235,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
      * For lazy initialization of {@link HubLayout} This always happens the first time the tab
      * switcher is shown on tablets and phones.
      */
-    private void initTabSwitcher() {
+    private void initHubLayout() {
         var tabSwitcher = mTabSwitcherSupplier.get();
         if (tabSwitcher != null) {
             return;
@@ -274,7 +284,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
         Layout layout = null;
         if (layoutType == LayoutType.TOOLBAR_SWIPE) {
             layout = mToolbarSwipeLayout;
-        } else if (layoutType == LayoutType.TAB_SWITCHER) {
+        } else if (layoutType == LayoutType.HUB) {
             if (mHubLayout != null) {
                 layout = mHubLayout;
             }
@@ -298,17 +308,17 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
     protected void tabClosed(int id, int nextId, boolean incognito, boolean tabRemoved) {
         boolean showOverview = nextId == Tab.INVALID_TAB_ID;
         boolean animate = !tabRemoved && animationsEnabled();
-        if (getActiveLayoutType() != LayoutType.TAB_SWITCHER
+        if (getActiveLayoutType() != LayoutType.HUB
                 && showOverview
-                && getNextLayoutType() != LayoutType.TAB_SWITCHER
+                && getNextLayoutType() != LayoutType.HUB
                 && !DeviceInfo.isXr()) {
-            showLayout(LayoutType.TAB_SWITCHER, animate);
-        } else if (getActiveLayoutType() == LayoutType.TAB_SWITCHER
+            showLayout(LayoutType.HUB, animate);
+        } else if (getActiveLayoutType() == LayoutType.HUB
                 && assumeNonNull(getActiveLayout()).isStartingToHide()
                 && showOverview
                 && getNextLayoutType() == LayoutType.BROWSING
                 && !DeviceInfo.isXr()) {
-            showLayout(LayoutType.TAB_SWITCHER, animate);
+            showLayout(LayoutType.HUB, animate);
         }
         super.tabClosed(id, nextId, incognito, tabRemoved);
     }
@@ -316,7 +326,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
     @Override
     public void tabsAllClosing(boolean incognito) {
         if (getActiveLayout() == mStaticLayout && !incognito && !DeviceInfo.isXr()) {
-            showLayout(LayoutType.TAB_SWITCHER, /* animate= */ false);
+            showLayout(LayoutType.HUB, /* animate= */ false);
         }
         super.tabsAllClosing(incognito);
     }
@@ -337,15 +347,15 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
                     if (getActiveLayout() == mStaticLayout
                             && !incognitoActive
                             && tabModelSelector.getModel(false).getCount() == 0
-                            && getNextLayoutType() != LayoutType.TAB_SWITCHER) {
-                        showLayout(LayoutType.TAB_SWITCHER, /* animate= */ false);
+                            && getNextLayoutType() != LayoutType.HUB) {
+                        showLayout(LayoutType.HUB, /* animate= */ false);
                     }
                 });
     }
 
     /** Initializes HubLayout without needing to open the Tab Switcher. */
     public void initHubLayoutForTesting() {
-        initTabSwitcher();
+        initHubLayout();
     }
 
     /**
@@ -397,7 +407,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
         }
 
         @Override
-        public void onSwipeStarted(@ScrollDirection int direction, MotionEvent ev) {
+        public void onSwipeStarted(@ScrollDirection int direction, MotionEvent triggerEvent) {
             mScrollDirection = ScrollDirection.UNKNOWN;
         }
 
@@ -427,7 +437,7 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
             } else if (mSupportsSwipeToShowTabSwitcher) {
                 // No need to test scroll direction here, as we've ruled out other possibilities.
                 RecordUserAction.record("MobileToolbarSwipeOpenStackView");
-                showLayout(LayoutType.TAB_SWITCHER, true);
+                showLayout(LayoutType.HUB, true);
             }
 
             mToolbarSwipeLayout.swipeStarted(time(), mScrollDirection, x, y);
@@ -484,11 +494,16 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
         }
 
         @Override
-        public boolean isSwipeEnabled(@ScrollDirection int direction) {
+        public boolean isSwipeEnabled(@ScrollDirection int direction, MotionEvent triggerEvent) {
             FullscreenManager manager = mHost.getFullscreenManager();
-            if (getActiveLayout() != mStaticLayout
-                    || !DeviceClassManager.enableToolbarSwipe()
+            if (!DeviceClassManager.enableToolbarSwipe()
+                    || getActiveLayout() != mStaticLayout
                     || (manager != null && manager.getPersistentFullscreenMode())) {
+                return false;
+            }
+
+            if (MotionEventUtils.isPointerEvent(triggerEvent)) {
+                // Dragging on the toolbar with the pointer should not cause swipes.
                 return false;
             }
 

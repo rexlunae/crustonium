@@ -449,30 +449,11 @@ BrowserManagementNoticeState GetManagementNoticeStateForNTPFooter(
     return BrowserManagementNoticeState::kEnabledByPolicy;
   }
 
-  size_t policies_count = g_browser_process->browser_policy_connector()
-                              ->GetPolicyService()
-                              ->GetPolicies(policy::PolicyNamespace(
-                                  policy::POLICY_DOMAIN_CHROME, std::string()))
-                              .size();
   const bool is_low_trust =
       management_service->GetManagementAuthorityTrustworthiness() <=
       policy::ManagementAuthorityTrustworthiness::LOW;
 
-  const bool show_for_high_trust =
-      !is_low_trust &&
-      base::FeatureList::IsEnabled(features::kEnterpriseBadgingForNtpFooter);
-  const bool show_for_local_management =
-      is_low_trust &&
-      base::FeatureList::IsEnabled(
-          features::kEnterpriseBadgingForLocalManagemenetNtpFooter);
-  const bool show_for_three_or_more_policies_local_management =
-      is_low_trust &&
-      base::FeatureList::IsEnabled(
-          features::kEnterpriseBadgingForNtpFooterWithOverThreePolicies) &&
-      policies_count > 3;
-
-  if (show_for_high_trust || show_for_local_management ||
-      show_for_three_or_more_policies_local_management) {
+  if (!is_low_trust) {
     return profile->GetPrefs()->GetBoolean(prefs::kNtpFooterVisible)
                ? BrowserManagementNoticeState::kEnabled
                : BrowserManagementNoticeState::kDisabled;
@@ -553,6 +534,29 @@ static bool JNI_ManagedBrowserUtils_IsEnterpriseRealTimeUrlCheckModeEnabled(
 
   return service->GetAppliedRealTimeUrlCheck() !=
          enterprise_connectors::REAL_TIME_CHECK_DISABLED;
+}
+
+// static
+static bool
+JNI_ManagedBrowserUtils_IsOnFileDownloadedEnterpriseConnectorEnabled(
+    JNIEnv* env,
+    Profile* profile) {
+  DCHECK(profile);
+
+  if (!base::FeatureList::IsEnabled(
+          enterprise_connectors::kEnableDownloadEnterpriseScanOnClank)) {
+    return false;
+  }
+
+  auto* service =
+      enterprise_connectors::ConnectorsServiceFactory::GetForBrowserContext(
+          profile);
+
+  return service &&
+         !service
+              ->GetAnalysisServiceProviderNames(
+                  enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED)
+              .empty();
 }
 
 #endif  // BUILDFLAG(IS_ANDROID)

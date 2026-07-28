@@ -9,7 +9,7 @@ import {AiEnterpriseFeaturePrefName} from 'chrome://settings/lazy_load.js';
 import {CrSettingsPrefs, ModelExecutionEnterprisePolicyValue} from 'chrome://settings/settings.js';
 import type {SettingsPrefsElement, SettingsYourSavedInfoPageIndexElement} from 'chrome://settings/settings.js';
 import {loadTimeData, resetRouterForTesting, Router, routes} from 'chrome://settings/settings.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {assertEquals, assertFalse, assertGT, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
@@ -27,7 +27,11 @@ suite('YourSavedInfoPageIndex', function() {
 
     // routes.YOUR_SAVED_INFO does not exist if enableYourSavedInfoSettingsPage
     // is false
-    loadTimeData.overrideValues({enableYourSavedInfoSettingsPage: true});
+    loadTimeData.overrideValues({
+      enableYourSavedInfoSettingsPage: true,
+      showSuggestionsFromGeminiSettings: true,
+      shoppingIntegrationEnabled: true,
+    });
     resetRouterForTesting();
 
     index = document.createElement('settings-your-saved-info-page-index');
@@ -76,6 +80,50 @@ suite('YourSavedInfoPageIndex', function() {
     await microtasksFinished();
     assertActiveView('passkeys');
     // </if>
+
+    Router.getInstance().navigateTo(routes.YOUR_SAVED_INFO_SHOPPING);
+    await microtasksFinished();
+    assertActiveView('shopping');
+
+    Router.getInstance().navigateTo(routes.SUGGESTIONS_FROM_GEMINI);
+    await microtasksFinished();
+    assertActiveView('suggestionsFromGemini');
+  });
+
+  test('GeminiRouteDisabled', async function() {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    loadTimeData.overrideValues({
+      enableYourSavedInfoSettingsPage: true,
+      showSuggestionsFromGeminiSettings: false,
+    });
+    resetRouterForTesting();
+
+    index = document.createElement('settings-your-saved-info-page-index');
+    index.prefs = settingsPrefs.prefs!;
+    document.body.appendChild(index);
+    await flushTasks();
+
+    assertEquals(undefined, routes.SUGGESTIONS_FROM_GEMINI);
+    const subpage = index.$.viewManager.querySelector('#suggestionsFromGemini');
+    assertFalse(!!subpage);
+  });
+
+  test('ShoppingRouteDisabled', async function() {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    loadTimeData.overrideValues({
+      enableYourSavedInfoSettingsPage: true,
+      shoppingIntegrationEnabled: false,
+    });
+    resetRouterForTesting();
+
+    index = document.createElement('settings-your-saved-info-page-index');
+    index.prefs = settingsPrefs.prefs!;
+    document.body.appendChild(index);
+    await flushTasks();
+
+    assertEquals(undefined, routes.YOUR_SAVED_INFO_SHOPPING);
+    const subpage = index.$.viewManager.querySelector('#shopping');
+    assertFalse(!!subpage);
   });
 
   // Minimal (non-exhaustive) tests to ensure SearchableViewContainerMixin is
@@ -84,6 +132,8 @@ suite('YourSavedInfoPageIndex', function() {
     // Test that the child views are properly annotated.
     const childViewsId = [
       'payments',
+      'shopping',
+      'suggestionsFromGemini',
     ];
     for (const id of childViewsId) {
       assertTrue(!!index.$.viewManager.querySelector(
@@ -94,6 +144,15 @@ suite('YourSavedInfoPageIndex', function() {
     const result = await index.searchContents('Payments');
     assertFalse(result.canceled);
     assertEquals(2, result.matchCount);
+    assertFalse(result.wasClearSearch);
+  });
+
+  // Test that no errors happen during search.
+  test('SearchNoErrors', async function() {
+    // Searching for 'a' is expected to return results in all sections.
+    const result = await index.searchContents('a');
+    assertGT(result.matchCount, 0);
+    assertFalse(result.canceled);
     assertFalse(result.wasClearSearch);
   });
 });

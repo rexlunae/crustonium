@@ -27,6 +27,7 @@ import androidx.preference.PreferenceScreen;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -130,6 +131,7 @@ public class AutofillCardBenefitsFragment extends ChromeBaseSettingsFragment
     @VisibleForTesting
     static void setObserverForTest(Callback<Fragment> observerForTest) {
         sObserverForTest = observerForTest;
+        ResettersForTesting.register(() -> sObserverForTest = null);
     }
 
     private void createCardBenefitSwitch() {
@@ -262,13 +264,11 @@ public class AutofillCardBenefitsFragment extends ChromeBaseSettingsFragment
         super.onDestroyView();
     }
 
-    @StringRes
-    private static int getCardBenefitsTitle() {
+    private static @StringRes int getCardBenefitsTitle() {
         return R.string.autofill_settings_page_card_benefits_label;
     }
 
-    @StringRes
-    private static int getCardBenefitsSummary() {
+    private static @StringRes int getCardBenefitsSummary() {
         return ChromeFeatureList.isEnabled(
                         ChromeFeatureList.AUTOFILL_ENABLE_NEW_CARD_BENEFITS_TOGGLE_TEXT)
                 ? R.string

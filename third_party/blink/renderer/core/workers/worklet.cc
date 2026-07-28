@@ -45,12 +45,7 @@ void Worklet::Dispose() {
 
   // Abort any pending tasks as a safeguard before pre-finalization.
   // This ensures that HasPendingTasks() will be false in the destructor.
-  if (HasPendingTasks()) {
-    HeapVector<Member<WorkletPendingTasks>> tasks_to_abort(pending_tasks_set_);
-    for (const auto& task : tasks_to_abort) {
-      task->Abort(nullptr);
-    }
-  }
+  AbortPendingTasks();
 }
 
 // Implementation of the first half of the "addModule(moduleURL, options)"
@@ -115,15 +110,22 @@ void Worklet::ContextDestroyed() {
   // Abort any pending tasks when the context is destroyed. This is the primary
   // cleanup path. This prevents the DCHECK in ~Worklet from firing if a module
   // load is in flight during navigation.
-  if (HasPendingTasks()) {
-    HeapVector<Member<WorkletPendingTasks>> tasks_to_abort(pending_tasks_set_);
-    for (const auto& task : tasks_to_abort) {
-      task->Abort(nullptr);
-    }
-  }
+  AbortPendingTasks();
 
   for (const auto& proxy : proxies_)
     proxy->TerminateWorkletGlobalScope();
+}
+
+void Worklet::AbortPendingTasks() {
+  DCHECK(IsMainThread());
+  while (!pending_tasks_set_.empty()) {
+    auto it = pending_tasks_set_.begin();
+    WorkletPendingTasks* task = it->Get();
+    task->Abort(nullptr);
+    if (pending_tasks_set_.Contains(task)) {
+      pending_tasks_set_.erase(task);
+    }
+  }
 }
 
 bool Worklet::HasPendingTasks() const {
@@ -150,6 +152,10 @@ void Worklet::FetchAndInvokeScript(const KURL& module_url_record,
   DCHECK(IsMainThread());
   if (!GetExecutionContext())
     return;
+
+  if (!pending_tasks_set_.Contains(pending_tasks)) {
+    return;
+  }
 
   // Step 6: "Let credentialOptions be the credentials member of options."
   network::mojom::CredentialsMode credentials_mode =

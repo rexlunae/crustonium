@@ -18,10 +18,10 @@
 namespace gpu {
 class ClientSharedImage;
 struct ExportedSharedImage;
+class SharedImageExportResult;
 }  // namespace gpu
 
 namespace blink {
-class CanvasResourceProviderSharedImageNon2D;
 class MailboxTextureBacking;
 class WebGraphicsContext3DProviderWrapper;
 
@@ -51,6 +51,7 @@ class PLATFORM_EXPORT AcceleratedStaticBitmapImage final
       scoped_refptr<gpu::ClientSharedImage>,
       const gpu::SyncToken&,
       SkAlphaType alpha_type,
+      const gfx::HDRMetadata&,
       base::WeakPtr<WebGraphicsContext3DProviderWrapper>,
       base::PlatformThreadRef context_thread_ref,
       scoped_refptr<base::SingleThreadTaskRunner> context_task_runner,
@@ -65,7 +66,8 @@ class PLATFORM_EXPORT AcceleratedStaticBitmapImage final
       gpu::ExportedSharedImage exported_shared_image,
       const gpu::SyncToken& sync_token,
       SkAlphaType alpha_type,
-      base::OnceCallback<void(const gpu::SyncToken&)> release_callback);
+      const gfx::HDRMetadata&,
+      base::OnceCallback<void(gpu::SharedImageExportResult)> release_callback);
 
   bool IsOpaque() override;
   bool IsTextureBacked() const override { return true; }
@@ -91,10 +93,6 @@ class PLATFORM_EXPORT AcceleratedStaticBitmapImage final
                      const gfx::Point& dest_point,
                      const gfx::Rect& src_rect) override;
 
-  bool CopyToResourceProvider(
-      CanvasResourceProviderSharedImageNon2D* resource_provider,
-      const gfx::Rect& copy_rect) override;
-
   // To be called on sender thread before performing a transfer to a different
   // thread.
   void Transfer() final;
@@ -108,6 +106,8 @@ class PLATFORM_EXPORT AcceleratedStaticBitmapImage final
   void UpdateSyncToken(const gpu::SyncToken& sync_token) final {
     mailbox_ref_->set_sync_token(sync_token);
   }
+  void UpdateSyncTokenFromExportResult(
+      gpu::SharedImageExportResult export_result) final;
 
   // Provides the mailbox backing for this image. The caller must wait on the
   // sync token before accessing this mailbox.
@@ -125,11 +125,16 @@ class PLATFORM_EXPORT AcceleratedStaticBitmapImage final
     return shared_image_->format();
   }
 
+  const gfx::HDRMetadata& GetHdrMetadata() const override {
+    return hdr_metadata_;
+  }
+
  private:
   AcceleratedStaticBitmapImage(
       scoped_refptr<gpu::ClientSharedImage>,
       const gpu::SyncToken&,
       SkAlphaType alpha_type,
+      const gfx::HDRMetadata&,
       const ImageOrientation& orientation,
       base::WeakPtr<WebGraphicsContext3DProviderWrapper>,
       base::PlatformThreadRef context_thread_ref,
@@ -152,6 +157,7 @@ class PLATFORM_EXPORT AcceleratedStaticBitmapImage final
   sk_sp<MailboxTextureBacking> texture_backing_;
 
   PaintImage::ContentId paint_image_content_id_;
+  gfx::HDRMetadata hdr_metadata_;
   THREAD_CHECKER(thread_checker_);
 };
 

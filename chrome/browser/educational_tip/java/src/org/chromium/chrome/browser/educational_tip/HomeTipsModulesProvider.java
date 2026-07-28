@@ -13,6 +13,8 @@ import org.chromium.chrome.browser.magic_stack.ModuleRegistry;
 import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
 
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Manages the registration of high-level module collections on the home surface, like the Setup
@@ -40,7 +42,7 @@ public class HomeTipsModulesProvider {
         Collection<Integer> modulesToRegister =
                 getModuleTypesToRegister(isSetupListActive, showTwoCell);
         for (@ModuleType int moduleType : modulesToRegister) {
-            if (showTwoCell) {
+            if (moduleType == ModuleType.SETUP_LIST_TWO_CELL_CONTAINER) {
                 moduleRegistry.registerModule(
                         moduleType,
                         new EducationalTipModuleTwoCellBuilder(moduleType, actionDelegate));
@@ -63,11 +65,14 @@ public class HomeTipsModulesProvider {
     static Collection<Integer> getModuleTypesToRegister(
             boolean isSetupListActive, boolean showTwoCell) {
         if (isSetupListActive) {
-            // If the "Set Up List" feature is active, return its ranked modules.
-            if (showTwoCell) {
-                return SetupListModuleUtils.getTwoCellContainerModuleTypes();
-            }
-            return SetupListModuleUtils.getRankedModuleTypes();
+            // Register both Setup List and standard Educational Tip modules. This allows the UI to
+            // transition seamlessly from the Setup List (Celebration card) back to standard Tips
+            // within the same session once all tasks are complete. Actual visibility is enforced
+            // via each builder's isEligible() check.
+            Set<Integer> modules = new HashSet<>();
+            modules.addAll(SetupListModuleUtils.getModuleTypesForRegistration(showTwoCell));
+            modules.addAll(EducationalTipModuleUtils.getModuleTypes());
+            return modules;
         } else {
             // Fall back to returning the default Educational Tip modules.
             return EducationalTipModuleUtils.getModuleTypes();

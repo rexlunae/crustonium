@@ -24,6 +24,7 @@
 #include "url/origin.h"
 
 namespace content {
+class BrowserContext;
 class NavigationRequest;
 class PerWebUIBrowserInterfaceBroker;
 class RenderFrameHost;
@@ -75,6 +76,7 @@ class CONTENT_EXPORT WebUIImpl : public WebUI, public mojom::WebUIHost {
   void SetProperty(const std::string& name, const std::string& value);
 
   // WebUI implementation:
+  WebUIConfig* GetWebUIConfig() override;
   WebContents* GetWebContents() override;
   WebUIController* GetController() override;
   RenderFrameHost* GetRenderFrameHost() override;
@@ -109,7 +111,8 @@ class CONTENT_EXPORT WebUIImpl : public WebUI, public mojom::WebUIHost {
   bool HasRenderFrameHost() const;
 
   static blink::mojom::LocalResourceLoaderConfigPtr
-  GetLocalResourceLoaderConfigForTesting(URLDataManagerBackend* data_backend,
+  GetLocalResourceLoaderConfigForTesting(BrowserContext* browser_context,
+                                         URLDataManagerBackend* data_backend,
                                          const url::Origin& current_origin,
                                          WebUIController* controller);
 

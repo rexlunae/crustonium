@@ -151,7 +151,7 @@ CastNetworkContexts::GetSystemURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::OriginatingProcess::browser();
+  params->process_id = network::OriginatingProcessId::browser();
   params->is_orb_enabled = false;
   params->is_trusted = true;
   GetSystemContext()->CreateURLLoaderFactory(
@@ -320,7 +320,9 @@ void CastNetworkContexts::AddProxyToNetworkContextParams(
   if (!proxy_config_service_) {
     pref_proxy_config_tracker_impl_ =
         std::make_unique<PrefProxyConfigTrackerImpl>(
-            CastBrowserProcess::GetInstance()->pref_service(), nullptr);
+            CastBrowserProcess::GetInstance()->pref_service(),
+            /*proxy_config_service_task_runner=*/nullptr,
+            /*policy_service=*/nullptr);
     proxy_config_service_ =
         pref_proxy_config_tracker_impl_->CreateTrackingProxyConfigService(
             nullptr);

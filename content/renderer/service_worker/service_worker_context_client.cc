@@ -18,7 +18,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -181,13 +180,11 @@ ServiceWorkerContextClient::ServiceWorkerContextClient(
 
   service_worker_provider_info_ = std::move(provider_info);
 
-  TRACE_EVENT_BEGIN("ServiceWorker", "ServiceWorkerContextClient",
-                    perfetto::Track::FromPointer(this), "script_url",
-                    script_url_.spec());
-  TRACE_EVENT_BEGIN("ServiceWorker", "LOAD_SCRIPT",
-                    perfetto::Track::FromPointer(this), "Source",
-                    (is_starting_installed_worker_ ? "InstalledScriptsManager"
-                                                   : "ResourceLoader"));
+  TRACE_EVENT_INSTANT("ServiceWorker", "ServiceWorkerContextClient LOAD_SCRIPT",
+                      perfetto::Flow::FromPointer(this), "script_url",
+                      script_url_.spec(), "Source",
+                      (is_starting_installed_worker_ ? "InstalledScriptsManager"
+                                                     : "ResourceLoader"));
 }
 
 ServiceWorkerContextClient::~ServiceWorkerContextClient() {
@@ -254,8 +251,9 @@ void ServiceWorkerContextClient::FailedToFetchClassicScript() {
            ".Time"}),
       base::TimeTicks::Now() - top_level_script_loading_start_time_);
   // End "LOAD_SCRIPT" trace event.
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this), "Status",
-                  "FailedToFetchClassicScript");
+  TRACE_EVENT_INSTANT("ServiceWorker",
+                      "ServiceWorkerContextClient::FailedToFetchClassicScript",
+                      perfetto::Flow::FromPointer(this));
   // The caller is responsible for terminating the thread which
   // eventually destroys |this|.
 }
@@ -269,8 +267,9 @@ void ServiceWorkerContextClient::FailedToFetchModuleScript() {
            ".Time"}),
       base::TimeTicks::Now() - top_level_script_loading_start_time_);
   // End "LOAD_SCRIPT" trace event.
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this), "Status",
-                  "FailedToFetchModuleScript");
+  TRACE_EVENT_INSTANT("ServiceWorker",
+                      "ServiceWorkerContextClient::FailedToFetchModuleScript",
+                      perfetto::Flow::FromPointer(this));
   // The caller is responsible for terminating the thread which
   // eventually destroys |this|.
 }
@@ -285,7 +284,10 @@ void ServiceWorkerContextClient::WorkerScriptLoadedOnWorkerThread() {
            ".Time"}),
       base::TimeTicks::Now() - top_level_script_loading_start_time_);
   // End "LOAD_SCRIPT" trace event.
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_INSTANT(
+      "ServiceWorker",
+      "ServiceWorkerContextClient::WorkerScriptLoadedOnWorkerThread",
+      perfetto::Flow::FromPointer(this));
 }
 
 void ServiceWorkerContextClient::WorkerContextStarted(
@@ -393,7 +395,8 @@ void ServiceWorkerContextClient::WillDestroyWorkerContext(
   context_.reset();
 
   GetContentClient()->renderer()->WillDestroyServiceWorkerContextOnWorkerThread(
-      context, service_worker_version_id_, service_worker_scope_, script_url_);
+      context, service_worker_version_id_, service_worker_scope_, script_url_,
+      service_worker_token_);
 }
 
 void ServiceWorkerContextClient::WorkerContextDestroyed() {
@@ -519,7 +522,8 @@ void ServiceWorkerContextClient::SendWorkerStarted(
     SCOPED_CRASH_KEY_NUMBER("extensions", "service_worker_start_status",
                             static_cast<int>(status));
     GetContentClient()->renderer()->DidStartServiceWorkerContextOnWorkerThread(
-        service_worker_version_id_, service_worker_scope_, script_url_);
+        service_worker_version_id_, service_worker_scope_, script_url_,
+        service_worker_token_);
   }
 
   // Temporary DCHECK for https://crbug.com/881100
@@ -543,7 +547,9 @@ void ServiceWorkerContextClient::SendWorkerStarted(
       std::move(start_timing_));
 
   // End "ServiceWorkerContextClient" trace event.
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_INSTANT("ServiceWorker",
+                      "ServiceWorkerContextClient::SendWorkerStarted",
+                      perfetto::TerminatingFlow::FromPointer(this));
 }
 
 void ServiceWorkerContextClient::SetupNavigationPreload(
@@ -561,9 +567,11 @@ void ServiceWorkerContextClient::SetupNavigationPreload(
 }
 
 void ServiceWorkerContextClient::RequestTermination(
+    uint64_t observed_keepalive_sequence_number,
     RequestTerminationCallback callback) {
   DCHECK(worker_task_runner_->RunsTasksInCurrentSequence());
-  instance_host_->RequestTermination(std::move(callback));
+  instance_host_->RequestTermination(observed_keepalive_sequence_number,
+                                     std::move(callback));
 }
 
 bool ServiceWorkerContextClient::ShouldNotifyServiceWorkerOnWebSocketActivity(

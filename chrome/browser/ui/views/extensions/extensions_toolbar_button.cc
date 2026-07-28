@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_view.h"
@@ -17,52 +18,12 @@
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/vector_icons/vector_icons.h"
 #include "extensions/common/extension_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/pointer/touch_ui_controller.h"
-#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button_controller.h"
-
-namespace {
-
-const gfx::VectorIcon& GetIcon(
-    ExtensionsToolbarViewModel::ExtensionsToolbarButtonState state) {
-  switch (state) {
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::kDefault:
-      return vector_icons::kExtensionChromeRefreshIcon;
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
-        kAllExtensionsBlocked:
-      return vector_icons::kExtensionOffIcon;
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
-        kAnyExtensionHasAccess:
-      return vector_icons::kExtensionOnIcon;
-  }
-}
-
-// Returns the accessible text for the button.
-std::u16string GetAccessibleText(
-    ExtensionsToolbarViewModel::ExtensionsToolbarButtonState state) {
-  int message_id;
-  switch (state) {
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::kDefault:
-      message_id = IDS_ACC_NAME_EXTENSIONS_BUTTON;
-      break;
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
-        kAllExtensionsBlocked:
-      message_id = IDS_ACC_NAME_EXTENSIONS_BUTTON_ALL_EXTENSIONS_BLOCKED;
-      break;
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
-        kAnyExtensionHasAccess:
-      message_id = IDS_ACC_NAME_EXTENSIONS_BUTTON_ANY_EXTENSION_HAS_ACCESS;
-      break;
-  }
-  return l10n_util::GetStringUTF16(message_id);
-}
-
-}  // namespace
 
 ExtensionsToolbarButton::ExtensionsToolbarButton(
     BrowserWindowInterface* browser,
@@ -84,7 +45,7 @@ ExtensionsToolbarButton::ExtensionsToolbarButton(
   button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnPress);
 
-  SetVectorIcon(GetIcon(
+  SetVectorIcon(ExtensionsToolbarViewModel::GetToolbarButtonIcon(
       ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::kDefault));
 
   GetViewAccessibility().SetHasPopup(ax::mojom::HasPopup::kMenu);
@@ -98,8 +59,10 @@ ExtensionsToolbarButton::ExtensionsToolbarButton(
 
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
-    GetViewAccessibility().SetName(GetAccessibleText(
-        ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::kDefault));
+    GetViewAccessibility().SetName(
+        ExtensionsToolbarViewModel::GetToolbarButtonAccessibleText(
+            ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
+                kDefault));
     // By default, the button's accessible description is set to the button's
     // tooltip text. This is the accepted workaround to ensure only accessible
     // name is announced by a screenreader rather than tooltip text and
@@ -169,8 +132,9 @@ void ExtensionsToolbarButton::UpdateState(
   CHECK(base::FeatureList::IsEnabled(
       extensions_features::kExtensionsMenuAccessControl));
 
-  SetVectorIcon(GetIcon(state));
-  GetViewAccessibility().SetName(GetAccessibleText(state));
+  SetVectorIcon(ExtensionsToolbarViewModel::GetToolbarButtonIcon(state));
+  GetViewAccessibility().SetName(
+      ExtensionsToolbarViewModel::GetToolbarButtonAccessibleText(state));
   UpdateCachedTooltipText(state);
 }
 
@@ -204,15 +168,16 @@ void ExtensionsToolbarButton::ToggleExtensionsMenu() {
       base::RecordAction(base::UserMetricsAction(
           "Extensions.Toolbar.MenuOpenedWhenExtensionsAreRequestingAccess"));
     }
-    extensions_menu_coordinator_->Show(this, extensions_toolbar_);
+    extensions_menu_coordinator_->Show(views::BubbleAnchor(this),
+                                       extensions_toolbar_);
     menu = extensions_menu_coordinator_->GetExtensionsMenuWidget();
   } else {
     // Desktop Android will use the
     // extensions_features::kExtensionsMenuAccessControl menu, therefore we can
     // use Browser for the other menu until the feature is rolled out.
     menu = ExtensionsMenuView::ShowBubble(
-        this, browser_->GetBrowserForMigrationOnly(),
-        extensions_toolbar_->GetToolbarViewModel(), extensions_toolbar_);
+        this, browser_, extensions_toolbar_->GetToolbarViewModel(),
+        extensions_toolbar_);
   }
   extensions_menu_widget_ = menu->GetWeakPtr();
   extension_menu_observation_.Observe(menu);
@@ -233,21 +198,8 @@ int ExtensionsToolbarButton::GetIconSize() const {
 
 void ExtensionsToolbarButton::UpdateCachedTooltipText(
     ExtensionsToolbarViewModel::ExtensionsToolbarButtonState state) {
-  int message_id;
-  switch (state) {
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::kDefault:
-      message_id = IDS_TOOLTIP_EXTENSIONS_BUTTON;
-      break;
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
-        kAllExtensionsBlocked:
-      message_id = IDS_TOOLTIP_EXTENSIONS_BUTTON_ALL_EXTENSIONS_BLOCKED;
-      break;
-    case ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::
-        kAnyExtensionHasAccess:
-      message_id = IDS_TOOLTIP_EXTENSIONS_BUTTON_ANY_EXTENSION_HAS_ACCESS;
-      break;
-  }
-  SetTooltipText(l10n_util::GetStringUTF16(message_id));
+  SetTooltipText(
+      ExtensionsToolbarViewModel::GetToolbarButtonTooltipText(state));
 }
 
 BEGIN_METADATA(ExtensionsToolbarButton)

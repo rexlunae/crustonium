@@ -19,6 +19,7 @@
 #include "base/test/test_simple_task_runner.h"
 #include "base/values.h"
 #include "components/policy/core/common/cloud/cloud_external_data_store.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/resource_cache.h"
 #include "components/policy/core/common/external_data_fetcher.h"
@@ -55,13 +56,13 @@ const char k10ByteData[] = "10 bytes..";
 const char k20ByteData[] = "20 bytes............";
 
 const PolicyDetails kPolicyDetails[] = {
-    // deprecated  future, scope  id    max_external_data_size
-    {false, false, kProfile, 1, 0},
-    {false, false, kProfile, 2, 10},
-    {false, false, kProfile, 3, 20},
-    {false, false, kProfile, 4, 20},
+    // is_deprecated, is_future, supports_dynamic_refresh, id
+    // max_external_data_size, risk tags
+    {false, false, false, kProfile, kSourceRestrictionNone, 1, 0},
+    {false, false, false, kProfile, kSourceRestrictionNone, 2, 10},
+    {false, false, false, kProfile, kSourceRestrictionNone, 3, 20},
+    {false, false, false, kProfile, kSourceRestrictionNone, 4, 20},
 };
-
 const char kCacheKey[] = "data";
 
 const char k10ByteAppURL[] = "http://localhost/app_10_bytes";
@@ -111,7 +112,8 @@ class CloudExternalDataManagerBaseTest : public testing::Test {
   base::test::SingleThreadTaskEnvironment task_environment_;
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<ResourceCache> resource_cache_;
-  MockCloudPolicyStore cloud_policy_store_;
+  MockCloudPolicyStore cloud_policy_store_{
+      dm_protocol::GetChromeUserPolicyType()};
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 

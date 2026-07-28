@@ -13,7 +13,9 @@
 #import "base/ios/block_types.h"
 #import "base/task/bind_post_task.h"
 #import "components/prefs/pref_service.h"
+#import "ios/chrome/browser/intelligence/bwg/metrics/gemini_metrics.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/thread/web_task_traits.h"
 #import "ios/web/public/thread/web_thread.h"
@@ -39,6 +41,9 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
 
   // The presenting view controller for the camera picker and alerts.
   __weak UIViewController* _presentingViewController;
+
+  // The active first responder prior to camera presentation, if any.
+  __weak UIResponder* _activeResponder;
 }
 
 - (instancetype)initWithPrefService:(PrefService*)prefService {
@@ -58,12 +63,25 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
   _completion = completion;
   _presentingViewController = presentingViewController;
 
+  // Resign active first responder (e.g. Gemini prompt text field) to prevent
+  // the software keyboard from appearing over the camera preview/review
+  // screen.
+  UIResponder* firstResponder = GetFirstResponder();
+  if (firstResponder) {
+    [firstResponder resignFirstResponder];
+    _activeResponder = firstResponder;
+  }
+
+  RecordGeminiCameraFlowBegan();
+
   // Ensure the hardware supports a camera.
   if (![UIImagePickerController
           isSourceTypeAvailable:UIImagePickerControllerSourceTypeCamera]) {
     [self executeCompletionWithImages:nil
                                 error:[self errorWithCode:
                                                 NSFeatureUnsupportedError]];
+    RecordGeminiCameraFlowOSCameraAuthorizationInitialStatus(
+        IOSGeminiOSCameraAuthorizationInitialStatus::kSourceTypeUnavailable);
     return;
   }
 
@@ -78,16 +96,21 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
 
   switch (authStatus) {
     case AVAuthorizationStatusAuthorized: {
+      RecordGeminiCameraFlowOSCameraAuthorizationInitialStatus(
+          IOSGeminiOSCameraAuthorizationInitialStatus::kAuthorized);
       [self maybeShowGeminiPermissionPromptWithCompletion:presentCameraBlock];
       break;
     }
 
     case AVAuthorizationStatusNotDetermined: {
+      RecordGeminiCameraFlowOSCameraAuthorizationInitialStatus(
+          IOSGeminiOSCameraAuthorizationInitialStatus::kNotDetermined);
       // Will start the camera picker flow on the main thread, since this can
       // be called from a background thread.
       base::OnceCallback<void(BOOL)> authorizationRequestCallback =
           base::BindPostTask(
               web::GetUIThreadTaskRunner({}), base::BindOnce(^(BOOL granted) {
+                RecordGeminiCameraFlowOSAuthorizationResult(granted);
                 if (!granted) {
                   [weakSelf presentGoToSettingsAlert];
                   return;
@@ -106,11 +129,15 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
     }
 
     case AVAuthorizationStatusDenied: {
+      RecordGeminiCameraFlowOSCameraAuthorizationInitialStatus(
+          IOSGeminiOSCameraAuthorizationInitialStatus::kDenied);
       [self presentGoToSettingsAlert];
       break;
     }
 
     case AVAuthorizationStatusRestricted: {
+      RecordGeminiCameraFlowOSCameraAuthorizationInitialStatus(
+          IOSGeminiOSCameraAuthorizationInitialStatus::kRestricted);
       [self executeCompletionWithImages:nil
                                   error:[self errorWithCode:
                                                   NSFeatureUnsupportedError]];
@@ -126,6 +153,7 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
 - (void)maybeShowGeminiPermissionPromptWithCompletion:
     (ProceduralBlock)showCameraCompletion {
   if (_prefService->GetBoolean(prefs::kIOSGeminiCameraSetting)) {
+    RecordGeminiCameraFlowGeminiCameraPermissionInitialValue(true);
     if (showCameraCompletion) {
       showCameraCompletion();
     }
@@ -133,6 +161,7 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
     return;
   }
 
+  RecordGeminiCameraFlowGeminiCameraPermissionInitialValue(false);
   [self presentGeminiPermissionAlertWithCompletion:showCameraCompletion];
 }
 
@@ -140,6 +169,8 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
 // should only be called after having checked that the Gemini-specific camera
 // permission has been granted, and on the main thread.
 - (void)presentCameraPicker {
+  RecordGeminiCameraFlowPresentCameraPicker();
+
   UIImagePickerController* picker = [[UIImagePickerController alloc] init];
   picker.sourceType = UIImagePickerControllerSourceTypeCamera;
   picker.delegate = self;
@@ -156,6 +187,13 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
                               error:(NSError*)error {
   if (_completion) {
     _completion(images, error);
+  }
+
+  // Restore focus to the text input that was active prior to presenting the
+  // camera.
+  if (_activeResponder) {
+    [_activeResponder becomeFirstResponder];
+    _activeResponder = nil;
   }
 
   _completion = nil;
@@ -186,6 +224,7 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
                           IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_GRANT)
                 style:UIAlertActionStyleDefault
               handler:^(UIAlertAction* action) {
+                RecordGeminiCameraFlowGeminiCameraPermissionAlertResult(true);
                 [weakSelf enableGeminiCameraPermissionPref];
                 if (showCameraCompletion) {
                   showCameraCompletion();
@@ -197,6 +236,7 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
                           IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_DENY)
                 style:UIAlertActionStyleCancel
               handler:^(UIAlertAction* action) {
+                RecordGeminiCameraFlowGeminiCameraPermissionAlertResult(false);
                 [weakSelf
                     executeCompletionWithImages:nil
                                           error:[weakSelf
@@ -231,6 +271,7 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
               IDS_IOS_GEMINI_PERMISSION_CAMERA_DISABLED_PROMPT_GO_TO_SETTINGS)
                 style:UIAlertActionStyleDefault
               handler:^(UIAlertAction* action) {
+                RecordGeminiCameraFlowGoToOSSettingsAlertResult(true);
                 [weakSelf openAppSettings];
               }];
 
@@ -240,6 +281,7 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
               IDS_IOS_GEMINI_PERMISSION_CAMERA_DISABLED_PROMPT_NO_THANKS)
                 style:UIAlertActionStyleCancel
               handler:^(UIAlertAction* action) {
+                RecordGeminiCameraFlowGoToOSSettingsAlertResult(false);
                 [weakSelf
                     executeCompletionWithImages:nil
                                           error:[self
@@ -284,6 +326,11 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
   NSArray* results = @[];
   if (image) {
     results = @[ image ];
+    RecordGeminiCameraFlowCameraPickerResult(
+        IOSGeminiCameraPickerResult::kFinishedWithImage);
+  } else {
+    RecordGeminiCameraFlowCameraPickerResult(
+        IOSGeminiCameraPickerResult::kFinishedWithoutImage);
   }
 
   __weak GeminiCameraHandler* weakSelf = self;
@@ -302,6 +349,9 @@ NSString* const kGeminiCameraHandlerErrorDomain = @"GeminiCameraHandler";
                               error:[weakSelf
                                         errorWithCode:NSUserCancelledError]];
   };
+
+  RecordGeminiCameraFlowCameraPickerResult(
+      IOSGeminiCameraPickerResult::kCancelled);
 
   [picker dismissViewControllerAnimated:YES completion:cameraDismissedBlock];
 }

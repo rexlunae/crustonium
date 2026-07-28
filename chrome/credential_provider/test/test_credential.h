@@ -14,6 +14,7 @@
 #include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/win/atl.h"
+#include "base/win/scoped_bstr.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/gaia_credential_base.h"
 #include "chrome/credential_provider/test/gls_runner_test_base.h"
@@ -54,6 +55,8 @@ class DECLSPEC_UUID("3710aa3a-13c7-44c2-bc38-09ba137804d8") ITestCredential
   virtual bool STDMETHODCALLTYPE ContainsIsAdJoinedUser() = 0;
   virtual base::CommandLine STDMETHODCALLTYPE GetTestGlsCommandline() = 0;
   virtual std::string STDMETHODCALLTYPE GetShowTosFromCmdLine() = 0;
+  virtual HRESULT STDMETHODCALLTYPE
+  InitializeThreadForNamedPipe(base::win::ScopedHandle hid_read_handle) = 0;
 };
 
 // Test implementation of an ICredentialProviderCredential backed by a Gaia
@@ -126,6 +129,9 @@ class ATL_NO_VTABLE CTestCredentialBase : public T, public ITestCredential {
   HRESULT ForkPerformPostSigninActionsStub(const base::DictValue& dict,
                                            BSTR* status_text) override;
 
+  HRESULT STDMETHODCALLTYPE InitializeThreadForNamedPipe(
+      base::win::ScopedHandle hid_read_handle) override;
+
   UiExitCodes default_exit_code_ = kUiecSuccess;
   std::string gls_email_;
   std::string gaia_password_;
@@ -134,7 +140,7 @@ class ATL_NO_VTABLE CTestCredentialBase : public T, public ITestCredential {
   base::WaitableEvent gls_done_;
   base::win::ScopedHandle process_continue_event_;
   std::wstring start_gls_event_name_;
-  CComBSTR error_text_;
+  base::win::ScopedBstr error_text_;
   bool gls_process_started_ = false;
   bool ignore_expected_gaia_id_ = false;
   bool fail_loading_gaia_logon_stub_ = false;
@@ -211,7 +217,7 @@ HRESULT CTestCredentialBase<T>::SetStartGlsEventName(
 
 template <class T>
 BSTR CTestCredentialBase<T>::GetFinalUsername() {
-  return this->get_username();
+  return this->get_username().Get();
 }
 
 template <class T>
@@ -286,7 +292,7 @@ base::CommandLine CTestCredentialBase<T>::GetTestGlsCommandline() {
 
 template <class T>
 BSTR CTestCredentialBase<T>::GetErrorText() {
-  return error_text_;
+  return error_text_.Get();
 }
 
 template <class T>
@@ -302,7 +308,7 @@ bool CTestCredentialBase<T>::CanAttemptWindowsLogon() {
 template <class T>
 bool CTestCredentialBase<T>::IsWindowsPasswordValidForStoredUser() {
   return T::IsWindowsPasswordValidForStoredUser(
-             this->get_current_windows_password()) == S_OK;
+             this->get_current_windows_password().Get()) == S_OK;
 }
 
 template <class T>
@@ -389,8 +395,14 @@ template <class T>
 void CTestCredentialBase<T>::DisplayErrorInUI(LONG status,
                                               LONG substatus,
                                               BSTR status_text) {
-  error_text_ = status_text;
+  error_text_.Reset(::SysAllocString(status_text));
   T::DisplayErrorInUI(status, substatus, status_text);
+}
+
+template <class T>
+HRESULT CTestCredentialBase<T>::InitializeThreadForNamedPipe(
+    base::win::ScopedHandle hid_read_handle) {
+  return T::InitializeThreadForNamedPipe(std::move(hid_read_handle));
 }
 
 // This class is used to implement a test credential based off a fully

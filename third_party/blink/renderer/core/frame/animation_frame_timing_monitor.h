@@ -13,8 +13,10 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/timing/animation_frame_timing_info.h"
+#include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace base {
 class TimeTicks;
@@ -22,12 +24,22 @@ class TimeTicks;
 
 namespace blink {
 
+// When enabled, long-animation-frame events will always include the sourceURL,
+// regardless of protocol. This is useful during development when using `file:`
+// URLs or custom protocols defined by embedders.
+CORE_EXPORT BASE_DECLARE_FEATURE(kAlwaysLogLOAFURL);
+
 class LocalFrame;
 
 // Monitors long-animation-frame timing (LoAF).
-// This object is a supplement to a WebFrameWidgetImpl. It handles the state
-// machine related to capturing the timing for long animation frames, and
-// reporting them back to the frames that observe it.
+// On the main thread, this object is owned by a WebFrameWidgetImpl (which also
+// acts as its Client). It handles the state machine related to capturing the
+// timing for long animation frames, and reporting them back to the frames that
+// observe it.
+// In worker mode (owned by WorkerGlobalScope, which also acts as its Client,
+// for a dedicated worker) it has no rendering lifecycle; instead it observes
+// the worker's task loop and reports a long task blocking the event loop as a
+// congested moment via Client::ReportCongestedMoment().
 class CORE_EXPORT AnimationFrameTimingMonitor final
     : public GarbageCollected<AnimationFrameTimingMonitor>,
       public base::sequence_manager::TaskTimeObserver {
@@ -37,6 +49,7 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
     virtual void ReportLongTaskTiming(base::TimeTicks start,
                                       base::TimeTicks end,
                                       ExecutionContext* context) = 0;
+    virtual void ReportCongestedMoment(AnimationFrameTimingInfo*) {}
     virtual bool ShouldReportLongAnimationFrameTiming() const = 0;
     virtual bool RequestedMainFramePending() = 0;
     virtual ukm::UkmRecorder* MainFrameUkmRecorder() = 0;
@@ -59,17 +72,15 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
   AnimationFrameTimingInfo* RecordRenderingUpdateEndTime(
       LocalDOMWindow& local_root_window,
       base::TimeTicks);
-  void OnTaskCompleted(base::TimeTicks start_time,
-                       base::TimeTicks end_time,
-                       LocalFrame* frame);
+  void OnMainThreadTaskCompleted(base::TimeTicks start_time,
+                                 base::TimeTicks end_time,
+                                 LocalFrame* frame);
 
   // TaskTimeObserver
   void WillProcessTask(base::TimeTicks start_time) override;
 
   void DidProcessTask(base::TimeTicks start_time,
-                      base::TimeTicks end_time) override {
-    OnTaskCompleted(start_time, end_time, /*frame=*/nullptr);
-  }
+                      base::TimeTicks end_time) override;
 
   // probes
   void WillHandlePromise(ScriptState*,
@@ -107,9 +118,12 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
   void DidFinishSyncXHR(base::TimeDelta);
   void WillHandleInput(LocalFrame*);
 
+  void MarkConditional(const AtomicString& name, base::TimeTicks start_time);
+
  private:
   Member<AnimationFrameTimingInfo> current_frame_timing_info_;
   HeapVector<Member<ScriptTimingInfo>> current_scripts_;
+  Vector<ConditionalMarkInfo> conditional_marks_;
   viz::BeginFrameId current_begin_frame_id_;
   struct PendingScriptInfo {
     ScriptTimingInfo::InvokerType invoker_type;
@@ -118,6 +132,10 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
     base::TimeTicks execution_start_time;
     base::TimeDelta style_duration;
     base::TimeDelta layout_duration;
+    // Tracks style duration accumulated during layout (e.g. from container
+    // query style recalc). This is subtracted from layout_duration when the
+    // outermost layout scope ends to avoid double-counting.
+    base::TimeDelta style_duration_during_layout;
     base::TimeDelta pause_duration;
     int layout_depth = 0;
     const char* class_like_name = nullptr;
@@ -135,6 +153,9 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
       const PendingScriptInfo& script_info);
 
   bool PushScriptEntryPoint(ScriptState*);
+
+  void OnWorkerTaskCompleted(base::TimeTicks start_time,
+                             base::TimeTicks end_time);
 
   void RecordLongAnimationFrameUKMAndTrace(const AnimationFrameTimingInfo&,
                                            LocalDOMWindow& window);
@@ -170,12 +191,27 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
   base::TimeTicks current_task_start_;
   base::TimeDelta total_blocking_time_excluding_longest_task_;
   base::TimeDelta longest_task_duration_;
+  base::TimeDelta render_style_duration_;
+  base::TimeDelta render_layout_duration_;
+  // Tracks style duration accumulated during render-phase layout (e.g. from
+  // container query style recalc). Subtracted from render_layout_duration_
+  // when the outermost layout scope ends.
+  base::TimeDelta render_style_duration_during_layout_;
+  int render_layout_depth_ = 0;
   bool did_pause_ = false;
   bool did_see_ui_events_ = false;
   WeakMember<LocalFrame> frame_handling_input_;
   bool multiple_focused_frames_in_same_task_ = false;
 
+  WeakMember<LocalDOMWindow> task_attributed_window_;
+  bool task_has_multiple_attributed_windows_ = false;
+  bool task_longtask_reported_ = false;
+
   unsigned entry_point_depth_ = 0;
+
+  // Top-level script entry points in the current reporting interval, counted
+  // regardless of duration (so it can exceed current_scripts_.size()).
+  uint32_t script_count_ = 0;
 
   bool enabled_ = false;
 };

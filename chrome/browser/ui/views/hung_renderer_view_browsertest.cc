@@ -71,7 +71,7 @@ class HungRendererDialogViewBrowserTest : public DialogBrowserTest {
     auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
 
     return HungRendererDialogView::CreateInstance(
-        web_contents, browser()->window()->GetNativeWindow());
+        web_contents, browser()->GetWindow()->GetNativeWindow());
   }
 
   void EndForWebContents(HungRendererDialogView* dialog,
@@ -94,7 +94,7 @@ IN_PROC_BROWSER_TEST_F(HungRendererDialogViewBrowserTest,
   ShowAndVerifyUi();
 }
 
-// This is a regression test for https://crbug.com/855369.
+// This is a regression test for https://crbug.com/41396098.
 IN_PROC_BROWSER_TEST_F(HungRendererDialogViewBrowserTest, InactiveWindow) {
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -161,8 +161,8 @@ IN_PROC_BROWSER_TEST_F(HungRendererDialogViewBrowserTest, TwoHungBrowsers) {
       web_contents1->GetPrimaryMainFrame()->GetRenderViewHost()->GetWidget();
 
   Browser* browser2 =
-      Browser::Create(Browser::CreateParams(browser1->profile(), true));
-  chrome::NewTab(browser2);
+      Browser::Create(Browser::CreateParams(browser1->GetProfile(), true));
+  chrome::NewTab(browser2, NewTabTypes::kNoUserAction);
   content::WebContents* web_contents2 =
       browser2->tab_strip_model()->GetActiveWebContents();
   content::RenderWidgetHost* widget_host2 =

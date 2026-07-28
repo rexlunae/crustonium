@@ -20,6 +20,7 @@
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
 namespace {
@@ -40,13 +41,17 @@ class AutocompleteDictionaryPreloadBrowserTest
   }
 
  protected:
+  network::mojom::NetworkContext* GetTargetNetworkContext() {
+    return browser()
+        ->GetProfile()
+        ->GetDefaultStoragePartition()
+        ->GetNetworkContext();
+  }
+
   bool HasPreloadedSharedDictionaryInfo() {
     base::test::TestFuture<bool> future;
-    browser()
-        ->profile()
-        ->GetDefaultStoragePartition()
-        ->GetNetworkContext()
-        ->HasPreloadedSharedDictionaryInfoForTesting(future.GetCallback());
+    GetTargetNetworkContext()->HasPreloadedSharedDictionaryInfoForTesting(
+        future.GetCallback());
     return future.Get();
   }
 
@@ -72,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        PreloadDictionaryAndDiscard) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -88,7 +93,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        NonHttpFamilyAreIgnored) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -103,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        DoNotPreloadDictionayUnderMemoryPressure) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -111,6 +116,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
   autocomplete_result.AppendMatches({autocomplete_match});
   SendMemoryPressureToNetworkService();
   dictionary_preload_service->MaybePreload(autocomplete_result);
+  content::FlushNetworkServiceInstanceForTesting();
   EXPECT_FALSE(HasPreloadedSharedDictionaryInfo());
 }
 
@@ -118,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        PreloadedDictionayDiscardedByMemoryPressure) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -127,5 +133,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
   dictionary_preload_service->MaybePreload(autocomplete_result);
   EXPECT_TRUE(HasPreloadedSharedDictionaryInfo());
   SendMemoryPressureToNetworkService();
-  EXPECT_FALSE(HasPreloadedSharedDictionaryInfo());
+  content::FlushNetworkServiceInstanceForTesting();
+  EXPECT_TRUE(content::WaitUntilHasPreloadSharedDictionaryInfo(
+      GetTargetNetworkContext(), /*expected_value=*/false));
 }

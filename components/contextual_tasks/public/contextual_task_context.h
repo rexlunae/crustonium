@@ -26,8 +26,8 @@ enum class ContextualTaskContextSource {
   kFallbackTitle,
   kFaviconService,
   kHistoryService,
-  kTabStrip,
-  kPendingContextDecorator,
+  kUploadedContextDecorator,
+  kSubmittedContextDecorator,
 };
 
 class ContextualTask;
@@ -61,14 +61,8 @@ struct UrlAttachmentDecoratorData {
   };
   HistoryData history_data;
 
-  // Filled in by ContextualTaskContextSource::kTabStrip.
-  struct TabStripData {
-    std::u16string title;
-    bool is_open_in_tab_strip = false;
-  };
-  TabStripData tab_strip_data;
-
-  // Filled in by ContextualTaskContextSource::kPendingContextDecorator.
+  // Filled in by ContextualTaskContextSource::kUploadedContextDecorator and
+  // ContextualTaskContextSource::kSubmittedContextDecorator.
   struct ContextualSearchContextData {
     std::u16string title;
     // From SessionTabHelper.
@@ -93,9 +87,10 @@ struct UrlAttachment {
   GURL GetURL() const;
   std::u16string GetTitle() const;
   gfx::Image GetFavicon() const;
-  bool IsOpen() const;
   // The tab SessionID of the tab that was the source of this attachment.
   SessionID GetTabSessionId() const;
+  // True if the context/media is derived from a Chrome tab.
+  bool HasChromeTabData() const;
   // The type of resource.
   ResourceType GetResourceType() const;
 
@@ -122,6 +117,9 @@ struct UrlAttachment {
   // The tab SessionID, if available from the ContextualTask directly.
   std::optional<SessionID> tab_session_id_;
 
+  // True if the context/media is derived from a Chrome tab.
+  bool has_chrome_tab_data_ = false;
+
   // A data block that can be populated by decorators with additional metadata
   // about the URL.
   UrlAttachmentDecoratorData decorator_data_;
@@ -147,6 +145,10 @@ struct ContextualTaskContext {
 
   // Returns the URL attachments for the task.
   const std::vector<UrlAttachment>& GetUrlAttachments() const;
+
+  // Returns a deduplicated list of URL attachments for the task.
+  // Meant to be used for context library.
+  std::vector<UrlAttachment> GetUniqueUrlAttachments() const;
 
   // Returns a mutable version of the URL attachments for the task.
   std::vector<UrlAttachment>& GetMutableUrlAttachmentsForTesting();

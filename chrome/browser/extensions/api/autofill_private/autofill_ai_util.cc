@@ -10,7 +10,9 @@
 #include <utility>
 
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/feature_list.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -26,8 +28,10 @@
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_labels.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_wallet_utils.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/management_utils.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -66,11 +70,11 @@ void EntityInstanceToPrivateApiEntityInstanceWithLabels(
     std::vector<autofill_private::EntityInstanceWithLabels>& output) {
   // Step 1#, get all available labels for `entity_instances`.
   const std::vector<autofill::EntityLabel> labels_for_entities =
-      autofill::GetLabelsForEntities(entity_instances,
-                                     /*attribute_types_to_ignore=*/{},
-                                     /*only_disambiguating_types=*/false,
-                                     /*obfuscate_sensitive_types=*/obfuscate_sensitive_types,
-                                     app_locale);
+      autofill::GetLabelsForEntities(
+          entity_instances,
+          /*attribute_types_to_ignore=*/{},
+          /*only_disambiguating_types=*/false,
+          /*obfuscate_sensitive_types=*/obfuscate_sensitive_types, app_locale);
 
   // Step 2#
   // Update the `output` with each entity's respective
@@ -90,18 +94,12 @@ void EntityInstanceToPrivateApiEntityInstanceWithLabels(
         output.emplace_back();
     entity_instance_with_labels.guid = *entity_instance.guid();
 
-    const EntityType entity_type = entity_instance.type();
-    entity_instance_with_labels.type.type_name =
-        std::to_underlying(entity_type.name());
-    entity_instance_with_labels.type.type_name_as_string =
-        base::UTF16ToUTF8(entity_type.GetNameForI18n());
-    entity_instance_with_labels.type.add_entity_type_string =
-        autofill::GetAddEntityTypeStringForI18n(entity_type);
-    entity_instance_with_labels.type.edit_entity_type_string =
-        autofill::GetEditEntityTypeStringForI18n(entity_type);
-    entity_instance_with_labels.type.delete_entity_type_string =
-        autofill::GetDeleteEntityTypeStringForI18n(entity_type);
-
+    // TODO(crbug.com/477845712): Pass a proper value for
+    // supports_wallet_storage. Currently, the value doesn't matter, because
+    // EntityInstanceWithLabels is only used for displaying the list of existing
+    // entities, which are already stored either locally or in Wallet.
+    entity_instance_with_labels.type = EntityTypeToPrivateApiEntityType(
+        entity_instance.type(), /*supports_wallet_storage=*/false);
     entity_instance_with_labels.entity_instance_label =
         base::UTF16ToUTF8(entity_instance.type().GetNameForI18n());
     entity_instance_with_labels.entity_instance_sub_label = base::UTF16ToUTF8(
@@ -109,6 +107,12 @@ void EntityInstanceToPrivateApiEntityInstanceWithLabels(
     entity_instance_with_labels.stored_in_wallet =
         entity_instance.record_type() ==
         EntityInstance::RecordType::kServerWallet;
+    if (entity_instance_with_labels.stored_in_wallet) {
+      entity_instance_with_labels.wallet_entity_url =
+          autofill::GetWalletManagementURL(entity_instance);
+    }
+    entity_instance_with_labels.is_read_only =
+        entity_instance.are_attributes_read_only().value();
   }
 }
 
@@ -132,7 +136,8 @@ AttributeTypeDataTypeToPrivateApiAttributeTypeDataType(
 
 std::optional<EntityInstance> PrivateApiEntityInstanceToEntityInstance(
     const autofill_private::EntityInstance& private_api_entity_instance,
-    std::string_view app_locale) {
+    std::string_view app_locale,
+    bool entity_supports_wallet_storage) {
   base::flat_set<AttributeInstance, AttributeInstance::CompareByType>
       attribute_instances;
   for (const autofill_private::AttributeInstance&
@@ -200,17 +205,26 @@ std::optional<EntityInstance> PrivateApiEntityInstanceToEntityInstance(
       private_api_entity_instance.guid.empty()
           ? base::Uuid::GenerateRandomV4().AsLowercaseString()
           : private_api_entity_instance.guid);
+
+  const bool save_entity_to_wallet =
+      private_api_entity_instance.stored_in_wallet.value_or(false) &&
+      entity_supports_wallet_storage;
+
   return EntityInstance(
       std::move(entity_type), attribute_instances, std::move(guid),
       private_api_entity_instance.nickname, base::Time::Now(), /*use_count=*/0,
-      /*use_date=*/base::Time::Now(), EntityInstance::RecordType::kLocal,
-      EntityInstance::AreAttributesReadOnly(false),
+      /*use_date=*/base::Time::Now(),
+      save_entity_to_wallet ? EntityInstance::RecordType::kServerWallet
+                            : EntityInstance::RecordType::kLocal,
+      EntityInstance::AreAttributesReadOnly(
+          private_api_entity_instance.is_read_only.value_or(false)),
       /*frecency_override=*/"");
 }
 
 autofill_private::EntityInstance EntityInstanceToPrivateApiEntityInstance(
     const EntityInstance& entity_instance,
-    std::string_view app_locale) {
+    std::string_view app_locale,
+    bool entity_supports_wallet_storage) {
   std::vector<autofill_private::AttributeInstance>
       private_api_attribute_instances;
   bool should_authenticate_to_view = false;
@@ -232,7 +246,8 @@ autofill_private::EntityInstance EntityInstanceToPrivateApiEntityInstance(
         AttributeTypeDataTypeToPrivateApiAttributeTypeDataType(data_type);
 
     if (data_type == AttributeType::DataType::kDate) {
-      autofill::FieldType field_type = attribute_instance.type().field_type();
+      std::optional<autofill::FieldType> field_type =
+          attribute_instance.type().field_type();
       base::DictValue date_value;
       date_value.SetByDottedPath(
           "month",
@@ -261,22 +276,19 @@ autofill_private::EntityInstance EntityInstanceToPrivateApiEntityInstance(
   }
 
   autofill_private::EntityInstance private_api_entity_instance;
-  private_api_entity_instance.type.type_name =
-      std::to_underlying(entity_instance.type().name());
-  private_api_entity_instance.type.type_name_as_string =
-      base::UTF16ToUTF8(entity_instance.type().GetNameForI18n());
-  private_api_entity_instance.type.add_entity_type_string =
-      autofill::GetAddEntityTypeStringForI18n(entity_instance.type());
-  private_api_entity_instance.type.edit_entity_type_string =
-      autofill::GetEditEntityTypeStringForI18n(entity_instance.type());
-  private_api_entity_instance.type.delete_entity_type_string =
-      autofill::GetDeleteEntityTypeStringForI18n(entity_instance.type());
+  private_api_entity_instance.type = EntityTypeToPrivateApiEntityType(
+      entity_instance.type(), entity_supports_wallet_storage);
   private_api_entity_instance.attribute_instances =
       std::move(private_api_attribute_instances);
   private_api_entity_instance.guid = *entity_instance.guid();
   private_api_entity_instance.nickname = entity_instance.nickname();
   private_api_entity_instance.should_authenticate_to_view =
       should_authenticate_to_view;
+  private_api_entity_instance.stored_in_wallet =
+      (entity_instance.record_type() ==
+       EntityInstance::RecordType::kServerWallet);
+  private_api_entity_instance.is_read_only =
+      entity_instance.are_attributes_read_only().value();
   return private_api_entity_instance;
 }
 
@@ -308,13 +320,33 @@ api::autofill_private::EntityType EntityTypeToPrivateApiEntityType(
   api_type.type_name = std::to_underlying(entity_type.name());
   api_type.type_name_as_string =
       base::UTF16ToUTF8(entity_type.GetNameForI18n());
-  api_type.add_entity_type_string =
-      autofill::GetAddEntityTypeStringForI18n(entity_type);
+  api_type.add_entity_type_string = autofill::GetAddEntityTypeStringForI18n(
+      entity_type,
+      /*is_wallet_branded=*/supports_wallet_storage &&
+          base::FeatureList::IsEnabled(
+              autofill::features::kAutofillAiWalletPassBranding2026));
   api_type.edit_entity_type_string =
       autofill::GetEditEntityTypeStringForI18n(entity_type);
   api_type.delete_entity_type_string =
       autofill::GetDeleteEntityTypeStringForI18n(entity_type);
   api_type.supports_wallet_storage = supports_wallet_storage;
+  switch (entity_type.name()) {
+    case EntityTypeName::kPassport:
+    case EntityTypeName::kDriversLicense:
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kKnownTravelerNumber:
+    case EntityTypeName::kRedressNumber:
+      api_type.pass_type = autofill_private::EntityPassType::kPrivatePass;
+      break;
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kFlightReservation:
+      api_type.pass_type = autofill_private::EntityPassType::kPublicPass;
+      break;
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      // pass_type is unset for non-pass type entities.
+      break;
+  }
   return api_type;
 }
 
@@ -331,6 +363,14 @@ api::autofill_private::AttributeType AttributeTypeToPrivateApiAttributeType(
 
 std::vector<api::autofill_private::AttributeType> GetRequiredAttributesForType(
     autofill::EntityType entity_type) {
+  // Read-only entity types cannot be created or updated in the UI, so they
+  // do not have required fields in the UI context. Bypassing them also
+  // prevents hitting a CHECK on complex constraints (e.g. for Orders/Shipments)
+  // which the UI cannot represent.
+  if (entity_type.read_only()) {
+    return {};
+  }
+
   return base::ToVector(entity_type.import_constraints(), [](autofill::DenseSet<
                                                               AttributeType>
                                                                  group) {

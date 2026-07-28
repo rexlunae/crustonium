@@ -15,12 +15,13 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "content/browser/android/additional_navigation_params_utils.h"
+#include "content/browser/android/additional_navigation_params.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/initiator_navigation_state.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "content/public/common/referrer.h"
@@ -127,17 +128,24 @@ NavigationControllerAndroid::NavigationControllerAndroid(
     NavigationControllerImpl* navigation_controller)
     : navigation_controller_(navigation_controller) {
   JNIEnv* env = AttachCurrentThread();
-  obj_.Reset(env, Java_NavigationControllerImpl_create(
-                      env, reinterpret_cast<intptr_t>(this)));
+  obj_ =
+      JavaObjectWeakGlobalRef(env, Java_NavigationControllerImpl_create(
+                                       env, reinterpret_cast<intptr_t>(this)));
 }
 
 NavigationControllerAndroid::~NavigationControllerAndroid() {
-  Java_NavigationControllerImpl_destroy(AttachCurrentThread(), obj_);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = obj_.get(env);
+  CHECK(!obj.is_null());
+  Java_NavigationControllerImpl_destroy(env, obj);
 }
 
 base::android::ScopedJavaLocalRef<jobject>
 NavigationControllerAndroid::GetJavaObject() {
-  return base::android::ScopedJavaLocalRef<jobject>(obj_);
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = obj_.get(env);
+  CHECK(!obj.is_null());
+  return obj;
 }
 
 bool NavigationControllerAndroid::CanGoBack(JNIEnv* env) {
@@ -228,7 +236,9 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
     const base::android::JavaRef<jobject>& j_additional_navigation_params,
     int64_t input_start,
     int64_t navigation_ui_data_ptr,
-    bool is_pdf) {
+    bool is_pdf,
+    bool remove_extra_headers_on_cross_origin_redirect,
+    const JavaRef<jstring>& internal_scroll_to_text_fragment) {
   DCHECK(url);
   NavigationController::LoadURLParams params(
       GURL(ConvertJavaStringToUTF8(env, url)));
@@ -247,6 +257,8 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
   params.has_user_gesture = has_user_gesture;
   params.should_clear_history_list = should_clear_history_list;
   params.is_pdf = is_pdf;
+  params.remove_extra_headers_on_cross_origin_redirect =
+      remove_extra_headers_on_cross_origin_redirect;
 
   if (j_additional_navigation_params) {
     params.initiator_frame_token =
@@ -255,16 +267,9 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
     params.initiator_process_id =
         GetInitiatorProcessIdFromJavaAdditionalNavigationParams(
             env, j_additional_navigation_params);
-
-    // If the attribution src token exists, then an impression exists with this
-    // navigation.
-    if (std::optional<blink::AttributionSrcToken> attribution_src_token =
-            GetAttributionSrcTokenFromJavaAdditionalNavigationParams(
-                env, j_additional_navigation_params)) {
-      params.impression = blink::Impression{
-          .attribution_src_token = *attribution_src_token,
-      };
-    }
+    params.initiator_navigation_state =
+        TakeNativeStateFromJavaAdditionalNavigationParams(
+            env, j_additional_navigation_params);
   }
 
   if (extra_headers)
@@ -316,6 +321,11 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
     params.input_start = base::TimeTicks::FromUptimeMillis(input_start);
 
   params.navigation_ui_data = std::move(navigation_ui_data);
+
+  if (internal_scroll_to_text_fragment) {
+    params.internal_scroll_to_text_fragment =
+        ConvertJavaStringToUTF8(env, internal_scroll_to_text_fragment);
+  }
 
   base::WeakPtr<NavigationHandle> handle =
       navigation_controller_->LoadURLWithParams(params);

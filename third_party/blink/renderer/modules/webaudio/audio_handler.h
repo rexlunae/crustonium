@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 // Higher values produce more debugging output.
 #define DEBUG_AUDIONODE_REFERENCES 0
@@ -62,8 +63,7 @@ class AudioHandlerUmaReporter {
         total_process_duration_.InSecondsF() / total_render_time;
     // Report as a percentage (e.g., 0.5 ratio -> 50%).
     int percentage_to_report = static_cast<int>(average_ratio * 100.0);
-    base::UmaHistogramExactLinear(metric_name_.c_str(), percentage_to_report,
-                                  101);
+    base::UmaHistogramExactLinear(metric_name_, percentage_to_report, 101);
   }
 
   static constexpr int kReportingInterval = 1000;
@@ -131,7 +131,7 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   }
 
   NodeType GetNodeType() const { return node_type_; }
-  String NodeTypeName() const;
+  const char* NodeTypeName() const;
 
   // This object has been connected to another object. This might have
   // existing connections from others.
@@ -190,7 +190,7 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   static void PrintNodeCounts();
 #endif
 #if DEBUG_AUDIONODE_REFERENCES > 1
-  void TailProcessingDebug(const char* debug_note, bool flag);
+  void TailProcessingDebug(String note, bool flag);
   void AddTailProcessingDebug();
   void RemoveTailProcessingDebug(bool disable_outputs);
 #endif
@@ -225,6 +225,12 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
 
   void EnableOutputsIfNecessary();
   void DisableOutputsIfNecessary();
+
+  // Enables the outputs of this node and all downstream nodes iteratively.
+  void EnableOutputs();
+
+  // Disables the outputs of this node and all downstream nodes iteratively.
+  // This is the entry point for disabling propagation.
   void DisableOutputs();
 
   unsigned ChannelCount() const;
@@ -296,7 +302,15 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   void SetNodeType(NodeType);
 
   // https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/media/capture/README.md#logs
-  void SendLogMessage(const char* const function_name, const String& message);
+  void SendLogMessage(const String& function_name, const String& message);
+
+  // Enables this node's outputs and enqueues downstream handlers that might
+  // need enabling into `worklist`. Called by `EnableOutputs()`.
+  void EnableOutputsInternal(Vector<scoped_refptr<AudioHandler>>& worklist);
+
+  // Disables this node's outputs and enqueues downstream handlers that might
+  // need disabling into `worklist`. Called by `DisableOutputs()`.
+  void DisableOutputsInternal(Vector<scoped_refptr<AudioHandler>>& worklist);
 
   bool is_initialized_ = false;
   NodeType node_type_ = NodeType::kNodeTypeUnknown;

@@ -16,6 +16,7 @@
 #include "base/numerics/byte_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "crypto/evp.h"
@@ -55,8 +56,8 @@ std::string GetOriginTrialToken(const GURL& base_url) {
   std::string payload = base::WriteJson(token_data).value_or(std::string());
   std::array<uint8_t, 4> payload_size = base::U32ToBigEndian(payload.size());
   // Version 3
-  std::string data_to_sign =
-      "\x03" + std::string(payload_size.begin(), payload_size.end()) + payload;
+  std::string data_to_sign = base::StrCat(
+      {"\x03", std::string(payload_size.begin(), payload_size.end()), payload});
 
   std::array<uint8_t, ED25519_SIGNATURE_LEN> signature;
 
@@ -66,9 +67,9 @@ std::string GetOriginTrialToken(const GURL& base_url) {
     return "";
   }
 
-  std::string token = "\x03" + std::string(signature.begin(), signature.end()) +
-                      std::string(payload_size.begin(), payload_size.end()) +
-                      payload;
+  std::string token =
+      base::StrCat({"\x03", base::as_string_view(signature),
+                    base::as_string_view(payload_size), payload});
 
   return base::Base64Encode(token);
 }
@@ -108,12 +109,32 @@ std::unique_ptr<net::test_server::HttpResponse> RequestHandler(
                                  .value_or("session_id");
     std::string cookie_name = GetQueryParameter(request.GetURL(), "cookie_name")
                                   .value_or("auth_cookie");
+    bool is_refresh = request.relative_url.starts_with("/dbsc_refresh_session");
+    std::optional<std::string> trigger_challenge =
+        GetQueryParameter(request.GetURL(), "trigger_challenge");
+    bool has_secure_session_response =
+        request.headers.contains("Secure-Session-Response");
+
+    if (is_refresh && trigger_challenge.has_value() &&
+        !has_secure_session_response) {
+      response->AddCustomHeader(
+          "Secure-Session-Challenge",
+          base::StringPrintf("\"%s\";id=\"%s\"", *trigger_challenge,
+                             session_id));
+      response->set_code(net::HTTP_FORBIDDEN);
+      return response;
+    }
+
     response->AddCustomHeader(
-        "Set-Cookie",
-        base::StringPrintf("%s=abcdef0123;SameSite=None;Secure", cookie_name));
-    std::string query_params = request.GetURL().GetQuery();
+        "Set-Cookie", base::StringPrintf("%s=abcdef0123;SameSite=Strict;Secure",
+                                         cookie_name));
+
     std::string refresh_path =
-        base::StringPrintf("/dbsc_refresh_session?%s", query_params);
+        GetQueryParameter(request.GetURL(), "refresh_path")
+            .value_or("/dbsc_refresh_session");
+    if (std::string query = request.GetURL().GetQuery(); !query.empty()) {
+      base::StrAppend(&refresh_path, {"?", query});
+    }
 
     const auto registration_response =
         base::DictValue()
@@ -132,7 +153,8 @@ std::unique_ptr<net::test_server::HttpResponse> RequestHandler(
                      base::DictValue()
                          .Set("type", "cookie")
                          .Set("name", cookie_name)
-                         .Set("attributes", "SameSite=None; Secure")));
+                         .Set("attributes", "SameSite=Strict; Secure")))
+            .Set("allowed_refresh_initiators", base::ListValue().Append("*"));
 
     std::optional<std::string> json = base::WriteJson(registration_response);
     EXPECT_TRUE(json.has_value());
@@ -151,8 +173,9 @@ std::unique_ptr<net::test_server::HttpResponse> RequestHandler(
   } else if (request.relative_url.starts_with("/set_early_challenge")) {
     std::string challenge = request.GetURL().GetQuery();
     CHECK(!challenge.empty());
-    response->AddCustomHeader("Secure-Session-Challenge",
-                              "\"" + challenge + "\";id=\"session_id\"");
+    response->AddCustomHeader(
+        "Secure-Session-Challenge",
+        base::StrCat({"\"", challenge, "\";id=\"session_id\""}));
     response->set_content_type("text/html");
     return response;
   } else if (request.relative_url.starts_with("/ensure_authenticated")) {
@@ -382,19 +405,18 @@ ScopedTestRegistrationFetcher ScopedTestRegistrationFetcher::CreateWithSuccess(
       [](const std::string& session_id, const std::string& refresh_url_string,
          const std::string& origin_string,
          RegistrationFetcher::RegistrationCompleteCallback callback) {
-        std::vector<SessionParams::Credential> cookie_credentials;
-        cookie_credentials.push_back(
-            SessionParams::Credential{"test_cookie", "secure"});
-        SessionParams::Scope scope;
-        scope.include_site = true;
-        scope.origin = origin_string;
         std::move(callback).Run(
             nullptr,
-            RegistrationResult(Session::CreateIfValid(SessionParams(
-                session_id, GURL(refresh_url_string), refresh_url_string,
-                std::move(scope), std::move(cookie_credentials),
-                unexportable_keys::UnexportableKeyId(),
-                /*allowed_refresh_initiators=*/{}))));
+            RegistrationResult(Session::CreateIfValid(SessionParams{
+                .session_id = session_id,
+                .fetcher_url = GURL(refresh_url_string),
+                .refresh_url = refresh_url_string,
+                .scope = {.include_site = true, .origin = origin_string},
+                .credentials = {{
+                    .name = "test_cookie",
+                    .attributes = "secure",
+                }},
+            })));
       },
       std::string(session_id), std::string(refresh_url_string),
       std::string(origin_string)));

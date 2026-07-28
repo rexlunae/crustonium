@@ -13,6 +13,7 @@ import android.content.Context;
 import android.content.Intent;
 
 import androidx.activity.result.ActivityResult;
+import androidx.fragment.app.FragmentActivity;
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 import androidx.test.filters.SmallTest;
 
@@ -32,7 +33,6 @@ import org.chromium.chrome.browser.media.MediaCapturePickerHeadlessFragment.Capt
 import org.chromium.chrome.browser.media.MediaCapturePickerManager.Delegate;
 import org.chromium.chrome.browser.media.MediaCapturePickerManager.Params;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabLoadIfNeededCaller;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.media.capture.ScreenCapture;
 import org.chromium.ui.base.TestActivity;
@@ -59,13 +59,8 @@ public class MediaCapturePickerInvokerTest {
         private boolean mShouldShareAudio;
 
         @Override
-        public Intent createScreenCaptureIntent(Context context, Params params) {
+        public Intent createScreenCaptureIntent(Context context, Params params, Delegate delegate) {
             return mIntent;
-        }
-
-        @Override
-        public WebContents getPickedWebContents() {
-            return null;
         }
 
         @Override
@@ -111,6 +106,7 @@ public class MediaCapturePickerInvokerTest {
         mActivityScenarioRule.getScenario().onActivity(activity -> mActivity = activity);
         mPickerDelegate = new FakeMediaCapturePickerDelegate();
         ServiceLoaderUtil.setInstanceForTesting(MediaCapturePickerDelegate.class, mPickerDelegate);
+        MediaCapturePickerManager.setBringTabToFrontCallbackForTesting(tab -> {});
     }
 
     @After
@@ -124,7 +120,7 @@ public class MediaCapturePickerInvokerTest {
         mPickerDelegate.setIntent(new Intent());
         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
         MediaCapturePickerHeadlessFragment fragment =
-                MediaCapturePickerHeadlessFragment.getInstanceForCurrentActivity();
+                MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
         fragment.mNextDelegate.onPicked(
                 CaptureAction.CAPTURE_CANCELLED,
                 new ActivityResult(Activity.RESULT_CANCELED, null));
@@ -142,10 +138,10 @@ public class MediaCapturePickerInvokerTest {
         mPickerDelegate.setShouldShareAudio(true);
         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
         MediaCapturePickerHeadlessFragment fragment =
-                MediaCapturePickerHeadlessFragment.getInstanceForCurrentActivity();
+                MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
         fragment.mNextDelegate.onPicked(
                 CaptureAction.CAPTURE_WINDOW, new ActivityResult(Activity.RESULT_OK, new Intent()));
-        verify(tab).loadIfNeeded(TabLoadIfNeededCaller.MEDIA_CAPTURE_PICKER);
+        verify(tab).loadIfNeeded(/* forceBackingSize= */ true);
         verify(mDelegate).onPickTab(mTabWebContents, true);
     }
 
@@ -160,10 +156,10 @@ public class MediaCapturePickerInvokerTest {
         mPickerDelegate.setShouldShareAudio(false);
         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
         MediaCapturePickerHeadlessFragment fragment =
-                MediaCapturePickerHeadlessFragment.getInstanceForCurrentActivity();
+                MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
         fragment.mNextDelegate.onPicked(
                 CaptureAction.CAPTURE_WINDOW, new ActivityResult(Activity.RESULT_OK, new Intent()));
-        verify(tab).loadIfNeeded(TabLoadIfNeededCaller.MEDIA_CAPTURE_PICKER);
+        verify(tab).loadIfNeeded(/* forceBackingSize= */ true);
         verify(mDelegate).onPickTab(mTabWebContents, false);
     }
 
@@ -173,7 +169,7 @@ public class MediaCapturePickerInvokerTest {
         mPickerDelegate.setIntent(new Intent());
         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
         MediaCapturePickerHeadlessFragment fragment =
-                MediaCapturePickerHeadlessFragment.getInstanceForCurrentActivity();
+                MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
         fragment.mNextDelegate.onPicked(
                 CaptureAction.CAPTURE_WINDOW, new ActivityResult(Activity.RESULT_OK, new Intent()));
         verify(mDelegate).onPickWindow();
@@ -185,7 +181,7 @@ public class MediaCapturePickerInvokerTest {
         mPickerDelegate.setIntent(new Intent());
         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
         MediaCapturePickerHeadlessFragment fragment =
-                MediaCapturePickerHeadlessFragment.getInstanceForCurrentActivity();
+                MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
         fragment.mNextDelegate.onPicked(
                 CaptureAction.CAPTURE_SCREEN, new ActivityResult(Activity.RESULT_OK, new Intent()));
         verify(mDelegate).onPickScreen();

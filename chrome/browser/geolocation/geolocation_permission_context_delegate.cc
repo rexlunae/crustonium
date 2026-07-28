@@ -5,6 +5,7 @@
 #include "chrome/browser/geolocation/geolocation_permission_context_delegate.h"
 
 #include "base/functional/bind.h"
+#include "chrome/browser/geolocation/geolocation_permission_context_slim_web_view.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/permissions/permission_request_id.h"
 #include "components/permissions/permission_util.h"
@@ -34,8 +35,17 @@ bool GeolocationPermissionContextDelegate::DecidePermission(
     if (extension_decision->permission_set) {
       context->NotifyPermissionSet(request_data, std::move(*callback),
                                    /*persist=*/false,
+                                   /*permission_result=*/nullptr,
                                    extension_decision->decision);
     }
+    return true;
+  }
+  // Handle permission requests if the render frame is for a SlimWebView.
+  // Note that SlimWebView permissions are never persisted and don't have UI
+  // indicators.
+  if (GeolocationPermissionContextSlimWebView::DecidePermission(
+          request_data.id, request_data.requesting_origin,
+          request_data.user_gesture, callback)) {
     return true;
   }
   return false;

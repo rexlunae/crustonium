@@ -17,8 +17,10 @@
 #include "ui/gfx/native_ui_types.h"
 
 class Browser;
+class BrowserWindowInterface;
 struct NavigateParams;
 class TabGroup;
+class TabStripModel;
 
 namespace content {
 class BrowserContext;
@@ -26,6 +28,7 @@ class NavigationHandle;
 }  // namespace content
 
 namespace tab_groups {
+class SavedTabGroup;
 class TabGroupSyncService;
 }  // namespace tab_groups
 
@@ -84,7 +87,7 @@ void OpenAllIfAllowed(
         bookmarks::OpenAllBookmarksContext::kNone,
     page_load_metrics::NavigationHandleUserData::InitiatorLocation
         navigation_type = page_load_metrics::NavigationHandleUserData::
-            InitiatorLocation::kOther,
+            kInitiatorLocationOther,
     std::optional<BookmarkLaunchAction> launch_action = std::nullopt);
 
 // Returns the count of bookmarks that would be opened by OpenAll. If
@@ -103,7 +106,7 @@ bool ConfirmDeleteBookmarkNode(gfx::NativeWindow window,
                                const bookmarks::BookmarkNode* node);
 
 // Shows the bookmark all tabs dialog.
-void ShowBookmarkAllTabsDialog(Browser* browser);
+void ShowBookmarkAllTabsDialog(BrowserWindowInterface* browser);
 
 // Shows the bookmark tab group dialog.
 void ShowBookmarkTabGroupDialog(
@@ -111,6 +114,10 @@ void ShowBookmarkTabGroupDialog(
     const TabGroup& tab_group,
     base::OnceCallback<void(Browser*, const tab_groups::TabGroupId&)>
         on_save_callback = base::DoNothing());
+
+// Shows the bookmark tab group dialog for a saved tab group.
+void ShowBookmarkSavedTabGroupDialog(Browser* browser,
+                                     const tab_groups::SavedTabGroup& group);
 
 // Returns true if OpenAll() can open at least one bookmark of type url
 // in |selection|.
@@ -139,7 +146,7 @@ void GetURLsAndFoldersForTabEntries(
 
 // Populates |folder_data| with all tabs from the tab group.
 void GetURLsAndFoldersForTabGroup(
-    const Browser* browser,
+    const TabStripModel* tab_strip_model,
     const TabGroup& tab_group,
     std::vector<BookmarkEditor::EditDetails::BookmarkData>* folder_data);
 

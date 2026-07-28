@@ -14,30 +14,25 @@
 #include "base/containers/fixed_flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "base/task/thread_pool.h"
+#include "base/values.h"
+#include "components/prefs/pref_service.h"
 #include "components/safe_search_api/url_checker.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/supervised_user/core/browser/family_link_user_capabilities.h"
-#include "components/supervised_user/core/browser/kids_chrome_management_url_checker_client.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
-#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/url_formatter/url_formatter.h"
 #include "components/url_matcher/url_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
-#include "url/url_constants.h"
 
 using net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES;
 using net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES;
@@ -46,22 +41,6 @@ using net::registry_controlled_domains::GetCanonicalHostRegistryLength;
 namespace supervised_user {
 
 namespace {
-// LINT.IfChange(top_level_filtering_context)
-std::string GetFilteringContextName(FilteringContext context) {
-  switch (context) {
-    case FilteringContext::kDefault:
-      return ".Default";
-    case FilteringContext::kNavigationThrottle:
-      return ".NavigationThrottle";
-    case FilteringContext::kNavigationObserver:
-      return ".NavigationObserver";
-    case FilteringContext::kFamilyLinkSettingsUpdated:
-      return ".FamilyLinkSettingsUpdated";
-    default:
-      NOTREACHED();
-  }
-}
-// LINT.ThenChange(//tools/metrics/histograms/metadata/families/histograms.xml:top_level_filtering_context)
 
 // Converts FilteringBehavior to SupervisedUserSafetyFilterResult histogram
 // value in tools/metrics/histograms/enums.xml.
@@ -93,28 +72,6 @@ int GetHistogramValueForFilteringBehavior(WebFilteringResult result) {
   return 0;
 }
 
-SupervisedUserFilterTopLevelResult TopLevelResult(WebFilteringResult result) {
-  switch (result.behavior) {
-    case FilteringBehavior::kAllow:
-      return SupervisedUserFilterTopLevelResult::kAllow;
-    case FilteringBehavior::kBlock:
-      switch (result.reason) {
-        case FilteringBehaviorReason::ASYNC_CHECKER:
-          return SupervisedUserFilterTopLevelResult::kBlockSafeSites;
-        case FilteringBehaviorReason::MANUAL:
-          return SupervisedUserFilterTopLevelResult::kBlockManual;
-        case FilteringBehaviorReason::DEFAULT:
-          return SupervisedUserFilterTopLevelResult::kBlockNotInAllowlist;
-        case FilteringBehaviorReason::FILTER_DISABLED:
-          NOTREACHED() << "Histograms must not be generated when the "
-                          "supervised user URL filter is turned off.";
-      }
-    case FilteringBehavior::kInvalid:
-      NOTREACHED();
-  }
-  NOTREACHED();
-}
-
 // Records ManagedUsers.FilteringResult, ManagedUsers.TopLevelFilteringResult
 // and ManagedUsers.TopLevelFilteringResult2 metrics after the client's callback
 // completes.
@@ -124,13 +81,6 @@ void WrappedCallbackWithMetrics(WebFilteringResult::Callback callback,
                                 WebFilterMetricsOptions options,
                                 WebFilteringResult result) {
   std::move(callback).Run(result);
-
-  // Legacy recording only in original throttle context
-  if (options.filtering_context == FilteringContext::kNavigationThrottle) {
-    base::UmaHistogramSparse(
-        kSupervisedUserTopLevelURLFilteringResultHistogramName,
-        static_cast<int>(TopLevelResult(result)));
-  }
 
   // Recorded only when transition type is specified.
   if (options.transition_type.has_value()) {
@@ -145,12 +95,12 @@ void WrappedCallbackWithMetrics(WebFilteringResult::Callback callback,
   // Aggregated recording
   base::UmaHistogramSparse(
       kSupervisedUserTopLevelURLFilteringResult2HistogramName,
-      static_cast<int>(TopLevelResult(result)));
+      static_cast<int>(result.ToTopLevelResult()));
   // Context-specific recording
   base::UmaHistogramSparse(
       base::StrCat({kSupervisedUserTopLevelURLFilteringResult2HistogramName,
                     GetFilteringContextName(options.filtering_context)}),
-      static_cast<int>(TopLevelResult(result)));
+      static_cast<int>(result.ToTopLevelResult()));
 }
 
 WebFilteringResult::Callback WrapCallbackWithMetrics(
@@ -185,17 +135,6 @@ FilteringBehavior GetDefaultFilteringBehavior(const PrefService& pref_service) {
          behavior_value == static_cast<int>(FilteringBehavior::kBlock))
       << "SupervisedUserURLFilter value not supported: " << behavior_value;
   return static_cast<FilteringBehavior>(behavior_value);
-}
-
-FilteringBehavior GetBehaviorFromSafeSearchClassification(
-    safe_search_api::Classification classification) {
-  switch (classification) {
-    case safe_search_api::Classification::SAFE:
-      return FilteringBehavior::kAllow;
-    case safe_search_api::Classification::UNSAFE:
-      return FilteringBehavior::kBlock;
-  }
-  NOTREACHED();
 }
 
 bool IsSameDomain(const GURL& url1, const GURL& url2) {
@@ -396,6 +335,9 @@ void FamilyLinkUrlFilter::OnFamilyLinkSettingsChanged(
   // Refresh auxiliary data structures.
   UpdateManualHosts();
   UpdateManualUrls();
+
+  // And notify the delegate owner that the settings have changed.
+  NotifyUrlFilteringDelegateChanged();
 }
 
 FamilyLinkUrlFilter::ManagedSiteList
@@ -622,15 +564,18 @@ void FamilyLinkUrlFilter::GetFilteringBehavior(
     bool skip_manual_parent_filter,
     WebFilteringResult::Callback callback,
     const WebFilterMetricsOptions& options) {
+  callback = WrapCallbackWithUrlServiceMetrics(std::move(callback), options);
+
   WebFilteringResult result = GetFilteringBehavior(url);
   if (result.IsAllowedBecauseOfDisabledFilter()) {
-    NotifyCallerAndObservers(std::move(callback), result);
+    std::move(callback).Run(result);
     return;
   }
 
   callback = WrapCallbackWithMetrics(std::move(callback), options);
+
   if (result.IsAllowed() && !result.IsFromDefaultSetting()) {
-    NotifyCallerAndObservers(std::move(callback), result);
+    std::move(callback).Run(result);
     return;
   }
 
@@ -638,7 +583,7 @@ void FamilyLinkUrlFilter::GetFilteringBehavior(
     // Any non-default reason trumps the async checker.
     // Also, if we're blocking anyway, then there's no need to check it.
     if (!result.IsFromDefaultSetting() || result.IsBlocked()) {
-      NotifyCallerAndObservers(std::move(callback), result);
+      std::move(callback).Run(result);
       return;
     }
   }
@@ -652,9 +597,11 @@ void FamilyLinkUrlFilter::GetFilteringBehaviorForSubFrame(
     const GURL& main_frame_url,
     WebFilteringResult::Callback callback,
     const WebFilterMetricsOptions& options) {
+  callback = WrapCallbackWithUrlServiceMetrics(std::move(callback), options);
+
   WebFilteringResult result = GetFilteringBehavior(url);
   if (result.IsAllowedBecauseOfDisabledFilter()) {
-    NotifyCallerAndObservers(std::move(callback), result);
+    std::move(callback).Run(result);
     return;
   }
 
@@ -662,7 +609,7 @@ void FamilyLinkUrlFilter::GetFilteringBehaviorForSubFrame(
 
   // If the reason is not default, then it is manually allowed or blocked.
   if (!result.IsFromDefaultSetting()) {
-    NotifyCallerAndObservers(std::move(callback), result);
+    std::move(callback).Run(result);
     return;
   }
 
@@ -670,7 +617,7 @@ void FamilyLinkUrlFilter::GetFilteringBehaviorForSubFrame(
   // the same domain as the main frame, block the subframe.
   if (result.IsBlocked() && !IsSameDomain(url, main_frame_url)) {
     // It is not in the same domain and is blocked.
-    NotifyCallerAndObservers(std::move(callback), result);
+    std::move(callback).Run(result);
     return;
   }
 
@@ -740,14 +687,6 @@ FamilyLinkUrlFilter::Statistics FamilyLinkUrlFilter::GetFilteringStatistics()
   return statistics_;
 }
 
-void FamilyLinkUrlFilter::AddObserver(Observer* observer) {
-  observers_.AddObserver(observer);
-}
-
-void FamilyLinkUrlFilter::RemoveObserver(Observer* observer) {
-  observers_.RemoveObserver(observer);
-}
-
 WebFilterType FamilyLinkUrlFilter::GetWebFilterType() const {
   if (base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
     return family_link_settings_service_->GetWebFilterType();
@@ -771,7 +710,7 @@ WebFilterType FamilyLinkUrlFilter::GetWebFilterType() const {
   // LINT.ThenChange(//components/supervised_user/core/browser/supervised_user_settings_service.cc:GetWebFilterType)
 }
 
-bool FamilyLinkUrlFilter::RunAsyncChecker(
+void FamilyLinkUrlFilter::RunAsyncChecker(
     const GURL& url,
     WebFilteringResult::Callback callback) {
   // The parental setting may allow all sites to be visited.
@@ -779,14 +718,15 @@ bool FamilyLinkUrlFilter::RunAsyncChecker(
     std::move(callback).Run(
         {url, FilteringBehavior::kAllow,
          supervised_user::FilteringBehaviorReason::DEFAULT});
-    return true;
+    return;
   }
 
   CHECK(async_url_checker_) << "Filter must always have a checker.";
-  return async_url_checker_->CheckURL(
+  async_url_checker_->CheckURL(
       url_matcher::util::Normalize(url),
-      base::BindOnce(&FamilyLinkUrlFilter::CheckCallback,
-                     base::Unretained(this), std::move(callback), url));
+      WebFilteringResult::BindUrlCheckerCallback(
+          std::move(callback), url,
+          InterstitialMode::kParentalReviewInterstitial));
 }
 
 void FamilyLinkUrlFilter::SetURLCheckerClientForTesting(
@@ -795,26 +735,11 @@ void FamilyLinkUrlFilter::SetURLCheckerClientForTesting(
       new safe_search_api::URLChecker(std::move(url_checker_client)));
 }
 
-void FamilyLinkUrlFilter::CheckCallback(
-    WebFilteringResult::Callback callback,
-    const GURL& requested_url,
-    const GURL& checked_url,
-    safe_search_api::Classification classification,
-    safe_search_api::ClassificationDetails details) const {
-  NotifyCallerAndObservers(
-      std::move(callback),
-      {.url = requested_url,
-       .behavior = GetBehaviorFromSafeSearchClassification(classification),
-       .reason = supervised_user::FilteringBehaviorReason::ASYNC_CHECKER,
-       .async_check_details = details});
+std::string_view FamilyLinkUrlFilter::GetName() const {
+  // LINT.IfChange(family_link_url_filtering_delegate)
+  static constexpr std::string_view kName = "Account";
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/families/histograms.xml:family_link_url_filtering_delegate)
+  return kName;
 }
 
-void FamilyLinkUrlFilter::NotifyCallerAndObservers(
-    WebFilteringResult::Callback callback,
-    WebFilteringResult result) const {
-  std::move(callback).Run(result);
-  for (Observer& observer : observers_) {
-    observer.OnURLChecked(result);
-  }
-}
 }  // namespace supervised_user

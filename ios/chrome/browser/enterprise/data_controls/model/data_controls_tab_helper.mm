@@ -4,10 +4,13 @@
 
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_tab_helper.h"
 
-#import "base/feature_list.h"
+#import <string>
+
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
 #import "base/metrics/histogram_functions.h"
+#import "base/strings/utf_string_conversions.h"
+#import "components/enterprise/data_controls/core/browser/features.h"
 #import "components/enterprise/data_controls/core/browser/prefs.h"
 #import "components/enterprise/data_controls/core/browser/rule.h"
 #import "components/policy/core/common/policy_types.h"
@@ -16,31 +19,29 @@
 #import "ios/chrome/browser/enterprise/common/util.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_metrics.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_pasteboard_manager.h"
-#import "ios/chrome/browser/enterprise/data_controls/utils/data_controls_utils.h"
+#import "ios/chrome/browser/enterprise/enterprise_dialog/model/warning_dialog.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
-#import "ios/components/enterprise/data_controls/features.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/web/public/web_state.h"
+#import "ui/base/clipboard/clipboard_format_type.h"
 #import "ui/base/clipboard/clipboard_metadata.h"
-#import "ui/base/l10n/l10n_util.cc"
+#import "ui/base/l10n/l10n_util.h"
 #import "url/gurl.h"
 
 namespace data_controls {
 
 DataControlsTabHelper::DataControlsTabHelper(web::WebState* web_state)
-    : web_state_(web_state) {}
+    : web_state_(web_state) {
+  scoped_observation_.Observe(DataControlsPasteboardManager::GetInstance());
+}
 
 DataControlsTabHelper::~DataControlsTabHelper() = default;
 
 void DataControlsTabHelper::ShouldAllowCopy(
     base::OnceCallback<void(bool)> callback) {
-  if (!IsClipboardDataControlsEnabled()) {
-    std::move(callback).Run(true);
-    return;
-  }
-
   // TODO(crbug.com/444224082): Include size and format type for copy
   // operations.
   ui::ClipboardMetadata metadata;
@@ -53,7 +54,7 @@ void DataControlsTabHelper::ShouldAllowCopy(
   switch (verdicts.copy_action_verdict.level()) {
     case Rule::Level::kWarn:
       ShowWarningDialog(
-          DataControlsDialog::Type::kClipboardCopyWarn,
+          enterprise::DialogType::kClipboardCopyWarn,
           GetManagementDomain(profile),
           base::BindOnce(&DataControlsTabHelper::FinishCopy,
                          weak_factory_.GetWeakPtr(), source_url,
@@ -75,11 +76,6 @@ void DataControlsTabHelper::ShouldAllowCopy(
 
 void DataControlsTabHelper::ShouldAllowPaste(
     base::OnceCallback<void(bool)> callback) {
-  if (!IsClipboardDataControlsEnabled()) {
-    std::move(callback).Run(true);
-    return;
-  }
-
   // TODO(crbug.com/444224082): Include size and format type for paste
   // operations.
   ui::ClipboardMetadata metadata;
@@ -104,8 +100,9 @@ void DataControlsTabHelper::ShouldAllowPaste(
 
   switch (policy_verdict.verdict.level()) {
     case Rule::Level::kWarn:
+      paste_event_state_ = PasteEventState::kDisplayingWarningDialog;
       ShowWarningDialog(
-          DataControlsDialog::Type::kClipboardPasteWarn, domain,
+          enterprise::DialogType::kClipboardPasteWarn, domain,
           base::BindOnce(
               &DataControlsTabHelper::FinishPaste, weak_factory_.GetWeakPtr(),
               destination_url, source.source_url, profile->AsWeakPtr(),
@@ -133,10 +130,6 @@ void DataControlsTabHelper::ShouldAllowCut(
 }
 
 bool DataControlsTabHelper::ShouldAllowShare() {
-  if (!IsClipboardDataControlsEnabled()) {
-    return true;
-  }
-
   ProfileIOS* profile =
       ProfileIOS::FromBrowserState(web_state_->GetBrowserState());
   const GURL& source_url = web_state_->GetLastCommittedURL();
@@ -146,9 +139,73 @@ bool DataControlsTabHelper::ShouldAllowShare() {
   return verdict.level() != Rule::Level::kBlock;
 }
 
-void DataControlsTabHelper::SetDataControlsCommandsHandler(
-    id<DataControlsCommands> handler) {
-  commands_handler_ = handler;
+bool DataControlsTabHelper::IsSearchWithFeatureEnabled() {
+  return base::FeatureList::IsEnabled(data_controls::kDataControlsSearchWith);
+}
+
+bool DataControlsTabHelper::IsSearchWithAllowed() {
+  if (!IsSearchWithFeatureEnabled()) {
+    return true;
+  }
+
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(web_state_->GetBrowserState());
+  const GURL& source_url = web_state_->GetLastCommittedURL();
+
+  Verdict verdict = IsSearchWithAllowedByPolicy(source_url, profile);
+
+  return verdict.level() != Rule::Level::kBlock;
+}
+
+void DataControlsTabHelper::ShouldAllowSearchWith(
+    size_t text_length,
+    base::OnceCallback<void(bool)> callback) {
+  if (!IsSearchWithFeatureEnabled()) {
+    std::move(callback).Run(true);
+    return;
+  }
+
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(web_state_->GetBrowserState());
+  const GURL& source_url = web_state_->GetLastCommittedURL();
+
+  Verdict verdict = IsSearchWithAllowedByPolicy(source_url, profile);
+
+  base::UmaHistogramEnumeration(
+      kIOSWebStateDataControlsSearchWithVerdictHistogram, verdict.level());
+
+  ui::ClipboardMetadata metadata{
+      .size = text_length * sizeof(std::u16string::value_type),
+      .format_type = ui::ClipboardFormatType::PlainTextType()};
+
+  switch (verdict.level()) {
+    case Rule::Level::kBlock:
+      // The menu item should have been blocked synchronously.
+      std::move(callback).Run(false);
+      break;
+    case Rule::Level::kWarn:
+      ShowWarningDialog(
+          enterprise::DialogType::kClipboardActionWarn,
+          GetManagementDomain(profile),
+          base::BindOnce(&DataControlsTabHelper::FinishSearchWith,
+                         weak_factory_.GetWeakPtr(), source_url,
+                         profile->AsWeakPtr(), metadata, std::move(verdict),
+                         std::move(callback)));
+      break;
+    case Rule::Level::kReport:
+      MaybeReportDataControlsCopy(source_url, profile, metadata, verdict,
+                                  /*bypassed=*/false);
+      [[fallthrough]];
+    case Rule::Level::kAllow:
+    case Rule::Level::kNotSet:
+      std::move(callback).Run(true);
+      break;
+  }
+}
+
+void DataControlsTabHelper::SetEnterpriseCommandsHandler(
+    id<EnterpriseCommands> handler) {
+  enterprise_handler_ = handler;
 }
 
 void DataControlsTabHelper::SetSnackbarHandler(
@@ -158,10 +215,6 @@ void DataControlsTabHelper::SetSnackbarHandler(
 void DataControlsTabHelper::DidFinishClipboardRead() {
   DataControlsPasteboardManager::GetInstance()
       ->RestorePlaceholderToGeneralPasteboardIfNeeded();
-}
-
-bool DataControlsTabHelper::IsClipboardDataControlsEnabled() const {
-  return base::FeatureList::IsEnabled(kEnableClipboardDataControlsIOS);
 }
 
 void DataControlsTabHelper::FinishCopy(const GURL& source_url,
@@ -211,6 +264,20 @@ void DataControlsTabHelper::FinishCopy(const GURL& source_url,
   std::move(callback).Run(allowed);
 }
 
+void DataControlsTabHelper::FinishSearchWith(
+    const GURL& source_url,
+    base::WeakPtr<ProfileIOS> source_profile,
+    const ui::ClipboardMetadata& metadata,
+    Verdict verdict,
+    base::OnceCallback<void(bool)> callback,
+    bool bypassed) {
+  if (source_profile) {
+    MaybeReportDataControlsCopy(source_url, source_profile.get(), metadata,
+                                std::move(verdict), bypassed);
+  }
+  std::move(callback).Run(bypassed);
+}
+
 void DataControlsTabHelper::FinishShare(const GURL& source_url,
                                         Verdict verdict,
                                         base::OnceCallback<void(bool)> callback,
@@ -243,6 +310,9 @@ void DataControlsTabHelper::FinishPaste(
   // Record the verdict level to the Paste histogram.
   base::UmaHistogramEnumeration(
       kIOSWebStateDataControlsClipboardPasteVerdictHistogram, verdict.level());
+
+  // Reset the `paste_event_state_` to `kIdle`.
+  paste_event_state_ = PasteEventState::kIdle;
 
   if (verdict.level() > Rule::Level::kNotSet && destination_profile.get()) {
     MaybeReportDataControlsPaste(
@@ -278,14 +348,14 @@ void DataControlsTabHelper::FinishPaste(
 }
 
 void DataControlsTabHelper::ShowWarningDialog(
-    DataControlsDialog::Type dialog_type,
+    enterprise::DialogType dialog_type,
     std::string_view org_domain,
     base::OnceCallback<void(bool)> on_bypassed_callback) {
-  if (commands_handler_) {
-    [commands_handler_
-        showDataControlsWarningDialog:dialog_type
-                   organizationDomain:org_domain
-                             callback:std::move(on_bypassed_callback)];
+  if (enterprise_handler_) {
+    [enterprise_handler_
+        showEnterpriseWarningDialog:dialog_type
+                 organizationDomain:org_domain
+                           callback:std::move(on_bypassed_callback)];
   } else {
     if (on_bypassed_callback) {
       std::move(on_bypassed_callback).Run(false);
@@ -310,7 +380,19 @@ std::string DataControlsTabHelper::GetManagementDomain(ProfileIOS* profile) {
 
   policy::PolicyScope scope = static_cast<policy::PolicyScope>(
       profile->GetPrefs()->GetInteger(kDataControlsRulesScopePref));
-  return enterprise::GetManagementDomain(scope, profile);
+  return enterprise::GetManagementDomain(
+      scope, IdentityManagerFactory::GetForProfile(profile));
+}
+
+void DataControlsTabHelper::OnPasteboardContentChanged() {
+  switch (paste_event_state_) {
+    case PasteEventState::kIdle:
+      break;
+    case PasteEventState::kDisplayingWarningDialog:
+      [enterprise_handler_ dismissEnterpriseWarningDialog];
+      paste_event_state_ = PasteEventState::kIdle;
+      break;
+  }
 }
 
 }  // namespace data_controls

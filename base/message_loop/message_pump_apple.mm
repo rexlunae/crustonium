@@ -2,15 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #import "base/message_loop/message_pump_apple.h"
 
 #import <Foundation/Foundation.h>
 
+#include <array>
 #include <atomic>
 #include <limits>
 #include <memory>
@@ -21,7 +17,9 @@
 #include "base/apple/scoped_nsautorelease_pool.h"
 #include "base/auto_reset.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_policy.h"
 #include "base/memory/stack_allocated.h"
@@ -66,6 +64,23 @@ bool g_not_using_cr_app = false;
 MessagePumpNSApplication* g_app_pump;
 #endif  // !BUILDFLAG(IS_IOS)
 
+#if BUILDFLAG(IS_IOS)
+constexpr int kDefaultInitialNestingLevel = 1;
+// Tracks the initial loop nesting level for the current thread's message pump.
+// It is used to synchronize the pump's internal nesting state with the host app's
+// run loop depth on startup to prevent work item stack mismatches and crashes.
+//
+// Requires thread_local storage because platform agnostic task plumbing
+// prevents passing host specific state via arguments during initialization.
+//
+// Note: This state is strictly consumable. The pump resets it to
+// std::nullopt upon reading so subsequent loops start clean.
+//
+// TODO(crbug.com/516847270): Pass this via OnAttach() if we can avoid
+// subclass specific parameter pollution on MessagePumpCFRunLoopBase.
+thread_local std::optional<int> g_initial_nesting_level;
+#endif  // BUILDFLAG(IS_IOS)
+
 }  // namespace
 
 // A scoper for an optional autorelease pool.
@@ -88,7 +103,7 @@ class OptionalAutoreleasePool {
 
 class MessagePumpCFRunLoopBase::ScopedModeEnabler {
  public:
-  ScopedModeEnabler(MessagePumpCFRunLoopBase* owner, int mode_index)
+  ScopedModeEnabler(MessagePumpCFRunLoopBase* owner, size_t mode_index)
       : owner_(owner), mode_index_(mode_index) {
     CFRunLoopRef loop = owner_->run_loop_.get();
     CFRunLoopAddTimer(loop, owner_->delayed_work_timer_.get(), mode());
@@ -123,7 +138,7 @@ class MessagePumpCFRunLoopBase::ScopedModeEnabler {
   //  - com.apple.hitoolbox.windows.transitionmode
   //  - com.apple.hitoolbox.windows.flushmode
   const CFStringRef& mode() const {
-    static const CFStringRef modes[] = {
+    static const std::array<CFStringRef, kNumModes> modes = {
         // The standard Core Foundation "common modes" constant. Must always be
         // first in this list to match the value of kCommonModeMask.
         kCFRunLoopCommonModes,
@@ -143,7 +158,7 @@ class MessagePumpCFRunLoopBase::ScopedModeEnabler {
 
  private:
   const raw_ptr<MessagePumpCFRunLoopBase> owner_;  // Weak. Owns this.
-  const int mode_index_;
+  const size_t mode_index_;
 };
 
 // Must be called on the run loop thread.
@@ -302,6 +317,33 @@ MessagePumpCFRunLoopBase::MessagePumpCFRunLoopBase(int initial_mode_mask) {
 // same number of run loops must be running when this object is destroyed.
 MessagePumpCFRunLoopBase::~MessagePumpCFRunLoopBase() {
   SetModeMask(0);
+
+  // Explicitly invalidate the observers, timers, and sources to prevent them
+  // from firing again. On iOS, the MessagePump may be destroyed while the run
+  // loop is active on the stack (e.g. during applicationWillTerminate:).
+  // Invalidation guarantees that these handles are not called during any
+  // trailing spins of the run loop after the MessagePump is destroyed.
+  if (pre_wait_observer_) {
+    CFRunLoopObserverInvalidate(pre_wait_observer_.get());
+  }
+  if (after_wait_observer_) {
+    CFRunLoopObserverInvalidate(after_wait_observer_.get());
+  }
+  if (pre_source_observer_) {
+    CFRunLoopObserverInvalidate(pre_source_observer_.get());
+  }
+  if (enter_exit_observer_) {
+    CFRunLoopObserverInvalidate(enter_exit_observer_.get());
+  }
+  if (delayed_work_timer_) {
+    CFRunLoopTimerInvalidate(delayed_work_timer_.get());
+  }
+  if (work_source_) {
+    CFRunLoopSourceInvalidate(work_source_.get());
+  }
+  if (nesting_deferred_work_source_) {
+    CFRunLoopSourceInvalidate(nesting_deferred_work_source_.get());
+  }
 }
 
 // static
@@ -313,12 +355,41 @@ void MessagePumpCFRunLoopBase::InitializeFeatures() {
 #if BUILDFLAG(IS_IOS)
 void MessagePumpCFRunLoopBase::OnAttach() {
   CHECK_EQ(nesting_level_, 0);
-  // On iOS: the MessagePump is attached while it's already running.
-  nesting_level_ = 1;
 
-  // There could be some native work done after attaching to the loop and before
-  // |work_source_| is invoked.
-  PushWorkItemScope();
+  // TODO(crbug.com/516847270): Consider passing the initial nesting level down
+  // as a parameter to OnAttach() if a clean way is found to avoid subclass specific
+  // parameter pollution on the parent MessagePumpCFRunLoopBase class (which is shared
+  // by other message pumps that do not support custom nesting synchronization).
+  std::optional<int> initial_depth =
+      std::exchange(g_initial_nesting_level, std::nullopt);
+  int depth =
+      initial_depth.value_or(kDefaultInitialNestingLevel);
+  CHECK_GE(depth, kDefaultInitialNestingLevel);
+  if (depth == kDefaultInitialNestingLevel) {
+    // On iOS: the MessagePump is attached while it's already running.
+    nesting_level_ = 1;
+
+    // There could be some native work done after attaching to the loop and before
+    // |work_source_| is invoked.
+    PushWorkItemScope();
+    return;
+  }
+
+  // Host app custom depth flow.
+  for (int i = 0; i < depth; ++i) {
+    ++nesting_level_;
+
+    // Pre-populates the `stack_` with placeholder frames to match the host's
+    // nesting level. Since the delegate is already attached (see Attach()),
+    // these frames correctly inform the delegate of the host's run loop nesting
+    // depth, ensuring system-wide state stability.
+    PushWorkItemScope();
+  }
+
+  // Initialize the nesting state to match the host's run loop depth we just
+  // reconstructed. Chromium on iOS treats the main loop as nested by default
+  // (delta of 1), so we maintain that invariant here.
+  deepest_nesting_level_ = nesting_level_;
 }
 
 void MessagePumpCFRunLoopBase::OnDetach() {
@@ -356,8 +427,8 @@ bool MessagePumpCFRunLoopBase::ShouldCreateAutoreleasePool() {
 void MessagePumpCFRunLoopBase::SetModeMask(int mode_mask) {
   for (size_t i = 0; i < kNumModes; ++i) {
     bool enable = mode_mask & (0x1 << i);
-    if (enable == !enabled_modes_[i]) {
-      enabled_modes_[i] =
+    if (enable == !UNSAFE_TODO(enabled_modes_[i])) {
+      UNSAFE_TODO(enabled_modes_[i]) =
           enable ? std::make_unique<ScopedModeEnabler>(this, i) : nullptr;
     }
   }
@@ -366,7 +437,7 @@ void MessagePumpCFRunLoopBase::SetModeMask(int mode_mask) {
 int MessagePumpCFRunLoopBase::GetModeMask() const {
   int mask = 0;
   for (size_t i = 0; i < kNumModes; ++i) {
-    mask |= enabled_modes_[i] ? (0x1 << i) : 0;
+    mask |= UNSAFE_TODO(enabled_modes_[i]) ? (0x1 << i) : 0;
   }
   return mask;
 }
@@ -541,6 +612,8 @@ void MessagePumpCFRunLoopBase::PreWaitObserver(CFRunLoopObserverRef observer,
     // amount of matching Pop/Push in between when running work items).
     self->PopWorkItemScope();
 
+    self->sleeping_nesting_levels_.push(self->nesting_level_);
+
     // Attempt to do some idle work before going to sleep.
     self->RunIdleWork();
 
@@ -565,6 +638,11 @@ void MessagePumpCFRunLoopBase::AfterWaitObserver(CFRunLoopObserverRef observer,
     // Emerging from sleep, any work happening after this (outside of a
     // RunWork()) should be considered native work. Matching PopWorkItemScope()
     // is in BeforeWait().
+    if (self->sleeping_nesting_levels_.empty() ||
+        self->sleeping_nesting_levels_.top() != self->nesting_level_) {
+      return;
+    }
+    self->sleeping_nesting_levels_.pop();
     self->PushWorkItemScope();
   });
 }
@@ -628,6 +706,12 @@ void MessagePumpCFRunLoopBase::EnterExitObserver(CFRunLoopObserverRef observer,
 
       // Current work item tracking needs to go away since execution will stop.
       self->PopWorkItemScope();
+
+      // If the loop is exiting, it can't be sleeping anymore.
+      if (!self->sleeping_nesting_levels_.empty() &&
+          self->sleeping_nesting_levels_.top() == self->nesting_level_) {
+        self->sleeping_nesting_levels_.pop();
+      }
 
       --self->nesting_level_;
       break;
@@ -739,13 +823,30 @@ bool MessagePumpUIApplication::DoQuit() {
   NOTREACHED();
 }
 
+// static
+// This is separate from Attach() because the MessagePump instance is
+// instantiated and owned by Chromium's internal task plumbing. The generic
+// callers of Attach() are platform-agnostic and cannot pass host-specific
+// state. This static method allows embedders to "prime" the nesting state for
+// the UI pump before Chromium's task system is fully initialized.
+void MessagePumpUIApplication::SetNextInitialNestingLevelForCurrentThread(
+    int depth) {
+  CHECK(!g_initial_nesting_level.has_value());
+  CHECK_GE(depth, kDefaultInitialNestingLevel);
+  g_initial_nesting_level = depth;
+}
+
+// static
+void MessagePumpUIApplication::ResetNextInitialNestingLevelForTesting() {
+  g_initial_nesting_level.reset();
+}
+
 void MessagePumpUIApplication::Attach(Delegate* delegate) {
   DCHECK(!run_loop_);
   run_loop_.emplace();
 
   CHECK(run_loop_->BeforeRun());
   SetDelegate(delegate);
-
   OnAttach();
 }
 
@@ -792,7 +893,7 @@ MessagePumpNSApplication::~MessagePumpNSApplication() {
 }
 
 void MessagePumpNSApplication::DoRun(Delegate* delegate) {
-  bool last_running_own_loop_ = running_own_loop_;
+  bool last_running_own_loop = running_own_loop_;
 
   // NSApp must be initialized by calling:
   // [{some class which implements CrAppProtocol} sharedApplication]
@@ -819,7 +920,7 @@ void MessagePumpNSApplication::DoRun(Delegate* delegate) {
     }
   }
 
-  running_own_loop_ = last_running_own_loop_;
+  running_own_loop_ = last_running_own_loop;
 }
 
 bool MessagePumpNSApplication::DoQuit() {

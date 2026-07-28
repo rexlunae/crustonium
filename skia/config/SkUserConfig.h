@@ -58,10 +58,16 @@
 
 // Log the file and line number for assertions.
 #define SkDebugf(...) SkDebugf_FileLine(__FILE__, __LINE__, __VA_ARGS__)
+#define SkLog(...) SkLog_FileLine(__FILE__, __LINE__, __VA_ARGS__)
 SK_API void SkDebugf_FileLine(const char* file,
                               int line,
                               const char* format,
                               ...);
+SK_API void SkLog_FileLine(const char* file,
+                           int line,
+                           SkLogPriority priority,
+                           const char* format,
+                           ...);
 
 #define SK_ABORT(format, ...) SkAbort_FileLine(__FILE__, __LINE__, \
                                                format,##__VA_ARGS__)
@@ -135,6 +141,10 @@ SK_API void SkDebugf_FileLine(const char* file,
 
 #define SK_SUPPORT_LEGACY_RRECT_TRANSFORM
 
+#define SK_USE_SAFE_INSET_FOR_TEXTURE_SAMPLING
+
+#define SK_GRAPHITE_USE_LEGACY_RRECT_CLIP_SHADER
+
 ///////////////////////// Imported from BUILD.gn and skia_common.gypi
 
 /* In some places Skia can use static initializers for global initialization,
@@ -152,5 +162,11 @@ SK_API void SkDebugf_FileLine(const char* file,
 
 // glGetError() forces a sync with gpu process on chrome
 #define GR_GL_CHECK_ERROR_START 0
+
+#if defined(SK_DEBUG)
+#define SKIA_LOWEST_ACTIVE_LOG_PRIORITY SkLogPriority::kWarning
+#else
+#define SKIA_LOWEST_ACTIVE_LOG_PRIORITY SkLogPriority::kInfo
+#endif
 
 #endif  // SKIA_CONFIG_SKUSERCONFIG_H_

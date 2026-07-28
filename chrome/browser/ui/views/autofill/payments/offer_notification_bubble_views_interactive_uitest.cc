@@ -7,46 +7,31 @@
 
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/autofill/payments/offer_notification_bubble_views_test_base.h"
-#include "chrome/browser/ui/views/autofill/payments/promo_code_label_button.h"
 #include "chrome/browser/ui/views/controls/subpage_view.h"
+#include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/offer_notification_handler.h"
 #include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
-#include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/search/ntp_features.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/browser_test.h"
-#include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/actions/actions.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/test/ui_controls.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/events/base_event_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/widget_test.h"
@@ -57,7 +42,6 @@ namespace autofill {
 struct OfferNotificationBubbleViewsInteractiveUiTestData {
   std::string name;
   AutofillOfferData::OfferType offer_type;
-  bool is_page_actions_migration_enabled = false;
 };
 
 std::string GetTestName(
@@ -77,7 +61,6 @@ class OfferNotificationBubbleViewsInteractiveUiTest
  public:
   OfferNotificationBubbleViewsInteractiveUiTest()
       : test_offer_type_(std::get<0>(GetParam()).offer_type) {
-    const auto& params = std::get<0>(GetParam());
     bool bubble_manager_enabled = std::get<1>(GetParam());
 
     std::vector<base::test::FeatureRefAndParams> enabled_features;
@@ -89,15 +72,6 @@ class OfferNotificationBubbleViewsInteractiveUiTest
     } else {
       disabled_features.push_back(
           features::kAutofillShowBubblesBasedOnPriorities);
-    }
-
-    if (params.is_page_actions_migration_enabled) {
-      enabled_features.push_back(
-          {::features::kPageActionsMigration,
-           {{::features::kPageActionsMigrationOfferNotification.name,
-             "true"}}});
-    } else {
-      disabled_features.push_back(::features::kPageActionsMigration);
     }
 
     feature_list_.InitWithFeaturesAndParameters(enabled_features,
@@ -124,7 +98,7 @@ class OfferNotificationBubbleViewsInteractiveUiTest
   }
 
   void ShowBubbleForCardLinkedOfferAndVerify() {
-    NavigateTo(GURL(chrome::kChromeUINewTabPageURL));
+    NavigateTo(chrome::ChromeUINewTabPageURLAsGURL());
     // Set the initial origin that the bubble will be displayed on.
     SetUpCardLinkedOfferDataWithDomains(
         {GetUrl("www.merchantsite1.test", "/"),
@@ -137,7 +111,7 @@ class OfferNotificationBubbleViewsInteractiveUiTest
   }
 
   void ShowBubbleForGPayPromoCodeOfferAndVerify() {
-    NavigateTo(GURL(chrome::kChromeUINewTabPageURL));
+    NavigateTo(chrome::ChromeUINewTabPageURLAsGURL());
     // Set the initial origin that the bubble will be displayed on.
     SetUpGPayPromoCodeOfferDataWithDomains(
         {GetUrl("www.merchantsite1.test", "/"),
@@ -215,25 +189,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 // TODO(crbug.com/416010106): Flaky failures.
 #if BUILDFLAG(IS_MAC)
-#define MAYBE_GPayCardLinkedWithNewPageAction \
-  DISABLED_GPayCardLinkedWithNewPageAction
-#else
-#define MAYBE_GPayCardLinkedWithNewPageAction GPayCardLinkedWithNewPageAction
-#endif
-INSTANTIATE_TEST_SUITE_P(
-    MAYBE_GPayCardLinkedWithNewPageAction,
-    OfferNotificationBubbleViewsInteractiveUiTest,
-    testing::Combine(
-        testing::Values(OfferNotificationBubbleViewsInteractiveUiTestData{
-            "GPayCardLinkedWithNewPageAction",
-            AutofillOfferData::OfferType::GPAY_CARD_LINKED_OFFER,
-            /*is_page_actions_migration_enabled=*/true,
-        }),
-        testing::Bool()),
-    &GetTestName);
-
-// TODO(crbug.com/416010106): Flaky failures.
-#if BUILDFLAG(IS_MAC)
 #define MAYBE_GPayPromoCode DISABLED_GPayPromoCode
 #else
 #define MAYBE_GPayPromoCode GPayPromoCode
@@ -245,24 +200,6 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(OfferNotificationBubbleViewsInteractiveUiTestData{
             "GPayPromoCode",
             AutofillOfferData::OfferType::GPAY_PROMO_CODE_OFFER}),
-        testing::Bool()),
-    &GetTestName);
-
-// TODO(crbug.com/416010106): Flaky failures.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_GPayPromoCodeWithNewPageAction \
-  DISABLED_GPayPromoCodeWithNewPageAction
-#else
-#define MAYBE_GPayPromoCodeWithNewPageAction GPayPromoCodeWithNewPageAction
-#endif
-INSTANTIATE_TEST_SUITE_P(
-    MAYBE_GPayPromoCodeWithNewPageAction,
-    OfferNotificationBubbleViewsInteractiveUiTest,
-    testing::Combine(
-        testing::Values(OfferNotificationBubbleViewsInteractiveUiTestData{
-            "GPayPromoCodeWithNewPageAction",
-            AutofillOfferData::OfferType::GPAY_PROMO_CODE_OFFER,
-            /*is_page_actions_migration_enabled=*/true}),
         testing::Bool()),
     &GetTestName);
 
@@ -290,24 +227,6 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(OfferNotificationBubbleViewsInteractiveUiTestData{
             "GPayPromoCode",
             AutofillOfferData::OfferType::GPAY_PROMO_CODE_OFFER}),
-        testing::Bool()),
-    &GetTestName);
-
-// TODO(crbug.com/416010106): Flaky failures.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_GPayPromoCodeWithNewPageAction \
-  DISABLED_GPayPromoCodeWithNewPageAction
-#else
-#define MAYBE_GPayPromoCodeWithNewPageAction GPayPromoCodeWithNewPageAction
-#endif
-INSTANTIATE_TEST_SUITE_P(
-    MAYBE_GPayPromoCodeWithNewPageAction,
-    OfferNotificationBubbleViewsInteractiveUiTestNoTestingConfig,
-    testing::Combine(
-        testing::Values(OfferNotificationBubbleViewsInteractiveUiTestData{
-            "GPayPromoCodeWithNewPageAction",
-            AutofillOfferData::OfferType::GPAY_PROMO_CODE_OFFER,
-            /*is_page_actions_migration_enabled=*/true}),
         testing::Bool()),
     &GetTestName);
 
@@ -351,7 +270,7 @@ IN_PROC_BROWSER_TEST_P(
         {test_case.url_navigated_to.spec(), ", bubble should be=",
          test_case.bubble_should_be_visible ? "visible" : "invisible"}));
     ClearNotificationActiveDomainsForTesting();
-    NavigateTo(GURL(chrome::kChromeUINewTabPageURL));
+    NavigateTo(chrome::ChromeUINewTabPageURLAsGURL());
 
     ResetEventWaiterForSequence({DialogEvent::BUBBLE_SHOWN});
     NavigateToAndWaitForForm(GetUrl("www.merchantsite1.test", "/first"));
@@ -596,6 +515,7 @@ IN_PROC_BROWSER_TEST_P(
 #endif
 IN_PROC_BROWSER_TEST_P(OfferNotificationBubbleViewsInteractiveUiTest,
                        MAYBE_IconViewAccessibleName) {
+  ShowBubbleForOfferAndVerify();
   EXPECT_EQ(GetOfferNotificationPageActionView()
                 ->GetViewAccessibility()
                 .GetCachedName(),

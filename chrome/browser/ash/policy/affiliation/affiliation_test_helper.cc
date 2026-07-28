@@ -11,7 +11,9 @@
 #include <string_view>
 
 #include "ash/constants/ash_switches.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
@@ -133,7 +135,7 @@ void AffiliationTestHelper::SetUserAffiliationIDs(
 
   fake_session_manager_client_->set_user_policy(
       cryptohome::CreateAccountIdentifierFromAccountId(user_account_id),
-      user_policy->GetBlob());
+      login_manager::POLICY_DOMAIN_CHROME, user_policy->GetBlob());
 }
 
 // static
@@ -148,7 +150,8 @@ void AffiliationTestHelper::PreLoginUser(const AccountId& account_id) {
   user_manager::KnownUser(g_browser_process->local_state())
       .SaveKnownUser(account_id);
 
-  ash::StartupUtils::MarkOobeCompleted();
+  ash::StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
 }
 
 // static

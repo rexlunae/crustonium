@@ -116,7 +116,7 @@ bool LayoutSVGModelObject::MapToVisualRectInAncestorSpaceInternal(
       transform_state.LastPlanarQuad().BoundingBox());
   // Apply other mappings on local SVG coordinates.
   bool retval = SVGLayoutSupport::MapToVisualRectInAncestorSpace(
-      *this, ancestor, gfx::RectF(rect), rect);
+      *this, ancestor, gfx::RectF(rect), rect, visual_rect_flags);
   transform_state.SetQuad(gfx::QuadF(gfx::RectF(rect)));
   return retval;
 }
@@ -165,8 +165,9 @@ void LayoutSVGModelObject::StyleDidChange(
   LayoutObject::StyleDidChange(diff, old_style, style_change_context);
 
   if (diff.NeedsFullLayout()) {
-    if (diff.TransformChanged())
+    if (diff.transform_changed) {
       SetNeedsTransformUpdate();
+    }
   }
 
   SetHasTransformRelatedProperty(
@@ -178,7 +179,7 @@ void LayoutSVGModelObject::StyleDidChange(
     return;
 
   if (!IsSVGHiddenContainer()) {
-    if (diff.BlendModeChanged()) {
+    if (diff.blend_mode_changed) {
       DCHECK(IsBlendingAllowed());
       Parent()->DescendantIsolationRequirementsChanged(
           StyleRef().HasBlendMode() ? kDescendantIsolationRequired
@@ -186,9 +187,7 @@ void LayoutSVGModelObject::StyleDidChange(
     }
     if ((StyleRef().HasCurrentTransformRelatedAnimation() &&
          !old_style->HasCurrentTransformRelatedAnimation()) ||
-        (RuntimeEnabledFeatures::
-             SvgAvoidCullingElementsWithTransformOperationsEnabled() &&
-         StyleRef().HasNonIdentityTransformOperation() &&
+        (StyleRef().HasNonIdentityTransformOperation() &&
          !old_style->HasNonIdentityTransformOperation())) {
       Parent()->SetSVGDescendantMayHaveTransformRelatedOperations();
     }

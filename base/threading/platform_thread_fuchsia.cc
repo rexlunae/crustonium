@@ -95,14 +95,13 @@ void PlatformThread::SetName(const std::string& name) {
 // static
 bool PlatformThread::CanChangeThreadType(ThreadType from, ThreadType to) {
   return from == to || to == ThreadType::kPresentation ||
-         to == ThreadType::kInteractive || to == ThreadType::kRealtimeAudio;
+         to == ThreadType::kAudioProcessing || to == ThreadType::kRealtimeAudio;
 }
 
 namespace internal {
 
 void SetCurrentThreadTypeImpl(ThreadType thread_type,
-                              MessagePumpType pump_type_hint,
-                              bool may_change_affinity) {
+                              MessagePumpType pump_type_hint) {
   switch (thread_type) {
     case ThreadType::kDefault:
       SetThreadRole("chromium.base.threading.default");
@@ -118,7 +117,7 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
       break;
 
     case ThreadType::kPresentation:
-    case ThreadType::kInteractive:
+    case ThreadType::kAudioProcessing:
       SetThreadRole("chromium.base.threading.display", kDisplaySchedulingPeriod,
                     kDisplaySchedulingCapacity);
       break;
@@ -148,7 +147,7 @@ ThreadType PlatformThread::GetCurrentEffectiveThreadTypeForTest() {
   // Fuchsia doesn't provide a way to get the current thread's priority.
   // Use ThreadType stored in TLS as a proxy.
   const ThreadType thread_type = PlatformThread::GetCurrentThreadType();
-  if (thread_type == ThreadType::kInteractive) {
+  if (thread_type == ThreadType::kAudioProcessing) {
     return ThreadType::kPresentation;
   }
   return thread_type;

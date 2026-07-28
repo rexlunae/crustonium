@@ -31,7 +31,6 @@
 #include "base/unguessable_token.h"
 #include "chrome/browser/history_embeddings/history_embeddings_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
@@ -42,7 +41,7 @@
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/compose/buildflags.h"
 #include "components/content_extraction/content/browser/inner_text.h"
-#include "components/history_embeddings/history_embeddings_service.h"
+#include "components/history_embeddings/content/history_embeddings_service.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
@@ -218,7 +217,7 @@ void OnHistorySearchCompleted(
       visit_item->mutable_visit_time()->set_seconds(static_cast<int64_t>(
           scored_url_row.scored_url.visit_time.InSecondsFSinceUnixEpoch()));
       for (const std::string& passage :
-           scored_url_row.passages_embeddings.passages.passages()) {
+           scored_url_row.url_data.passages.passages()) {
         visit_item->add_passages(passage);
       }
     }
@@ -255,7 +254,7 @@ void GetHistoryQueryResultForModelPrototyping(
                          .start_time()
                          .seconds())),
         history_query.num_history_visits(),
-        /*skip_answering=*/true, history_search_callback);
+        /*skip_answering=*/true, /*url_id_filter=*/{}, history_search_callback);
   }
 }
 

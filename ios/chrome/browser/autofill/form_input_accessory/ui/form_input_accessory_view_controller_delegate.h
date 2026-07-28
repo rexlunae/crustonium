@@ -8,6 +8,7 @@
 #import <UIKit/UIKit.h>
 
 @class FormInputAccessoryViewController;
+@class FormSuggestion;
 
 namespace manual_fill {
 enum class ManualFillDataType;
@@ -31,6 +32,23 @@ enum class ManualFillDataType;
 // Resets the delegate.
 - (void)formInputAccessoryViewControllerReset:
     (FormInputAccessoryViewController*)formInputAccessoryViewController;
+
+// Returns whether filling the suggestion is an asynchronous process.
+- (BOOL)formInputAccessoryViewController:
+            (FormInputAccessoryViewController*)formInputAccessoryViewController
+               isSuggestionAutofillAsync:(FormSuggestion*)formSuggestion;
+
+// Returns YES if the suggestion label with the given RP ID should show its RP
+// ID.
+- (BOOL)formInputAccessoryViewController:
+            (FormInputAccessoryViewController*)formInputAccessoryViewController
+                          shouldShowRPId:(NSString*)rpId;
+
+// Returns the username for the given passkey suggestion.
+- (NSString*)formInputAccessoryViewController:
+                 (FormInputAccessoryViewController*)
+                     formInputAccessoryViewController
+                        usernameForSuggestion:(FormSuggestion*)suggestion;
 
 @end
 

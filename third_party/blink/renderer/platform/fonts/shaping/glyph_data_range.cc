@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/platform/fonts/shaping/glyph_data_range.h"
 
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_run.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -17,11 +18,11 @@ GlyphDataRange::GlyphDataRange(const GlyphDataRange& range,
     : run_(range.run_) {
   DCHECK(run_);
   CHECK_GE(begin_glyph, run_->glyph_data_.begin());
-  index_ = begin_glyph - run_->glyph_data_.begin();
+  index_ = CheckedDistance(run_->glyph_data_.begin(), begin_glyph);
   DCHECK_GE(index_, range.index_);
   CHECK_LE(index_, run_->NumGlyphs());
   CHECK_GE(end_glyph, begin_glyph);
-  size_ = end_glyph - begin_glyph;
+  size_ = CheckedDistance(begin_glyph, end_glyph);
   CHECK_LE(size_, run_->NumGlyphs() - index_);
 }
 
@@ -64,7 +65,8 @@ GlyphDataRange GlyphDataRange::FindGlyphDataRange(
     const HarfBuzzRunGlyphData* start_glyph =
         std::lower_bound(begin(), end(), start_character_index, comparer);
     if (start_glyph == end()) [[unlikely]] {
-      return GlyphDataRange();
+      // No glyph matches; an empty range that still keeps the run.
+      return {*this, start_glyph, start_glyph};
     }
     const HarfBuzzRunGlyphData* end_glyph =
         std::lower_bound(start_glyph, end(), end_character_index, comparer);
@@ -78,7 +80,8 @@ GlyphDataRange GlyphDataRange::FindGlyphDataRange(
   const auto start_glyph_it =
       std::lower_bound(rbegin, rend, start_character_index, comparer);
   if (start_glyph_it == rend) [[unlikely]] {
-    return GlyphDataRange();
+    // No glyph matches; an empty range that still keeps the run.
+    return {*this, begin(), begin()};
   }
   const auto end_glyph_it =
       std::lower_bound(start_glyph_it, rend, end_character_index, comparer);

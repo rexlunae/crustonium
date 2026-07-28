@@ -8,7 +8,6 @@ import android.content.Context;
 import android.os.Bundle;
 import android.view.View;
 
-import androidx.annotation.StringRes;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
 
@@ -120,15 +119,8 @@ public class TopicsFragment extends PrivacySandboxSettingsBaseFragment
     }
 
     private void maybeApplyAdTopicsContentParity() {
-        if (!ChromeFeatureList.isEnabled(
-                ChromeFeatureList.PRIVACY_SANDBOX_AD_TOPICS_CONTENT_PARITY)) {
-            return;
-        }
         mTopicsTogglePreference.setSummary(
                 getResources().getString(R.string.settings_ad_topics_page_toggle_sub_label));
-        mActiveTopicsPreference.setSummary(
-                getResources()
-                        .getString(R.string.settings_ad_topics_page_active_topics_description));
     }
 
     private void maybeApplyAdsApiUxEnhancements() {
@@ -145,17 +137,12 @@ public class TopicsFragment extends PrivacySandboxSettingsBaseFragment
                                 "</link2>",
                                 new ChromeClickableSpan(
                                         getContext(), this::onCookieSettingsLink))));
-        @StringRes int disclaimerStringResId = R.string.settings_ad_topics_page_disclaimer_clank;
-        // Use the updated disclaimer text if the Ad Topics Content Parity feature is enabled.
-        if (ChromeFeatureList.isEnabled(
-                ChromeFeatureList.PRIVACY_SANDBOX_AD_TOPICS_CONTENT_PARITY)) {
-            disclaimerStringResId = R.string.settings_ad_topics_page_disclaimer_v2_clank;
-        }
         ClickableSpansTextMessagePreference disclaimerPreference =
                 findPreference(TOPICS_DISCLAIMER);
         disclaimerPreference.setSummary(
                 SpanApplier.applySpans(
-                        getResources().getString(disclaimerStringResId),
+                        getResources()
+                                .getString(R.string.settings_ad_topics_page_disclaimer_v2_clank),
                         new SpanApplier.SpanInfo(
                                 "<link>",
                                 "</link>",
@@ -302,6 +289,13 @@ public class TopicsFragment extends PrivacySandboxSettingsBaseFragment
                 @Override
                 public void updateDynamicPreferences(
                         Context context, SettingsIndexData indexData, Profile profile) {
+                    boolean isDeprecationEnabled =
+                            ChromeFeatureList.isEnabled(
+                                    ChromeFeatureList.PRIVACY_SANDBOX_AD_PRIVACY_UX_DEPRECATION);
+                    if (isDeprecationEnabled) {
+                        indexData.removeEntry(getUniqueId(TOPICS_TOGGLE_PREFERENCE));
+                    }
+
                     indexData.removeEntry(getUniqueId(DISABLED_TOPICS_PREFERENCE));
                     indexData.removeEntry(getUniqueId(EMPTY_TOPICS_PREFERENCE));
                     indexData.removeEntry(getUniqueId(CURRENT_TOPICS_PREFERENCE));
@@ -309,8 +303,8 @@ public class TopicsFragment extends PrivacySandboxSettingsBaseFragment
                     indexData.removeEntry(getUniqueId(TOPICS_PAGE_FOOTER_PREFERENCE));
                     indexData.removeEntry(getUniqueId(TOPICS_DISCLAIMER));
 
-                    updateIndexedPreferencesVisibility(
-                            isTopicsPrefEnabled(profile), /* refreshResult= */ false);
+                    boolean topicsEnabled = !isDeprecationEnabled && isTopicsPrefEnabled(profile);
+                    updateIndexedPreferencesVisibility(topicsEnabled, /* refreshResult= */ false);
                 }
             };
 

@@ -12,15 +12,24 @@
 // the constant declarations, include the file
 // "account_capabilities_constants.h".
 
+// WARNING: Care must be taken to ensure that capabilities are fully available
+// server-side before they are added here. This is because (on some platforms)
+// if one individual capability fails to evaluate, the fetch will fail for all
+// other capabilities as well. To add a capability, please either:
+// 1. Wait for the server-side rollout to complete, then add the capability with
+//    the ACCOUNT_CAPABILITY() macro.
+// 2. Or (if the capability needs to be added to the client before the
+//    server-side rollout is complete), add the capability with the
+//    ACCOUNT_CAPABILITY_F() macro instead. You must then ensure that the flag
+//    is only enabled once the server-side rollout is complete.
+
 // Here we define the values using a macro ACCOUNT_CAPABILITY, so it can be
 // expanded differently in some places. The macro has the following signature:
 // ACCOUNT_CAPABILITY(cpp_label, java_label, name).
 
 // To define a new account capability that is flag-guarded, add a
 // ACCOUNT_CAPABILITY_F(cpp_label, java_label, name, feature_flag) macro
-// instead of ACCOUNT_CAPABILITY. This allows the capability to be submitted
-// before it is fully rolled out server-side.
-// - This is currently not supported for capabilities exposed on Android
+// instead of ACCOUNT_CAPABILITY.
 // - The #include for the feature flag must be added to account_capabilities.cc
 //   and not to this file
 
@@ -33,7 +42,7 @@
 // found at go/capability-alias (eg. go/capability-alias/ge2dinbnmnqxa).
 
 // clang-format off
-// keep-sorted start newline_separated=yes sticky_prefixes=#if group_prefixes=#endif
+// keep-sorted start newline_separated=yes sticky_prefixes=#if,BUILDFLAG group_prefixes=#endif
 // clang-format on
 ACCOUNT_CAPABILITY(kCanFetchFamilyMemberInfoCapabilityName,
                    CAN_FETCH_FAMILY_MEMBER_INFO_CAPABILITY_NAME,
@@ -62,6 +71,13 @@ ACCOUNT_CAPABILITY(
     CAN_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME,
     "accountcapabilities/gi2tklldmfya")
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kCanSubmitFeedbackInChromeCapabilityName,
+                   CAN_SUBMIT_FEEDBACK_IN_CHROME_CAPABILITY_NAME,
+                   "accountcapabilities/gizdqmrnmnqxa")
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
 ACCOUNT_CAPABILITY(kCanToggleAutoUpdatesName,
                    CAN_TOGGLE_AUTO_UPDATES_NAME,
@@ -86,11 +102,9 @@ ACCOUNT_CAPABILITY(kCanUseEduFeaturesCapabilityName,
                    "accountcapabilities/gezdsmbnmnqxa")
 #endif
 
-#if !BUILDFLAG(IS_IOS)
 ACCOUNT_CAPABILITY(kCanUseGeminiInChromeCapabilityName,
                    CAN_USE_GEMINI_IN_CHROME_CAPABILITY_NAME,
                    "accountcapabilities/giytmnrnmnqxa")
-#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 ACCOUNT_CAPABILITY(kCanUseGenerativeAiInRecorderApp,
@@ -141,5 +155,66 @@ ACCOUNT_CAPABILITY(kIsSubjectToEnterprisePoliciesCapabilityName,
 ACCOUNT_CAPABILITY(kIsSubjectToParentalControlsCapabilityName,
                    IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME,
                    "accountcapabilities/guydolldmfya")
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY_F(
+    kCanContextuallyShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName,
+    CAN_CONTEXTUALLY_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME,
+    "accountcapabilities/giztknjnmnqxa",
+    switches::kReadContextualAccountCapabilities)
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY_F(kCanContextuallyUseGeminiInChromeCapabilityName,
+                     CAN_CONTEXTUALLY_USE_GEMINI_IN_CHROME_NAME,
+                     "accountcapabilities/giztmobnmnqxa",
+                     switches::kReadContextualAccountCapabilities)
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY_F(kCanContextuallyUseModelExecutionFeaturesName,
+                     CAN_CONTEXTUALLY_USE_MODEL_EXECUTION_FEATURES_NAME,
+                     "accountcapabilities/giztinznmnqxa",
+                     switches::kReadContextualAccountCapabilities)
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY_F(kCanSignInToChromeCapabilityName,
+                     CAN_SIGN_IN_TO_CHROME_CAPABILITY_NAME,
+                     "accountcapabilities/giztambnmnqxa",
+                     switches::kEnforceCanSignInToChromeCapability)
+#endif
+
+#if !defined(NDEBUG) && !BUILDFLAG(IS_ANDROID)
+// This is a fake account capability, used for unit tests only.
+// To avoid additional fetches in production code, only define this in debug
+// builds.
+// Java codegen does not pick up the `NDEBUG` guard, so do not define this
+// capability and the corresponding tests on Android.
+ACCOUNT_CAPABILITY_F(kFakeCapabilityForTestingName,
+                     FAKE_CAPABILITY_FOR_TESTING_NAME,
+                     "accountcapabilities/fakecapabilityfortesting",
+                     switches::kEnableFakeCapabilityForTesting)
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY_F(kMustFetchAppleAgeRangeInChromeCapabilityName,
+                     MUST_FETCH_APPLE_AGE_RANGE_IN_CHROME_CAPABILITY_NAME,
+                     "accountcapabilities/gi3dkmbnmnqxa",
+                     switches::kBuildExternalPrivacyContext)
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY_F(kMustSkipAppleAgeRangeInChromeCapabilityName,
+                     MUST_SKIP_APPLE_AGE_RANGE_IN_CHROME_CAPABILITY_NAME,
+                     "accountcapabilities/gi2tqnbnmnqxa",
+                     switches::kBuildExternalPrivacyContext)
+#endif
+
+ACCOUNT_CAPABILITY_F(
+    kSupportsWalletPrivatePassesInAutofillCapabilityName,
+    SUPPORTS_WALLET_PRIVATE_PASSES_IN_AUTOFILL_NAME,
+    "accountcapabilities/gi3dknrnmnqxa",
+    switches::kReadSupportsWalletPrivatePassesInAutofillCapability)
 
 // keep-sorted end

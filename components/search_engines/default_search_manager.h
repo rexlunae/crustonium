@@ -84,6 +84,7 @@ class DefaultSearchManager
   static const char kRequireShortcut[];
   static const char kPreconnectToSearchUrl[];
   static const char kPrefetchLikelyNavigations[];
+  static const char kSendXGeoHeader[];
   static const char kIsActive[];
   static const char kStarterPackId[];
   static const char kEnforcedByPolicy[];
@@ -114,11 +115,14 @@ class DefaultSearchManager
   // Keep in sync with enums.xml.
   enum class DefaultSearchEngineMirrorCheckOutcomeType {
     kNoTamperingDetected = 0,
-    kResetSkippedForEnterpriseDevice = 1,
+    kObsoleteResetSkippedForEnterpriseDevice = 1,
     kMirrorCheckReset = 2,
     kRecentHmacReset = 3,
     kStaleHmacReset = 4,
-    kMaxValue = kStaleHmacReset,
+    // Reset skipped when DSE is mandatory by policy, or when no user-controlled
+    // DSE setting or recent HMAC reset is present.
+    kResetSkippedForManagedDefaultSearch = 5,
+    kMaxValue = kResetSkippedForManagedDefaultSearch,
   };
 
   using ObserverCallback =

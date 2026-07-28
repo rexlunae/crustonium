@@ -52,13 +52,11 @@ class CORE_EXPORT SpellCheckRequest final
 
   static SpellCheckRequest* Create(
       const EphemeralRange& checking_range,
-      const blink::DocumentMarkerVector& spelling_markers,
       int request_number,
       bool should_force_refresh);
 
   SpellCheckRequest(Range* checking_range,
                     const String&,
-                    const blink::DocumentMarkerVector& spelling_markers,
                     int request_number,
                     bool should_force_refresh);
   ~SpellCheckRequest();
@@ -104,7 +102,6 @@ class CORE_EXPORT SpellCheckRequester final
   // Returns true if a request is initiated. Returns false otherwise.
   bool RequestCheckingFor(const EphemeralRange&);
   bool RequestCheckingFor(const EphemeralRange&,
-                          const blink::DocumentMarkerVector& spelling_markers,
                           int request_num,
                           bool should_force_refresh);
   void CancelCheck();
@@ -144,7 +141,7 @@ class CORE_EXPORT SpellCheckRequester final
 
   Member<SpellCheckRequest> processing_request_;
 
-  typedef HeapDeque<Member<SpellCheckRequest>> RequestQueue;
+  using RequestQueue = HeapDeque<Member<SpellCheckRequest>>;
   RequestQueue request_queue_;
 };
 

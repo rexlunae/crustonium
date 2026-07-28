@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/views/frame/browser_root_view.h"
 
 #include <cmath>
-#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -21,29 +20,22 @@
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/common/chrome_features.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/tabs/public/tab_interface.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/buildflags.h"
-#include "content/public/common/webplugininfo.h"
 #include "net/base/filename_util.h"
 #include "net/base/mime_util.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
@@ -59,7 +51,6 @@
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/compositor/paint_recorder.h"
-#include "ui/gfx/scoped_canvas.h"
 #include "ui/views/view.h"
 #include "url/url_constants.h"
 
@@ -195,7 +186,7 @@ BrowserRootView::~BrowserRootView() {
   // It's possible to destroy the browser while a drop is active.  In this case,
   // |drop_info_| will be non-null, but its |target| likely points to an
   // already-deleted child.  Clear the target so ~DropInfo() will not try and
-  // notify it of the drag ending. http://crbug.com/1001942
+  // notify it of the drag ending. http://crbug.com/40050082
   if (drop_info_) {
     drop_info_->target = nullptr;
   }
@@ -276,7 +267,7 @@ void BrowserRootView::OnDragEntered(const ui::DropTargetEvent& event) {
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&GetURLMimeTypes, urls),
       base::BindOnce(&FilterURLsForDropability, urls,
-                     browser_view_->browser()->profile(),
+                     browser_view_->browser()->GetProfile(),
                      base::BindOnce(&BrowserRootView::OnFilteringComplete,
                                     weak_ptr_factory_.GetWeakPtr(),
                                     drop_info_->sequence)));
@@ -380,6 +371,7 @@ bool BrowserRootView::OnMouseWheel(const ui::MouseWheelEvent& event) {
             browser, TabStripUserGestureDetails(
                          TabStripUserGestureDetails::GestureType::kWheel,
                          event.time_stamp()));
+        base::RecordAction(base::UserMetricsAction("ScrollToNavigate_NextTab"));
         return true;
       }
 
@@ -390,6 +382,8 @@ bool BrowserRootView::OnMouseWheel(const ui::MouseWheelEvent& event) {
             browser, TabStripUserGestureDetails(
                          TabStripUserGestureDetails::GestureType::kWheel,
                          event.time_stamp()));
+        base::RecordAction(
+            base::UserMetricsAction("ScrollToNavigate_PreviousTab"));
         return true;
       }
     }
@@ -573,7 +567,7 @@ std::optional<GURL> BrowserRootView::GetPasteAndGoURL(
 
   AutocompleteMatch match;
   AutocompleteClassifierFactory::GetForProfile(
-      browser_view_->browser()->profile())
+      browser_view_->browser()->GetProfile())
       ->Classify(text, false, false, metrics::OmniboxEventProto::INVALID_SPEC,
                  &match, nullptr);
   if (!match.destination_url.is_valid()) {
@@ -605,7 +599,7 @@ void BrowserRootView::NavigateToDroppedUrls(
   TabStripModel* const model = browser->tab_strip_model();
 
   // If the browser window is not visible, it's about to be destroyed.
-  if (!browser->window()->IsVisible() || model->empty()) {
+  if (!browser->GetWindow()->IsVisible() || model->empty()) {
     return;
   }
 

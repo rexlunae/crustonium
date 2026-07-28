@@ -17,7 +17,6 @@
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/omnibox_position_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_omnibox_consumer.h"
 #import "ios/web/public/ui/crw_web_view_proxy.h"
 #import "ios/web/public/web_state.h"
@@ -130,13 +129,6 @@
   [self.omniboxConsumer setBottomOmniboxOffsetForPopup:bottomOffset];
 }
 
-- (void)didNavigateToNTPOnActiveWebState {
-  _isNTP = YES;
-  if (IsBottomOmniboxAvailable()) {
-    [self updateOmniboxPosition];
-    [self.omniboxConsumer setIsNTP:_isNTP];
-  }
-}
 
 #pragma mark - Setters
 
@@ -176,6 +168,15 @@
 
 - (void)webState:(web::WebState*)webState
     didStartNavigation:(web::NavigationContext*)navigation {
+  [self updateForWebState:webState];
+}
+
+- (void)webState:(web::WebState*)webState
+    didFinishNavigation:(web::NavigationContext*)navigation {
+  [self updateForWebState:webState];
+}
+
+- (void)webState:(web::WebState*)webState didLoadPageWithSuccess:(BOOL)success {
   [self updateForWebState:webState];
 }
 
@@ -222,24 +223,6 @@
     return steadyState;
   }
 
-  if (omnibox::ForceBottomOmniboxInEditState()) {
-    if (IsCompactHeight(_toolbarTraitCollection)) {
-      return ToolbarType::kPrimary;
-    }
-
-    return ToolbarType::kSecondary;
-  }
-
-  if (omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition()) {
-    // When viewing the NTP in portrait orientation, deviate from the standard
-    // steady-state behavior and apply the preferred omnibox position.
-    if (_isNTP && !IsCompactHeight(_toolbarTraitCollection)) {
-      return _preferredOmniboxPosition;
-    }
-
-    return steadyState;
-  }
-
   return ToolbarType::kPrimary;
 }
 
@@ -250,8 +233,6 @@
     return;
   }
 
-  [self.omniboxConsumer setKeyboardAttachedBottomOmniboxHeight:
-                            self.delegate.keyboardAttachedBottomOmniboxHeight];
   [self.omniboxConsumer setPreferredOmniboxPosition:_preferredOmniboxPosition];
 
   self.omniboxPosition = [self omniboxPositionInCurrentState];

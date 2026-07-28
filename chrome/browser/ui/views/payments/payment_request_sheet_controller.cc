@@ -12,12 +12,12 @@
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view.h"
 #include "chrome/browser/ui/views/payments/payment_request_views_util.h"
-#include "components/payments/content/payment_request.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
@@ -245,7 +245,9 @@ class PaymentRequestBackArrowButton : public views::ImageButton {
       : views::ImageButton(std::move(back_arrow_callback)) {
     ConfigureVectorImageButton(this);
     views::SetImageFromVectorIconWithColor(
-        this, vector_icons::kBackArrowIcon,
+        this,
+        features::IsRoundedIconsEnabled() ? vector_icons::kArrowBackIcon
+                                          : vector_icons::kBackArrowOldIcon,
         {kColorPaymentsRequestBackArrowButtonIcon,
          kColorPaymentsRequestBackArrowButtonIconDisabled});
     constexpr int kBackArrowSize = 16;
@@ -381,18 +383,6 @@ void PaymentRequestSheetController::UpdateContentView() {
   content_view_->RemoveAllChildViews();
   FillContentView(content_view_);
   RelayoutPane();
-}
-
-void PaymentRequestSheetController::UpdateHeaderView() {
-  // Do not update the view if the payment request is being aborted.
-  if (!is_active_) {
-    return;
-  }
-
-  header_view_->RemoveAllChildViews();
-  PopulateSheetHeaderView(header_view_);
-  header_view_->InvalidateLayout();
-  header_view_->SchedulePaint();
 }
 
 void PaymentRequestSheetController::UpdateFocus(views::View* focused_view) {
@@ -590,7 +580,7 @@ bool PaymentRequestSheetController::DisplayDynamicBorderForHiddenContents() {
 
 bool PaymentRequestSheetController::ShouldAccelerateEnterKey() {
   // Subclasses must explicitly opt-into this behavior. Be aware of the risks of
-  // enabling click-jacking of the Enter key; see https://crbug.com/1403539
+  // enabling click-jacking of the Enter key; see https://crbug.com/40062377
   return false;
 }
 

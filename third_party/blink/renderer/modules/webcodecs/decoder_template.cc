@@ -58,7 +58,7 @@ base::AtomicSequenceNumber g_sequence_num_for_counters;
 // static
 template <typename Traits>
 const CodecTraceNames* DecoderTemplate<Traits>::GetTraceNames() {
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(CodecTraceNames, trace_names,
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(const CodecTraceNames, trace_names,
                                   (Traits::GetName()));
   return &trace_names;
 }
@@ -101,8 +101,7 @@ DecoderTemplate<Traits>::~DecoderTemplate() {
   base::UmaHistogramSparse(
       UNSAFE_TODO(
           String::Format("Blink.WebCodecs.%s.FinalStatus", Traits::GetName()))
-          .Ascii()
-          .c_str(),
+          .Ascii(),
       static_cast<int>(logger_->status_code()));
 }
 
@@ -672,6 +671,16 @@ void DecoderTemplate<Traits>::OnInitializeDone(media::DecoderStatus status) {
 
   const bool is_flush = pending_request_->type == Request::Type::kFlush;
   if (!status.is_ok()) {
+    if (status.code() == media::DecoderStatus::Codes::kTooManyDecoders) {
+      Shutdown(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kQuotaExceededError,
+          is_flush
+              ? "Unexpectedly ran out of decoders during initialize after "
+                "flush. Close all pending frames and try again."
+              : "Decoder initialization failed, too many decoders in use."));
+      return;
+    }
+
     std::string error_message;
     if (is_flush) {
       error_message = "Error during initialize after flush.";
@@ -777,12 +786,12 @@ void DecoderTemplate<Traits>::OnOutput(uint32_t reset_generation,
 
   OutputType* blink_output = std::move(output_or_error).value();
 
-  TRACE_EVENT_BEGIN1(kCategory, GetTraceNames()->output.c_str(), "timestamp",
-                     blink_output->timestamp());
-
-  output_cb_->InvokeAndReportException(nullptr, blink_output);
-
-  TRACE_EVENT_END0(kCategory, GetTraceNames()->output.c_str());
+  {
+    TRACE_EVENT(kCategory,
+                perfetto::StaticString(GetTraceNames()->output.c_str()),
+                "timestamp", blink_output->timestamp());
+    output_cb_->InvokeAndReportException(nullptr, blink_output);
+  }
 
   MarkCodecActive();
 }
@@ -921,8 +930,9 @@ void DecoderTemplate<Traits>::Request::StartTracing() {
   DCHECK(!is_tracing);
   is_tracing = true;
 #endif
-  TRACE_EVENT_BEGIN(kCategory, perfetto::DynamicString(TraceNameFromType()),
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(kCategory, perfetto::StaticString(TraceNameFromType()),
+                    perfetto::NamedTrack::FromPointer(
+                        perfetto::StaticString(Traits::GetName()), this));
 }
 
 template <typename Traits>
@@ -931,8 +941,10 @@ void DecoderTemplate<Traits>::Request::EndTracing(bool shutting_down) {
   DCHECK(is_tracing);
   is_tracing = false;
 #endif
-  TRACE_EVENT_END(kCategory, perfetto::Track::FromPointer(this), "completed",
-                  !shutting_down);
+  TRACE_EVENT_END(kCategory,
+                  perfetto::NamedTrack::FromPointer(
+                      perfetto::StaticString(Traits::GetName()), this),
+                  "completed", !shutting_down);
 }
 
 template <typename Traits>

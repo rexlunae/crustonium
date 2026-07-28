@@ -15,6 +15,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/token_binding_response_encryption_error.h"
 #include "net/cookies/cookie_constants.h"
@@ -29,10 +30,6 @@ using DeviceBoundSession = ::OAuthMultiloginResult::DeviceBoundSession;
 std::string_view StripXSSICharacters(std::string_view raw_data) {
   std::string_view body(raw_data);
   return body.substr(std::min(body.find('\n'), body.size()));
-}
-
-void RecordMultiloginResponseStatus(OAuthMultiloginResponseStatus status) {
-  base::UmaHistogramEnumeration("Signin.OAuthMultiloginResponseStatus", status);
 }
 
 void RecordMultiloginResponseEncryptionError(
@@ -56,6 +53,9 @@ DeviceBoundSession::Domain ParseDeviceBoundSessionDomain(
     std::string_view domain) {
   if (base::EqualsCaseInsensitiveASCII(domain, "GOOGLE_COM")) {
     return DeviceBoundSession::Domain::kGoogle;
+  }
+  if (base::EqualsCaseInsensitiveASCII(domain, "YOUTUBE_COM")) {
+    return DeviceBoundSession::Domain::kYoutube;
   }
   return DeviceBoundSession::Domain::kUnknown;
 }
@@ -356,14 +356,12 @@ OAuthMultiloginResult::OAuthMultiloginResult(
   std::optional<base::Value> json_data =
       base::JSONReader::Read(data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!json_data) {
-    RecordMultiloginResponseStatus(status_);
     return;
   }
 
   const base::DictValue& json_dict = json_data->GetDict();
   const std::string* status_string = json_dict.FindString("status");
   if (!status_string) {
-    RecordMultiloginResponseStatus(status_);
     return;
   }
 
@@ -384,8 +382,6 @@ OAuthMultiloginResult::OAuthMultiloginResult(
     // Sets status_ to `kUnknownStatus` if failed accounts cannot be parsed.
     TryParseFailedAccountsFromValue(json_dict);
   }
-
-  RecordMultiloginResponseStatus(status_);
 }
 
 OAuthMultiloginResult::~OAuthMultiloginResult() = default;

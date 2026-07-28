@@ -29,7 +29,6 @@
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
@@ -726,7 +725,7 @@ TEST_F(ChromeShelfPrefsTest, PinPreloadEmpty) {
            "mall, gmail, cal, files, messages, meet, play, youtube, photos"}));
   auto get_prefs = [&]() {
     return profile_->GetPrefs()
-        ->GetList(prefs::kShelfDefaultPinLayoutRolls)
+        ->GetList(ash::prefs::kShelfDefaultPinLayoutRolls)
         .DebugString();
   };
 
@@ -757,8 +756,8 @@ TEST_F(ChromeShelfPrefsTest, PinPreloadEmpty) {
 TEST_F(ChromeShelfPrefsTest, CleanupPreloadPrefs) {
   PrefService* prefs = profile_->GetPrefs();
   std::vector<std::string> pref_names = {
-      prefs::kShelfDefaultPinLayoutRolls,
-      prefs::kShelfDefaultPinLayoutRollsForTabletFormFactor};
+      ash::prefs::kShelfDefaultPinLayoutRolls,
+      ash::prefs::kShelfDefaultPinLayoutRollsForTabletFormFactor};
 
   const struct {
     std::vector<std::string> pref_list;

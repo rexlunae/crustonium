@@ -12,6 +12,7 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/app/application_delegate/startup_information.h"
 #import "ios/chrome/app/profile/profile_state.h"
@@ -67,12 +68,6 @@ bool IsEmptyNTP(const web::WebState* web_state) {
 // Caches the previous activation level.
 @property(nonatomic, assign) SceneActivationLevel previousActivationLevel;
 
-// YES if The ProfileState was not ready before the SceneState reached a valid
-// activation level, so therefore this agent needs to wait for the ProfileState
-// initStage to reach a valid stage before checking whether the Start Surface
-// should be shown.
-@property(nonatomic, assign) BOOL waitingForProfileStateAfterSceneStateReady;
-
 @end
 
 @implementation StartSurfaceSceneAgent
@@ -92,35 +87,44 @@ bool IsEmptyNTP(const web::WebState* web_state) {
 - (void)profileState:(ProfileState*)profileState
     didTransitionToInitStage:(ProfileInitStage)nextInitStage
                fromInitStage:(ProfileInitStage)fromInitStage {
-  if (nextInitStage == ProfileInitStage::kFinal &&
-      self.waitingForProfileStateAfterSceneStateReady) {
-    self.waitingForProfileStateAfterSceneStateReady = NO;
-    [self showStartSurfaceIfNecessary];
-    [self showTabGroupInGridIfNecessary];
+  if (nextInitStage == ProfileInitStage::kFinal) {
+    [profileState removeObserver:self];
+    [self sceneState:self.sceneState
+        transitionedToActivationLevel:self.sceneState.activationLevel];
   }
 }
 
 #pragma mark - SceneStateObserver
 
 - (void)sceneStateDidEnableUI:(SceneState*)sceneState {
-  if (self.waitingForProfileStateAfterSceneStateReady) {
-    self.waitingForProfileStateAfterSceneStateReady = NO;
-    [self showStartSurfaceIfNecessary];
-    [self showTabGroupInGridIfNecessary];
-  }
+  [self sceneState:self.sceneState
+      transitionedToActivationLevel:self.sceneState.activationLevel];
 }
 
 - (void)sceneStateDidDisableUI:(SceneState*)sceneState {
   // Tear down objects tied to the scene state before it is deleted.
   [self.sceneState.profileState removeObserver:self];
-  self.waitingForProfileStateAfterSceneStateReady = NO;
 }
 
 - (void)sceneState:(SceneState*)sceneState
     transitionedToActivationLevel:(SceneActivationLevel)level {
+  if (sceneState.profileState.initStage < ProfileInitStage::kFinal) {
+    return;
+  }
+
   if (level != SceneActivationLevelForegroundActive &&
       self.previousActivationLevel == SceneActivationLevelForegroundActive) {
     SetStartSurfaceSessionObjectForSceneState(sceneState);
+    Browser* browser =
+        sceneState.browserProviderInterface.mainBrowserProvider.browser;
+    if (browser) {
+      web::WebState* activeWebState =
+          browser->GetWebStateList()->GetActiveWebState();
+      if (activeWebState && !IsUrlNtp(activeWebState->GetVisibleURL())) {
+        StartSurfaceRecentTabBrowserAgent::FromBrowser(browser)
+            ->SaveMostRecentTab();
+      }
+    }
   }
   if (level == SceneActivationLevelBackground &&
       self.previousActivationLevel > SceneActivationLevelBackground) {
@@ -142,12 +146,10 @@ bool IsEmptyNTP(const web::WebState* web_state) {
   if (self.sceneState.profileState.initStage < ProfileInitStage::kFinal) {
     // NO if the app is not yet ready to present normal UI that is required by
     // Start Surface.
-    self.waitingForProfileStateAfterSceneStateReady = YES;
     return;
   }
 
   if (!self.sceneState.UIEnabled) {
-    self.waitingForProfileStateAfterSceneStateReady = YES;
     return;
   }
 
@@ -155,10 +157,13 @@ bool IsEmptyNTP(const web::WebState* web_state) {
   Browser* browser =
       self.sceneState.browserProviderInterface.mainBrowserProvider.browser;
 
-  // TODO(crbug.com/343699504): Remove pre-fetching capabilities once these
-  // are loaded in iSL.
   ProfileIOS* profile = browser->GetProfile();
-  RunSystemCapabilitiesPrefetch(signin::GetIdentitiesOnDevice(profile));
+
+  if (!base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext)) {
+    // Capabilities prefetching is no longer necessary; all capabilities fetches
+    // are deferred until External Privacy Contexts are built.
+    RunSystemCapabilitiesPrefetch(signin::GetIdentitiesOnDevice(profile));
+  }
 
   if (!ShouldShowStartSurfaceForSceneState(self.sceneState)) {
     return;
@@ -182,17 +187,27 @@ bool IsEmptyNTP(const web::WebState* web_state) {
     return;
   }
 
+  if (base::FeatureList::IsEnabled(kStartSurfaceUserSetting)) {
+    BOOL isStartSurfaceEnabled =
+        profile->GetPrefs()->GetBoolean(prefs::kStartSurfaceEnabled);
+    base::UmaHistogramBoolean("IOS.StartSurface.EnabledByUserSetting",
+                              isStartSurfaceEnabled);
+    if (!isStartSurfaceEnabled) {
+      return;
+    }
+  }
+
   base::RecordAction(base::UserMetricsAction("IOS.StartSurface.Show"));
   StartSurfaceRecentTabBrowserAgent::FromBrowser(browser)->SaveMostRecentTab();
   WebStateList* webStateList = browser->GetWebStateList();
 
-    // Iterate through the WebStateList and activate the existing NTP tab for
-    // the Start surface (if any).
-    for (int i = webStateList->count() - 1; i >= 0; --i) {
-      if ([self activateUngroupedNTPForWebStateList:webStateList atIndex:i]) {
-        return;
-      }
+  // Iterate through the WebStateList and activate the existing NTP tab for
+  // the Start surface (if any).
+  for (int i = webStateList->count() - 1; i >= 0; --i) {
+    if ([self activateUngroupedNTPForWebStateList:webStateList atIndex:i]) {
+      return;
     }
+  }
 
   // Create a new NTP since there is no existing one.
   TabInsertionBrowserAgent* insertion_agent =
@@ -347,9 +362,10 @@ bool IsEmptyNTP(const web::WebState* web_state) {
   }
   web::WebState* lastKnownWebState = webStateList->GetWebStateAt(index);
   if (IsUrlNtp(lastKnownWebState->GetVisibleURL())) {
-    webStateList->ActivateWebStateAt(index);
+    lastKnownWebState->ForceRealized();
     NewTabPageTabHelper::FromWebState(lastKnownWebState)
         ->SetShowStartSurface(true);
+    webStateList->ActivateWebStateAt(index);
     return YES;
   }
   return NO;
@@ -377,22 +393,18 @@ bool IsEmptyNTP(const web::WebState* web_state) {
 // Shows the active tab group in tab grid view if chrome becomes active during a
 // specific time interval since last activation.
 - (void)showTabGroupInGridIfNecessary {
-  if (!IsShowTabGroupInGridOnStartEnabled()) {
-    return;
-  }
-
   if (self.sceneState.profileState.initStage < ProfileInitStage::kFinal) {
     // Do not show if the app is not yet ready to present normal UI that is
     // required by tab group in grid.
-    self.waitingForProfileStateAfterSceneStateReady = YES;
     return;
   }
 
   Browser* browser =
-      self.sceneState.browserProviderInterface.currentBrowserProvider.browser;
+      self.sceneState.browserProviderInterface.mainBrowserProvider.browser;
 
-  // Do not show if in IncognitoMode
-  if (browser->type() != Browser::Type::kRegular) {
+  // Do not show if the regular browser is not the current one.
+  if (browser !=
+      self.sceneState.browserProviderInterface.currentBrowserProvider.browser) {
     return;
   }
 
@@ -407,6 +419,10 @@ bool IsEmptyNTP(const web::WebState* web_state) {
 
   WebStateList* webStateList = browser->GetWebStateList();
   int index = webStateList->active_index();
+  // Return if no active webState.
+  if (index == WebStateList::kInvalidIndex) {
+    return;
+  }
   const TabGroup* tabGroup = webStateList->GetGroupOfWebStateAt(index);
   if (!tabGroup) {
     // Do not show if active tab is not part of a group.

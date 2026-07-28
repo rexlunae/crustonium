@@ -75,6 +75,10 @@ bool ConvertManifestRule(DeclarativeManifestData::Rule& rule,
 
 }  // namespace
 
+// static
+const char* DeclarativeManifestData::kManifestDataKey =
+    manifest_keys::kEventRules;
+
 DeclarativeManifestData::DeclarativeManifestData() {
 }
 
@@ -82,10 +86,9 @@ DeclarativeManifestData::~DeclarativeManifestData() {
 }
 
 // static
-DeclarativeManifestData* DeclarativeManifestData::Get(
+const DeclarativeManifestData* DeclarativeManifestData::Get(
     const Extension* extension) {
-  return static_cast<DeclarativeManifestData*>(
-      extension->GetManifestData(manifest_keys::kEventRules));
+  return extension->GetManifestData<DeclarativeManifestData>();
 }
 
 // static
@@ -162,15 +165,18 @@ std::unique_ptr<DeclarativeManifestData> DeclarativeManifestData::FromValue(
 }
 
 std::vector<DeclarativeManifestData::Rule>
-DeclarativeManifestData::RulesForEvent(const std::string& event) {
-  const auto& rules = event_rules_map_[event];
+DeclarativeManifestData::RulesForEvent(const std::string& event) const {
   std::vector<DeclarativeManifestData::Rule> result;
-  result.reserve(rules.size());
-  for (const auto& rule : rules) {
-    // TODO(rdevlin.cronin): It would be nice if we could have the RulesRegistry
-    // reference the rules owned here, but the ownership issues are a bit
-    // tricky. Revisit this.
-    result.push_back(rule.Clone());
+  auto iterator = event_rules_map_.find(event);
+  if (iterator != event_rules_map_.end()) {
+    const std::vector<Rule>& rules = iterator->second;
+    result.reserve(rules.size());
+    for (const Rule& rule : rules) {
+      // TODO(rdevlin.cronin): It would be nice if we could have the
+      // RulesRegistry reference the rules owned here, but the ownership issues
+      // are a bit tricky. Revisit this.
+      result.push_back(rule.Clone());
+    }
   }
   return result;
 }

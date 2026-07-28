@@ -58,7 +58,7 @@ public class ApplicationViewportInsetTracker implements Destroyable {
     private @Nullable InsetObserver mInsetObserver;
 
     /** The observer that gets attached to all inset suppliers. */
-    private final Callback<Integer> mInsetSupplierObserver = (unused) -> computeInsets();
+    private final Callback<Integer> mInsetSupplierObserver = _ -> computeInsets();
 
     private final SettableNonNullObservableSupplier<ViewportInsets> mInsetSupplier =
             ObservableSuppliers.createNonNull(new ViewportInsets());
@@ -127,7 +127,7 @@ public class ApplicationViewportInsetTracker implements Destroyable {
         mKeyboardInsetSupplier = insetSupplier;
 
         if (mKeyboardInsetSupplier != null) {
-            mKeyboardInsetSupplier.addObserver(mInsetSupplierObserver);
+            mKeyboardInsetSupplier.addSyncObserverAndPostIfNonNull(mInsetSupplierObserver);
         } else if (didRemove) {
             // If a supplier was removed, removeObserver will not have notified observers (unlike
             // addObserver) so make sure insets get recomputed in this case.
@@ -164,7 +164,7 @@ public class ApplicationViewportInsetTracker implements Destroyable {
         mKeyboardAccessoryInsetSupplier = insetSupplier;
 
         if (mKeyboardAccessoryInsetSupplier != null) {
-            mKeyboardAccessoryInsetSupplier.addObserver(mInsetSupplierObserver);
+            mKeyboardAccessoryInsetSupplier.addSyncObserverAndPostIfNonNull(mInsetSupplierObserver);
         } else if (didRemove) {
             // If a supplier was removed, removeObserver will not have notified observers (unlike
             // addObserver) so make sure insets get recomputed in this case.
@@ -182,7 +182,7 @@ public class ApplicationViewportInsetTracker implements Destroyable {
         mBottomSheetInsetSupplier = insetSupplier;
 
         if (mBottomSheetInsetSupplier != null) {
-            mBottomSheetInsetSupplier.addObserver(mInsetSupplierObserver);
+            mBottomSheetInsetSupplier.addSyncObserverAndPostIfNonNull(mInsetSupplierObserver);
         } else if (didRemove) {
             // If a supplier was removed, removeObserver will not have notified observers (unlike
             // addObserver) so make sure insets get recomputed in this case.

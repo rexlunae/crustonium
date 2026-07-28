@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
@@ -18,16 +19,21 @@
 #include "chrome/browser/ash/kerberos/kerberos_files_handler.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/kerberos/kerberos_client.h"
 #include "chromeos/ash/components/dbus/kerberos/kerberos_service.pb.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -149,13 +155,26 @@ class KerberosCredentialsManagerTest : public testing::Test {
     KerberosClient::InitializeFake();
     client_test_interface()->SetTaskDelay(base::TimeDelta());
 
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
+
+    user_session_manager_ = std::make_unique<UserSessionManager>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash());
+
     user_manager_->AddUser(AccountId::FromUserEmail(kProfileEmail));
 
     // Setting the login password for the KerberosAccounts policy tests.
     UserContext* user_context =
-        UserSessionManager::GetInstance()->mutable_user_context_for_testing();
+        user_session_manager_->mutable_user_context_for_testing();
     user_context->SetPasswordKey(Key(kPassword));
-    UserSessionManager::GetInstance()->set_start_session_type_for_testing(
+    user_session_manager_->set_start_session_type_for_testing(
         UserSessionManager::StartSessionType::kPrimary);
 
     TestingProfile::Builder profile_builder;
@@ -180,8 +199,11 @@ class KerberosCredentialsManagerTest : public testing::Test {
     mgr_->RemoveObserver(&observer_);
     mgr_.reset();
     display_service_.reset();
+    user_session_manager_->Shutdown();
     profile_.reset();
-    UserSessionManager::GetInstance()->Shutdown();
+    user_session_manager_.reset();
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
+
     KerberosClient::Shutdown();
     SessionManagerClient::Shutdown();
   }
@@ -306,8 +328,9 @@ class KerberosCredentialsManagerTest : public testing::Test {
     mgr_->ListAccounts(base::BindLambdaForTesting(
         [&](const kerberos::ListAccountsResponse& response) {
           EXPECT_EQ(kerberos::ERROR_NONE, response.error());
-          for (int n = 0; n < response.accounts_size(); ++n)
+          for (int n = 0; n < response.accounts_size(); ++n) {
             accounts.push_back(std::move(response.accounts(n)));
+          }
           run_loop.Quit();
         }));
     run_loop.Run();
@@ -319,8 +342,9 @@ class KerberosCredentialsManagerTest : public testing::Test {
   kerberos::Account GetAccount() {
     Accounts accounts = ListAccounts();
     EXPECT_LE(1u, accounts.size());
-    if (accounts.size() != 1)
+    if (accounts.size() != 1) {
       return Account();
+    }
     return std::move(accounts[0]);
   }
 
@@ -335,7 +359,7 @@ class KerberosCredentialsManagerTest : public testing::Test {
          s = static_cast<UserSessionManager::PasswordConsumingService>(
              static_cast<int>(s) + 1)) {
       if (s != UserSessionManager::PasswordConsumingService::kKerberos) {
-        UserSessionManager::GetInstance()->VoteForSavingLoginPassword(
+        user_session_manager_->VoteForSavingLoginPassword(
             s, kDontSaveLoginPassword);
       }
     }
@@ -348,15 +372,23 @@ class KerberosCredentialsManagerTest : public testing::Test {
     }
 
     // The password should have being deleted from |user_context| at the end.
-    const UserContext& user_context =
-        UserSessionManager::GetInstance()->user_context();
+    const UserContext& user_context = user_session_manager_->user_context();
     EXPECT_TRUE(user_context.GetPasswordKey()->GetSecret().empty());
   }
 
+  // NOTE: InstallAttributes is required to construct BrowserPolicyConnectorAsh.
+  // CrosSettings is needed because otherwise TestingProfile automatically
+  // creates ScopedCrosSettingsTestHelper, which conflicts with
+  // ScopedStubInstallAttributes.
+  ScopedTestingCrosSettings scoped_testing_cros_settings_;
+  ScopedStubInstallAttributes scoped_stub_install_attributes_;
+
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  network::TestURLLoaderFactory test_url_loader_factory_;
   user_manager::TypedScopedUserManager<FakeChromeUserManager> user_manager_{
       std::make_unique<FakeChromeUserManager>()};
+  std::unique_ptr<UserSessionManager> user_session_manager_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<NotificationDisplayServiceTester> display_service_;
   std::unique_ptr<KerberosCredentialsManager> mgr_;
@@ -387,10 +419,10 @@ TEST_F(KerberosCredentialsManagerTest, GetDefaultKerberosConfig) {
   EXPECT_TRUE(default_config.contains("forwardable = true"));
 }
 
-// The prefs::kKerberosEnabled pref toggles IsKerberosEnabled().
+// The ash::prefs::kKerberosEnabled pref toggles IsKerberosEnabled().
 TEST_F(KerberosCredentialsManagerTest, IsKerberosEnabled) {
   EXPECT_FALSE(mgr_->IsKerberosEnabled());
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
   EXPECT_TRUE(mgr_->IsKerberosEnabled());
 }
 
@@ -754,7 +786,7 @@ TEST_F(KerberosCredentialsManagerTest, RemoveAccountFailsUnknownAccount) {
 // All accounts are wiped when prefs::KerberosEnabled is turned off.
 TEST_F(KerberosCredentialsManagerTest, UpdateEnabledFromPrefKerberosDisabled) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
   EXPECT_TRUE(mgr_->IsKerberosEnabled());
 
   AddAccountAndAuthenticate(kPrincipal, kUnmanaged, kerberos::ERROR_NONE,
@@ -762,7 +794,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateEnabledFromPrefKerberosDisabled) {
   AddAccountAndAuthenticate(kOtherPrincipal, kManaged, kerberos::ERROR_NONE,
                             kOneNotification, kTwoAccounts);
 
-  SetPref(prefs::kKerberosEnabled, base::Value(false));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(false));
 
   EXPECT_FALSE(mgr_->IsKerberosEnabled());
   EXPECT_EQ(0u, ListAccounts().size());
@@ -784,13 +816,14 @@ TEST_F(KerberosCredentialsManagerTest, UpdateEnabledFromPrefKerberosEnabled) {
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   EXPECT_FALSE(mgr_->IsKerberosEnabled());
   EXPECT_EQ(0u, ListAccounts().size());
   EXPECT_TRUE(mgr_->GetActiveAccount().empty());
 
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   // Two notifications are expected: one from AddAccountRunner and another from
   // RemoveAllManagedAccountsExcept.
@@ -802,13 +835,13 @@ TEST_F(KerberosCredentialsManagerTest, UpdateEnabledFromPrefKerberosEnabled) {
   EXPECT_EQ(kNormalizedPrincipal, mgr_->GetActiveAccount());
 }
 
-// No password is deleted when prefs::kKerberosRememberPasswordEnabled is turned
-// on.
+// No password is deleted when ash::prefs::kKerberosRememberPasswordEnabled is
+// turned on.
 TEST_F(KerberosCredentialsManagerTest,
        UpdateRememberPasswordEnabledFromPrefEnabled) {
   client_test_interface()->StartRecordingFunctionCalls();
 
-  SetPref(prefs::kKerberosRememberPasswordEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosRememberPasswordEnabled, base::Value(true));
 
   // Checks that ClearAccounts() was not called on KerberosClient.
   const std::string calls =
@@ -817,7 +850,7 @@ TEST_F(KerberosCredentialsManagerTest,
 }
 
 // All unmanaged passwords are deleted when
-// prefs::kKerberosRememberPasswordEnabled is turned off.
+// ash::prefs::kKerberosRememberPasswordEnabled is turned off.
 TEST_F(KerberosCredentialsManagerTest,
        UpdateRememberPasswordEnabledFromPrefDisabled) {
   mgr_->AddAccountAndAuthenticate(kPrincipal, kUnmanaged, kPassword,
@@ -830,7 +863,7 @@ TEST_F(KerberosCredentialsManagerTest,
   WaitAndVerifyResult(GetRepeatedError(kerberos::ERROR_NONE, kTwoAccounts),
                       kOneNotification, kTwoAccounts);
 
-  SetPref(prefs::kKerberosRememberPasswordEnabled, base::Value(false));
+  SetPref(ash::prefs::kKerberosRememberPasswordEnabled, base::Value(false));
 
   Accounts accounts = ListAccounts();
   ASSERT_EQ(2u, accounts.size());
@@ -840,16 +873,16 @@ TEST_F(KerberosCredentialsManagerTest,
   EXPECT_TRUE(accounts[1].password_was_remembered());
 }
 
-// Setting prefs::kKerberosAddAccountsAllowed to true should not cause any
+// Setting ash::prefs::kKerberosAddAccountsAllowed to true should not cause any
 // account to be deleted.
 TEST_F(KerberosCredentialsManagerTest,
        UpdateAddAccountsAllowedFromPrefEnabled) {
   // Starting with KerberosAddAccount disabled.
-  SetPref(prefs::kKerberosAddAccountsAllowed, base::Value(false));
+  SetPref(ash::prefs::kKerberosAddAccountsAllowed, base::Value(false));
 
   client_test_interface()->StartRecordingFunctionCalls();
 
-  SetPref(prefs::kKerberosAddAccountsAllowed, base::Value(true));
+  SetPref(ash::prefs::kKerberosAddAccountsAllowed, base::Value(true));
 
   // Checks that ClearAccounts() was not called on KerberosClient.
   const std::string calls =
@@ -857,8 +890,8 @@ TEST_F(KerberosCredentialsManagerTest,
   EXPECT_TRUE(calls.empty());
 }
 
-// All unmanaged accounts are deleted when prefs::kKerberosAddAccountsAllowed is
-// turned off.
+// All unmanaged accounts are deleted when
+// ash::prefs::kKerberosAddAccountsAllowed is turned off.
 TEST_F(KerberosCredentialsManagerTest,
        UpdateAddAccountsAllowedFromPrefDisabled) {
   AddAccountAndAuthenticate(kPrincipal, kUnmanaged, kerberos::ERROR_NONE,
@@ -866,7 +899,7 @@ TEST_F(KerberosCredentialsManagerTest,
   AddAccountAndAuthenticate(kOtherPrincipal, kManaged, kerberos::ERROR_NONE,
                             kOneNotification, kTwoAccounts);
 
-  SetPref(prefs::kKerberosAddAccountsAllowed, base::Value(false));
+  SetPref(ash::prefs::kKerberosAddAccountsAllowed, base::Value(false));
 
   Accounts accounts = ListAccounts();
   ASSERT_EQ(1u, accounts.size());
@@ -882,7 +915,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefKerberosDisabled) {
   base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   VerifyVotedForSavingLoginPassword(kDontSaveLoginPassword);
 
@@ -894,7 +928,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefKerberosDisabled) {
 // saved in prefs. Also, existing managed accounts are deleted.
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefNoAccounts) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   AddAccountAndAuthenticate(kPrincipal, kUnmanaged, kerberos::ERROR_NONE,
                             kOneNotification, kOneAccount);
@@ -902,7 +936,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefNoAccounts) {
                             kOneNotification, kTwoAccounts);
 
   base::ListValue managed_accounts;
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   VerifyVotedForSavingLoginPassword(kDontSaveLoginPassword);
 
@@ -914,7 +949,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefNoAccounts) {
 // UpdateAccountsFromPref ignores accounts with bad principal names.
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefBadPrincipal) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   base::DictValue managed_account_1;
   base::DictValue managed_account_2;
@@ -938,7 +973,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefBadPrincipal) {
   managed_accounts.Append(std::move(managed_account_5));
   managed_accounts.Append(std::move(managed_account_6));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   VerifyVotedForSavingLoginPassword(kDontSaveLoginPassword);
 
@@ -949,7 +985,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefBadPrincipal) {
 // UpdateAccountsFromPref uses config if given and default config if not.
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefConfig) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kTwoAccounts));
@@ -976,7 +1012,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefConfig) {
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected: one from AddAccountRunner and another from
   // RemoveAllManagedAccountsExcept().
@@ -998,7 +1035,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefConfig) {
 // passwords is equal to "${PASSWORD}".
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefPassword) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kTwoAccounts));
@@ -1015,7 +1052,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefPassword) {
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected: one from AddAccountRunner and another from
   // RemoveAllManagedAccountsExcept().
@@ -1037,7 +1075,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefPassword) {
 // unset or set to true.
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefRememberPassword) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kThreeAccounts));
@@ -1060,7 +1098,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefRememberPassword) {
   managed_accounts.Append(std::move(managed_account_2));
   managed_accounts.Append(std::move(managed_account_3));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected: one from AddAccountRunner and another from
   // RemoveAllManagedAccountsExcept().
@@ -1077,10 +1116,10 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefRememberPassword) {
 }
 
 // UpdateAccountsFromPref clears out old managed accounts not in
-// prefs::kKerberosAccounts anymore.
+// ash::prefs::kKerberosAccounts anymore.
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefClearAccounts) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   AddAccountAndAuthenticate(kPrincipal, kManaged, kerberos::ERROR_NONE,
                             kOneNotification, kOneAccount);
@@ -1101,7 +1140,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefClearAccounts) {
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected: one from AddAccountRunner and another from
   // RemoveAllManagedAccountsExcept().
@@ -1122,7 +1162,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefClearAccounts) {
 // TODO(crbug.com/40715458): Disabled due to flakiness.
 TEST_F(KerberosCredentialsManagerTest, DISABLED_UpdateAccountsFromPrefRetry) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   client_test_interface()->SetSimulatedNumberOfNetworkFailures(kOneFailure *
                                                                kOneAccount);
@@ -1138,7 +1178,8 @@ TEST_F(KerberosCredentialsManagerTest, DISABLED_UpdateAccountsFromPrefRetry) {
   base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected for each attempt: one from AddAccountRunner
   // and another from RemoveAllManagedAccountsExcept().
@@ -1161,7 +1202,7 @@ TEST_F(KerberosCredentialsManagerTest, DISABLED_UpdateAccountsFromPrefRetry) {
 TEST_F(KerberosCredentialsManagerTest,
        DISABLED_UpdateAccountsFromPrefMultipleRetries) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   client_test_interface()->SetSimulatedNumberOfNetworkFailures(kThreeFailures *
                                                                kOneAccount);
@@ -1177,7 +1218,8 @@ TEST_F(KerberosCredentialsManagerTest,
   base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected for each attempt: one from AddAccountRunner
   // and another from RemoveAllManagedAccountsExcept().
@@ -1203,7 +1245,7 @@ TEST_F(KerberosCredentialsManagerTest,
 TEST_F(KerberosCredentialsManagerTest,
        DISABLED_UpdateAccountsFromPrefRetryMultipleAccounts) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   client_test_interface()->SetSimulatedNumberOfNetworkFailures(kOneFailure *
                                                                kTwoAccounts);
@@ -1223,7 +1265,8 @@ TEST_F(KerberosCredentialsManagerTest,
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected for each attempt: one from AddAccountRunner
   // and another from RemoveAllManagedAccountsExcept().
@@ -1250,7 +1293,7 @@ TEST_F(KerberosCredentialsManagerTest,
 TEST_F(KerberosCredentialsManagerTest,
        DISABLED_UpdateAccountsFromPrefStopsRetrying) {
   // Starting with Kerberos enabled.
-  SetPref(prefs::kKerberosEnabled, base::Value(true));
+  SetPref(ash::prefs::kKerberosEnabled, base::Value(true));
 
   client_test_interface()->SetSimulatedNumberOfNetworkFailures(kLotsOfFailures);
 
@@ -1270,7 +1313,8 @@ TEST_F(KerberosCredentialsManagerTest,
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
-  SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
+  SetPref(ash::prefs::kKerberosAccounts,
+          base::Value(std::move(managed_accounts)));
 
   // Two notifications are expected for each attempt: one from AddAccountRunner
   // and another from RemoveAllManagedAccountsExcept().
@@ -1295,7 +1339,7 @@ TEST_F(KerberosCredentialsManagerTest,
   EXPECT_EQ(kNormalizedPrincipal, mgr_->GetActiveAccount());
 }
 
-// TODO(https://crbug.com/952251): Add more tests
+// TODO(https://crbug.com/259178156): Add more tests
 // - ClearAccounts
 //     + Normalization like in AddAccountAndAuthenticate
 //     + Calls the ClearAccounts KerberosClient method

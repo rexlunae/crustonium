@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+#include "third_party/blink/renderer/core/css/css_alpha_color_value.h"
 #include "third_party/blink/renderer/core/css/css_color.h"
 #include "third_party/blink/renderer/core/css/css_color_channel_keywords.h"
 #include "third_party/blink/renderer/core/css/css_color_mix_value.h"
@@ -173,6 +174,13 @@ bool IsInGamutRec2020(Color color) {
          -kEpsilon <= color.Param2() && color.Param2() <= 1.f + kEpsilon;
 }
 
+bool ShouldQuantizeAlphaTo8Bits(bool is_relative_color, bool is_legacy_syntax) {
+  if (RuntimeEnabledFeatures::CSSColorQuantizedAlphaOnlyLegacyEnabled()) {
+    return is_legacy_syntax;
+  }
+  return !is_relative_color;
+}
+
 }  // namespace
 
 bool ColorFunctionParser::ConsumeColorSpaceAndOriginColor(
@@ -227,8 +235,10 @@ bool IsAllowedValueInParserContext(
     const CSSValue* value,
     const css_parsing_utils::ColorParserContext& color_parser_context) {
   if (auto* primitive_value = DynamicTo<CSSPrimitiveValue>(value)) {
-    return color_parser_context.InElementContext() ||
-           !primitive_value->IsElementDependent();
+    return (color_parser_context.InElementContext() ||
+            !primitive_value->IsElementDependent()) &&
+           (color_parser_context.InPropertyContext() ||
+            !primitive_value->HasRandomFunctions());
   }
   return true;
 }
@@ -381,7 +391,8 @@ void ColorFunctionParser::MakePerColorSpaceAdjustments(
     // See compositing/background-color/background-color-alpha.html for example.
     // Ideally we would allow alpha to be any float value, but we have to clean
     // up all spots where this compression happens before this is possible.
-    if (!is_relative_color && alpha.has_value()) {
+    if (ShouldQuantizeAlphaTo8Bits(is_relative_color, is_legacy_syntax) &&
+        alpha.has_value()) {
       alpha = round(alpha.value() * 255.0) / 255.0;
     }
   }
@@ -517,11 +528,15 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
     return nullptr;
   }
 
+  CSSParserLocalContext::FunctionLocalContext function_context(function_id,
+                                                               local_context);
+
   if (function_id == CSSValueID::kColor) {
     context.Count(WebFeature::kCSSColorFunction);
   }
 
   bool has_alpha = false;
+  bool is_legacy_syntax = false;
   {
     CSSParserTokenStream::RestoringBlockGuard guard(stream);
     stream.ConsumeWhitespace();
@@ -531,6 +546,7 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
     }
 
     // Parse the three color channel params.
+    std::array<bool, 2> separator_is_comma{};
     for (int i = 0; i < 3; i++) {
       if (!ConsumeChannel(stream, context, local_context, i,
                           color_parser_context)) {
@@ -539,26 +555,28 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
       // Potentially expect a separator after the first and second channel. The
       // separator for a potential alpha channel is handled below.
       if (i < 2) {
-        const bool matched_comma =
+        separator_is_comma[i] =
             css_parsing_utils::ConsumeCommaIncludingWhitespace(stream);
-        if (is_legacy_syntax_) {
-          // We've parsed one separating comma token, so we expect the second
-          // separator to match.
-          if (!matched_comma) {
-            return nullptr;
-          }
-        } else if (matched_comma) {
-          if (IsRelativeColor()) {
-            return nullptr;
-          }
-          is_legacy_syntax_ = true;
-        }
       }
     }
 
+    // Validate that separators are consistent.
+    if (separator_is_comma[0] != separator_is_comma[1]) {
+      return nullptr;
+    }
+    // Legacy colors have commas separating their channels. This syntax is
+    // incompatible with CSSColor4 features like "none" or alpha with a slash.
+    is_legacy_syntax = separator_is_comma[0];
+
     // Parse alpha.
-    if (is_legacy_syntax_) {
-      if (!Color::IsLegacyColorSpace(color_space_)) {
+    if (is_legacy_syntax) {
+      // Relative colors can't use legacy syntax.
+      if (IsRelativeColor()) {
+        return nullptr;
+      }
+      // rgb(), rgba(), hsl() and hsla() allow legacy syntax.
+      if (color_space_ != Color::ColorSpace::kSRGBLegacy &&
+          color_space_ != Color::ColorSpace::kHSL) {
         return nullptr;
       }
       // , <alpha-value>?
@@ -581,21 +599,18 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
       return nullptr;
     }
 
-    if (is_legacy_syntax_) {
+    if (is_legacy_syntax) {
       // "None" is not a part of the legacy syntax.
       if (has_none_) {
         return nullptr;
       }
-      // Legacy rgb needs percentage consistency. Percentages need to be mapped
-      // from the range [0, 1] to the [0, 255] that the color space uses.
-      // Percentages and bare numbers CAN be mixed in relative colors.
+      // Legacy rgb() syntax needs percentage consistency. Percentages need to
+      // be mapped from the range [0, 1] to the [0, 255] that the color space
+      // uses. Percentages and bare numbers CAN be mixed in relative colors.
       if (color_space_ == Color::ColorSpace::kSRGBLegacy) {
         bool uses_percentage = false;
         bool uses_bare_numbers = false;
         for (int i = 0; i < 3; i++) {
-          if (channel_types_[i] == ChannelType::kNone) {
-            continue;
-          }
           if (channel_types_[i] == ChannelType::kPercentage) {
             if (uses_bare_numbers) {
               return nullptr;
@@ -606,23 +621,19 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
               return nullptr;
             }
             uses_bare_numbers = true;
+          } else {
+            NOTREACHED();
           }
         }
-      }
-
-      // Legacy syntax is not allowed for hwb().
-      if (color_space_ == Color::ColorSpace::kHWB) {
-        return nullptr;
-      }
-
-      if (color_space_ == Color::ColorSpace::kHSL ||
-          color_space_ == Color::ColorSpace::kHWB) {
+      } else if (color_space_ == Color::ColorSpace::kHSL) {
+        // Legacy hsl() syntax needs percentages for S and L.
         for (int i : {1, 2}) {
           if (channel_types_[i] == ChannelType::kNumber) {
-            // Legacy color syntax needs percentages.
             return nullptr;
           }
         }
+      } else {
+        NOTREACHED();
       }
     }
 
@@ -655,7 +666,7 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
       }
     }
 
-    MakePerColorSpaceAdjustments(/*is_relative_color=*/false, is_legacy_syntax_,
+    MakePerColorSpaceAdjustments(/*is_relative_color=*/false, is_legacy_syntax,
                                  color_space_, channels, alpha);
 
     resolved_color = Color::FromColorSpace(color_space_, channels[0],
@@ -721,6 +732,49 @@ CSSValue* ColorFunctionParser::ConsumeFunctionalSyntaxColor(
         DynamicTo<CSSPrimitiveValue>(*unresolved_channels_[2]), channel_types_,
         DynamicTo<CSSPrimitiveValue>(unresolved_alpha_), alpha_channel_type_);
   }
+}
+
+CSSValue* ColorFunctionParser::ConsumeRelativeAlphaFunction(
+    CSSParserTokenStream& stream,
+    const CSSParserContext& context,
+    CSSParserLocalContext& local_context,
+    const css_parsing_utils::ColorParserContext& color_parser_context) {
+  CSSParserLocalContext::FunctionLocalContext function_context(
+      CSSValueID::kAlpha, local_context);
+
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  // "from" keyword is required.
+  if (!css_parsing_utils::ConsumeIdent<CSSValueID::kFrom>(stream)) {
+    return nullptr;
+  }
+
+  unresolved_origin_color_ = css_parsing_utils::ConsumeColor(
+      stream, context, local_context, color_parser_context);
+  if (!unresolved_origin_color_) {
+    return nullptr;
+  }
+
+  // Optional: / <alpha-value>
+  if (css_parsing_utils::ConsumeSlashIncludingWhitespace(stream)) {
+    // The allowed component keywords is `alpha`.
+    color_channel_map_ = {{CSSValueID::kAlpha, std::nullopt}};
+
+    if (!ConsumeAlpha(stream, context, local_context, color_parser_context)) {
+      return nullptr;
+    }
+  }
+
+  if (!stream.AtEnd()) {
+    return nullptr;
+  }
+
+  guard.Release();
+  stream.ConsumeWhitespace();
+
+  return MakeGarbageCollected<cssvalue::CSSAlphaColorValue>(
+      unresolved_origin_color_, unresolved_alpha_);
 }
 
 }  // namespace blink

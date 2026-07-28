@@ -10,7 +10,6 @@ import android.content.Context;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
-import androidx.fragment.app.FragmentManager;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
@@ -23,7 +22,6 @@ import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SignoutReason;
 import org.chromium.components.sync.SyncService;
@@ -44,9 +42,8 @@ import java.util.stream.IntStream;
 public class SignOutCoordinator {
     /**
      * Starts the sign-out flow. The caller must verify existence of a signed-in account and whether
-     * sign-out is allowed before calling. Child users may only call this method if there is an
-     * account with {@link ConsentLevel#SYNC}. It can show three different UIs depending on user
-     * state:
+     * sign-out is allowed before calling. Child users must not call this method. It can show three
+     * different UIs depending on user state:
      * <li>A snackbar indicating user has signed-out.
      * <li>A confirmation dialog indicating user has unsaved data.
      * <li>A confirmation dialog indicating that user may be signed-out as a side-effect of some
@@ -54,8 +51,8 @@ public class SignOutCoordinator {
      *
      * @param context Context to create the view.
      * @param profile The Profile to sign out of.
-     * @param fragmentManager FragmentManager used by {@link SignOutDialogCoordinator}.
      * @param dialogManager A ModalDialogManager that manages the dialog.
+     * @param snackbarManager The manager for displaying snackbars at the bottom of the activity.
      * @param signOutReason The access point to sign out from.
      * @param showConfirmDialog Whether a confirm dialog should be shown before sign-out.
      * @param onSignOut A {@link Runnable} to run when the user presses the confirm button. Will be
@@ -66,7 +63,6 @@ public class SignOutCoordinator {
     public static void startSignOutFlow(
             Context context,
             Profile profile,
-            FragmentManager fragmentManager,
             ModalDialogManager dialogManager,
             SnackbarManager snackbarManager,
             @SignoutReason int signOutReason,
@@ -75,7 +71,6 @@ public class SignOutCoordinator {
         startSignOutFlow(
                 context,
                 profile,
-                fragmentManager,
                 dialogManager,
                 snackbarManager,
                 signOutReason,
@@ -89,9 +84,8 @@ public class SignOutCoordinator {
     // signout snackbar from here, which means after fixing b/343933167.
     /**
      * Starts the sign-out flow. The caller must verify existence of a signed-in account and whether
-     * sign-out is allowed before calling. Child users may only call this method if there is an
-     * account with {@link ConsentLevel#SYNC}. It can show three different UIs depending on user
-     * state:
+     * sign-out is allowed before calling. Child users must not call this method. It can show three
+     * different UIs depending on user state:
      * <li>A snackbar indicating user has signed-out.
      * <li>A confirmation dialog indicating user has unsaved data.
      * <li>A confirmation dialog indicating that user may be signed-out as a side-effect of some
@@ -99,8 +93,9 @@ public class SignOutCoordinator {
      *
      * @param context Context to create the view.
      * @param profile The Profile to sign out of.
-     * @param fragmentManager FragmentManager used by {@link SignOutDialogCoordinator}.
      * @param dialogManager A ModalDialogManager that manages the dialog.
+     * @param snackbarManager SnackbarManager for displaying snackbars at the bottom of the
+     *     activity.
      * @param signOutReason The access point to sign out from.
      * @param showConfirmDialog Whether a confirm dialog should be shown before sign-out.
      * @param onSignOut A {@link Runnable} to run when the user presses the confirm button. Will be
@@ -112,7 +107,6 @@ public class SignOutCoordinator {
     public static void startSignOutFlow(
             Context context,
             Profile profile,
-            FragmentManager fragmentManager,
             ModalDialogManager dialogManager,
             SnackbarManager snackbarManager,
             @SignoutReason int signOutReason,
@@ -124,7 +118,12 @@ public class SignOutCoordinator {
         assert onSignOut != null;
         validateSignOutReason(profile, signOutReason);
 
-        IdentityManager identityManager = getSignedInIdentityManager(profile);
+        IdentityManager identityManager =
+                assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile));
+        if (!identityManager.hasPrimaryAccount()) {
+            throw new IllegalStateException("There is no signed-in account");
+        }
+
         SigninManager signinManager = IdentityServicesProvider.get().getSigninManager(profile);
         assumeNonNull(signinManager);
         SyncService syncService = SyncServiceFactory.getForProfile(profile);
@@ -135,10 +134,10 @@ public class SignOutCoordinator {
                     @UiState
                     int uiState =
                             getUiState(
-                                    identityManager,
                                     !unsyncedTypes.isEmpty(),
                                     showConfirmDialog,
-                                    userActionableError);
+                                    userActionableError,
+                                    signinManager.hasSignedInAccountExtensions());
                     switch (uiState) {
                         case UiState.SNACK_BAR ->
                                 signOutAndShowSnackbar(
@@ -154,7 +153,6 @@ public class SignOutCoordinator {
                                         context,
                                         dialogManager,
                                         signinManager,
-                                        syncService,
                                         userActionableError,
                                         signOutReason,
                                         onSignOut);
@@ -165,14 +163,6 @@ public class SignOutCoordinator {
                                         snackbarManager,
                                         signinManager,
                                         syncService,
-                                        signOutReason,
-                                        onSignOut);
-                        case UiState.LEGACY_DIALOG ->
-                                SignOutDialogCoordinator.show(
-                                        context,
-                                        profile,
-                                        fragmentManager,
-                                        dialogManager,
                                         signOutReason,
                                         onSignOut);
                     }
@@ -213,11 +203,18 @@ public class SignOutCoordinator {
             case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_BOOKMARKS:
             case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_NTP:
             case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_RECENT_TABS:
+            case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_AUTOFILL_AND_PASSWORDS:
                 break;
             default:
                 throw new IllegalArgumentException("Invalid signOutReason: " + signOutReason);
         }
-        getSignedInIdentityManager(profile);
+
+        IdentityManager identityManager =
+                assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile));
+        if (!identityManager.hasPrimaryAccount()) {
+            throw new IllegalStateException("There is no signed-in account");
+        }
+
         assert snackbarManager != null;
         assert onSignOut != null;
 
@@ -245,7 +242,7 @@ public class SignOutCoordinator {
 
     // TODO: b/325654229 - This method should be private. It's temporarily made public as a work
     // around for b/343933167.
-    /** Shows the sanckbar which is shown upon signing out. */
+    /** Shows the snackbar which is shown upon signing out. */
     public static void showSnackbar(
             Context context, SnackbarManager snackbarManager, SyncService syncService) {
         boolean anyTypeIsManagedByPolicy =
@@ -278,14 +275,12 @@ public class SignOutCoordinator {
         UiState.SNACK_BAR,
         UiState.UNSAVED_DATA,
         UiState.SHOW_CONFIRM_DIALOG,
-        UiState.LEGACY_DIALOG
     })
     @Retention(RetentionPolicy.SOURCE)
     private @interface UiState {
         int SNACK_BAR = 0;
         int UNSAVED_DATA = 1;
         int SHOW_CONFIRM_DIALOG = 2;
-        int LEGACY_DIALOG = 3;
     }
 
     private static void validateSignOutReason(Profile profile, @SignoutReason int signOutReason) {
@@ -295,38 +290,23 @@ public class SignOutCoordinator {
             case SignoutReason.USER_DISABLED_ALLOW_CHROME_SIGN_IN:
                 assert !profile.isChild() : "Child accounts can only revoke sync consent";
                 return;
-            case SignoutReason.USER_CLICKED_REVOKE_SYNC_CONSENT_SETTINGS:
-                assert profile.isChild() : "Regular accounts can't just revoke sync consent";
-                return;
             default:
                 throw new IllegalArgumentException("Invalid signOutReason: " + signOutReason);
         }
     }
 
-    private static IdentityManager getSignedInIdentityManager(Profile profile) {
-        IdentityManager identityManager =
-                assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile));
-        if (!identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
-            throw new IllegalStateException("There is no signed-in account");
-        }
-        return identityManager;
-    }
-
     private static @UiState int getUiState(
-            IdentityManager identityManager,
             boolean hasUnsavedData,
             boolean showConfirmDialog,
-            @UserActionableError int userActionableError) {
+            @UserActionableError int userActionableError,
+            boolean hasSignedInAccountExtensions) {
         if (userActionableError == UserActionableError.BOOKMARKS_LIMIT_EXCEEDED) {
             return UiState.UNSAVED_DATA;
-        }
-        if (identityManager.hasPrimaryAccount(ConsentLevel.SYNC)) {
-            return UiState.LEGACY_DIALOG;
         }
         if (hasUnsavedData) {
             return UiState.UNSAVED_DATA;
         }
-        if (showConfirmDialog) {
+        if (showConfirmDialog || hasSignedInAccountExtensions) {
             return UiState.SHOW_CONFIRM_DIALOG;
         }
         return UiState.SNACK_BAR;
@@ -336,7 +316,6 @@ public class SignOutCoordinator {
             Context context,
             ModalDialogManager dialogManager,
             SigninManager signinManager,
-            SyncService syncService,
             @UserActionableError int userActionableError,
             @SignoutReason int signOutReason,
             Runnable onSignOut) {
@@ -346,7 +325,7 @@ public class SignOutCoordinator {
                     context.getString(
                             R.string.chrome_signout_confirmation_prompt_too_many_bookmarks_body,
                             NumberFormat.getIntegerInstance()
-                                    .format(syncService.getBookmarksLimit()));
+                                    .format(SyncService.SYNC_BOOKMARKS_LIMIT));
         }
         final PropertyModel model =
                 new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
@@ -354,6 +333,15 @@ public class SignOutCoordinator {
                                 ModalDialogProperties.TITLE,
                                 context.getString(R.string.sign_out_unsaved_data_title))
                         .with(ModalDialogProperties.MESSAGE_PARAGRAPH_1, message)
+                        // Setting CHECKBOX_TEXT to an empty string hides the checkbox.
+                        .with(
+                                ModalDialogProperties.CHECKBOX_TEXT,
+                                signinManager.hasSignedInAccountExtensions()
+                                        ? context.getString(
+                                                R.string
+                                                        .sign_out_unsaved_data_remove_extensions_message)
+                                        : "")
+                        .with(ModalDialogProperties.CHECKBOX_CHECKED, false)
                         .with(
                                 ModalDialogProperties.POSITIVE_BUTTON_TEXT,
                                 context.getString(R.string.sign_out_unsaved_data_primary_button))
@@ -394,6 +382,14 @@ public class SignOutCoordinator {
                         .with(
                                 ModalDialogProperties.MESSAGE_PARAGRAPH_1,
                                 context.getString(R.string.sign_out_message))
+                        // Setting CHECKBOX_TEXT to an empty string hides the checkbox.
+                        .with(
+                                ModalDialogProperties.CHECKBOX_TEXT,
+                                signinManager.hasSignedInAccountExtensions()
+                                        ? context.getString(
+                                                R.string.sign_out_remove_extensions_message)
+                                        : "")
+                        .with(ModalDialogProperties.CHECKBOX_CHECKED, false)
                         .with(
                                 ModalDialogProperties.POSITIVE_BUTTON_TEXT,
                                 context.getString(R.string.sign_out))
@@ -418,6 +414,8 @@ public class SignOutCoordinator {
             @Override
             public void onClick(PropertyModel model, int buttonType) {
                 if (buttonType == ModalDialogProperties.ButtonType.POSITIVE) {
+                    signinManager.setUninstallAccountExtensionsOnSignout(
+                            model.get(ModalDialogProperties.CHECKBOX_CHECKED));
                     signOut(
                             signinManager,
                             signOutReason,
@@ -461,7 +459,7 @@ public class SignOutCoordinator {
     private static void signOut(
             SigninManager signinManager,
             @SignoutReason int signOutReason,
-            SigninManager.SignOutCallback signOutCallback) {
+            Runnable signOutCallback) {
         signinManager.runAfterOperationInProgress(
                 () -> {
                     if (!signinManager.isSignOutAllowed()) {
@@ -469,8 +467,7 @@ public class SignOutCoordinator {
                         // asynchronous. In that case return early instead.
                         return;
                     }
-                    signinManager.signOut(
-                            signOutReason, signOutCallback, /* forceWipeUserData= */ false);
+                    signinManager.signOut(signOutReason, signOutCallback);
                 });
     }
 }

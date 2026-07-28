@@ -5,8 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_ANIMATION_TRIGGER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_ANIMATION_TRIGGER_H_
 
-#include "cc/animation/animation_host.h"
 #include "cc/animation/animation_trigger.h"
+#include "cc/animation/animation_trigger_delegate.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_animation_play_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_animation_trigger_behavior.h"
 #include "third_party/blink/renderer/core/animation/animation.h"
@@ -20,10 +20,10 @@
 namespace blink {
 
 class Animation;
-class Element;
 class ExceptionState;
 
-class CORE_EXPORT AnimationTrigger : public ScriptWrappable {
+class CORE_EXPORT AnimationTrigger : public ScriptWrappable,
+                                     public cc::AnimationTriggerDelegate {
   DEFINE_WRAPPERTYPEINFO();
   USING_PRE_FINALIZER(AnimationTrigger, Dispose);
 
@@ -40,7 +40,8 @@ class CORE_EXPORT AnimationTrigger : public ScriptWrappable {
   // animation trigger's point of view. In other words, for reasons not in this
   // whitelist, we should not even bother running the check function.
   static const CompositorAnimations::FailureReasons kRecheckCompositingReasons =
-      CompositorAnimations::kInvalidAnimationOrEffect;
+      CompositorAnimations::kInvalidAnimationOrEffect |
+      CompositorAnimations::kUnchecked;
 
   void addAnimation(Animation* animation,
                     V8AnimationTriggerBehavior activate_behavior,
@@ -63,24 +64,41 @@ class CORE_EXPORT AnimationTrigger : public ScriptWrappable {
 
   static bool HasPausedCSSPlayState(Animation* animation);
   static CcBehavior ToCcAnimationTriggerBehavior(Behavior behavior);
+  static bool CanCompositeBehavior(Behavior behavior);
 
   void UpdateCompositorTrigger(
       const PaintArtifactCompositor* paint_artifact_compositor);
   virtual void CreateCompositorTrigger() {}
-  virtual void DestroyCompositorTrigger() {}
-  cc::AnimationTrigger* CompositorTrigger() { return nullptr; }
+  virtual void DestroyCompositorTrigger();
+  cc::AnimationTrigger* CompositorTrigger() {
+    return compositor_trigger_.get();
+  }
 
   void Dispose();
 
   void Trace(Visitor* visitor) const override;
 
-  Element* OwningElement() { return owning_element_.Get(); }
-
  protected:
-  void PerformActivate();
-  void PerformDeactivate();
+  FRIEND_TEST_ALL_PREFIXES(ScriptedTimelineTriggerTest,
+                           ForbidScriptDuringActivation);
+  // |async_activate_time| and |async_deactivate_time| are the timestamps
+  // at which the impl thread observed activation and deactivation respectively.
+  // If the event (activation/deactivation) was observed on the main thread
+  // (i.e. compositor_trigger_ is null) and not the impl thread, these times are
+  // not set.
+  //
+  // When these times are set, if the animation is composited, it has already
+  // been acted on by the impl thread and these functions work to synchronize
+  // the animation to that time. If the animation is not composited, these
+  // functions trigger the animation newly from the main thread, similar to
+  // observing activation/deactivation on the main thread.
+  void PerformActivate(
+      std::optional<base::TimeDelta> async_activate_time = std::nullopt);
+  void PerformDeactivate(
+      std::optional<base::TimeDelta> async_deactivate_time = std::nullopt);
   static void PerformBehavior(Animation& animation,
                               Behavior behavior,
+                              std::optional<base::TimeDelta> async_event_time,
                               ExceptionState& exception_state);
 
   // Gets the document associated with this AnimationTrigger. For a timeline
@@ -93,7 +111,9 @@ class CORE_EXPORT AnimationTrigger : public ScriptWrappable {
   // thread version is cloned from this.
   scoped_refptr<cc::AnimationTrigger> compositor_trigger_;
 
-  WeakMember<Element> owning_element_;
+  // Set to true during PerformActivate and PerformDeactivate to prevent
+  // mutations of the behavior map.
+  bool is_activating_or_deactivating_ = false;
 
  private:
   virtual void WillAddAnimation(Animation* animation,
@@ -103,7 +123,8 @@ class CORE_EXPORT AnimationTrigger : public ScriptWrappable {
   virtual void DidAddAnimation();
   virtual void DidRemoveAnimation(Animation* animation);
 
-  bool IsTriggeredOnCompositor(Animation* animation);
+  bool IsTriggeredOnCompositor(Animation* animation,
+                               const std::pair<Behavior, Behavior>&);
   void UpdateCompositorTriggerAnimations(
       const PaintArtifactCompositor* paint_artifact_compositor);
 

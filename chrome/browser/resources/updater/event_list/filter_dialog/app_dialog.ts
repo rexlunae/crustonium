@@ -14,6 +14,7 @@ import {getKnownApps} from '../../known_apps.js';
 
 import {getCss} from './app_dialog.css.js';
 import {getHtml} from './app_dialog.html.js';
+import {handleKeyboardNavigation} from './keyboard_navigation.js';
 
 export class AppDialogElement extends CrLitElement {
   static get is() {
@@ -34,6 +35,7 @@ export class AppDialogElement extends CrLitElement {
       search: {type: String},
       pendingSelections: {type: Object},
       initialSelections: {type: Object},
+      displayedApps: {type: Array},
     };
   }
 
@@ -41,7 +43,7 @@ export class AppDialogElement extends CrLitElement {
   accessor search = '';
   accessor pendingSelections = new Set<string>();
   accessor initialSelections = new Set<string>();
-  protected displayedApps: string[] = [];
+  protected accessor displayedApps: string[] = [];
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -92,6 +94,11 @@ export class AppDialogElement extends CrLitElement {
         this.requestUpdate();
       }
     }
+  }
+
+  protected onKeydown(e: KeyboardEvent) {
+    handleKeyboardNavigation(
+        e, this.shadowRoot.querySelectorAll<HTMLElement>('.filter-menu-item'));
   }
 
   protected onCheckedChanged(e: Event) {

@@ -8,6 +8,8 @@
 #include <optional>
 #include <string_view>
 
+#include "base/time/time.h"
+
 // Provides functions to validate that the variations seed is
 // correctly configured to respect an entropy limit. See below for details.
 //
@@ -15,9 +17,7 @@
 // entropy" layer – that is, a layer with `EntropyMode.LIMITED`. For brevity,
 // documentation in this file will refer to this layer as the "limited layer".
 // There is at most one limited layer in the seed with filters that are
-// applicable to the client. For now, it's the server's responsibility to ensure
-// this invariant. As an optimization, the client code should be updated to
-// consider the filters when calculating entropy (TODO(b/319681288)).
+// applicable to the client.
 //
 // Consider each client's chosen groups across all studies which use limited
 // entropy. While some group combinations may be more likely than others (based
@@ -100,6 +100,7 @@ double GetGoogleWebEntropyLimitInBits();
 //
 // * client_state: The client state to use for filtering studies.
 // * seed: The seed to check for misconfigured entropy.
+// * current_time: The time used for visibility considerations.
 // * entropy_limit_in_bits: The entropy limit to use for checking. Exposed for
 //     testing. Should be set to GetGoogleWebEntropyLimitInBits() in production.
 MisconfiguredEntropyResult SeedHasMisconfiguredEntropy(

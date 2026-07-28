@@ -2,16 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
 import 'chrome://settings/settings.js';
 
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import type {CrActionMenuElement, SettingsSyncAccountControlElement, StoredAccount} from 'chrome://settings/settings.js';
-import {loadTimeData, resetRouterForTesting, Router, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
-import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {isChildVisible, isVisible} from 'chrome://webui-test/test_util.js';
+import type {SettingsSyncAccountControlElement} from 'chrome://settings/settings.js';
+import {loadTimeData, resetRouterForTesting, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
+import {assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {isChildVisible} from 'chrome://webui-test/test_util.js';
+// <if expr="not is_chromeos">
+import type {CrActionMenuElement, StoredAccount} from 'chrome://settings/settings.js';
+import {ChromeSigninAccessPoint, Router, routes} from 'chrome://settings/settings.js';
+import {assertEquals, assertFalse, assertNotEquals} from 'chrome://webui-test/chai_assert.js';
+import {isVisible} from 'chrome://webui-test/test_util.js';
 
+// </if>
 import {simulateStoredAccounts} from './sync_test_util.js';
 import {TestSyncBrowserProxy} from './test_sync_browser_proxy.js';
+// clang-format on
 
 
 suite('SyncAccountControl', function() {
@@ -61,6 +69,7 @@ suite('SyncAccountControl', function() {
     testElement.remove();
   });
 
+  // <if expr="not is_chromeos">
   test('promo header is visible', function() {
     testElement.syncStatus = {
       signedInState: SignedInState.SIGNED_OUT,
@@ -221,6 +230,19 @@ suite('SyncAccountControl', function() {
         assertTrue(isChildVisible(testElement, '#signout-button'));
       });
 
+  test('recordSigninOffered called when promo shown', async function() {
+    Router.getInstance().navigateTo(routes.PEOPLE);
+    testElement.accessPoint = ChromeSigninAccessPoint.SETTINGS;
+    testElement.syncStatus = {
+      signedInState: SignedInState.SIGNED_OUT,
+      signedInUsername: '',
+      statusAction: StatusAction.NO_ACTION,
+    };
+    simulateStoredAccounts([]);
+    const accessPoint = await browserProxy.whenCalled('recordSigninOffered');
+    assertEquals(ChromeSigninAccessPoint.SETTINGS, accessPoint);
+  });
+
   test('Signout buttons not available to managed accounts', function() {
     testElement.syncStatus = {
       signedInState: SignedInState.SIGNED_IN,
@@ -329,7 +351,7 @@ suite('SyncAccountControl', function() {
         assertFalse(
             isVisible(testElement.shadowRoot!.querySelector('#banner')));
       });
-
+  // </if>
 
   test(
       'signed in, has passphrase error', function() {
@@ -343,15 +365,19 @@ suite('SyncAccountControl', function() {
         };
         flush();
 
+        // <if expr="not is_chromeos">
         assertTrue(testElement.shadowRoot!
                        .querySelector<HTMLElement>('#sync-icon-container')!
                        .classList.contains('sync-problem'));
         assertTrue(!!testElement.shadowRoot!.querySelector(
             '[icon="settings:sync-problem"]'));
+        // </if>
         assertTrue(isChildVisible(testElement, '#sync-error-button'));
+        // <if expr="not is_chromeos">
         assertTrue(isChildVisible(testElement, '#turn-off'));
         assertFalse(
             isVisible(testElement.shadowRoot!.querySelector('#banner')));
+        // </if>
       });
 
   test('signed in, has bookmark limit exceeded error', async function() {
@@ -372,6 +398,24 @@ suite('SyncAccountControl', function() {
     await browserProxy.whenCalled('showBookmarkLimitExceededHelp');
   });
 
+  test(
+      'sync off has passphrase error, clicking error button triggers dialog',
+      async function() {
+        testElement.syncStatus = {
+          firstSetupInProgress: false,
+          signedInState: SignedInState.SIGNED_IN,
+          hasError: true,
+          statusAction: StatusAction.ENTER_PASSPHRASE,
+        };
+        flush();
+
+        assertTrue(isChildVisible(testElement, '#sync-error-button'));
+        testElement.shadowRoot!
+            .querySelector<HTMLElement>('#sync-error-button')!.click();
+        await browserProxy.whenCalled('showSyncPassphraseDialog');
+      });
+
+  // <if expr="not is_chromeos">
   test(
       'user in sync paused state', function() {
         testElement.syncStatus = {
@@ -540,46 +584,6 @@ suite('SyncAccountControl', function() {
     assertFalse(isChildVisible(testElement, '#sync-error-button'));
   });
 
-  test('hide buttons', function() {
-    testElement.hideButtons = true;
-    testElement.syncStatus = {
-      firstSetupInProgress: false,
-      signedInState: SignedInState.SYNCING,
-      signedInUsername: 'bar@bar.com',
-      statusAction: StatusAction.NO_ACTION,
-      hasError: false,
-      hasUnrecoverableError: false,
-      disabled: false,
-    };
-
-    assertFalse(isChildVisible(testElement, '#turn-off'));
-    assertFalse(isChildVisible(testElement, '#sync-error-button'));
-
-    testElement.syncStatus = {
-      firstSetupInProgress: false,
-      signedInState: SignedInState.SYNCING,
-      signedInUsername: 'bar@bar.com',
-      hasError: true,
-      hasUnrecoverableError: false,
-      statusAction: StatusAction.REAUTHENTICATE,
-      disabled: false,
-    };
-    assertFalse(isChildVisible(testElement, '#turn-off'));
-    assertFalse(isChildVisible(testElement, '#sync-error-button'));
-
-    testElement.syncStatus = {
-      firstSetupInProgress: false,
-      signedInState: SignedInState.SYNCING,
-      signedInUsername: 'bar@bar.com',
-      hasError: true,
-      hasUnrecoverableError: false,
-      statusAction: StatusAction.ENTER_PASSPHRASE,
-      disabled: false,
-    };
-    assertFalse(isChildVisible(testElement, '#turn-off'));
-    assertFalse(isChildVisible(testElement, '#sync-error-button'));
-  });
-
   test('signinButtonDisabled', function() {
     // Ensure that the sync button is disabled when signin is disabled.
     assertFalse(testElement.$.signIn.disabled);
@@ -676,8 +680,10 @@ suite('SyncAccountControl', function() {
         const deleteProfile = await browserProxy.whenCalled('signOut');
         assertFalse(deleteProfile);
       });
+  // </if>
 });
 
+// <if expr="not is_chromeos">
 suite('SyncAccountControlHideBanner', function() {
   let browserProxy: TestSyncBrowserProxy;
   let testElement: SettingsSyncAccountControlElement;
@@ -717,3 +723,4 @@ suite('SyncAccountControlHideBanner', function() {
     assertFalse(isVisible(testElement.shadowRoot!.querySelector('#banner')));
   });
 });
+// </if>

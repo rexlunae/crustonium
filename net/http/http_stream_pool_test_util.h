@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/test/test_future.h"
 #include "net/base/completion_once_callback.h"
@@ -25,6 +26,7 @@
 #include "net/http/http_stream_pool_job.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/stream_socket.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_versions.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "url/scheme_host_port.h"
 
@@ -52,7 +54,6 @@ class FakeServiceEndpointResolution {
 
   // These setters return `this&` to allow chaining.
   FakeServiceEndpointResolution& CompleteStartSynchronously(int rv);
-  FakeServiceEndpointResolution& set_start_result(int start_result);
   FakeServiceEndpointResolution& set_endpoints(
       std::vector<ServiceEndpoint> endpoints);
   FakeServiceEndpointResolution& add_endpoint(ServiceEndpoint endpoint);
@@ -89,20 +90,42 @@ class FakeServiceEndpointRequest : public HostResolver::ServiceEndpointRequest {
       ResolveErrorInfo resolve_error_info);
   FakeServiceEndpointRequest& set_priority(RequestPriority priority);
 
+  // Sets a callback that will be invoked asynchronously after Start() is
+  // invoked. It's async so that CallOnServiceEndpointsUpdated() and
+  // CallOnServiceEndpointRequestFinished() may be safely invoked from the
+  // callback. May not be used with CompleteStartSynchronously().
+  FakeServiceEndpointRequest& set_start_callback(
+      base::OnceClosure start_callback);
+
   // Make `this` complete synchronously when ServiceEndpointRequest::Start()
   // is called.
   FakeServiceEndpointRequest& CompleteStartSynchronously(int rv);
 
+  // Make `this` call CallOnServiceEndpointRequestFinished() asynchronously when
+  // ServiceEndpointRequest::Start() is called. May not be used with
+  // set_start_callback() or CompleteStartSynchronously();
+  FakeServiceEndpointRequest& CompleteStartAsynchronously(int rv);
+
   // Calls `delegate_->OnServiceEndpointsUpdated()`. Must not be used after
-  // calling CompleteStartSynchronously() or
+  // calling CompleteStartSynchronously(), CompleteStartAsynchronously(), or
   // CallOnServiceEndpointRequestFinished()
   FakeServiceEndpointRequest& CallOnServiceEndpointsUpdated();
 
-  // Calls `delegate_->OnServiceEndpointRequestFinished()`. Mut not be used
-  // after calling CompleteStartSynchronously().
-  FakeServiceEndpointRequest& CallOnServiceEndpointRequestFinished(int rv);
+  // Calls `delegate_->OnServiceEndpointRequestFinished()`. Must not be used
+  // after calling CompleteStartSynchronously(). Unlike other methods, this
+  // doesn't return `*this` since `this` can be deleted during the delegate
+  // call.
+  void CallOnServiceEndpointRequestFinished(int rv);
+
+  FakeServiceEndpointRequest& set_is_stale_while_refreshing(bool is_stale) {
+    is_stale_while_refreshing_ = is_stale;
+    return *this;
+  }
 
   RequestPriority priority() const { return resolution_.priority(); }
+  const HostResolver::ResolveHostParameters& resolve_host_params() const {
+    return resolve_host_params_;
+  }
 
   // HostResolver::ServiceEndpointRequest methods:
   int Start(Delegate* delegate) override;
@@ -111,15 +134,23 @@ class FakeServiceEndpointRequest : public HostResolver::ServiceEndpointRequest {
   bool EndpointsCryptoReady() override;
   ResolveErrorInfo GetResolveErrorInfo() override;
   const HostCache::EntryStaleness* GetStaleInfo() const override;
-  bool IsStaleWhileRefresing() const override;
+  bool IsStaleWhileRefreshing() const override;
   void ChangeRequestPriority(RequestPriority priority) override;
+  std::optional<ResolutionDetails> GetResolutionDetails() const override;
 
  private:
   friend class FakeServiceEndpointResolver;
 
+  void CompleteAsync(int rv);
+
   raw_ptr<Delegate> delegate_;
 
+  bool is_stale_while_refreshing_ = false;
+
   FakeServiceEndpointResolution resolution_;
+
+  base::OnceClosure start_callback_;
+  HostResolver::ResolveHostParameters resolve_host_params_;
 
   base::WeakPtrFactory<FakeServiceEndpointRequest> weak_ptr_factory_{this};
 };
@@ -168,16 +199,19 @@ class FakeServiceEndpointResolver : public HostResolver {
   std::unique_ptr<ResolveHostRequest> CreateRequest(
       url::SchemeHostPort host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       std::optional<ResolveHostParameters> optional_parameters) override;
   std::unique_ptr<ResolveHostRequest> CreateRequest(
       const HostPortPair& host,
       const NetworkAnonymizationKey& network_anonymization_key,
+      handles::NetworkHandle target_network,
       const NetLogWithSource& net_log,
       const std::optional<ResolveHostParameters>& optional_parameters) override;
   std::unique_ptr<ServiceEndpointRequest> CreateServiceEndpointRequest(
       Host host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       ResolveHostParameters parameters) override;
   bool IsHappyEyeballsV3Enabled() const override;
@@ -201,6 +235,11 @@ class ServiceEndpointBuilder {
   ServiceEndpointBuilder& add_ip_endpoint(IPEndPoint ip_endpoint);
 
   ServiceEndpointBuilder& set_alpns(std::vector<std::string> alpns);
+
+  // Helper that looks up the alpn string for `quic_version`, and sets the list
+  // of alpns to contain only that value. Clears any other pre-existing ALPNs
+  // already set.
+  ServiceEndpointBuilder& set_alpn(quic::ParsedQuicVersion quic_version);
 
   ServiceEndpointBuilder& set_ech_config_list(
       std::vector<uint8_t> ech_config_list);
@@ -300,6 +339,11 @@ class StreamKeyBuilder {
     return *this;
   }
 
+  StreamKeyBuilder& set_target_network(handles::NetworkHandle target_network) {
+    target_network_ = target_network;
+    return *this;
+  }
+
   HttpStreamKey Build() const;
 
  private:
@@ -308,6 +352,7 @@ class StreamKeyBuilder {
   SecureDnsPolicy secure_dns_policy_ = SecureDnsPolicy::kAllow;
   bool disable_cert_network_fetches_ = true;
   std::optional<AlternativeService> alt_service_;
+  handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
 };
 
 // An HttpStreamPool::Job::Delegate implementation for tests.

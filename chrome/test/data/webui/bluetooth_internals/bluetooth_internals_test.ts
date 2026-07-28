@@ -140,7 +140,7 @@ suite('bluetooth_internals', function() {
     assertEquals(deviceInfo.address, addressColumn.textContent);
 
     if (deviceInfo.rssi) {
-      assertEquals(String(deviceInfo.rssi.value), rssiColumn.textContent);
+      assertEquals(String(deviceInfo.rssi), rssiColumn.textContent);
     }
 
     if (deviceInfo.serviceUuids) {
@@ -245,7 +245,7 @@ suite('bluetooth_internals', function() {
     // Copy device info because device collection will not copy this object.
     const newDeviceInfo = fakeDeviceInfo1();
     newDeviceInfo.nameForDisplay = 'DDDD';
-    newDeviceInfo.rssi = {value: -20};
+    newDeviceInfo.rssi = -20;
     newDeviceInfo.serviceUuids = [
       {uuid: '00002a05-0000-1000-8000-00805f9b34fb'},
       {uuid: '0000180d-0000-1000-8000-00805f9b34fb'},
@@ -268,7 +268,7 @@ suite('bluetooth_internals', function() {
 
     const newDeviceInfo = fakeDeviceInfo3();
     newDeviceInfo.nameForDisplay = 'DDDD';
-    newDeviceInfo.rssi = {value: -20};
+    newDeviceInfo.rssi = -20;
     newDeviceInfo.serviceUuids = [
       {uuid: '00002a05-0000-1000-8000-00805f9b34fb'},
       {uuid: '0000180d-0000-1000-8000-00805f9b34fb'},
@@ -299,7 +299,7 @@ suite('bluetooth_internals', function() {
     assertEquals('Unknown', rssiColumn.textContent);
 
     const newDeviceInfo1 = fakeDeviceInfo3();
-    newDeviceInfo1.rssi = {value: -42};
+    newDeviceInfo1.rssi = -42;
     adapterBroker.deviceChanged(newDeviceInfo1);
     assertEquals('-42', rssiColumn.textContent);
 
@@ -310,7 +310,7 @@ suite('bluetooth_internals', function() {
     assertEquals('-42', rssiColumn.textContent);
 
     const newDeviceInfo3 = fakeDeviceInfo3();
-    newDeviceInfo3.rssi = {value: -17};
+    newDeviceInfo3.rssi = -17;
     adapterBroker.deviceChanged(newDeviceInfo3);
     assertEquals('-17', rssiColumn.textContent);
   });
@@ -464,11 +464,11 @@ suite('bluetooth_internals', function() {
   });
 
   /* AdapterPage Tests */
-  function checkAdapterFieldSet(adapterInfo: Record<string, any>) {
+  function checkAdapterFieldSet(adapterInfo: AdapterInfo) {
     for (const propName in adapterInfo) {
       const valueCell = adapterFieldSet.shadowRoot!.querySelector(
           `fieldset [data-field="${propName}"]`)!;
-      const value = adapterInfo[propName];
+      const value = adapterInfo[propName as keyof AdapterInfo];
 
       if (typeof (value) === 'boolean') {
         assertEquals(value, valueCell.classList.contains('checked'));
@@ -483,12 +483,12 @@ suite('bluetooth_internals', function() {
 
   test('AdapterPage_DefaultState', function() {
     assertTrue(!!adapterFieldSet.value);
-    checkAdapterFieldSet(adapterFieldSet.value);
+    checkAdapterFieldSet(adapterFieldSet.value as unknown as AdapterInfo);
   });
 
   test('AdapterPage_AdapterChanged', function() {
     assertTrue(!!adapterBroker);
-    const adapterInfo = adapterFieldSet.value as AdapterInfo;
+    const adapterInfo = adapterFieldSet.value as unknown as AdapterInfo;
     assertTrue(!!adapterInfo);
 
     adapterInfo.present = !adapterInfo.present;
@@ -502,7 +502,7 @@ suite('bluetooth_internals', function() {
 
   test('AdapterPage_AdapterChanged_RepeatTwice', function() {
     assertTrue(!!adapterBroker);
-    const adapterInfo = adapterFieldSet.value as AdapterInfo;
+    const adapterInfo = adapterFieldSet.value as unknown as AdapterInfo;
     assertTrue(!!adapterInfo);
 
     adapterInfo.present = !adapterInfo.present;
@@ -528,7 +528,7 @@ suite('bluetooth_internals', function() {
     ['name',
      'address',
      'isGattConnected',
-     'rssi.value',
+     'rssi',
      'serviceUuids',
      'manufacturerDataMap',
     ].forEach(function(propName) {
@@ -537,19 +537,19 @@ suite('bluetooth_internals', function() {
               .querySelector(`fieldset [data-field="${propName}"]`)!;
 
       const parts = propName.split('.');
-      let value: any = deviceInfo;
+      let value: unknown = deviceInfo;
 
       while (value != null && parts.length > 0) {
         const part = parts.shift()!;
-        value = value[part];
+        value = (value as Record<string, unknown>)[part];
       }
 
       if (propName === 'isGattConnected') {
         value = value ? 'Connected' : 'Not Connected';
       } else if (propName === 'serviceUuids') {
-        value = formatServiceUuids(value);
+        value = formatServiceUuids(value as UUID[]);
       } else if (propName === 'manufacturerDataMap') {
-        value = formatManufacturerDataMap(value);
+        value = formatManufacturerDataMap(value as {[key: number]: number[]});
       }
 
       if (typeof (value) === 'boolean') {

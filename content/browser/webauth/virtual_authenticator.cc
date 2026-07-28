@@ -34,7 +34,9 @@ VirtualAuthenticator::VirtualAuthenticator(const Options& options)
       has_cred_blob_(options.has_cred_blob),
       has_min_pin_length_(options.has_min_pin_length),
       has_prf_(options.has_prf),
+      has_hmac_secret_(options.has_hmac_secret),
       has_hmac_secret_mc_(options.has_hmac_secret_mc),
+      has_cmtg_key_(options.has_cmtg_key),
       unique_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
       state_(base::MakeRefCounted<device::VirtualFidoDevice::State>()) {
   state_->transport = options.transport;
@@ -57,7 +59,7 @@ bool VirtualAuthenticator::AddRegistration(
     std::vector<uint8_t> key_handle,
     const std::string& rp_id,
     base::span<const uint8_t> private_key,
-    int32_t counter) {
+    std::optional<uint32_t> counter) {
   std::optional<std::unique_ptr<device::VirtualFidoDevice::PrivateKey>>
       fido_private_key =
           device::VirtualFidoDevice::PrivateKey::FromPKCS8(private_key);
@@ -77,7 +79,7 @@ bool VirtualAuthenticator::AddResidentRegistration(
     std::vector<uint8_t> key_handle,
     std::string rp_id,
     base::span<const uint8_t> private_key,
-    int32_t counter,
+    std::optional<uint32_t> counter,
     std::vector<uint8_t> user_handle,
     std::optional<std::string> user_name,
     std::optional<std::string> user_display_name) {
@@ -139,6 +141,15 @@ void VirtualAuthenticator::SetUserPresence(bool is_user_present) {
       is_user_present);
 }
 
+void VirtualAuthenticator::SetSignatureCounter(
+    base::span<const uint8_t> key_handle,
+    std::optional<uint32_t> counter) {
+  auto it = state_->registrations.find(key_handle);
+  if (it != state_->registrations.end()) {
+    it->second.counter = counter;
+  }
+}
+
 std::unique_ptr<device::VirtualFidoDevice>
 VirtualAuthenticator::ConstructDevice() {
   switch (protocol_) {
@@ -169,6 +180,9 @@ VirtualAuthenticator::ConstructDevice() {
         // This is required when `prf_support` is set.
         config.internal_account_chooser = true;
       }
+      if (has_hmac_secret_) {
+        config.hmac_secret_support = true;
+      }
       if (has_hmac_secret_mc_) {
         config.hmac_secret_support = true;
         config.hmac_secret_mc_support = true;
@@ -178,12 +192,13 @@ VirtualAuthenticator::ConstructDevice() {
           // Writing a large blob requires obtaining a PinUvAuthToken with
           // permissions if the authenticator is protected by user verification.
           (has_large_blob_ && has_user_verification_) ||
-          // prf support and hmac-secret-mc support always requires PIN support
-          // because the exchange is encrypted.
-          has_prf_ || has_hmac_secret_mc_) {
+          // prf, hmac-secret, and hmac-secret-mc support always requires PIN
+          // support because the exchange is encrypted.
+          has_prf_ || has_hmac_secret_ || has_hmac_secret_mc_) {
         config.pin_uv_auth_token_support = true;
       }
       config.internal_uv_support = has_user_verification_;
+      config.cmtg_key_support = has_cmtg_key_;
       config.is_platform_authenticator =
           attachment_ == device::AuthenticatorAttachment::kPlatform;
       config.user_verification_succeeds = is_user_verified_;
@@ -306,6 +321,42 @@ void VirtualAuthenticator::OnLargeBlobCompressed(
                           original_size));
   }
   std::move(callback).Run(result.has_value());
+}
+
+bool VirtualAuthenticator::AddCmtgKey(
+    base::span<const uint8_t> key_handle,
+    std::unique_ptr<device::VirtualFidoDevice::PrivateKey> cmtg_key) {
+  auto registration = state_->registrations.find(key_handle);
+  if (registration == state_->registrations.end()) {
+    return false;
+  }
+  if (!cmtg_key) {
+    return false;
+  }
+  registration->second.cmtg_keys.push_back(std::move(cmtg_key));
+  return true;
+}
+
+bool VirtualAuthenticator::SetSelectedCmtgKeyIndex(
+    base::span<const uint8_t> key_handle,
+    size_t index) {
+  auto registration = state_->registrations.find(key_handle);
+  if (registration == state_->registrations.end()) {
+    return false;
+  }
+  registration->second.selected_cmtg_key_index = index;
+  return true;
+}
+
+bool VirtualAuthenticator::SetGenerateCmtgKeyOnNextOperation(
+    base::span<const uint8_t> key_handle,
+    bool generate) {
+  auto registration = state_->registrations.find(key_handle);
+  if (registration == state_->registrations.end()) {
+    return false;
+  }
+  registration->second.generate_cmtg_key_on_next_operation = generate;
+  return true;
 }
 
 }  // namespace content

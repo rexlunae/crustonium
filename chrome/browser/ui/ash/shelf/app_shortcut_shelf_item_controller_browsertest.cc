@@ -16,7 +16,6 @@
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -71,17 +70,18 @@ class AppShortcutShelfItemControllerBrowserTest : public InProcessBrowserTest {
   }
 
   void InstallApp() {
-    ash::SystemWebAppManager::GetForTest(browser()->profile())
+    ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
 
-    app_id_ = *ash::GetAppIdForSystemWebApp(browser()->profile(),
+    app_id_ = *ash::GetAppIdForSystemWebApp(browser()->GetProfile(),
                                             ash::SystemWebAppType::TERMINAL);
     app_shelf_id_ = ash::ShelfID(app_id_);
     PinAppWithIDToShelf(app_id_);
   }
 
   BrowserWindowInterface* LaunchApp() {
-    guest_os::LaunchTerminal(browser()->profile(), display::kInvalidDisplayId,
+    guest_os::LaunchTerminal(browser()->GetProfile(),
+                             display::kInvalidDisplayId,
                              crostini::DefaultContainerId());
     return Waiter::WaitForNewBrowser();
   }
@@ -162,7 +162,8 @@ IN_PROC_BROWSER_TEST_F(AppShortcutShelfItemControllerBrowserTest,
   EXPECT_EQ(4u, GetAppMenuItems(ui::EF_SHIFT_DOWN).size());
 
   // Open a new app tab in an existing app browser.
-  chrome::NewTab(app_browser1->GetBrowserForMigrationOnly());
+  chrome::NewTab(app_browser1->GetBrowserForMigrationOnly(),
+                 NewTabTypes::kNoUserAction);
   EXPECT_EQ(5u, GetAppMenuItems(ui::EF_SHIFT_DOWN).size());
 
   // Clicking the third item in the menu should activate the first tab in the

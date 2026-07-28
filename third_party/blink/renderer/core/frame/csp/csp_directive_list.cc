@@ -70,6 +70,10 @@ String GetEvalSha256String(const String& content) {
   return StrCat({"eval-", GetSha256String(content)});
 }
 
+String GetUrlSha256String(const String& url) {
+  return StrCat({"url-", GetSha256String(url)});
+}
+
 // https://w3c.github.io/webappsec-csp/#effective-directive-for-inline-check
 CSPDirectiveName EffectiveDirectiveForInlineCheck(
     ContentSecurityPolicy::InlineType inline_type) {
@@ -133,7 +137,9 @@ void ReportViolation(
         ContentSecurityPolicyViolationType::kURLViolation,
     const String& sample = String(),
     const String& sample_prefix = String(),
-    std::optional<base::UnguessableToken> issue_id = std::nullopt) {
+    std::optional<base::UnguessableToken> issue_id = std::nullopt,
+    std::optional<String> eval_hash = std::nullopt,
+    std::optional<String> url_hash = std::nullopt) {
   String message =
       StrCat({console_message,
               CSPDirectiveListIsReportOnly(csp)
@@ -151,7 +157,7 @@ void ReportViolation(
                           violation_type, nullptr,
                           nullptr,  // localFrame
                           nullptr,  // Element*
-                          sample, sample_prefix, issue_id);
+                          sample, sample_prefix, issue_id, eval_hash, url_hash);
 }
 
 void ReportViolationWithLocation(
@@ -425,11 +431,11 @@ bool CheckEvalAndReportViolation(
     policy->LogToConsole(suffix_console_message);
   }
   String content_for_sample =
-      content.Substring(0, ContentSecurityPolicy::kMaxSampleLength);
+      content.substr(0, ContentSecurityPolicy::kMaxSampleLength);
   ReportEvalViolation(
       csp, policy, raw_directive, CSPDirectiveName::ScriptSrc,
       StrCat({console_message, "\"", raw_directive, "\".", suffix, "\n"}),
-      KURL(), exception_status,
+      NullUrl(), exception_status,
       directive.source_list->report_sample ? content_for_sample
                                            : g_empty_string,
       hash);
@@ -462,7 +468,7 @@ bool CheckWasmEvalAndReportViolation(
       GetRawDirectiveForMessage(csp.raw_directives, directive.type);
   ReportWasmEvalViolation(
       csp, policy, raw_directive, CSPDirectiveName::ScriptSrc,
-      StrCat({console_message, "\"", raw_directive, "\".", suffix}), KURL(),
+      StrCat({console_message, "\"", raw_directive, "\".", suffix}), NullUrl(),
       exception_status,
       directive.source_list->report_sample ? content : g_empty_string);
   if (!CSPDirectiveListIsReportOnly(csp)) {
@@ -551,7 +557,7 @@ bool CheckInlineAndReportViolation(
       StrCat({console_message,
               " violates the following Content Security Policy directive '",
               raw_directive, "'.", suffix}),
-      KURL(), context_url, context_line, element,
+      NullUrl(), context_url, context_line, element,
       directive.source_list->report_sample ? source : g_empty_string);
 
   if (!CSPDirectiveListIsReportOnly(csp)) {
@@ -662,12 +668,25 @@ void ReportViolationForCheckSource(
   String raw_directive =
       GetRawDirectiveForMessage(csp.raw_directives, directive.type);
 
+  std::optional<String> url_hash;
+  if (policy && policy->ScriptSrcExtendedHashesEnabled() &&
+      (effective_type == CSPDirectiveName::ScriptSrc ||
+       effective_type == CSPDirectiveName::ScriptSrcElem ||
+       effective_type == CSPDirectiveName::ScriptSrcAttr ||
+       effective_type == CSPDirectiveName::WorkerSrc)) {
+    String stripped_url = CSPStripURL(url_before_redirects).GetString();
+    if (!stripped_url.empty()) {
+      url_hash = GetUrlSha256String(stripped_url);
+    }
+  }
+
   ReportViolation(
       csp, policy, raw_directive, effective_type,
       StrCat({prefix, url.ElidedString(),
               "' violates the following Content Security Policy directive: \"",
               raw_directive, "\".", suffix}),
-      url_before_redirects);
+      url_before_redirects, ContentSecurityPolicyViolationType::kURLViolation,
+      String(), String(), std::nullopt, std::nullopt, url_hash);
 }
 
 CSPCheckResult CheckSource(
@@ -745,7 +764,7 @@ bool CSPDirectiveListAllowTrustedTypeAssignmentFailure(
       csp, policy,
       ContentSecurityPolicy::GetDirectiveName(
           CSPDirectiveName::RequireTrustedTypesFor),
-      CSPDirectiveName::RequireTrustedTypesFor, message, KURL(),
+      CSPDirectiveName::RequireTrustedTypesFor, message, NullUrl(),
       ContentSecurityPolicyViolationType::kTrustedTypesSinkViolation, sample,
       sample_prefix, issue_id);
   return CSPDirectiveListIsReportOnly(csp);
@@ -975,8 +994,8 @@ String JoinPath(const Vector<StringView>& tokens) {
 String GetRelativeScriptUrl(const KURL& document_url, const KURL& script_url) {
   // TODO: Make this behave more like
   // https://html.spec.whatwg.org/multipage/semantics.html#the-base-element
-  if (!document_url.ProtocolIsInHTTPFamily() ||
-      !script_url.ProtocolIsInHTTPFamily() ||
+  if (!document_url.ProtocolIsInHttpFamily() ||
+      !script_url.ProtocolIsInHttpFamily() ||
       !SecurityOrigin::AreSameOrigin(document_url, script_url)) {
     return String();
   }
@@ -1002,8 +1021,8 @@ String GetRelativeScriptUrl(const KURL& document_url, const KURL& script_url) {
   Vector<StringView> script_path_tokens =
       StringView(script_path).substr(1).SplitSkippingEmpty('/');
 
-  size_t common_prefix_len = 0;
-  size_t min_len =
+  wtf_size_t common_prefix_len = 0;
+  wtf_size_t min_len =
       std::min(document_path_tokens.size(), script_path_tokens.size());
   while (common_prefix_len < min_len &&
          document_path_tokens[common_prefix_len] ==
@@ -1011,14 +1030,13 @@ String GetRelativeScriptUrl(const KURL& document_url, const KURL& script_url) {
     common_prefix_len++;
   }
 
-  int level_difference = document_path_tokens.size() - common_prefix_len;
+  wtf_size_t level_difference = document_path_tokens.size() - common_prefix_len;
   Vector<StringView> relative_path_tokens;
-  for (int i = 0; i < level_difference; i++) {
+  for (wtf_size_t i = 0; i < level_difference; ++i) {
     relative_path_tokens.push_back("..");
   }
-  for (size_t i = common_prefix_len; i < script_path_tokens.size(); i++) {
-    relative_path_tokens.push_back(script_path_tokens[i]);
-  }
+  relative_path_tokens.append_range(
+      base::span(script_path_tokens).subspan(common_prefix_len));
   return JoinPath(relative_path_tokens);
 }
 
@@ -1049,9 +1067,20 @@ bool CheckURLHash(const KURL& document_url,
     return true;
   }
   String relative_url = GetRelativeScriptUrl(document_url, url);
-  return !relative_url.empty() &&
-         URLHashMatchesSourceList(relative_url, hash_algorithms_used,
-                                  source_list);
+  if (relative_url.empty()) {
+    return false;
+  }
+  // For relative URLs, first check for the hash of the url without a leading
+  // '/', then with one, and allow it if either matches.
+  if (URLHashMatchesSourceList(relative_url, hash_algorithms_used,
+                               source_list)) {
+    return true;
+  }
+  StringBuilder sb;
+  sb.Append("/");
+  sb.Append(relative_url);
+  return (URLHashMatchesSourceList(sb.ReleaseString(), hash_algorithms_used,
+                                   source_list));
 }
 
 CSPCheckResult CSPDirectiveListAllowFromSource(
@@ -1159,7 +1188,8 @@ bool CSPDirectiveListAllowTrustedTypePolicy(
                     raw_directive, "\"."});
   ReportViolation(
       csp, policy, "trusted-types", CSPDirectiveName::TrustedTypes, message,
-      KURL(), ContentSecurityPolicyViolationType::kTrustedTypesPolicyViolation,
+      NullUrl(),
+      ContentSecurityPolicyViolationType::kTrustedTypesPolicyViolation,
       policy_name, String(), issue_id);
 
   return CSPDirectiveListIsReportOnly(csp);

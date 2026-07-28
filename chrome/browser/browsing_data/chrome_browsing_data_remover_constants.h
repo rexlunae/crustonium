@@ -46,6 +46,8 @@ constexpr DataType DATA_TYPE_READING_LIST = DATA_TYPE_EMBEDDER_BEGIN << 14;
 constexpr DataType DATA_TYPE_TABS = DATA_TYPE_EMBEDDER_BEGIN << 15;
 constexpr DataType DATA_TYPE_SEARCH_ENGINE_CHOICE = DATA_TYPE_EMBEDDER_BEGIN
                                                     << 16;
+constexpr DataType DATA_TYPE_PRIVATE_VERIFICATION_TOKENS =
+    DATA_TYPE_EMBEDDER_BEGIN << 17;
 
 // Group datatypes.
 
@@ -62,7 +64,8 @@ constexpr DataType DATA_TYPE_SITE_DATA =
     DATA_TYPE_EXTERNAL_PROTOCOL_DATA | DATA_TYPE_ISOLATED_ORIGINS |
     DATA_TYPE_ISOLATED_WEB_APP_COOKIES |
     content::BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX |
-    content::BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+    content::BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS |
+    DATA_TYPE_PRIVATE_VERIFICATION_TOKENS;
 
 // Datatypes protected by Important Sites.
 constexpr DataType IMPORTANT_SITES_DATA_TYPES =
@@ -82,6 +85,9 @@ constexpr DataType FILTERABLE_DATA_TYPES =
 // look like a new Profile. Does not delete account-scoped data like
 // passwords but will remove access to account-scoped data by signing the
 // user out.
+//
+// TODO(crbug.com/506130502): This treats account vs local data inconsistently,
+// remove or fix.
 constexpr DataType ALL_DATA_TYPES =
     DATA_TYPE_SITE_DATA |  //
     content::BrowsingDataRemover::DATA_TYPE_CACHE |

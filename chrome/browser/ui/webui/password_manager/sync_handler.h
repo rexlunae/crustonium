@@ -61,7 +61,7 @@ class SyncHandler : public content::WebUIMessageHandler,
   // Handles the request for the primary account information.
   void HandleGetAccountInfo(const base::ListValue& args);
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS)
   // Opens the Batch Upload Dialog.
   void HandleOpenBatchUploadDialog(const base::ListValue& args);
 #endif
@@ -85,8 +85,7 @@ class SyncHandler : public content::WebUIMessageHandler,
 
   syncer::SyncService* GetSyncService() const;
 
-  // Weak pointer.
-  raw_ptr<Profile, DanglingUntriaged> profile_;
+  raw_ptr<Profile> profile_;
 
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
       sync_service_observation_{this};

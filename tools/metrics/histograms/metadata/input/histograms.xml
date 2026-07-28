@@ -22,6 +22,16 @@ chromium-metrics-reviews@google.com.
 
 <histograms>
 
+<histogram name="Input.Blink.DispatchEvent.Type" enum="WebInputEventType"
+    expires_after="2027-07-23">
+  <owner>lizeb@chromium.org</owner>
+  <owner>input-dev@chromium.org</owner>
+  <summary>
+    The type of input event being dispatched in WidgetInputHandlerManager.
+    Subsampled at 10%.
+  </summary>
+</histogram>
+
 <histogram name="Input.Digitizer.MaxTouchPoints.{PointerDigitizerType}"
     units="maximum allowed touch points" expires_after="2027-01-01">
   <owner>kouhei@chromium.org</owner>
@@ -98,6 +108,17 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
+<histogram name="Input.FirstGestureScrollUpdate.DeltaY" units="pixels"
+    expires_after="2027-02-10">
+  <owner>anandrv@google.com</owner>
+  <owner>clank-performance-team@google.com</owner>
+  <owner>input-dev@chromium.org</owner>
+  <summary>
+    Records the Y scroll delta of the first gesture scroll update event in a
+    touch sequence. Subsampled to 1/100.
+  </summary>
+</histogram>
+
 <histogram name="Input.PointerTypePrimary" enum="PrimaryPointerType"
     expires_after="2025-02-10">
   <owner>flackr@chromium.org</owner>
@@ -122,7 +143,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Input.ToolType.Android" units="tool type"
-    expires_after="2026-05-03">
+    expires_after="2026-12-06">
   <owner>alexmitra@chromium.org</owner>
   <owner>flackr@chromium.org</owner>
   <owner>peconn@chromium.org</owner>
@@ -140,12 +161,11 @@ chromium-metrics-reviews@google.com.
   <owner>essential-inputs-team@google.com</owner>
   <summary>
     The number of enabled input methods. Recorded when the user logs in to
-    Chrome OS or each cold start of Chrome on Android. The enabled input methods
-    are selected by user in the language settings page on Chrome OS and in
-    system language settings on Android. NOTE: 'Active' in the metric name is a
-    legacy misnomer; 'active' should refer to just the single current aka.
-    activated input method that is one of the enabled input methods whose total
-    count is being tracked by this metric.
+    Chrome OS. The enabled input methods are selected by user in the language
+    settings page on Chrome OS. NOTE: 'Active' in the metric name is a legacy
+    misnomer; 'active' should refer to just the single current aka. activated
+    input method that is one of the enabled input methods whose total count is
+    being tracked by this metric.
   </summary>
 </histogram>
 
@@ -1778,7 +1798,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="InputMethod.StylusHandwriting.Gesture"
-    enum="StylusHandwritingGesture" expires_after="2026-07-29">
+    enum="StylusHandwritingGesture" expires_after="2027-07-29">
   <owner>peconn@chromium.org</owner>
   <owner>embedded-experience@google.com</owner>
   <summary>
@@ -1789,7 +1809,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="InputMethod.StylusHandwriting.GestureResult"
-    enum="StylusHandwritingGestureResult" expires_after="2026-07-29">
+    enum="StylusHandwritingGestureResult" expires_after="2027-07-29">
   <owner>alexmitra@chromium.org</owner>
   <owner>embedded-experience@google.com</owner>
   <summary>
@@ -1798,7 +1818,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="InputMethod.StylusHandwriting.GestureTime2" units="ms"
-    expires_after="2026-07-29">
+    expires_after="2027-07-29">
   <owner>alexmitra@chromium.org</owner>
   <owner>embedded-experience@google.com</owner>
   <summary>
@@ -1809,7 +1829,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="InputMethod.StylusHandwriting.Triggered"
-    enum="StylusHandwritingApi" expires_after="2026-07-29">
+    enum="StylusHandwritingApi" expires_after="2027-07-29">
   <owner>peconn@chromium.org</owner>
   <owner>embedded-experience@google.com</owner>
   <summary>
@@ -2177,7 +2197,8 @@ chromium-metrics-reviews@google.com.
 <histogram name="Stylus.Handwriting.RequestHandwritingForPointer"
     enum="Hresult" expires_after="2026-09-06">
   <owner>flackr@chromium.org</owner>
-  <owner>arakeri@microsoft.com</owner>
+  <owner>johna@microsoft.com</owner>
+  <owner>gerchiko@microsoft.com</owner>
   <summary>
     Records the HRESULT returned by RequestHandwritingForPointer. This is only
     applicable to users on Windows.
@@ -2187,66 +2208,102 @@ chromium-metrics-reviews@google.com.
 <histogram name="Stylus.Handwriting.TSFFocus" enum="Boolean"
     expires_after="2026-09-06">
   <owner>flackr@chromium.org</owner>
-  <owner>arakeri@microsoft.com</owner>
+  <owner>johna@microsoft.com</owner>
+  <owner>gerchiko@microsoft.com</owner>
   <summary>
     Records whether the TSF focus was successfully set. This is only applicable
     to users on Windows.
   </summary>
 </histogram>
 
-<histogram name="TextInputClient.CharacterIndex" units="ms"
-    expires_after="2024-08-18">
-  <owner>kouhei@chromium.org</owner>
+<histogram name="TextInputClient.CharacterIndex.TimedOut" enum="Boolean"
+    expires_after="2027-01-03">
+  <owner>joenotcharles@google.com</owner>
   <owner>input-dev@chromium.org</owner>
   <summary>
     Recorded per call from a browser process thread to query
-    GetCharacterIndexAtPoint on a renderer process. The call is effectively
-    synchronous, blocking all other tasks from running on the browser thread.
+    GetCharacterIndexAtPoint on a renderer process. If True the call timed out
+    before receiving a response.
 
     Only recorded on macOS.
-
-    Warning: this histogram was missing its entry until 2024-01; data may be
-    missing.
   </summary>
 </histogram>
 
-<histogram name="TextInputClient.FirstRect" units="ms"
-    expires_after="2025-02-23">
-  <owner>kouhei@chromium.org</owner>
+<histogram name="TextInputClient.CharacterIndex2" units="ms"
+    expires_after="2027-01-03">
+  <owner>joenotcharles@google.com</owner>
   <owner>input-dev@chromium.org</owner>
   <summary>
     Recorded per call from a browser process thread to query
-    GetFirstRectForRange on a renderer process. The call is effectively
-    synchronous, blocking all other tasks from running on the browser thread.
+    GetCharacterIndexAtPoint on a renderer process, with the duration of the
+    query. The call is effectively synchronous, blocking all other tasks from
+    running on the browser thread for that duration. The duration is tracked
+    with LiveTicks so doesn't include time when the system is suspended.
 
     Only recorded on macOS.
-
-    Warning: this histogram was missing its entry until 2024-01; data may be
-    missing.
   </summary>
 </histogram>
 
-<histogram name="TextInputClient.LockWait" units="ms"
-    expires_after="2024-08-18">
-  <owner>kouhei@chromium.org</owner>
+<histogram name="TextInputClient.FirstRect.TimedOut" enum="Boolean"
+    expires_after="2026-12-27">
+  <owner>joenotcharles@google.com</owner>
+  <owner>input-dev@chromium.org</owner>
+  <summary>
+    Recorded per call from a browser process thread to query
+    GetFirstRectForRange on a renderer process. If True the call timed out
+    before receiving a response.
+
+    Only recorded on macOS.
+  </summary>
+</histogram>
+
+<histogram name="TextInputClient.FirstRect2" units="ms"
+    expires_after="2026-12-27">
+  <owner>joenotcharles@google.com</owner>
+  <owner>input-dev@chromium.org</owner>
+  <summary>
+    Recorded per call from a browser process thread to query
+    GetFirstRectForRange on a renderer process, with the duration of the query.
+    The call is effectively synchronous, blocking all other tasks from running
+    on the browser thread for that duration. The duration is tracked with
+    LiveTicks so doesn't include time when the system is suspended.
+
+    Only recorded on macOS.
+  </summary>
+</histogram>
+
+<histogram name="TextInputClient.GetCachedFirstRectResult"
+    enum="GetCachedFirstRectResult" expires_after="2026-12-20">
+  <owner>joenotcharles@google.com</owner>
+  <owner>input-dev@chromium.org</owner>
+  <summary>
+    Records the result of attempting to retrieve the first rect for a character
+    range from the cache on Mac. This is logged every time
+    RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange is called.
+
+    Only recorded on macOS.
+  </summary>
+</histogram>
+
+<histogram name="TextInputClient.LockWait2" units="ms"
+    expires_after="2026-12-27">
+  <owner>joenotcharles@google.com</owner>
   <owner>input-dev@chromium.org</owner>
   <summary>
     Time took to acquire TextInputClient mutex lock on the browser process
     thread, recorded per attempt. The histogram is useful to understand how much
-    of the TextInputClient.FirstRect and TextInputClient.CharacterIndex latency
-    are due to acquring browser-side lock.
+    of the TextInputClient.FirstRect2 and TextInputClient.CharacterIndex2
+    latency are due to acquring browser-side lock. For parity with those
+    histograms, the duration is tracked with LiveTicks so doesn't include time
+    when the system is suspended.
 
     Only recorded on macOS.
-
-    Warning: this histogram was missing its entry until 2024-01; data may be
-    missing.
   </summary>
 </histogram>
 
 <histogram name="Touch.DevicePosture.{Instance}" enum="PostureMode"
-    expires_after="2026-06-20">
+    expires_after="2027-06-20">
   <owner>robliao@chromium.org</owner>
-  <owner>arakeri@microsoft.com</owner>
   <owner>wangsongjin@microsoft.com</owner>
   <owner>gerchiko@microsoft.com</owner>
   <owner>input-dev@chromium.org</owner>

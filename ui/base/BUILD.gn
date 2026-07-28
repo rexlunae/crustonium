@@ -48,7 +48,6 @@ build_ime = !is_ios
 component("ui_data_pack") {
   visibility = [
     ":base",
-    "//chromeos/crosapi/mojom",  # This target requires minimal dependencies.
     "//ios/chrome/tools/strings:generate_localizable_strings",
     "//third_party/blink/renderer/core",
     "//third_party/blink/renderer/platform",
@@ -139,6 +138,8 @@ component("base") {
     "dragdrop/os_exchange_data_provider_factory.h",
     "ime/utf_offset.cc",
     "ime/utf_offset.h",
+    "l10n/chromium_language_matcher.cc",
+    "l10n/chromium_language_matcher.h",
     "l10n/formatter.cc",
     "l10n/formatter.h",
     "l10n/l10n_font_util.cc",
@@ -407,6 +408,13 @@ component("base") {
       ]
     }
 
+    if (is_linux) {
+      sources += [
+        "linux/xdg_shortcut.cc",
+        "linux/xdg_shortcut.h",
+      ]
+    }
+
     if (is_chromeos) {
       sources += [
         "accelerators/ash/quick_insert_event_property.cc",
@@ -596,12 +604,10 @@ component("base") {
       "Carbon.framework",
       "CoreVideo.framework",
       "Foundation.framework",
+      "IOKit.framework",
       "QuartzCore.framework",
+      "ScreenCaptureKit.framework",
       "UniformTypeIdentifiers.framework",
-    ]
-
-    weak_frameworks = [
-      "ScreenCaptureKit.framework",  # Available in macOS 12.3, stable in 13.2.
     ]
   }
 
@@ -751,6 +757,15 @@ if (is_android) {
     # files, they should be added here as necessary.
     srcjar_deps = [ ":java_features_srcjar" ]
   }
+
+  java_cpp_enum("ui_base_types_srcjar") {
+    sources = [ "ui_base_types.h" ]
+  }
+
+  android_library("ui_base_types_java") {
+    srcjar_deps = [ ":ui_base_types_srcjar" ]
+    deps = [ "//third_party/androidx:androidx_annotation_annotation_java" ]
+  }
 }
 
 static_library("test_support") {
@@ -764,6 +779,8 @@ static_library("test_support") {
     "resource/mock_resource_bundle_delegate.h",
     "test/idle_test_utils.cc",
     "test/idle_test_utils.h",
+    "test/mock_base_window.cc",
+    "test/mock_base_window.h",
   ]
 
   if (is_mac) {
@@ -801,8 +818,6 @@ static_library("test_support") {
     sources += [
       "accelerators/test_accelerator_target.cc",
       "accelerators/test_accelerator_target.h",
-      "test/mock_base_window.cc",
-      "test/mock_base_window.h",
       "test/test_dialog_model_host.cc",
       "test/test_dialog_model_host.h",
       "test/ui_controls.cc",
@@ -834,7 +849,7 @@ static_library("test_support") {
     "//testing/gmock",
     "//testing/gtest",
     "//ui/base/idle",
-    "//ui/base/interaction:test_support",
+    "//ui/base/interaction",
   ]
 
   if (!is_ios) {
@@ -905,6 +920,11 @@ static_library("test_support") {
     ]
   }
 
+  if (is_android) {
+    sources += [ "test/ui_controls_android.cc" ]
+    deps += [ "//ui/android" ]
+  }
+
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.
   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
@@ -931,10 +951,7 @@ if (is_android) {
 
 bundle_data("ui_base_unittests_bundle_data") {
   testonly = true
-  sources = [
-    "//testing/buildbot/filters/ios.ui_base_unittests.filter",
-    "test/data/data_pack_unittest/truncated-header.pak",
-  ]
+  sources = [ "test/data/data_pack_unittest/truncated-header.pak" ]
   outputs = [ "{{bundle_resources_dir}}/" +
               "{{source_root_relative_dir}}/{{source_file_part}}" ]
 }
@@ -989,6 +1006,14 @@ source_set("run_all_unittests") {
     "//ui/base",
     "//ui/display",
   ]
+}
+
+if (is_win) {
+  executable("shell_test_helper") {
+    testonly = true
+    sources = [ "win/shell_test_helper.cc" ]
+    deps = [ "//base" ]
+  }
 }
 
 test("ui_base_unittests") {
@@ -1051,6 +1076,7 @@ test("ui_base_unittests") {
     "//ui/base/clipboard:file_info",
     "//ui/base/cursor:unittests",
     "//ui/base/data_transfer_policy:unittests",
+    "//ui/base/identifier:unit_tests",
     "//ui/base/interaction:unit_tests",
     "//ui/base/metadata:metadata_tests",
     "//ui/base/prediction",
@@ -1086,6 +1112,7 @@ test("ui_base_unittests") {
       "cocoa/base_view_unittest.mm",
       "cocoa/bubble_closer_unittest.mm",
       "cocoa/cocoa_base_utils_unittest.mm",
+      "cocoa/command_dispatcher_unittest.mm",
       "cocoa/constrained_window/constrained_window_animation_unittest.mm",
       "cocoa/defaults_utils_unittest.mm",
       "cocoa/nsmenu_additions_unittest.mm",
@@ -1127,6 +1154,7 @@ test("ui_base_unittests") {
   }
 
   if (use_blink) {
+    sources += [ "pointer/pointer_device_unittest.cc" ]
     deps += [
       "//ui/events:events_base",
       "//ui/events:test_support",
@@ -1231,12 +1259,17 @@ test("ui_base_unittests") {
       "dragdrop/os_exchange_data_win_unittest.cc",
       "view_prop_unittest.cc",
       "win/hwnd_subclass_unittest.cc",
+      "win/shell_unittest.cc",
       "win/win_cursor_factory_unittest.cc",
     ]
     deps += [
       "//ui/base/cursor",
       "//ui/base/cursor/mojom:cursor_type_shared",
+      "//ui/base/idle:unit_tests",
     ]
+    if (!is_component_build && !is_asan) {
+      data_deps += [ ":shell_test_helper" ]
+    }
   }
 
   if (is_android) {
@@ -1319,6 +1352,10 @@ test("ui_base_unittests") {
       "//ui/base/accelerators/global_accelerator_listener",
       "//ui/linux:linux_ui",
     ]
+  }
+
+  if (is_linux) {
+    sources += [ "linux/xdg_shortcut_unittest.cc" ]
   }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
@@ -1410,7 +1447,7 @@ buildflag_header("ozone_buildflags") {
   header = "ozone_buildflags.h"
 
   flags = [
-    "IS_OZONE_WAYLAND=$ozone_platform_wayland",
-    "IS_OZONE_X11=$ozone_platform_x11",
+    "SUPPORTS_OZONE_WAYLAND=$ozone_platform_wayland",
+    "SUPPORTS_OZONE_X11=$ozone_platform_x11",
   ]
 }

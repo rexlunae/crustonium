@@ -5,9 +5,11 @@
 #import "ios/chrome/browser/omnibox/ui/popup/row/omnibox_popup_row_trailing_button.h"
 
 #import "base/check.h"
+#import "base/metrics/histogram_functions.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_popup_accessibility_identifier_constants.h"
 #import "ios/chrome/browser/omnibox/ui/popup/row/omnibox_popup_row_util.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/sharing/ui_bundled/sharing_metrics.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/pointer_interaction_util.h"
@@ -40,6 +42,12 @@ const CGFloat kTrailingButtonIconPointSizeMedium = 15.0f;
   }
 
   _trailingIconType = trailingIconType;
+
+  if (_trailingIconType == TrailingIconType::kShare) {
+    base::UmaHistogramEnumeration("Mobile.ShareThisPage.Shown",
+                                  ShareThisPageLocation::kOmniboxVerbatimMatch);
+  }
+
   [self updateButtonImageForCurrentState];
 }
 
@@ -76,24 +84,31 @@ const CGFloat kTrailingButtonIconPointSizeMedium = 15.0f;
     UIImage* icon;
     self.hidden = NO;
     switch (self.trailingIconType) {
+      case TrailingIconType::kShare:
+        // The arrow should point in the direction of the omnibox.
+        icon = SymbolWithPointSize(
+            SymbolShare, kTrailingButtonIconPointSizeMedium * multiplier);
+        self.accessibilityIdentifier =
+            kOmniboxPopupRowShareAccessibilityIdentifier;
+        break;
       case TrailingIconType::kNone:
         self.accessibilityIdentifier = nil;
         self.hidden = YES;
         return;
       case TrailingIconType::kRefineQuery: {
         // The arrow should point in the direction of the omnibox.
-        NSString* iconName = self.refineQueryArrowDirectionDown
-                                 ? kRefineQueryDownSymbol
-                                 : kRefineQuerySymbol;
-        icon = DefaultSymbolWithPointSize(
-            iconName, kTrailingButtonIconPointSizeMedium * multiplier);
+        Symbol symbol = self.refineQueryArrowDirectionDown
+                            ? SymbolRefineQueryDown
+                            : SymbolRefineQuery;
+        icon = SymbolWithPointSize(
+            symbol, kTrailingButtonIconPointSizeMedium * multiplier);
         self.accessibilityIdentifier =
             kOmniboxPopupRowAppendAccessibilityIdentifier;
         break;
       }
       case TrailingIconType::kOpenExistingTab:
-        icon = DefaultSymbolWithPointSize(
-            kNavigateToTabSymbol,
+        icon = SymbolWithPointSize(
+            SymbolNavigateToTab,
             kTrailingButtonIconPointSizeMedium * multiplier);
         self.accessibilityIdentifier =
             kOmniboxPopupRowSwitchTabAccessibilityIdentifier;

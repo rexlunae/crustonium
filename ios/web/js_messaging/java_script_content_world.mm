@@ -8,8 +8,11 @@
 
 #import "base/check_op.h"
 #import "base/debug/crash_logging.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/time/time.h"
+#import "ios/web/common/features.h"
 #import "ios/web/javascript_flags.h"
 #import "ios/web/js_messaging/web_view_web_state_map.h"
 #import "ios/web/public/browser_state.h"
@@ -17,6 +20,7 @@
 #import "ios/web/public/js_messaging/java_script_feature.h"
 #import "ios/web/public/js_messaging/script_message.h"
 #import "ios/web/public/js_messaging/web_view_js_utils.h"
+#import "ios/web/util/wk_security_origin_util.h"
 #import "ios/web/web_state/ui/crw_web_controller.h"
 #import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
 #import "ios/web/web_state/web_state_impl.h"
@@ -81,9 +85,22 @@ std::optional<ScriptMessage> GetMessage(WKScriptMessage* script_message,
     url = net::GURLWithNSURL(ns_url);
   }
 
-  return ScriptMessage(web::ValueResultFromWKResult(script_message.body),
-                       web_controller.isUserInteracting,
-                       script_message.frameInfo.mainFrame, url);
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  std::optional<ScriptMessage> message = ScriptMessage(
+      web::ValueResultFromWKResult(script_message.body),
+      web_controller.isUserInteracting, script_message.frameInfo.mainFrame, url,
+      web::OriginWithWKSecurityOrigin(script_message.frameInfo.securityOrigin));
+  if (base::FeatureList::IsEnabled(
+          web::features::kIOSScriptMessageConversionDurationLogging) &&
+      base::TimeTicks::IsHighResolution()) {
+    const base::TimeTicks end_time = base::TimeTicks::Now();
+    base::UmaHistogramCustomMicrosecondsTimes(
+        "IOS.Web.JSMessaging.ScriptMessageConversion.Duration",
+        end_time - start_time, /*min=*/base::Microseconds(1),
+        /*max=*/base::Seconds(5), /*number of buckets=*/100);
+  }
+
+  return message;
 }
 
 }  // namespace
@@ -312,14 +329,14 @@ void JavaScriptContentWorld::ScriptMessageReceived(
     return;
   }
 
-  web::WebViewWebStateMap* map =
-      web::WebViewWebStateMap::FromBrowserState(browser_state_);
-  web::WebState* web_state = map->GetWebStateForWebView(script_message.webView);
-
+  web::WebState* web_state = web::GetWebStateForWebView(script_message.webView);
   if (!web_state) {
     return;
   }
-
+  if (!feature->ShouldHandleMessageFromOrigin(web::OriginWithWKSecurityOrigin(
+          script_message.frameInfo.securityOrigin))) {
+    return;
+  }
   std::optional<ScriptMessage> message = GetMessage(script_message, web_state);
   if (!message) {
     return;
@@ -340,11 +357,13 @@ void JavaScriptContentWorld::ScriptMessageReceivedWithReply(
     return;
   }
 
-  web::WebViewWebStateMap* map =
-      web::WebViewWebStateMap::FromBrowserState(browser_state_);
-  web::WebState* web_state = map->GetWebStateForWebView(script_message.webView);
-
+  web::WebState* web_state = web::GetWebStateForWebView(script_message.webView);
   if (!web_state) {
+    reply_handler(nullptr, kInternalError);
+    return;
+  }
+  if (!feature->ShouldHandleMessageFromOrigin(web::OriginWithWKSecurityOrigin(
+          script_message.frameInfo.securityOrigin))) {
     reply_handler(nullptr, kInternalError);
     return;
   }

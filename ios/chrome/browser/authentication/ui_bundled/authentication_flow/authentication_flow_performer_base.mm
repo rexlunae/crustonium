@@ -50,6 +50,7 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -105,7 +106,7 @@ void HandleSignoutForSnackbar(
   ProfileIOS* profile = browser->GetProfile()->GetOriginalProfile();
   AuthenticationService* auth_service =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (!auth_service->HasPrimaryIdentity(signin::ConsentLevel::kSignin)) {
+  if (!auth_service->HasPrimaryIdentity()) {
     return;
   }
 
@@ -161,8 +162,9 @@ void MaybeShowHistorySyncScreenAfterProfileSwitch(
     view_controller = view_controller.presentedViewController;
   }
 
-  [browser->GetSceneState().controller showSignin:command
-                               baseViewController:view_controller];
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
+  [sceneHandler showSignin:command baseViewController:view_controller];
 }
 
 void CompletePostSignInActionsContinuationImpl(
@@ -289,10 +291,13 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
                                             accessPoint);
   ChangeProfileContinuation authenticationFlowContinuation =
       [self authenticationFlowContinuation];
+  ChangeProfileContinuation secondContinuation =
+      requestHelperContinuation ? ChainChangeProfileContinuations(
+                                      std::move(requestHelperContinuation),
+                                      std::move(postSignInContinuation))
+                                : std::move(postSignInContinuation);
   ChangeProfileContinuation fullContinuation = ChainChangeProfileContinuations(
-      std::move(authenticationFlowContinuation),
-      ChainChangeProfileContinuations(std::move(requestHelperContinuation),
-                                      std::move(postSignInContinuation)));
+      std::move(authenticationFlowContinuation), std::move(secondContinuation));
   [_changeProfileHandler changeProfile:profileName
                               forScene:sceneState
                                 reason:reason

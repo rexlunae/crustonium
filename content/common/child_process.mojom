@@ -35,6 +35,14 @@ interface ChildProcessHost {
   // Whether or not the interface type encapsulated by |receiver| is supported
   // depends on the process type and potentially on the Content embedder.
   BindHostReceiver(mojo_base.mojom.GenericPendingReceiver receiver);
+
+  // Batched form of BindHostReceiver(). Each receiver in |receivers| is bound
+  // exactly as if passed individually to BindHostReceiver(), in array order.
+  // The child uses this to coalesce the burst of bind requests issued during
+  // process startup into a single IPC. Only used for receivers whose interface
+  // is used asynchronously (a synchronous call on a not-yet-bound interface
+  // must use BindHostReceiver() so the bind is sent immediately).
+  BindHostReceivers(array<mojo_base.mojom.GenericPendingReceiver> receivers);
 };
 
 // A control interface the browser uses to drive the behavior of all types of
@@ -97,13 +105,6 @@ interface ChildProcess {
   // The callback is invoked once the profile has been flushed to disk.
   [EnableIf=clang_profiling_inside_sandbox]
   WriteClangProfilingProfile() => ();
-
-  // Sets the pseudonymization salt in a child process.
-  //
-  // PRIVACY NOTE: It is important that the `salt` is never persisted anywhere
-  // or sent to a server.  Whoever has access to the salt can de-anonymize
-  // results of the content::PseudonymizationUtil::PseudonymizeString method.
-  SetPseudonymizationSalt(uint32 salt);
 
   // Reinitializes the child process's logging with the given settings. This
   // is needed on Chrome OS, which switches to a log file in the user's home

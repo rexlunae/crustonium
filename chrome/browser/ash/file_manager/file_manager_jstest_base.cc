@@ -55,7 +55,7 @@ class TestWebUIProvider
         content::WebUIDataSource::CreateAndAdd(
             profile, ash::file_manager::kChromeUIFileManagerHost);
 
-    files_swa_source->AddResourcePaths(base::span(kFileManagerSwaResources));
+    files_swa_source->AddResourcePaths(kFileManagerSwaResources);
 
     ash::file_manager::AddFilesAppResources(files_swa_source,
                                             kFileManagerResources);
@@ -173,7 +173,7 @@ void FileManagerJsTestBase::SetUpOnMainThread() {
           ChromeWebUIControllerFactory::GetInstance());
   webui_controller_factory_->AddFactoryOverride(TestResourceUrl().GetHost(),
                                                 test_webui_provider_.Pointer());
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   file_manager::test::AddDefaultComponentExtensionsOnMainThread(profile);
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();

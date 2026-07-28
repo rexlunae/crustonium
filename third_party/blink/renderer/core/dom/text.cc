@@ -123,8 +123,8 @@ Text* Text::splitText(unsigned offset, ExceptionState& exception_state) {
   EventQueueScope scope;
   String old_str = data();
   Text* new_text =
-      To<Text>(CloneWithData(GetDocument(), old_str.Substring(offset)));
-  SetDataWithoutUpdate(old_str.Substring(0, offset));
+      To<Text>(CloneWithData(GetDocument(), old_str.substr(offset)));
+  SetDataWithoutUpdate(old_str.substr(0, offset));
 
   DidModifyData(old_str, CharacterData::kUpdateFromNonParser);
 
@@ -253,7 +253,7 @@ String Text::nodeName() const {
 }
 
 static inline bool EndsWithWhitespace(const String& text) {
-  return text.length() && IsASCIISpace(text[text.length() - 1]);
+  return text.length() && IsAsciiSpace(text[text.length() - 1]);
 }
 
 static inline bool CanHaveWhitespaceChildren(
@@ -340,13 +340,12 @@ void Text::AttachLayoutTree(AttachContext& context) {
   if (context.parent) {
     if (Element* style_parent =
             LayoutTreeBuilderTraversal::ParentElement(*this)) {
-      const ComputedStyle* const style =
+      const ComputedStyle& style =
           IsA<HTMLHtmlElement>(style_parent) && style_parent->GetLayoutObject()
-              ? style_parent->GetLayoutObject()->Style()
-              : style_parent->GetComputedStyle();
-      CHECK(style);
-      if (TextLayoutObjectIsNeeded(context, *style)) {
-        LayoutTreeBuilderForText(*this, context, style).CreateLayoutObject();
+              ? style_parent->GetLayoutObject()->StyleRef()
+              : style_parent->ComputedStyleRef();
+      if (TextLayoutObjectIsNeeded(context, style)) {
+        LayoutTreeBuilderForText(*this, context, &style).CreateLayoutObject();
         context.previous_in_flow = GetLayoutObject();
       }
     }
@@ -391,11 +390,11 @@ void Text::RecalcTextStyle(const StyleRecalcChange change) {
   const ComputedStyle* new_style =
       GetDocument().GetStyleResolver().StyleForText(this);
   if (LayoutText* layout_text = GetLayoutObject()) {
-    const ComputedStyle* layout_parent_style =
-        GetLayoutObject()->Parent()->Style();
+    const ComputedStyle& layout_parent_style =
+        GetLayoutObject()->Parent()->StyleRef();
     if (!new_style || GetForceReattachLayoutTree() ||
-        (new_style != layout_parent_style &&
-         !new_style->InheritedEqual(*layout_parent_style))) {
+        (*new_style != layout_parent_style &&
+         !new_style->InheritedEqual(layout_parent_style))) {
       // The computed style or the need for an anonymous inline wrapper for a
       // display:contents text child changed.
       SetNeedsReattachLayoutTree();
@@ -434,7 +433,7 @@ static bool ShouldUpdateLayoutByReattaching(const Text& text_node,
   Node::AttachContext context;
   context.parent = text_layout_object->Parent();
   if (!text_node.TextLayoutObjectIsNeeded(context,
-                                          *text_layout_object->Style())) {
+                                          text_layout_object->StyleRef())) {
     return true;
   }
   if (text_layout_object->IsTextFragment()) {

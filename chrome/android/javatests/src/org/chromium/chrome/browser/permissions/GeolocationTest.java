@@ -11,6 +11,7 @@ import androidx.test.filters.MediumTest;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
@@ -21,6 +22,8 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.permissions.PermissionTestRule.PermissionUpdateWaiter;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
 import org.chromium.device.geolocation.LocationProviderOverrider;
 import org.chromium.device.geolocation.MockLocationProvider;
@@ -35,7 +38,13 @@ import org.chromium.ui.base.DeviceFormFactor;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class GeolocationTest {
-    @Rule public PermissionTestRule mPermissionRule = new PermissionTestRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+    public PermissionTestRule mPermissionRule =
+            new PermissionTestRule(mActivityTestRule.getActivityTestRule());
+
+    @Rule
+    public RuleChain mRuleChain = RuleChain.outerRule(mActivityTestRule).around(mPermissionRule);
 
     private static final String TEST_FILE = "/content/test/data/android/geolocation.html";
 
@@ -48,14 +57,12 @@ public class GeolocationTest {
         LocationProviderOverrider.setLocationProviderImpl(new MockLocationProvider());
     }
 
-    private void runTest(String javascript, int nUpdates, boolean withGesture, boolean isDialog)
-            throws Exception {
+    private void runTest(String javascript, int nUpdates, boolean withGesture) throws Exception {
         Tab tab = mPermissionRule.getActivityTab();
         PermissionUpdateWaiter updateWaiter =
                 new PermissionUpdateWaiter("Count:", mPermissionRule.getActivity());
         ThreadUtils.runOnUiThreadBlocking(() -> tab.addObserver(updateWaiter));
-        mPermissionRule.runAllowTest(
-                updateWaiter, TEST_FILE, javascript, nUpdates, withGesture, isDialog);
+        mPermissionRule.runAllowTest(updateWaiter, TEST_FILE, javascript, nUpdates, withGesture);
         ThreadUtils.runOnUiThreadBlocking(() -> tab.removeObserver(updateWaiter));
     }
 
@@ -65,7 +72,7 @@ public class GeolocationTest {
     @Feature({"Location", "Main"})
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/41486136
     public void testGeolocationPlumbingAllowedDialog() throws Exception {
-        runTest("initiate_getCurrentPosition()", 1, true, true);
+        runTest("initiate_getCurrentPosition()", 1, true);
     }
 
     /**
@@ -76,7 +83,7 @@ public class GeolocationTest {
     @MediumTest
     @Feature({"Location", "Main"})
     public void testGeolocationPlumbingAllowedDialogNoGesture() throws Exception {
-        runTest("initiate_getCurrentPosition()", 1, false, true);
+        runTest("initiate_getCurrentPosition()", 1, false);
     }
 
     /** Verify Geolocation creates a dialog and receives multiple locations. */
@@ -85,6 +92,6 @@ public class GeolocationTest {
     @Feature({"Location"})
     @DisableIf.Build(sdk_is_greater_than = Build.VERSION_CODES.R, message = "crbug.com/362792693")
     public void testGeolocationWatchDialog() throws Exception {
-        runTest("initiate_watchPosition()", 2, true, true);
+        runTest("initiate_watchPosition()", 2, true);
     }
 }

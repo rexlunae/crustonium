@@ -5,9 +5,6 @@
 #include "chrome/browser/autofill/android/autofill_fallback_surface_launcher.h"
 
 #include "base/android/jni_android.h"
-#include "base/android/jni_string.h"
-#include "chrome/browser/profiles/profile.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
@@ -16,17 +13,6 @@
 #include "chrome/android/chrome_jni_headers/AutofillFallbackSurfaceLauncher_jni.h"
 
 namespace autofill {
-
-void ShowManagePlusAddressesPage(content::WebContents& web_contents) {
-  if (web_contents.GetNativeView() &&
-      web_contents.GetNativeView()->GetWindowAndroid()) {
-    Java_AutofillFallbackSurfaceLauncher_openManagePlusAddresses(
-        base::android::AttachCurrentThread(),
-        web_contents.GetNativeView()->GetWindowAndroid()->GetJavaObject(),
-        Profile::FromBrowserContext(web_contents.GetBrowserContext())
-            ->GetJavaObject());
-  }
-}
 
 void ShowGoogleWalletPassesPage(content::WebContents& web_contents) {
   if (web_contents.GetNativeView() &&
@@ -37,9 +23,14 @@ void ShowGoogleWalletPassesPage(content::WebContents& web_contents) {
   }
 }
 
-static std::string
-JNI_AutofillFallbackSurfaceLauncher_GetPlusAddressManagementUrl(JNIEnv* env) {
-  return plus_addresses::features::kPlusAddressManagementUrl.Get();
+void ShowGoogleWallePrivatePassesHelpCenterPageInCct(
+    content::WebContents& web_contents) {
+  if (web_contents.GetNativeView() &&
+      web_contents.GetNativeView()->GetWindowAndroid()) {
+    Java_AutofillFallbackSurfaceLauncher_openGoogleWalletPrivatePassHelpCenterPageInCct(
+        base::android::AttachCurrentThread(),
+        web_contents.GetNativeView()->GetWindowAndroid()->GetJavaObject());
+  }
 }
 
 }  // namespace autofill

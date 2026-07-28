@@ -5,13 +5,37 @@
 #ifndef COMPONENTS_WEBAUTHN_IOS_PASSKEY_REQUEST_PARSER_H_
 #define COMPONENTS_WEBAUTHN_IOS_PASSKEY_REQUEST_PARSER_H_
 
+#import "base/functional/function_ref.h"
 #import "base/types/expected.h"
 #import "base/values.h"
 #import "components/webauthn/ios/passkey_request_params.h"
+#import "url/origin.h"
 
 namespace webauthn {
 
+// Events received from the Passkey JavaScript shim.
+enum class PasskeyScriptEvent {
+  kCancelRequest,
+  kHandleGetRequest,
+  kHandleCreateRequest,
+  kLogGetRequest,
+  kLogCreateRequest,
+  kLogGetResolvedGpm,
+  kLogGetResolvedNonGpm,
+  kLogCreateResolvedGpm,
+  kLogCreateResolvedNonGpm,
+  kSignalUnknownCredential,
+  kSignalCurrentUserDetails,
+  kSignalAllAcceptedCredentials,
+};
+
+// Function to check if a credential exists in GPM.
+using IsGpmPasskeyFunc =
+    base::FunctionRef<bool(const std::string& rp_id,
+                           const std::string& credential_id)>;
+
 // List of errors which can be returned by the parsing methods below.
+// LINT.IfChange(PasskeysParsingError)
 enum class PasskeysParsingError {
   kMissingFrameId,
   kEmptyFrameId,
@@ -42,7 +66,9 @@ enum class PasskeysParsingError {
   kMalformedFirstPRFInput,
   kMalformedSecondPRFInput,
   kPRFInputTooLarge,
+  kMaxValue = kPRFInputTooLarge,
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:PasskeysParsingError)
 
 // Builds a IOSPasskeyClient::RequestInfo object from the parameters contained
 // in the provided dictionary.
@@ -66,6 +92,27 @@ BuildRegistrationRequestParams(IOSPasskeyClient::RequestInfo request_info,
 // passkey_controller.ts.
 base::DictValue ToAuthenticationExtensionsClientOutputsJSON(
     passkey_model_utils::ExtensionOutputData extension_output_data);
+
+// Builds a SignalUnknownCredentialParams object from the parameters contained
+// in the provided dictionary.
+std::optional<SignalUnknownCredentialParams> BuildSignalUnknownCredentialParams(
+    const base::DictValue& dict);
+
+// Builds a SignalCurrentUserDetailsParams object from the parameters contained
+// in the provided dictionary.
+std::optional<SignalCurrentUserDetailsParams>
+BuildSignalCurrentUserDetailsParams(const base::DictValue& dict);
+
+// Builds a SignalAllAcceptedCredentialsParams object from the parameters
+// contained in the provided dictionary.
+std::optional<SignalAllAcceptedCredentialsParams>
+BuildSignalAllAcceptedCredentialsParams(const base::DictValue& dict);
+
+// Parses the event string into a strongly typed enum.
+std::optional<PasskeyScriptEvent> ParsePasskeyScriptEvent(
+    const base::DictValue& dict,
+    const url::Origin& caller_origin,
+    IsGpmPasskeyFunc is_gpm_passkey_func);
 
 }  // namespace webauthn
 

@@ -54,7 +54,7 @@ bool IsValidIdList(const std::string& extension_ids) {
     return false;
   }
   for (const auto& id : ids) {
-    if (!crx_file::id_util::IdIsValid(std::string(id))) {
+    if (!crx_file::id_util::IdIsValid(id)) {
       return false;
     }
   }
@@ -434,6 +434,8 @@ void ExtensionSettingsPolicyHandler::SanitizePolicySettings(
 bool ExtensionSettingsPolicyHandler::CheckPolicySettings(
     const policy::PolicyMap& policies,
     policy::PolicyErrorMap* errors) {
+  checked_value_.reset();
+  check_called_ = true;
   std::unique_ptr<base::Value> policy_value;
   if (!CheckAndGetValue(policies, errors, &policy_value)) {
     return false;
@@ -443,19 +445,25 @@ bool ExtensionSettingsPolicyHandler::CheckPolicySettings(
   }
 
   SanitizePolicySettings(policy_value.get(), errors);
+  checked_value_ = std::move(policy_value);
   return true;
 }
 
 void ExtensionSettingsPolicyHandler::ApplyPolicySettings(
     const policy::PolicyMap& policies,
     PrefValueMap* prefs) {
-  std::unique_ptr<base::Value> policy_value;
-  if (!CheckAndGetValue(policies, nullptr, &policy_value) || !policy_value) {
+  // CheckPolicySettings() must be called before ApplyPolicySettings().
+  // This is guaranteed by the framework (configuration_policy_handler_list.cc)
+  // and documented in ConfigurationPolicyHandler::ApplyPolicySettingsWithParameters().
+  CHECK(check_called_);
+  check_called_ = false;
+
+  if (!checked_value_) {
     return;
   }
-  SanitizePolicySettings(policy_value.get(), nullptr);
+
   prefs->SetValue(pref_names::kExtensionManagement,
-                  base::Value::FromUniquePtrValue(std::move(policy_value)));
+                  base::Value::FromUniquePtrValue(std::move(checked_value_)));
 }
 
 }  // namespace extensions

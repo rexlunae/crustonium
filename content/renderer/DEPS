@@ -20,7 +20,6 @@ include_rules = [
   "+content/public/child",
   "+content/public/renderer",
   "+content/child",
-  "+content/services/auction_worklet",
   "+device/base/synchronization",
   "+device/gamepad/public/cpp",
   "+device/gamepad/public/mojom",
@@ -42,20 +41,17 @@ specific_include_rules = {
     "+content/public/browser",
     "+content/shell",
   ],
-  "renderer_main\.cc": [
-   "+chromeos/ash/components/memory/userspace_swap",
-  ],
-  "render_thread_impl_browsertest\.cc": [
+  "render_thread_impl_browsertest\\.cc": [
     "+content/app/mojo/mojo_init.h",
   ],
-  "local_resource_url_loader_factory_unittest\.cc": [
+  "local_resource_url_loader_factory_unittest\\.cc": [
     "+ui/base/resource",
   ],
-  "render_thread_impl_discardable_memory_browsertest\.cc": [
+  "render_thread_impl_discardable_memory_browsertest\\.cc": [
     "+components/discardable_memory/service",
     "+content/browser/browser_main_loop.h",
   ],
-  ".*_(unit|pixel|perf)test.*\.cc": [
+  ".*_(unit|pixel|perf)test.*\\.cc": [
     "+components/viz/test",
     "+third_party/blink/renderer/platform/testing",
   ],

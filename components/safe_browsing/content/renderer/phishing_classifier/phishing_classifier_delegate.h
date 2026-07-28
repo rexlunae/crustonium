@@ -10,19 +10,13 @@
 #include <memory>
 #include <string>
 
-#include "base/memory/read_only_shared_memory_region.h"
-#include "base/memory/ref_counted_memory.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
 #include "components/safe_browsing/content/renderer/phishing_classifier/phishing_classifier.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/scorer.h"
+#include "components/safe_browsing/core/common/phishing_classifier/scorer.h"
 #include "content/public/renderer/render_frame_observer.h"
-#include "content/public/renderer/render_thread_observer.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
-#include "mojo/public/cpp/bindings/receiver_set.h"
-#include "services/service_manager/public/cpp/binder_registry.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
@@ -51,7 +45,18 @@ enum class SBPhishingClassifierEvent {
   kPhishingClasifierCallbackEmptyOnCompletion = 8,
   // Phishing classification request responded.
   kPhishingClassifierRequestResponded = 9,
-  kMaxValue = kPhishingClassifierRequestResponded,
+  // Renderer frame layout has finished loading as
+  // WebMeaningfulLayout::kFinishedLoading.
+  kPhishingClassifierPageFinishedLoading = 10,
+  // Renderer frame layout has finished loading during classification.
+  kPhishingClassifierPageFinishedLoadingAgainDuringClassification = 11,
+  // There is an ongoing classification at the time of classification start
+  // request.
+  kOngoingClassificationAtAnotherClassificationRequest = 12,
+  // A new page has loaded while the browser request has been waiting for page
+  // to finish loading in order to start classification.
+  kNewPageLoadWhileBrowserRequestWaitsForLoad = 13,
+  kMaxValue = kNewPageLoadWhileBrowserRequestWaitsForLoad,
 };
 
 class PhishingClassifierDelegate : public content::RenderFrameObserver,
@@ -70,15 +75,16 @@ class PhishingClassifierDelegate : public content::RenderFrameObserver,
 
   ~PhishingClassifierDelegate() override;
 
-  // Called by the RenderFrame once a page has finished loading.  Updates the
-  // last-loaded URL, then starts classification if all other
-  // conditions are met (see MaybeStartClassification for details).
-  // We ignore preliminary captures, since these happen before the page has
-  // finished loading. The page_text was used for DOM classification, which is
-  // now deprecated. This observer function will stay to update the last loaded
-  // URL until further changes.
-  void PageCaptured(scoped_refptr<const base::RefCountedString16> page_text,
-                    bool preliminary_capture);
+  // Called by the RenderFrame once a page has finished loading and it has
+  // captured the page text. Updates the last-loaded URL, then starts
+  // classification if all other conditions are met (see
+  // MaybeStartClassification for details). We ignore preliminary captures,
+  // since these happen before the page has finished loading.
+  //
+  // Note: Previously, this method accepted the page text as a parameter for DOM
+  // classification, which is now deprecated. This observer function will stay
+  // to update the last loaded URL until further changes.
+  void PageCaptured(bool preliminary_capture);
 
   // RenderFrameObserver implementation, public for testing.
 
@@ -106,7 +112,10 @@ class PhishingClassifierDelegate : public content::RenderFrameObserver,
     kShutdown = 3,
     kNewPhishingScorerUpdate = 4,
     kScorerCleared = 5,
-    kMaxValue = kScorerCleared,  // Always add new values before this one.
+    kNewRequestFromBrowser = 6,
+
+    kMaxValue =
+        kNewRequestFromBrowser,  // Always add new values before this one.
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/sb_client/enums.xml:SBClientPhishingCancelClassificationReason)
 
@@ -173,6 +182,10 @@ class PhishingClassifierDelegate : public content::RenderFrameObserver,
   // Set to true when StartPhishingDetection method is called. It is
   // set to false whenever phishing detection has finished.
   bool is_phishing_detection_running_ = false;
+
+  // Set to true when PageText is captured. Set to false when there is a new
+  // frame loading. This is used as a signal to start the classification.
+  bool renderer_layout_finished_ = false;
 
   // Set to true when we want to classify for the page, but classifier was not
   // ready. It is set to false whenever |is_phishing_detection_running_| is set

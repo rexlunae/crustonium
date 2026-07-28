@@ -17,12 +17,11 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/promos/ios_promo_trigger_service.h"
-#include "chrome/browser/ui/promos/ios_promo_trigger_service_factory.h"
+#include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service.h"
+#include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service_factory.h"
 #include "chrome/browser/ui/safety_hub/extensions_result.h"
 #include "chrome/browser/ui/safety_hub/menu_notification_service_factory.h"
 #include "chrome/browser/ui/safety_hub/notification_permission_review_service.h"
@@ -40,7 +39,6 @@
 #include "chrome/browser/ui/webui/settings/site_settings_helper.h"
 #include "chrome/browser/ui/webui/version/version_ui.h"
 #include "chrome/browser/upgrade_detector/build_state.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -57,6 +55,7 @@
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/site_engagement/content/site_engagement_service.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_prefs_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -74,7 +73,7 @@ namespace {
 
 const char kRevocationTypeKey[] = "revocation_type";
 
-// Get values from |UnusedSitePermission| object in
+// Get values from |UnusedSitePermissions| object in
 // safety_hub_browser_proxy.ts.
 PermissionsData GetUnusedSitePermissionsFromDict(
     const base::DictValue& unused_site_permissions) {
@@ -89,21 +88,19 @@ PermissionsData GetUnusedSitePermissionsFromDict(
       unused_site_permissions.FindList(site_settings::kPermissions);
   CHECK(permissions);
   for (const auto& permission : *permissions) {
-    CHECK(permission.is_string());
-    const std::string& type_string = permission.GetString();
+    CHECK(permission.is_dict());
+    const std::string* type_string =
+        permission.GetDict().FindString(site_settings::kType);
+    CHECK(type_string);
+    const base::Value* setting_value =
+        permission.GetDict().Find(site_settings::kSettingValue);
     ContentSettingsType type =
-        site_settings::ContentSettingsTypeFromGroupName(type_string);
+        site_settings::ContentSettingsTypeFromGroupName(*type_string);
     CHECK(type != ContentSettingsType::DEFAULT)
         << type_string << " is not expected to have a UI representation.";
-    permissions_data.permission_types.insert(type);
+    permissions_data.permissions.insert(std::make_pair(
+        type, setting_value ? setting_value->Clone() : base::Value()));
   }
-
-  const base::DictValue* chooser_permissions_data =
-      unused_site_permissions.FindDict(
-          safety_hub::kSafetyHubChooserPermissionsData);
-  permissions_data.chooser_permissions_data =
-      chooser_permissions_data ? chooser_permissions_data->Clone()
-                               : base::DictValue();
 
   // Handle expiration and lifetime for revoked permission.
   const base::Value* js_expiration =
@@ -277,11 +274,14 @@ base::ListValue SafetyHubHandler::PopulateUnusedSitePermissionsData() {
                                  permissions_data.primary_pattern.ToString());
 
     base::ListValue permissions_value_list;
-    for (ContentSettingsType type : permissions_data.permission_types) {
+    for (const auto& [type, value] : permissions_data.permissions) {
       std::string_view permission_str =
           site_settings::ContentSettingsTypeToGroupName(type);
       if (!permission_str.empty()) {
-        permissions_value_list.Append(permission_str);
+        base::DictValue dict;
+        dict.Set(site_settings::kType, permission_str);
+        dict.Set(site_settings::kSettingValue, value.Clone());
+        permissions_value_list.Append(std::move(dict));
       }
     }
 
@@ -305,10 +305,6 @@ base::ListValue SafetyHubHandler::PopulateUnusedSitePermissionsData() {
     revoked_permission_value.Set(
         safety_hub::kLifetimeKey,
         base::TimeDeltaToValue(permissions_data.constraints.lifetime()));
-
-    revoked_permission_value.Set(
-        safety_hub::kSafetyHubChooserPermissionsData,
-        base::Value(permissions_data.chooser_permissions_data.Clone()));
 
     revoked_permission_value.Set(
         kRevocationTypeKey, static_cast<int>(permissions_data.revocation_type));

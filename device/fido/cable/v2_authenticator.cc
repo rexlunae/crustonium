@@ -40,6 +40,7 @@
 #include "net/cookies/site_for_cookies.h"
 #include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
@@ -378,19 +379,26 @@ class TunnelTransport : public Transport {
   void StartWebSocket() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+    uint32_t options = network::mojom::kWebSocketOptionBlockAllCookies;
+    if (base::FeatureList::IsEnabled(kWebAuthnSocketMaxPriorityMode)) {
+      options |= network::mojom::kWebSocketOptionMaximumPriority;
+    }
     network_context_factory_.Run()->CreateWebSocket(
-        target_, {device::kCableWebSocketProtocol}, net::SiteForCookies(),
+        target_, {device::kCableWebSocketProtocol},
         net::StorageAccessApiStatus::kNone, net::IsolationInfo(),
-        /*additional_headers=*/{}, network::mojom::kBrowserProcessId,
+        /*additional_headers=*/{}, network::OriginatingProcessId::browser(),
         url::Origin::Create(target_),
-        network::mojom::ClientSecurityState::New(),
-        network::mojom::kWebSocketOptionBlockAllCookies,
+        network::mojom::ClientSecurityState::New(), options,
         net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
         websocket_client_->BindNewHandshakeClientPipe(),
         /*url_loader_network_observer=*/mojo::NullRemote(),
         /*auth_handler=*/mojo::NullRemote(),
         /*header_client=*/mojo::NullRemote(),
-        /*throttling_profile_id=*/std::nullopt);
+        /*throttling_profile_id=*/std::nullopt,
+        // This is a browser-internal connection for the caBLE rendezvous
+        // tunnel. It does not belong to any webpage, so we bypass connection
+        // allowlists.
+        /*network_restrictions_id=*/network::GetNoOpNetworkRestrictionsId());
     FIDO_LOG(DEBUG) << "Creating WebSocket to " << target_.spec();
   }
 

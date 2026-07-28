@@ -4,6 +4,8 @@
 
 package org.chromium.base.supplier;
 
+import com.google.errorprone.annotations.DoNotMock;
+
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.MonotonicObservableSupplier.NotifyBehavior;
 import org.chromium.build.annotations.NullMarked;
@@ -14,6 +16,9 @@ import java.util.function.Supplier;
 
 /** An interface for Suppliers that can be observed. Implementations are not thread-safe. */
 @NullMarked
+// The mix-in methods here make tests brittle when mocked. We also do not want tests to simulate
+// callbacks incorrectly (e.g. calling them synchronously when they should be posted).
+@DoNotMock("Mock the thing you are supplying instead.")
 public interface NullableObservableSupplier<T> extends Supplier<@Nullable T> {
     /**
      * Adds an observer to the supplier.
@@ -63,16 +68,6 @@ public interface NullableObservableSupplier<T> extends Supplier<@Nullable T> {
         return addObserver(obs, NotifyBehavior.NOTIFY_ON_ADD | NotifyBehavior.POST_ON_ADD);
     }
 
-    /**
-     * Adds an observer to the supplier and posts a notification if the value is not null.
-     *
-     * @param obs The observer to add.
-     * @return The current value of the supplier.
-     */
-    default @Nullable T addObserver(Callback<@Nullable T> obs) {
-        return addSyncObserverAndPostIfNonNull(obs);
-    }
-
     /** Returns whether there are any observers. */
     default boolean hasObservers() {
         return getObserverCount() != 0;
@@ -84,7 +79,7 @@ public interface NullableObservableSupplier<T> extends Supplier<@Nullable T> {
     /**
      * Creates an ObservableSupplier that tracks an ObservableSupplier of this ObservableSupplier.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default <
                     ChildT,
                     FuncT extends @Nullable T,
@@ -103,7 +98,7 @@ public interface NullableObservableSupplier<T> extends Supplier<@Nullable T> {
      * If either supplier has not yet been initialized, uses the given default value. The current
      * and transitive suppliers must both be non-null or monotonic.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default <ChildT> SettableNonNullObservableSupplier<ChildT> createTransitiveNonNull(
             ChildT defaultValue, Function<T, NonNullObservableSupplier<ChildT>> unwrapFunction) {
         return new TransitiveObservableSupplier<>(
@@ -114,7 +109,7 @@ public interface NullableObservableSupplier<T> extends Supplier<@Nullable T> {
     }
 
     /** Creates an ObservableSupplier that tracks a value derived from this ObservableSupplier. */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default <ChildT, FuncT extends @Nullable T>
             SettableNullableObservableSupplier<ChildT> createDerivedNullable(
                     Function<FuncT, @Nullable ChildT> unwrapFunction) {
@@ -123,7 +118,7 @@ public interface NullableObservableSupplier<T> extends Supplier<@Nullable T> {
     }
 
     /** Creates an ObservableSupplier that tracks a value derived from this ObservableSupplier. */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default <ChildT, FuncT extends @Nullable T>
             SettableNonNullObservableSupplier<ChildT> createDerivedNonNull(
                     Function<FuncT, ChildT> unwrapFunction) {

@@ -26,6 +26,10 @@
 #include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/api/messaging/android/native_message_android_port.h"
+#endif
+
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
@@ -45,13 +49,16 @@ ChromeMessagingDelegate::IsNativeMessagingHostAllowed(
   PolicyPermission allow_result = PolicyPermission::ALLOW_ALL;
   if (pref_service->IsManagedPreference(
           pref_names::kNativeMessagingUserLevelHosts)) {
-    if (!pref_service->GetBoolean(pref_names::kNativeMessagingUserLevelHosts))
+    if (!pref_service->GetBoolean(pref_names::kNativeMessagingUserLevelHosts)) {
       allow_result = PolicyPermission::ALLOW_SYSTEM_ONLY;
+    }
   }
 
   // All native messaging hosts are allowed if there is no blocklist.
-  if (!pref_service->IsManagedPreference(pref_names::kNativeMessagingBlocklist))
+  if (!pref_service->IsManagedPreference(
+          pref_names::kNativeMessagingBlocklist)) {
     return allow_result;
+  }
   const base::ListValue& blocklist =
       pref_service->GetList(pref_names::kNativeMessagingBlocklist);
 
@@ -117,16 +124,24 @@ ChromeMessagingDelegate::CreateReceiverForNativeApp(
     const std::string& native_app_name,
     bool allow_user_level,
     std::string* error_out) {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, `native_app_name` represents the target package name.
+  return std::make_unique<NativeMessageAndroidPort>(
+      browser_context, channel_delegate, receiver_port_id, extension_id,
+      native_app_name);
+#else
   DCHECK(error_out);
   gfx::NativeView native_view =
       source ? source->GetNativeView() : gfx::NativeView();
   std::unique_ptr<NativeMessageHost> native_host =
       NativeMessageHost::Create(browser_context, native_view, extension_id,
                                 native_app_name, allow_user_level, error_out);
-  if (!native_host.get())
+  if (!native_host.get()) {
     return nullptr;
+  }
   return std::make_unique<NativeMessagePort>(channel_delegate, receiver_port_id,
                                              std::move(native_host));
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void ChromeMessagingDelegate::QueryIncognitoConnectability(

@@ -10,6 +10,8 @@
 #include "base/test/bind.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
 #include "chrome/browser/ui/browser.h"
@@ -17,10 +19,12 @@
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/test_accounts.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/family_link_user_capabilities.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/test_support/account_repository.h"
 #include "components/supervised_user/test_support/family_link_settings_state_management.h"
+#include "components/sync/base/features.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/page_transition_types.h"
@@ -46,9 +50,11 @@ BrowserUser::BrowserUser(
                          add_tab_function) {}
 BrowserUser::~BrowserUser() = default;
 
-void BrowserUser::TurnOnSync() {
-  sign_in_functions_.TurnOnSync({credentials_.username, credentials_.password},
-                                /*previously_signed_in_accounts=*/0);
+void BrowserUser::SignInToBrowser() {
+  sign_in_functions_.SignInFromSettingsWithSyncChoice(
+      {credentials_.username, credentials_.password},
+      /*previously_signed_in_accounts=*/0,
+      signin::test::SignInFunctions::SyncChoice::kRejectOptionalDateTypesSync);
 }
 
 void BrowserUser::SignOutFromWeb() {
@@ -66,6 +72,7 @@ FamilyLinkSettingsState::Services BrowserUser::GetServices() const {
       *SupervisedUserUrlFilteringServiceFactory::GetForProfile(&profile_.get()),
       *profile_->GetPrefs(),
       *HostContentSettingsMapFactory::GetForProfile(&profile_.get()),
+      *FamilyLinkSettingsServiceFactory::GetForKey(profile_->GetProfileKey()),
   };
 }
 

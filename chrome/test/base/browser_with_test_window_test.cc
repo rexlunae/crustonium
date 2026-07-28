@@ -14,9 +14,9 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -40,7 +40,6 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/app_mode/kiosk_cryptohome_remover.h"
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
@@ -117,7 +116,6 @@ void BrowserWithTestWindowTest::SetUp() {
       TestingBrowserProcess::GetGlobal()->local_state());
 
 #if BUILDFLAG(IS_CHROMEOS)
-  manager_ = std::make_unique<crosapi::CrosapiManager>();
   kiosk_cryptohome_remover_ = std::make_unique<ash::KioskCryptohomeRemover>(
       TestingBrowserProcess::GetGlobal()->local_state());
   kiosk_chrome_app_manager_ = std::make_unique<ash::KioskChromeAppManager>(
@@ -168,7 +166,6 @@ void BrowserWithTestWindowTest::TearDown() {
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
-  manager_.reset();
   kiosk_chrome_app_manager_.reset();
   kiosk_cryptohome_remover_.reset();
 #endif

@@ -7,16 +7,12 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_observer.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_menu_controller_observer.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_menu_delegate.h"
-#include "components/bookmarks/browser/bookmark_model.h"
-#include "components/prefs/pref_service.h"
 #include "content/public/browser/page_navigator.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
@@ -52,9 +48,6 @@ BookmarkMenuController::BookmarkMenuController(
     run_type |= views::MenuRunner::FOR_DROP;
   }
 
-  if (base::FeatureList::IsEnabled(features::kTabGroupMenuImprovements)) {
-    run_type |= views::MenuRunner::HAS_MNEMONICS;
-  }
   menu_runner_ = std::make_unique<views::MenuRunner>(
       base::WrapUnique<MenuItemView>(menu_delegate_->menu()), run_type);
 }
@@ -166,7 +159,7 @@ int BookmarkMenuController::GetDragOperations(MenuItemView* sender) {
   return menu_delegate_->GetDragOperations(sender);
 }
 
-bool BookmarkMenuController::ShouldCloseOnDragComplete() {
+bool BookmarkMenuController::ShouldCloseOnDragDropCompleted() {
   return false;
 }
 
@@ -196,8 +189,7 @@ views::MenuItemView* BookmarkMenuController::GetSiblingMenu(
   menu_delegate_->SetActiveMenu(*folder, start_index);
   *button = bookmark_bar_->GetMenuButtonForFolder(*folder);
   bookmark_bar_->GetAnchorPositionForButton(*button, anchor);
-  *has_mnemonics =
-      base::FeatureList::IsEnabled(features::kTabGroupMenuImprovements);
+  *has_mnemonics = false;
   return this->menu();
 }
 

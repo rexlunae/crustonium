@@ -24,11 +24,13 @@ namespace errors = manifest_errors;
 
 using api::extensions_manifest_types::OptionsUI;
 
+// static
+const char* OptionsPageInfo::kManifestDataKey = keys::kOptionsUI;
+
 namespace {
 
-OptionsPageInfo* GetOptionsPageInfo(const Extension* extension) {
-  return static_cast<OptionsPageInfo*>(
-      extension->GetManifestData(keys::kOptionsUI));
+const OptionsPageInfo* GetOptionsPageInfo(const Extension* extension) {
+  return extension->GetManifestData<OptionsPageInfo>();
 }
 
 // Parses |url_string| into a GURL |result| if it is a valid options page for
@@ -75,7 +77,7 @@ OptionsPageInfo::~OptionsPageInfo() = default;
 
 // static
 const GURL& OptionsPageInfo::GetOptionsPage(const Extension* extension) {
-  OptionsPageInfo* info = GetOptionsPageInfo(extension);
+  const OptionsPageInfo* info = GetOptionsPageInfo(extension);
   return info ? info->options_page_ : GURL::EmptyGURL();
 }
 
@@ -86,13 +88,13 @@ bool OptionsPageInfo::HasOptionsPage(const Extension* extension) {
 
 // static
 bool OptionsPageInfo::ShouldUseChromeStyle(const Extension* extension) {
-  OptionsPageInfo* info = GetOptionsPageInfo(extension);
+  const OptionsPageInfo* info = GetOptionsPageInfo(extension);
   return info && info->chrome_styles_;
 }
 
 // static
 bool OptionsPageInfo::ShouldOpenInTab(const Extension* extension) {
-  OptionsPageInfo* info = GetOptionsPageInfo(extension);
+  const OptionsPageInfo* info = GetOptionsPageInfo(extension);
   return info && info->open_in_tab_;
 }
 
@@ -179,7 +181,7 @@ bool OptionsPageHandler::Parse(Extension* extension, std::u16string* error) {
   }
 
   extension->AddInstallWarnings(std::move(install_warnings));
-  extension->SetManifestData(keys::kOptionsUI, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

@@ -79,7 +79,8 @@ class CSSToStyleMap {
                                                const CSSValue&);
   static double MapAnimationIterationCount(StyleResolverState&,
                                            const CSSValue&);
-  static AtomicString MapAnimationName(StyleResolverState&, const CSSValue&);
+  static const ScopedCSSName* MapAnimationName(StyleResolverState&,
+                                               const CSSValue&);
   static CSSTransitionData::TransitionBehavior MapAnimationBehavior(
       StyleResolverState&,
       const CSSValue&);
@@ -127,11 +128,11 @@ class CSSToStyleMap {
       StyleResolverState&,
       const CSSValue&);
   static std::optional<TimelineOffset>
-  MapAnimationTimelineTriggerEntryRangeStart(StyleResolverState&,
-                                             const CSSValue&);
-  static std::optional<TimelineOffset> MapAnimationTimelineTriggerEntryRangeEnd(
-      StyleResolverState&,
-      const CSSValue&);
+  MapAnimationTimelineTriggerActivationRangeStart(StyleResolverState&,
+                                                  const CSSValue&);
+  static std::optional<TimelineOffset>
+  MapAnimationTimelineTriggerActivationRangeEnd(StyleResolverState&,
+                                                const CSSValue&);
   static TimelineOffsetOrAuto MapAnimationTimelineTriggerActiveRangeStart(
       StyleResolverState&,
       const CSSValue&);

@@ -7,31 +7,30 @@
 //! message.
 
 chromium::import! {
-    "//mojo/public/rust:mojo_rust_system_api";
-    "//mojo/public/rust/sequences:sequences";
+    "//mojo/public/rust/system";
+    "//base:sequenced_task_runner";
 }
 
-use mojo_rust_system_api::message_pipe::{MessageEndpoint, RawMojoMessage};
-use mojo_rust_system_api::mojo_types::{HandleSignals, MojoResult, UntypedHandle};
-use mojo_rust_system_api::raw_trap::TriggerCondition;
-use mojo_rust_system_api::trap::{ArmingPolicyForBlockingEvents, Trap, TrapError, TrapEvent};
-use sequences::SequencedTaskRunnerHandle;
+use sequenced_task_runner::SequencedTaskRunnerHandle;
+use system::message::{ReadableWithHandlesMessage, SendableMessage};
+use system::message_pipe::MessageEndpoint;
+use system::mojo_types::MojoResult;
+use system::trap::{ArmResult, HandleSignals, Trap, TrapError, TrapEvent, TriggerCondition};
 
+// TODO(crbug.com/470438844): Replace some/all of the std::sync imports with
+// chromium sequenced equivalents once those are implemented (figure out which,
+// if any, need to be replaced).
 // TODO(crbug.com/477584253): Replace std::sync with std::nonpoison if there are
 // any non-sequenced versions remaining.
 use std::sync::{Arc, Mutex, Weak};
 
-// FOR_RELEASE: Add tests once this is finished and trap is functional.
-// FOR_RELEASE: Replace some/all of the std::sync imports with chromium
-// sequenced equivalents once those are implemented (figure out which, if any,
-// need to be replaced).
-
 /// A message pipe endpoint that can send or receive messages. Whenever it
 /// receives a message, it invokes a user-provided function with the raw bytes
 /// of that message.
+///
+/// If the other end of pipe is closed, then the watcher will execute its
+/// disconnect handler if one is set.
 pub struct MessagePipeWatcher {
-    // Watches the handle for incoming messages.
-    trap: Trap,
     // The watcher needs to share its state with the callback that processes
     // messages, so it can read from the endpoint, set the disconnect handler,
     // and so on. Therefore, we store the state in a sub-struct so we can
@@ -41,10 +40,14 @@ pub struct MessagePipeWatcher {
 
 // Stores the shared contents of the watcher type.
 struct MessagePipeWatcherState {
+    trap: Trap,
     endpoint: MessageEndpoint,
-    // The endpoint is already thread-safe, but for this we need our own
-    // synchronization. This can be read/written off-sequence, so it must
-    // be wrapped in a real Mutex, not a sequenced equivalent.
+    // The user-provided callback to run for each message that arrives. This
+    // is only ever run on-sequence, so it should be replaced with a sequenced
+    // Mutex once we implement those.
+    message_handler: Mutex<Box<dyn MessagePipeWatcherHandler>>,
+    // The user-provided disconnect handler. This can be read/written
+    // off-sequence, so it must be wrapped in a real Mutex, not a sequenced equivalent.
     disconnect_info: Mutex<DisconnectInfo>,
 }
 
@@ -68,11 +71,12 @@ pub struct ResponseSender {
 /// Send a message through the underlying pipe. This function just forwards
 /// MessageEndpoint::write from the underlying endpoint.
 impl ResponseSender {
-    /// Send a message through the underlying pipe, if possible. Return true iff
-    /// the message was successfully sent.
-    pub fn try_send_response(&self, msg: RawMojoMessage) -> bool {
+    /// Send a message through the underlying pipe, if possible.
+    ///
+    /// Returns true iff the message was successfully sent. This can only fail
+    /// if one or both sides of the pipe have been closed.
+    pub fn try_send_response(&self, msg: SendableMessage) -> bool {
         if let Some(state) = self.state_weak.upgrade() {
-            // FOR_RELEASE: Handle the returned MojoResult
             return state.endpoint.write(msg).is_ok();
         }
         return false;
@@ -90,29 +94,48 @@ impl ResponseSender {
 /// 2. A (weak) reference to the endpoint in question, so the handler can send a
 ///    response if it wishes.
 pub trait MessagePipeWatcherHandler:
-    FnMut((Vec<u8>, Vec<UntypedHandle>), ResponseSender) + Send + 'static
+    FnMut(ReadableWithHandlesMessage, ResponseSender) + Send + 'static
 {
 }
 
 impl<T> MessagePipeWatcherHandler for T where
-    T: FnMut((Vec<u8>, Vec<UntypedHandle>), ResponseSender) + Send + 'static
+    T: FnMut(ReadableWithHandlesMessage, ResponseSender) + Send + 'static
 {
 }
 
 impl MessagePipeWatcher {
     /// Create a new MessagePipeWatcher which schedules `message_handler` on
     /// the default sequence whenever the endpoint receives a new message.
+    ///
+    /// When invoked, `message_handler` is passed the output of
+    /// `MessageEndpoint::read`. See that method's documentation for
+    /// information about `method_handler`'s input type.
+    ///
+    /// If the other end of the pipe becomes disconnected, `disconnect_handler`
+    /// will be scheduled on `runner` after all previously received messages.
+    /// After that point, no more handlers will ever be scheduled for this
+    /// watcher.
+    ///
+    /// If `begin_processing_immediately` is false, the watcher will not
+    /// process any notifications until `begin_processing` is called.
+    ///
+    /// May fail if the system has run out of resources to allocate new Mojo
+    /// handles.
     pub fn new(
         endpoint: MessageEndpoint,
         message_handler: impl MessagePipeWatcherHandler,
-    ) -> Result<Self, MojoResult> {
+        disconnect_handler: Option<Box<dyn FnOnce() + Send + 'static>>,
+        begin_processing_immediately: bool,
+    ) -> Option<Self> {
         Self::new_with_runner(
             endpoint,
-            message_handler,
             SequencedTaskRunnerHandle::get_current_default().expect(concat!(
                 "Must be called in a context with a default SequencedTaskRunner.\n",
                 "Use MessagePipeWatcher::new_with_runner instead to provide one explicitly."
             )),
+            message_handler,
+            disconnect_handler,
+            begin_processing_immediately,
         )
     }
 
@@ -124,101 +147,83 @@ impl MessagePipeWatcher {
     /// `MessageEndpoint::read`. See that method's documentation for
     /// information about `method_handler`'s input type.
     ///
-    /// FOR_RELEASE: Document what MojoResults might occur if this fails
+    /// If the other end of the pipe becomes disconnected, `disconnect_handler`
+    /// will be scheduled on `runner` after all previously received messages.
+    /// After that point, no more handlers will ever be scheduled for this
+    /// watcher.
+    ///
+    /// If `begin_processing_immediately` is false, the watcher will not
+    /// process any notifications until `begin_processing` is called.
+    ///
+    /// May fail if the system has run out of resources to allocate new Mojo
+    /// handles.
     pub fn new_with_runner(
         endpoint: MessageEndpoint,
-        message_handler: impl MessagePipeWatcherHandler,
         runner: SequencedTaskRunnerHandle,
-    ) -> Result<Self, MojoResult> {
+        message_handler: impl MessagePipeWatcherHandler,
+        disconnect_handler: Option<Box<dyn FnOnce() + Send + 'static>>,
+        begin_processing_immediately: bool,
+    ) -> Option<Self> {
         // The main goal of this function is to construct a closure which reads
         // from the `endpoint` and schedules `message_handler` on `runner`.
 
+        let trap = Trap::new().ok()?;
+
+        let disconnect_info = match disconnect_handler {
+            None => DisconnectInfo::ConnectedNoHandler,
+            Some(f) => DisconnectInfo::ConnectedWithHandler(f),
+        };
+
         let watcher_state = Arc::new(MessagePipeWatcherState {
+            trap,
             endpoint,
-            disconnect_info: Mutex::new(DisconnectInfo::ConnectedNoHandler),
+            message_handler: Mutex::new(Box::new(message_handler)),
+            disconnect_info: Mutex::new(disconnect_info),
         });
 
         // Lifetime considerations:
         // The following variables are `move`d into the closure:
         // - `watcher_state` is weak because the ownership logically belongs only to the
         //   watcher (we don't want to read them after the watcher dies).
-        // - `message_handler` is strong because it's shared by all tasks we post to the
-        //   runner, so it needs to be alive until those tasks finish or are dropped.
         // - `runner` is moved directly so that we can guarantee it survives until the
-        //   trap is dropped.
+        //   trap is dropped. We can't rely on `get_current_default` in the trap handler
+        //   because it can run on any thread.
         let watcher_state_weak = Arc::downgrade(&watcher_state);
-        let message_handler = Arc::new(Mutex::new(message_handler));
 
         let trigger_handler = move |trap_event: &TrapEvent| {
-            Self::read_from_pipe_and_schedule_handler(
-                trap_event,
-                &watcher_state_weak,
-                &message_handler,
-                &runner,
-            )
+            Self::process_trap_event(trap_event, &watcher_state_weak, &runner)
         };
 
         // Define when we trigger the trap (whenever we get a new message)
-        let trigger_signals: HandleSignals = HandleSignals::NEW_DATA_READABLE;
-        let trigger_condition: TriggerCondition = TriggerCondition::SignalsSatisfied;
+        let trigger_signals: HandleSignals = HandleSignals::READABLE;
+        let trigger_condition: TriggerCondition = TriggerCondition::TriggerWhenSatisfied;
 
-        let trap = Trap::new()?;
-
-        // This trap only ever has one trigger active, so no need to track its id
-        let _trigger_id = trap.add_trigger(
+        // We only ever have one trigger, so there's no need to remember its ID.
+        let _trigger_id = watcher_state.trap.add_trigger(
             &watcher_state.endpoint,
             trigger_signals,
             trigger_condition,
             trigger_handler,
-        )?;
+        );
 
-        trap.arm(ArmingPolicyForBlockingEvents::RearmUntilNoBlockingEvents)?;
-
-        Ok(Self { trap, shared_state: watcher_state })
+        if begin_processing_immediately {
+            Self::try_arm(&watcher_state);
+        }
+        Some(Self { shared_state: watcher_state })
     }
 
-    /// Consume the MessagePipeWatcher, returning the endpoint. The watching
-    /// function will no longer be called for messages that arrive after this
-    /// function returns.
-    ///
-    /// If this watcher held the last reference to its task runner, then any
-    /// messages which previously arrived but haven't yet been processed by the
-    /// runner might be dropped silently.
-    pub fn into_endpoint(mut self) -> MessageEndpoint {
-        // Clear any existing triggers, which ends the lifetime of any references
-        // they contain.
-        // FOR_RELEASE: don't unwrap here, handle errors once we know what might happen
-        self.trap.clear_triggers().unwrap();
-        // We only hand out weak references (into the triggers), and the
-        // triggers were cleared when we dropped the trap, so none of them are
-        // running. Thus there should be exactly one strong reference.
-        return Arc::into_inner(self.shared_state).unwrap().endpoint;
+    /// Begin processing incoming messages and scheduling handlers.
+    pub fn begin_processing(&self) {
+        Self::try_arm(&self.shared_state);
     }
 
     /// Send a message through the underlying pipe. This function just forwards
     /// MessageEndpoint::write from the underlying endpoint.
-    pub fn send_message(&self, msg: RawMojoMessage) -> Result<(), MojoResult> {
+    ///
+    /// # Possible Error Codes:
+    /// - `FailedPrecondition`: If the other end of the message pipe is closed.
+    pub fn send_message(&self, msg: SendableMessage) -> MojoResult<()> {
         self.shared_state.endpoint.write(msg)
-    }
-
-    /// Designate a function to run if the underlying pipe becomes disconnected.
-    /// This can happen either because it sent a bad mojo message, or because it
-    /// was closed.
-    ///
-    /// When disconnection is detected, the disconnect handler will be scheduled
-    /// on the same sequence as incoming message notifications.
-    ///
-    /// Panics if the watcher is already disconnected.
-    pub fn set_disconnect_handler(&mut self, handler: impl FnOnce() + Send + 'static) {
-        let mut lock_contents = self
-            .shared_state
-            .disconnect_info
-            .lock()
-            .expect("disconnect_info should never be poisoned");
-        if matches!(*lock_contents, DisconnectInfo::Disconnected) {
-            panic!("Cannot set disconnect handler: Watcher is already disconnected")
-        }
-        *lock_contents = DisconnectInfo::ConnectedWithHandler(Box::new(handler));
     }
 
     /// Check if the watcher is currently connected
@@ -234,23 +239,26 @@ impl MessagePipeWatcher {
     }
 
     /// This is the function that we pass to the underlying trap. It is executed
-    /// once for each incoming message. Its job is to:
-    /// 1. Make sure it can acquire all necessary locks
-    /// 2. Read the most recent message from the pipe
-    /// 3. Schedule the user-provided handler on the given task runner, to parse
-    ///    and process the raw data from the message.
+    /// once for each incoming message.
+    /// 1. Parse the trap event, and
+    /// 2. Post a task to handle it, which invokes either the user's callback or
+    ///    the disconnect handler.
+    ///
+    /// The posted task is responsible for rearming the trap, so we won't post
+    /// any more tasks until it's processed. The alternative would be looping
+    /// through all blocking events here, which could keep this thread busy for
+    /// an arbitrary amount of time.
     ///
     /// Note that since traps expect a function which takes only a TrapEvent, we
     /// actually wrap this function in a closure which owns the latter three
     /// arguments. This ensure that the handler function and task runner
     /// stay alive until all triggers are processed.
-    fn read_from_pipe_and_schedule_handler(
+    fn process_trap_event(
         trap_event: &TrapEvent,
-        watcher_state: &Weak<MessagePipeWatcherState>,
-        message_handler: &Arc<Mutex<impl MessagePipeWatcherHandler>>,
+        watcher_state_weak: &Weak<MessagePipeWatcherState>,
         runner: &SequencedTaskRunnerHandle,
     ) {
-        let Some(watcher_state) = watcher_state.upgrade() else {
+        let Some(watcher_state) = watcher_state_weak.upgrade() else {
             // If we can't get the watcher state, then it must have just been
             // dropped, so just finish here.
             return;
@@ -260,8 +268,7 @@ impl MessagePipeWatcher {
             Ok(()) => (),
             Err(TrapError::Cancelled) => {
                 // This indicates the trigger was cancelled, which can only
-                // happen if we're tearing down the trap and therefore the
-                // watcher. So no need to do anything.
+                // happen if we're tearing down the watcher. So no need to do anything.
                 return;
             }
             Err(TrapError::FailedPrecondition) => {
@@ -284,24 +291,58 @@ impl MessagePipeWatcher {
                 return;
             }
         }
-        // Otherwise, there's a new message for us to read
 
-        // The only way `read` can fail is if there isn't a message to read
-        let msg =
-            watcher_state.endpoint.read().expect("Tried to read a message but there wasn't one");
-        // Clone the handler function Arc so we can move it into the closure
-        let message_handler_clone = message_handler.clone();
-        let response_sender = ResponseSender { state_weak: Arc::downgrade(&watcher_state) };
+        // Otherwise, there's a new message for us to read, so post a task to
+        // handle it.
+        let watcher_state_weak_clone = watcher_state_weak.clone();
+        runner.post_task(move || Self::handle_message_on_sequence(watcher_state_weak_clone));
+    }
 
-        runner.post_task(move || {
-            // We're posting to a sequence, so try_lock should always succeed
-            let mut message_handler = message_handler_clone
+    /// This is the task that we post to the sequenced task runner as a result
+    /// of the trap handler firing. Its job is to:
+    /// 1. Read the next message from the pipe
+    /// 2. Invoke the user callback on that message
+    /// 3. Re-arm the trap.
+    ///
+    /// If the trap fails to rearm due to blocking events, this will call
+    /// `process_trap_event`, which will post a task that calls
+    /// `handle_message_on_sequence` all over again.
+    fn handle_message_on_sequence(watcher_state_weak: Weak<MessagePipeWatcherState>) {
+        let Some(watcher_state) = watcher_state_weak.upgrade() else {
+            // If we can't get the watcher state, then it must have just been
+            // dropped, so just finish here.
+            return;
+        };
+
+        // Read the message from the pipe and pass it to the user's callback.
+        {
+            let msg = watcher_state
+                .endpoint
+                .read()
+                .expect("Tried to read a message but there wasn't one");
+            let response_sender = ResponseSender { state_weak: watcher_state_weak };
+            let mut message_handler = watcher_state
+                .message_handler
                 .try_lock()
+                // This function is run on-sequence, so try_lock should always succeed
                 .expect("Sequence-bound mutex was locked or poisoned");
-            message_handler(msg, response_sender)
-        });
+            message_handler(msg, response_sender);
+        }
 
-        // FOR_RELEASE: Make sure we set the trap to automatically re-arm itself
-        // once that's implemented.
+        Self::try_arm(&watcher_state);
+    }
+
+    /// Try to rearm the trap. If there are blocking events, instead post a task
+    /// to handle the first one of them (which will recursively post tasks to
+    /// handle the remainder over time).
+    fn try_arm(watcher_state: &Arc<MessagePipeWatcherState>) {
+        if let ArmResult::BlockingEvents(vec) = watcher_state.trap.arm() {
+            // This will post a task that will recursively call `handle_message_on_sequence`
+            Self::process_trap_event(
+                &vec[0],
+                &Arc::downgrade(watcher_state),
+                SequencedTaskRunnerHandle::get_current_default().as_ref().unwrap(),
+            );
+        }
     }
 }

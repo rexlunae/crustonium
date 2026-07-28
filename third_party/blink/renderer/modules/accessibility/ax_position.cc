@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/accessibility/ax_position.h"
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -1041,7 +1042,7 @@ int AXPosition::GetLeadingIgnoredCharacterCount(const OffsetMapping* mapping,
     }
 
     if (unit.TextContentStart() != previous_content_end) {
-      String substring = text.Substring(
+      String substring = text.DeprecatedSubstring(
           previous_content_end, unit.TextContentStart() - previous_content_end);
       String unignored = substring.RemoveCharacters(IsIgnoredCharacter);
       count += substring.length() - unignored.length();

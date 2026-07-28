@@ -18,8 +18,6 @@ const char* GetEnumStringValue(SharingFeatureName feature) {
   switch (feature) {
     case SharingFeatureName::kUnknown:
       return "Unknown";
-    case SharingFeatureName::kClickToCall:
-      return "ClickToCall";
     case SharingFeatureName::kSharedClipboard:
       return "SharedClipboard";
     case SharingFeatureName::kSmsRemoteFetcher:
@@ -124,8 +122,6 @@ sharing_message::MessageType SharingPayloadCaseToMessageType(
       return sharing_message::PING_MESSAGE;
     case components_sharing_message::SharingMessage::kAckMessage:
       return sharing_message::ACK_MESSAGE;
-    case components_sharing_message::SharingMessage::kClickToCallMessage:
-      return sharing_message::CLICK_TO_CALL_MESSAGE;
     case components_sharing_message::SharingMessage::kSharedClipboardMessage:
       return sharing_message::SHARED_CLIPBOARD_MESSAGE;
     case components_sharing_message::SharingMessage::kSmsFetchRequest:
@@ -145,6 +141,12 @@ sharing_message::MessageType SharingPayloadCaseToMessageType(
     case components_sharing_message::SharingMessage::
         kOptimizationGuidePushNotification:
       return sharing_message::OPTIMIZATION_GUIDE_PUSH_NOTIFICATION;
+    case components_sharing_message::SharingMessage::
+        kOneTimeTokenBackendNotification:
+      return sharing_message::ONE_TIME_TOKEN_BACKEND_NOTIFICATION;
+    case components_sharing_message::SharingMessage::
+        kGlicExperimentalTriggering:
+      return sharing_message::GLIC_EXPERIMENTAL_TRIGGERING;
   }
   // For proto3 enums unrecognized enum values are kept when parsing, and a new
   // payload case received over the network would not default to

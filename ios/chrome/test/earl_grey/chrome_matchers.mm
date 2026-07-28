@@ -165,6 +165,10 @@ id<GREYMatcher> PrimaryToolbar() {
   return [ChromeMatchersAppInterface primaryToolbar];
 }
 
+id<GREYMatcher> SecondaryToolbar() {
+  return [ChromeMatchersAppInterface secondaryToolbar];
+}
+
 id<GREYMatcher> CancelButton() {
   return [ChromeMatchersAppInterface cancelButton];
 }
@@ -225,6 +229,10 @@ id<GREYMatcher> OmniboxPopupRowWithString(NSString* string) {
   return [ChromeMatchersAppInterface omniboxPopupRowWithString:string];
 }
 
+id<GREYMatcher> OmniboxPopupRowVisibleWithString(NSString* string) {
+  return [ChromeMatchersAppInterface omniboxPopupRowVisibleWithString:string];
+}
+
 id<GREYMatcher> OmniboxPopupList() {
   return [ChromeMatchersAppInterface omniboxPopupList];
 }
@@ -267,6 +275,10 @@ id<GREYMatcher> ToolsMenuButton() {
   return [ChromeMatchersAppInterface toolsMenuButton];
 }
 
+id<GREYMatcher> ToolsMenuNTPButton() {
+  return [ChromeMatchersAppInterface toolsMenuNTPButton];
+}
+
 id<GREYMatcher> NewTabButton() {
   return [ChromeMatchersAppInterface openNewTabButton];
 }
@@ -283,8 +295,17 @@ id<GREYMatcher> TabShareButton() {
   return [ChromeMatchersAppInterface tabShareButton];
 }
 
+id<GREYMatcher> OverflowMenuShareButton() {
+  return [ChromeMatchersAppInterface overflowMenuShareButton];
+}
+
 id<GREYMatcher> ShowTabsButton() {
   return [ChromeMatchersAppInterface showTabsButton];
+}
+
+id<GREYMatcher> ShowTabsButtonWithCount(NSString* count) {
+  return grey_allOf(grey_descendant(grey_accessibilityLabel(count)),
+                    ShowTabsButton(), nil);
 }
 
 id<GREYMatcher> BlueDotOnShowTabsButton() {
@@ -539,8 +560,8 @@ id<GREYMatcher> BrowsingDataButtonMatcher() {
   return [ChromeMatchersAppInterface browsingDataButtonMatcher];
 }
 
-id<GREYMatcher> BrowsingDataConfirmButtonMatcher() {
-  return [ChromeMatchersAppInterface browsingDataConfirmButtonMatcher];
+id<GREYMatcher> BrowsingDataDoneButtonMatcher() {
+  return [ChromeMatchersAppInterface browsingDataDoneButtonMatcher];
 }
 
 id<GREYMatcher> ClearBrowsingHistoryButton() {
@@ -557,10 +578,6 @@ id<GREYMatcher> ClearCookiesButton() {
 
 id<GREYMatcher> ClearCacheButton() {
   return [ChromeMatchersAppInterface clearCacheButton];
-}
-
-id<GREYMatcher> ClearSavedPasswordsButton() {
-  return [ChromeMatchersAppInterface clearSavedPasswordsButton];
 }
 
 id<GREYMatcher> ClearAutofillButton() {
@@ -766,14 +783,6 @@ id<GREYMatcher> TabGridDoneButton() {
   return [ChromeMatchersAppInterface tabGridDoneButton];
 }
 
-id<GREYMatcher> TabGridOverflowMenuButton() {
-  return [ChromeMatchersAppInterface tabGridOverflowMenuButton];
-}
-
-id<GREYMatcher> TabGridUndoCloseAllButton() {
-  return [ChromeMatchersAppInterface tabGridUndoCloseAllButton];
-}
-
 id<GREYMatcher> TabGridSelectShowHistoryCell() {
   return [ChromeMatchersAppInterface tabGridSelectShowHistoryCell];
 }
@@ -873,6 +882,10 @@ id<GREYMatcher> SettingsSearchEngineButton() {
 
 id<GREYMatcher> SettingsAddressBarButton() {
   return [ChromeMatchersAppInterface settingsAddressBarButton];
+}
+
+id<GREYMatcher> SettingsGeminiInChromeButton() {
+  return [ChromeMatchersAppInterface settingsGeminiInChromeButton];
 }
 
 id<GREYMatcher> AutofillSuggestionViewMatcher() {
@@ -1019,18 +1032,18 @@ id<GREYMatcher> IncognitoInterstitialCancelButton() {
   return [ChromeMatchersAppInterface incognitoInterstitialCancelButton];
 }
 
-#pragma mark - Tab Grid Edit Mode
+#pragma mark - Tab Grid Overflow Menu
 
-id<GREYMatcher> TabGridEditButton() {
-  return [ChromeMatchersAppInterface tabGridEditButton];
+id<GREYMatcher> TabGridOverflowMenuButton() {
+  return [ChromeMatchersAppInterface tabGridOverflowMenuButton];
 }
 
-id<GREYMatcher> TabGridEditMenuCloseAllButton() {
-  return [ChromeMatchersAppInterface tabGridEditMenuCloseAllButton];
+id<GREYMatcher> TabGridOverflowMenuCloseAllButton() {
+  return [ChromeMatchersAppInterface tabGridOverflowMenuCloseAllButton];
 }
 
-id<GREYMatcher> TabGridSelectTabsMenuButton() {
-  return [ChromeMatchersAppInterface tabGridSelectTabsMenuButton];
+id<GREYMatcher> TabGridOverflowMenuSelectTabsButton() {
+  return [ChromeMatchersAppInterface tabGridOverflowMenuSelectTabsButton];
 }
 
 id<GREYMatcher> TabGridEditAddToButton() {

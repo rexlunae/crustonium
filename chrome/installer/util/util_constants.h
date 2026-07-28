@@ -143,7 +143,6 @@ enum InstallerStage {
   PRECONDITIONS,             // Evaluating pre-install conditions.
   UNCOMPRESSING,             // Uncompressing chrome.packed.7z.
   UNPACKING,                 // Unpacking chrome.7z.
-  CREATING_VISUAL_MANIFEST,  // Creating VisualElementsManifest.xml.
   BUILDING,                  // Building the install work item list.
   EXECUTING,                 // Executing the install work item list.
   COPYING_PREFERENCES_FILE,  // Copying preferences file.
@@ -158,6 +157,7 @@ enum InstallerStage {
 namespace switches {
 
 extern const char kAllowDowngrade[];
+inline constexpr char kBrowserVersionSwitch[] = "browser-version";
 extern const char kChannel[];
 extern const char kConfigureUserSettings[];
 extern const char kCreateShortcuts[];
@@ -183,6 +183,7 @@ extern const char kMsi[];
 extern const char kNewSetupExe[];
 extern const char kNonce[];
 extern const char kOnOsUpgrade[];
+extern const char kOsUpgradeVersions[];
 extern const char kPreviousVersion[];
 extern const char kReenableAutoupdates[];
 extern const char kRegisterChromeBrowser[];

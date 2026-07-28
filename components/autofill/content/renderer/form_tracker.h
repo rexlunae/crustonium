@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
@@ -30,47 +31,6 @@ namespace autofill {
 class AutofillAgent;
 class PasswordAutofillAgent;
 
-// Reference to a WebFormElement, represented as such and as a FormRendererId.
-// TODO(crbug.com/40056157): Replace with FormRendererId when
-// `kAutofillReplaceCachedWebElementsByRendererIds` launches.
-class FormRef {
- public:
-  explicit FormRef(
-      cppgc::SourceLocation loc = BLINK_WEB_NODE_LOCATION_FROM_HERE)
-      : form_(loc) {}
-  explicit FormRef(blink::WebFormElement form);
-
-  blink::WebFormElement GetForm() const;
-  FormRendererId GetId() const;
-
- private:
-  blink::WebFormElement form_;
-  FormRendererId form_renderer_id_;
-};
-
-// Reference to a WebFormControlElement, represented as such and as a
-// FieldRendererId.
-// TODO(crbug.com/40056157): Replace with FieldRendererId when
-// `kAutofillReplaceCachedWebElementsByRendererIds` launches.
-class FieldRef {
- public:
-  explicit FieldRef(
-      cppgc::SourceLocation loc = BLINK_WEB_NODE_LOCATION_FROM_HERE)
-      : field_(loc) {}
-  explicit FieldRef(blink::WebFormControlElement form_control);
-  explicit FieldRef(blink::WebElement content_editable);
-
-  friend bool operator<(const FieldRef& lhs, const FieldRef& rhs);
-
-  blink::WebFormControlElement GetField() const;
-  blink::WebElement GetContentEditable() const;
-  FieldRendererId GetId() const;
-
- private:
-  blink::WebElement field_;
-  FieldRendererId field_renderer_id_;
-};
-
 // TODO(crbug.com/40550175): Track the select and checkbox change.
 // This class is used to track user's change of form or WebFormControlElement,
 // notifies observers of form's change and submission.
@@ -86,7 +46,7 @@ class FormTracker : public content::RenderFrameObserver,
       base::StrongAlias<class UserGestureRequiredTag, bool>;
   explicit FormTracker(content::RenderFrame* render_frame,
                        AutofillAgent& autofill_agent,
-                       PasswordAutofillAgent& password_autofill_agent);
+                       PasswordAutofillAgent* password_autofill_agent);
 
   FormTracker(const FormTracker&) = delete;
   FormTracker& operator=(const FormTracker&) = delete;
@@ -105,12 +65,16 @@ class FormTracker : public content::RenderFrameObserver,
   // form or field won't trigger the regular *DidChange events, the tracker
   // won't be notified of this `element` otherwise. This is currently only used
   // by PWM.
-  void TrackAutofilledElement(const blink::WebFormControlElement& element);
+  void TrackAutofilledElement(FieldRendererId field_id);
 
   // Called in order to update submission data when a form is autofilled.
   // `filled_fields_and_forms` represent the fields and forms that were affected
   // by the corresponding autofill operation  and is used to determine an
   // appropriate single element to track.
+  //
+  // Callers must guarantee that form_util::GetFormByRendererId() and
+  // form_util::GetFormControlByRendererId() find the elements in
+  // `filled_fields_and_forms`.
   void TrackAutofilledElement(
       const base::flat_map<FieldRendererId, FormRendererId>&
           filled_fields_and_forms);
@@ -169,7 +133,9 @@ class FormTracker : public content::RenderFrameObserver,
   void OnFrameDetached() override {}
   void WillSendSubmitEvent(const blink::WebFormElement& form) override;
 
-  FormRef last_interacted_form() const { return last_interacted_.form; }
+  FormRendererId last_interacted_form_id() const {
+    return last_interacted_.form_id;
+  }
 
   std::optional<FormData>& provisionally_saved_form() {
     return last_interacted_.saved_state;
@@ -202,12 +168,9 @@ class FormTracker : public content::RenderFrameObserver,
       std::optional<blink::WebFormElement> submitted_form_element);
 
   // Virtual for testing.
-  // TODO(crbug.com/40281981): Remove `reset_last_interacted_elements` when
-  // `kAutofillFixFormTracking` launches.
   virtual void FireFormSubmission(
       mojom::SubmissionSource source,
-      std::optional<blink::WebFormElement> submitted_form_element,
-      bool reset_last_interacted_elements);
+      std::optional<blink::WebFormElement> submitted_form_element);
   void FireSubmissionIfFormDisappear(mojom::SubmissionSource source);
   bool CanInferFormSubmitted();
 
@@ -229,8 +192,8 @@ class FormTracker : public content::RenderFrameObserver,
   UserGestureRequired user_gesture_required_ = UserGestureRequired(true);
 
   struct {
-    FormRef form;
-    FieldRef formless_element;
+    FormRendererId form_id;
+    FieldRendererId formless_element_id;
     // Used when a FormData version of the last interacted form is needed if
     // we'd like to avoid extracting using `form`.
     std::optional<FormData> saved_state;
@@ -254,7 +217,7 @@ class FormTracker : public content::RenderFrameObserver,
 
   // The respective agents for Autofill and PasswordManager.
   raw_ref<AutofillAgent> autofill_agent_;
-  raw_ref<PasswordAutofillAgent> password_autofill_agent_;
+  raw_ptr<PasswordAutofillAgent> password_autofill_agent_ = nullptr;
 
   SEQUENCE_CHECKER(form_tracker_sequence_checker_);
 

@@ -28,6 +28,7 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/scoped_group_bookmark_actions.h"
+#include "components/bookmarks/common/bookmark_bar_visibility_state.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -184,9 +185,9 @@ void CloneBookmarkNode(BookmarkModel* model,
   metrics::RecordCloneBookmarkNode(elements.size());
 }
 
-std::vector<const BookmarkNode*> GetMostRecentlyModifiedUserFolders(
+std::vector<raw_ptr<const BookmarkNode>> GetMostRecentlyModifiedUserFolders(
     BookmarkModel* model) {
-  std::vector<const BookmarkNode*> nodes;
+  std::vector<raw_ptr<const BookmarkNode>> nodes;
   ui::TreeNodeIterator<const BookmarkNode> iterator(
       model->root_node(), base::BindRepeating(&PruneFoldersForDisplay, model));
 
@@ -222,7 +223,7 @@ std::vector<const BookmarkNode*> GetMostRecentlyModifiedUserFolders(
             : n2->date_folder_modified();
 
     // If no node has been modified more recently, choose a default folder.
-    return t1 == t2 ? (n1 == default_node || n2 != default_node) : (t1 > t2);
+    return t1 == t2 ? (n1 == default_node && n2 != default_node) : (t1 > t2);
   };
 
   std::ranges::stable_sort(nodes, more_recently_modified);
@@ -250,7 +251,7 @@ BookmarkNodesSplitByAccountAndLocal GetMostRecentlyUsedFoldersForDisplay(
   // Max number of most recently used non-permanent-node folders.
   static constexpr size_t kMaxMRUFolders = 5;
 
-  std::vector<const BookmarkNode*> mru_nodes =
+  std::vector<raw_ptr<const BookmarkNode>> mru_nodes =
       bookmarks::GetMostRecentlyModifiedUserFolders(model);
   const BookmarkNode* const most_recent_node =
       mru_nodes.empty() ? nullptr : mru_nodes[0];
@@ -452,6 +453,12 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(
       prefs::kShowBookmarkBar, false,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  // `BookmarkBarVisibilityState::kOnlyShowOnNtp` is equivalent to
+  // `kShowBookmarkBar` set to false.
+  registry->RegisterIntegerPref(
+      prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(BookmarkBarVisibilityState::kOnlyShowOnNtp),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(prefs::kEditBookmarksEnabled, true);
   registry->RegisterBooleanPref(
       prefs::kShowAppsShortcutInBookmarkBar, false,
@@ -551,7 +558,7 @@ const BookmarkNode* GetParentForNewNodes(BookmarkModel* model,
   }
 
   // Return the last modified folder if there is no save location suggestion.
-  std::vector<const BookmarkNode*> nodes =
+  std::vector<raw_ptr<const BookmarkNode>> nodes =
       GetMostRecentlyModifiedUserFolders(model);
   CHECK(!nodes.empty());
   return nodes[0];

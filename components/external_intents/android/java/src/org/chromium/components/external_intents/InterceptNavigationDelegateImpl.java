@@ -6,6 +6,7 @@ package org.chromium.components.external_intents;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
+import android.text.TextUtils;
 import android.util.Pair;
 
 import androidx.annotation.IntDef;
@@ -39,7 +40,6 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.common.ConsoleMessageLevel;
 import org.chromium.content_public.common.Referrer;
-import org.chromium.network.mojom.ReferrerPolicy;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
@@ -104,6 +104,8 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
         InterceptScheme.OPENID4VP_SCHEME,
         InterceptScheme.OPENID4VCI_SCHEME,
         InterceptScheme.HAIP_SCHEME,
+        InterceptScheme.HAIP_VP_SCHEME,
+        InterceptScheme.HAIP_VCI_SCHEME,
         InterceptScheme.NUM_ENTRIES
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -115,12 +117,15 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
         int MDOC_SCHEME = 4;
         int OPENID4VP_SCHEME = 5;
         int OPENID4VCI_SCHEME = 6;
-        int HAIP_SCHEME = 7;
-        int NUM_ENTRIES = 8;
+        int HAIP_SCHEME = 7; // Deprecated.
+        int HAIP_VP_SCHEME = 8;
+        int HAIP_VCI_SCHEME = 9;
+        int NUM_ENTRIES = 10;
     }
 
     private static final String MDOC_SCHEME = "mdoc";
-    private static final String HAIP_SCHEME = "haip";
+    private static final String HAIP_VP_SCHEME = "haip-vp";
+    private static final String HAIP_VCI_SCHEME = "haip-vci";
     private static final String OPENID4VP_SCHEME_SUFFIX = "openid4vp";
     private static final String OPENID4VCI_SCHEME = "openid-credential-offer";
 
@@ -278,7 +283,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                         navigationHandle.isRedirect(),
                         navigationHandle.hasUserGesture(),
                         navigationHandle.isRendererInitiated(),
-                        navigationHandle.getReferrerUrl(),
+                        navigationHandle.getReferrer(),
                         navigationHandle.isInPrimaryMainFrame(),
                         navigationHandle.getInitiatorOrigin(),
                         navigationHandle.isExternalProtocol(),
@@ -404,8 +409,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                         isRedirect,
                         hasUserGesture,
                         isRendererInitiated,
-                        GURL.emptyGURL()
-                        /* referrerUrl= */ ,
+                        /* referrer= */ null,
                         /* isInPrimaryMainFrame= */ false,
                         initiatorOrigin,
                         /* isExternalProtocol= */ true,
@@ -438,7 +442,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
             boolean isRedirect,
             boolean hasUserGesture,
             boolean isRendererInitiated,
-            GURL referrerUrl,
+            @Nullable Referrer referrer,
             boolean isInPrimaryMainFrame,
             @Nullable Origin initiatorOrigin,
             boolean isExternalProtocol,
@@ -459,7 +463,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                 new ExternalNavigationParams.Builder(
                                 escapedUrl,
                                 mClient.isIncognito(),
-                                referrerUrl,
+                                referrer,
                                 pageTransition,
                                 isRedirect)
                         .setRedirectHandler(redirectHandler)
@@ -559,9 +563,12 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
             } else if (OPENID4VCI_SCHEME.equals(params.getUrl().getScheme())) {
                 scheme = InterceptScheme.OPENID4VCI_SCHEME;
                 digitalCredentialHistogramSuffix = "ForOpenId4Vci";
-            } else if (HAIP_SCHEME.equals(params.getUrl().getScheme())) {
-                scheme = InterceptScheme.HAIP_SCHEME;
-                digitalCredentialHistogramSuffix = "ForHaip";
+            } else if (HAIP_VP_SCHEME.equals(params.getUrl().getScheme())) {
+                scheme = InterceptScheme.HAIP_VP_SCHEME;
+                digitalCredentialHistogramSuffix = "ForHaipVp";
+            } else if (HAIP_VCI_SCHEME.equals(params.getUrl().getScheme())) {
+                scheme = InterceptScheme.HAIP_VCI_SCHEME;
+                digitalCredentialHistogramSuffix = "ForHaipVci";
             }
 
             if (digitalCredentialHistogramSuffix != null) {
@@ -763,9 +770,8 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
 
         int transitionType = PageTransition.LINK;
         final LoadUrlParams loadUrlParams = new LoadUrlParams(targetUrl, transitionType);
-        if (!params.getReferrerUrl().isEmpty()) {
-            Referrer referrer =
-                    new Referrer(params.getReferrerUrl().getSpec(), ReferrerPolicy.ALWAYS);
+        Referrer referrer = params.getReferrer();
+        if (referrer != null && !TextUtils.isEmpty(referrer.getUrl())) {
             loadUrlParams.setReferrer(referrer);
         }
         // Ideally this navigation would be part of the navigation chain that triggered it and get,

@@ -9,8 +9,8 @@
 #include "chrome/browser/actor/ui/actor_ui_tab_controller_interface.h"
 #include "chrome/browser/actor/ui/ui_event.h"
 #include "chrome/common/actor.mojom-forward.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/common/buildflags.h"
+#include "components/actor/core/task_id.h"
 
 namespace actor::ui {
 using UiCompleteCallback =
@@ -23,6 +23,8 @@ struct StoppedTaskInfo {
   ActorTask::State final_state;
   std::string title;
   tabs::TabInterface::Handle last_acted_on_tab_handle;
+  ActorTask::TaskDuration duration;
+  glic::mojom::FeatureMode feature_mode;
 };
 
 class ActorUiStateManagerInterface {
@@ -38,6 +40,19 @@ class ActorUiStateManagerInterface {
   // Shows toast that notifies user the Actor is working in the background.
   // Shows a maximum of kToastShownMax per profile.
   virtual void MaybeShowToast(BrowserWindowInterface* bwi) = 0;
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Lazily initializes the tab strip tracker when the first actor task is
+  // created.
+  // Since ActorKeyedService is constructed during Profile/TestingProfile
+  // instantiation, eager initialization in the constructor would invoke
+  // BrowserTabStripTracker::Init() immediately. This triggers crashes in
+  // headless environments or non-UI/backend unit tests (e.g., due to a missing
+  // DeviceDataManager or X server/$DISPLAY) that instantiate a profile without
+  // a complete UI environment. Delaying until the first task ensures the UI
+  // environment is fully set up.
+  virtual void LazyInitTabTracker() = 0;
 #endif
 
   // Gets the title of a given task, this includes active tasks and tasks that
@@ -59,6 +74,12 @@ class ActorUiStateManagerInterface {
   // std::nullopt is returned when we don't have a task for the given id.
   virtual std::optional<actor::ActorTask::State> GetActorTaskState(
       TaskId id) = 0;
+
+  // Gets the duration of a given task.
+  virtual ActorTask::TaskDuration GetDuration(TaskId task_id) = 0;
+
+  // Gets the feature mode of a given task.
+  virtual glic::mojom::FeatureMode GetFeatureMode(TaskId task_id) = 0;
 
   // Gets the number of inactive tasks (finished and failed). Cancelled tasks
   // are not included in this count.

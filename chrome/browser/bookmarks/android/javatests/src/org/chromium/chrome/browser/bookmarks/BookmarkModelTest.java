@@ -10,7 +10,6 @@ import androidx.test.filters.SmallTest;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -20,10 +19,10 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.url.GURL;
 
 import java.util.ArrayList;
@@ -44,8 +43,6 @@ public class BookmarkModelTest {
     public static final GURL C_COM = new GURL("http://c.com");
     public static final GURL AA_COM = new GURL("http://aa.com");
 
-    @Rule public final ChromeBrowserTestRule mChromeBrowserTestRule = new ChromeBrowserTestRule();
-
     private static final int TIMEOUT_MS = 5000;
     private BookmarkModel mBookmarkModel;
     private BookmarkId mMobileNode;
@@ -54,6 +51,7 @@ public class BookmarkModelTest {
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     Profile profile = ProfileManager.getLastUsedRegularProfile();
@@ -157,7 +155,7 @@ public class BookmarkModelTest {
     @UiThreadTest
     @Feature({"Bookmark"})
     public void testMoveBookmarksMixed() {
-        // Inspired by https://crbug.com/1441847 where a move during a search would have bookmarks
+        // Inspired by https://crbug.com/40910218 where a move during a search would have bookmarks
         // from a mixed set of parent folders. Need to be able to handle interleaving url bookmarks
         // where only some of which are in the same destination folder.
         BookmarkId folderA = mBookmarkModel.addFolder(mMobileNode, 0, "fa");
@@ -219,7 +217,7 @@ public class BookmarkModelTest {
 
         mBookmarkModel.deleteBookmarks(bookmarkA);
 
-        // This line is problematic, see: https://crbug.com/824559
+        // This line is problematic, see: https://crbug.com/41378185
         mBookmarkModel.deleteBookmarks(bookmarkA, bookmarkB);
 
         Assert.assertNull(mBookmarkModel.getBookmarkById(bookmarkA));

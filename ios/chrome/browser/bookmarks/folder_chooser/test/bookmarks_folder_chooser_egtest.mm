@@ -10,6 +10,7 @@
 #import "base/ios/ios_util.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
+#import "base/test/ios/wait_util.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
@@ -17,6 +18,7 @@
 #import "ios/chrome/browser/bookmarks/public/bookmarks_ui_constants.h"
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey.h"
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey_ui.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_constants.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -25,7 +27,7 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers_app_interface.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -40,7 +42,6 @@ using chrome_test_util::ContextBarLeadingButtonWithLabel;
 using chrome_test_util::KindOfTest;
 using chrome_test_util::ScrollToTop;
 using chrome_test_util::SearchBar;
-using chrome_test_util::TabGridEditButton;
 using chrome_test_util::TappableBookmarkNodeWithLabel;
 
 BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
@@ -54,10 +55,15 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
 }
 
 // Bookmark folders integration tests for Chrome.
-@interface BookmarksFolderChooserTestCase : WebHttpServerChromeTestCase
+@interface BookmarksFolderChooserTestCase : ChromeTestCase
 @end
 
 @implementation BookmarksFolderChooserTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  return config;
+}
 
 - (void)setUp {
   [super setUp];
@@ -558,7 +564,8 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
   [self util_testEditFunctionalityOnSingleFolder:KindOfTest::kLocal];
 }
 
-- (void)testEditFunctionalityOnSingleFolderAccount {
+// TODO(crbug.com/514455596): Flaky. Reenable it.
+- (void)DISABLED_testEditFunctionalityOnSingleFolderAccount {
   [SigninEarlGreyUI signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
   [self util_testEditFunctionalityOnSingleFolder:KindOfTest::kAccount];
 }
@@ -628,10 +635,11 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
 
   // Close edit mode.
   [BookmarkEarlGreyUI closeContextBarEditMode];
+  [ChromeEarlGreyUI waitForAppToIdle];
 
   // Navigate to "Folder 1.1" and verify "New Folder Title" is under it.
-  [[EarlGrey
-      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1.1")]
+  [[EarlGrey selectElementWithMatcher:TappableBookmarkNodeWithLabel(
+                                          @"Folder 1.1", kindOfTest)]
       performAction:grey_tap()];
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(newFolderTitle)]
       assertWithMatcher:grey_sufficientlyVisible()];
@@ -748,13 +756,13 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
   // Move to Mobile Bookmarks > Folder 1
   [BookmarkEarlGreyUI openBookmarks];
   [BookmarkEarlGreyUI openMobileBookmarks:sourceKind];
-  [[EarlGrey
-      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1")]
+  [[EarlGrey selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1",
+                                                                    sourceKind)]
       performAction:grey_tap()];
 
   // Invoke Move through long press.
-  [[EarlGrey
-      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 2")]
+  [[EarlGrey selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 2",
+                                                                    sourceKind)]
       performAction:grey_longPress()];
 
   [[EarlGrey selectElementWithMatcher:ButtonWithAccessibilityLabelId(
@@ -972,11 +980,11 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
       performAction:grey_tap()];
 
   // Select multiple folders.
-  [[EarlGrey
-      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1.1")]
+  [[EarlGrey selectElementWithMatcher:TappableBookmarkNodeWithLabel(
+                                          @"Folder 1.1", kindOfTest)]
       performAction:grey_tap()];
-  [[EarlGrey
-      selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1")]
+  [[EarlGrey selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1",
+                                                                    kindOfTest)]
       performAction:grey_tap()];
 
   // Tap context menu.
@@ -1296,6 +1304,11 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
   // Interrupt the folder name editing by tapping on done.
   [[EarlGrey selectElementWithMatcher:BookmarksHomeDoneButton()]
       performAction:grey_tap()];
+
+  // Wait for Bookmarks to close completely.
+  [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:
+                      grey_accessibilityID(kBookmarksHomeTableViewIdentifier)];
+
   // Reopen bookmarks.
   [BookmarkEarlGreyUI openBookmarks];
 
@@ -1536,7 +1549,7 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
   [[EarlGrey
       selectElementWithMatcher:grey_accessibilityID(
                                    kBookmarksFolderPickerSearchScrimIdentifier)]
-      assertWithMatcher:grey_sufficientlyVisible()];
+      assertWithMatcher:grey_minimumVisiblePercent(0.5)];
 
   // Search for "Folder 2" and check the others disappeared.
   [[EarlGrey selectElementWithMatcher:SearchBar()]

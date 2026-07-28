@@ -87,15 +87,14 @@ export class InputListElement extends InputListElementBase {
     };
   }
 
-  protected showTouchpads: boolean;
-  protected showTouchscreens: boolean;
+  declare protected showTouchpads: boolean;
+  declare protected showTouchscreens: boolean;
   // The evdev id of touchscreen under testing.
-  protected touchscreenIdUnderTesting: number = -1;
-  protected hostDeviceStatus:
-      HostDeviceStatus = {isLidOpen: false, isTabletMode: false};
-  private keyboards: KeyboardInfo[];
-  private touchpads: TouchDeviceInfo[];
-  private touchscreens: TouchDeviceInfo[];
+  declare protected touchscreenIdUnderTesting: number;
+  declare protected hostDeviceStatus: HostDeviceStatus;
+  declare private keyboards: KeyboardInfo[];
+  declare private touchpads: TouchDeviceInfo[];
+  declare private touchscreens: TouchDeviceInfo[];
   private connectedDevicesObserverReceiver: ConnectedDevicesObserverReceiver|
       null = null;
   private internalDisplayPowerStateObserverReceiver:
@@ -115,12 +114,13 @@ export class InputListElement extends InputListElementBase {
   }
 
   private computeShowTouchscreens(numTouchscreens: number): boolean {
-    return numTouchscreens > 0 &&
-        loadTimeData.getBoolean('isTouchscreenEnabled');
+    return numTouchscreens > 0;
   }
 
   constructor() {
     super();
+    this.touchscreenIdUnderTesting = -1;
+    this.hostDeviceStatus = {isLidOpen: false, isTabletMode: false};
     this.browserProxy.initialize();
     this.loadInitialDevices().then(() => {
       this.handleKeyboardTesterDirectOpen();
@@ -133,7 +133,9 @@ export class InputListElement extends InputListElementBase {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const keyboardTester = this.shadowRoot!.querySelector('keyboard-tester');
+    const keyboardTester =
+        this.shadowRoot!.querySelector<KeyboardTesterElement>(
+            'keyboard-tester');
     assert(keyboardTester);
     this.keyboardTester = keyboardTester;
   }

@@ -14,38 +14,37 @@
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
+#include "chrome/browser/ui/extensions/extensions_menu_handler.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_entry_view.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_handler.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "extensions/common/extension_id.h"
 #include "ui/base/class_property.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/bubble/tooltip_icon.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
-#include "ui/views/controls/separator.h"
+#include "ui/views/input_event_activation_protector.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/layout/layout_types.h"
@@ -91,6 +90,47 @@ struct ExtensionIdWrapper {
 DEFINE_UI_CLASS_PROPERTY_TYPE(ExtensionIdWrapper*)
 DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ExtensionIdWrapper, kExtensionIdKey)
 
+// A button in the extensions menu requesting access section that grants one
+// time site access to the extension. It uses an input event activation
+// protector to prevent unintended clicks.
+class ExtensionsMenuAllowButton : public views::MdTextButton {
+ public:
+  ExtensionsMenuAllowButton() = default;
+  ExtensionsMenuAllowButton(const ExtensionsMenuAllowButton&) = delete;
+  ExtensionsMenuAllowButton& operator=(const ExtensionsMenuAllowButton&) =
+      delete;
+  ~ExtensionsMenuAllowButton() override = default;
+
+  // views::View:
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    views::MdTextButton::VisibilityChanged(starting_from, is_visible);
+    input_protector_.VisibilityChanged(is_visible);
+  }
+
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
+    views::MdTextButton::OnBoundsChanged(previous_bounds);
+    input_protector_.MaybeUpdateViewProtectedTimeStamp();
+  }
+
+  void NotifyClick(const ui::Event& event) override {
+    if (input_protector_.IsPossiblyUnintendedInteraction(
+            event, /*allow_key_events=*/false)) {
+      return;
+    }
+    views::MdTextButton::NotifyClick(event);
+  }
+
+ private:
+  views::InputEventActivationProtector input_protector_;
+};
+
+BEGIN_VIEW_BUILDER(/* No Export */,
+                   ExtensionsMenuAllowButton,
+                   views::MdTextButton)
+END_VIEW_BUILDER
+
+DEFINE_VIEW_BUILDER(/* No Export */, ExtensionsMenuAllowButton)
+
 // Base class for a container inside the extensions menu.
 class SectionContainer : public views::BoxLayoutView {
  public:
@@ -117,7 +157,7 @@ END_VIEW_BUILDER
 DEFINE_VIEW_BUILDER(/* No Export */, SectionContainer)
 
 ExtensionsMenuMainPageView::ExtensionsMenuMainPageView(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ExtensionsMenuHandler* menu_handler)
     : browser_(browser), menu_handler_(menu_handler) {
   views::FlexSpecification stretch_specification =
@@ -203,8 +243,11 @@ void ExtensionsMenuMainPageView::CreateAndInsertMenuEntry(
   // tied to this view lifetime by the extensions menu coordinator.
   auto item = std::make_unique<ExtensionsMenuEntryView>(
       browser_, entry_state.is_enterprise, action_model,
-      base::BindRepeating(&ExtensionsMenuHandler::OnExtensionToggleSelected,
+      base::BindRepeating(&ExtensionsMenuHandler::OnActionButtonClicked,
                           base::Unretained(menu_handler_), extension_id),
+      base::BindRepeating(&ExtensionsMenuHandler::OnExtensionToggleSelected,
+                          base::Unretained(menu_handler_), extension_id,
+                          entry_state.origin),
       base::BindRepeating(&ExtensionsMenuHandler::OpenSitePermissionsPage,
                           base::Unretained(menu_handler_), extension_id));
   item->Update(entry_state);
@@ -282,7 +325,7 @@ void ExtensionsMenuMainPageView::AddExtensionRequestingAccess(
                   .SetAccessibleName(l10n_util::GetStringFUTF16(
                       IDS_EXTENSIONS_MENU_REQUESTS_ACCESS_SECTION_DISMISS_BUTTON_ACCESSIBLE_NAME,
                       request.extension_name)),
-              views::Builder<views::MdTextButton>()
+              views::Builder<ExtensionsMenuAllowButton>()
                   .SetCallback(base::BindRepeating(
                       &ExtensionsMenuHandler::OnAllowExtensionClicked,
                       base::Unretained(menu_handler_), request.extension_id))
@@ -496,7 +539,7 @@ ExtensionsMenuMainPageView::CreateContentsBuilder(
     gfx::Insets reload_button_margins,
     gfx::Insets menu_entries_margins) {
   // This is set so that the extensions menu doesn't fall outside the monitor in
-  // a maximized window in 1024x768. See https://crbug.com/1096630.
+  // a maximized window in 1024x768. See https://crbug.com/40700838.
   // TODO(crbug.com/40891805): Consider making the height dynamic.
   constexpr int kMaxExtensionButtonsHeightDp = 448;
 
@@ -591,7 +634,7 @@ ExtensionsMenuMainPageView::CreateManageButtonBuilder() {
   return views::Builder<HoverButton>(
              std::make_unique<HoverButton>(
                  base::BindRepeating(
-                     [](Browser* browser) {
+                     [](BrowserWindowInterface* browser) {
                        base::RecordAction(
                            base::UserMetricsAction("Extensions.Menu."
                                                    "ExtensionsSettingsOpened"));
@@ -599,7 +642,9 @@ ExtensionsMenuMainPageView::CreateManageButtonBuilder() {
                      },
                      browser_),
                  ui::ImageModel::FromVectorIcon(
-                     vector_icons::kSettingsChromeRefreshIcon),
+                     features::IsRoundedIconsEnabled()
+                         ? vector_icons::kSettingsIcon
+                         : vector_icons::kSettingsChromeRefreshOldIcon),
                  l10n_util::GetStringUTF16(IDS_MANAGE_EXTENSIONS)))
       .SetProperty(views::kElementIdentifierKey,
                    kExtensionsMenuManageExtensionsElementId);

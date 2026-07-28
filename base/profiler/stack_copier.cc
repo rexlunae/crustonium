@@ -39,12 +39,14 @@ std::unique_ptr<StackBuffer> StackCopier::CloneStack(
   *stack_top =
       reinterpret_cast<const uintptr_t>(stack_copy_bottom) + stack_size;
 
-  for (uintptr_t* reg : GetRegistersToRewrite(thread_context)) {
-    *reg = RewritePointerIfInOriginalStack(
+  std::vector<uintptr_t> registers = GetRegisters(thread_context);
+  for (uintptr_t& reg : registers) {
+    reg = RewritePointerIfInOriginalStack(
         reinterpret_cast<const uint8_t*>(original_bottom),
         reinterpret_cast<const uintptr_t*>(original_top), stack_copy_bottom,
-        *reg);
+        reg);
   }
+  SetRegisters(thread_context, registers);
   return cloned_stack_buffer;
 }
 
@@ -70,6 +72,7 @@ uintptr_t StackCopier::RewritePointerIfInOriginalStack(
 
 // static
 NO_SANITIZE("address")
+NO_SANITIZE("hwaddress")
 const uint8_t* StackCopier::CopyStackContentsAndRewritePointers(
     const uint8_t* original_stack_bottom,
     const uintptr_t* original_stack_top,

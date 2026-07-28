@@ -125,6 +125,11 @@ void UrlLoaderNetworkServiceObserver::OnLocalNetworkAccessPermissionRequired(
     network::mojom::IPAddressSpace ip_address_space,
     OnLocalNetworkAccessPermissionRequiredCallback callback) {}
 
+void UrlLoaderNetworkServiceObserver::OnPlatformLocalNetworkPermissionRequired(
+    OnPlatformLocalNetworkPermissionRequiredCallback callback) {
+  std::move(callback).Run(/*granted=*/false);
+}
+
 void UrlLoaderNetworkServiceObserver::OnClearSiteData(
     const GURL& url,
     const std::string& header_value,
@@ -155,21 +160,17 @@ void UrlLoaderNetworkServiceObserver::OnSharedStorageHeaderReceived(
   std::move(callback).Run();
 }
 
-void UrlLoaderNetworkServiceObserver::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
-
 void UrlLoaderNetworkServiceObserver::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
         observer) {
   receivers_.Add(this, std::move(observer));
 }
 
-void UrlLoaderNetworkServiceObserver::OnWebSocketConnectedToPrivateNetwork(
+void UrlLoaderNetworkServiceObserver::OnWebSocketConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace ip_address_space) {}
 
-void UrlLoaderNetworkServiceObserver::OnUrlLoaderConnectedToPrivateNetwork(
+void UrlLoaderNetworkServiceObserver::OnUrlLoaderConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace response_address_space,
     network::mojom::IPAddressSpace client_address_space,

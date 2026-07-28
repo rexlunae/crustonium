@@ -11,7 +11,6 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_bytebuffer.h"
-#include "base/android/jni_callback.h"
 #include "base/android/jni_string.h"
 #include "base/android/token_android.h"
 #include "base/logging.h"
@@ -28,6 +27,7 @@
 #include "chrome/browser/tab/tab_group_collection_data.h"
 #include "chrome/browser/tab/tab_state_storage_backend.h"
 #include "chrome/browser/tab/tab_state_storage_service.h"
+#include "chrome/browser/tab/tab_storage_util.h"
 #include "components/tabs/public/android/jni_conversion.h"
 #include "components/tabs/public/direct_child_walker.h"
 #include "components/tabs/public/tab_strip_collection.h"
@@ -50,6 +50,12 @@ void RunJavaCallbackLoadAll(JNIEnv* env,
       new StorageLoadedDataAndroid(env, std::move(loaded_data));
   base::android::RunObjectCallbackAndroid(j_loaded_data_callback,
                                           data_android->GetJavaObject());
+}
+
+void RunJavaCallbackCountTabsForWindow(JNIEnv* env,
+                                       const JavaRef<jobject>& j_count_callback,
+                                       int count) {
+  base::android::RunIntCallbackAndroid(j_count_callback, count);
 }
 
 // Recursively crawls the entire tree and retrieves storage ids for all nodes.
@@ -122,13 +128,36 @@ void TabStateStorageServiceAndroid::LoadAllData(
                                            std::move(load_data_callback));
 }
 
+void TabStateStorageServiceAndroid::CountTabsForWindow(
+    JNIEnv* env,
+    const std::string& window_tag,
+    bool is_off_the_record,
+    const jni_zero::JavaRef<jobject>& j_callback) {
+  auto count_callback =
+      base::BindOnce(&RunJavaCallbackCountTabsForWindow, env,
+                     jni_zero::ScopedJavaGlobalRef<jobject>(j_callback));
+  tab_state_storage_service_->CountTabsForWindow(window_tag, is_off_the_record,
+                                                 std::move(count_callback));
+}
+
 void TabStateStorageServiceAndroid::ClearState(JNIEnv* env) {
-  tab_state_storage_service_->ClearState();
+  auto scoped_batch = tab_state_storage_service_->CreateScopedBatch();
+  tab_state_storage_service_->ClearAllWindows();
+  tab_state_storage_service_->ClearAllDivergenceWindows();
 }
 
 void TabStateStorageServiceAndroid::ClearWindow(JNIEnv* env,
                                                 const std::string& window_tag) {
+  auto scoped_batch = tab_state_storage_service_->CreateScopedBatch();
   tab_state_storage_service_->ClearWindow(window_tag);
+  tab_state_storage_service_->ClearDivergenceWindow(window_tag);
+}
+
+void TabStateStorageServiceAndroid::ClearAllWindowsExcept(
+    JNIEnv* env,
+    const std::vector<std::string>& window_tags) {
+  auto scoped_batch = tab_state_storage_service_->CreateScopedBatch();
+  tab_state_storage_service_->ClearAllWindowsExcept(window_tags);
 }
 
 void TabStateStorageServiceAndroid::ClearWindowWithOtrStatus(
@@ -136,8 +165,11 @@ void TabStateStorageServiceAndroid::ClearWindowWithOtrStatus(
     const std::string& window_tag,
     bool is_off_the_record) {
   std::vector<StorageId> ids;
+  auto scoped_batch = tab_state_storage_service_->CreateScopedBatch();
   tab_state_storage_service_->ClearNodesForWindowExcept(window_tag,
                                                         is_off_the_record, ids);
+  tab_state_storage_service_->ClearDivergentNodesForWindow(window_tag,
+                                                           is_off_the_record);
 }
 
 void TabStateStorageServiceAndroid::ClearUnusedNodesForWindow(
@@ -155,6 +187,8 @@ void TabStateStorageServiceAndroid::ClearUnusedNodesForWindow(
     walker.Walk();
   }
 
+  // We do not need to clear the divergence window since divergent nodes will
+  // never remain when this method is called.
   tab_state_storage_service_->ClearNodesForWindowExcept(window_tag,
                                                         is_off_the_record, ids);
 }

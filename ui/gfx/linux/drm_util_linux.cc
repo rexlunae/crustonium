@@ -10,6 +10,7 @@
 
 namespace ui {
 
+
 int GetFourCCFormatFromSharedImageFormat(const viz::SharedImageFormat& format) {
   if (format == viz::SinglePlaneFormat::kR_8) {
     return DRM_FORMAT_R8;
@@ -96,10 +97,8 @@ viz::SharedImageFormat GetSharedImageFormatFromFourCCFormat(int format) {
   }
 }
 
-bool IsValidBufferFormat(uint32_t current_format) {
+bool IsValidDrmFormat(uint32_t current_format) {
   switch (current_format) {
-    case DRM_FORMAT_R8:
-    case DRM_FORMAT_GR88:
     case DRM_FORMAT_ABGR8888:
     case DRM_FORMAT_XBGR8888:
     case DRM_FORMAT_ARGB8888:

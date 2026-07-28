@@ -19,7 +19,7 @@ import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
-import {BrowserProxyImpl} from './browser_proxy.js';
+import {browserProxyFactory} from './chrome_urls.mojom-webui.js';
 import type {WebuiUrlInfo} from './chrome_urls.mojom-webui.js';
 
 export const INTERNAL_DEBUG_PAGES_HASH: string = 'internal-debug-pages';
@@ -58,17 +58,6 @@ export class ChromeUrlsAppElement extends CrLitElement {
   protected loadUrlsTimeout_: number|null = null;
   // </if>
 
-  override updated(changedProperties: PropertyValues<this>) {
-    super.updated(changedProperties);
-
-    const changedPrivateProperties =
-        changedProperties as Map<PropertyKey, unknown>;
-    if (changedPrivateProperties.has('internalUrlInfos_') &&
-        this.internalUrlInfos_.length > 0) {
-      this.onHashChanged_(CrRouter.getInstance().getHash());
-    }
-  }
-
   override connectedCallback() {
     super.connectedCallback();
 
@@ -99,6 +88,17 @@ export class ChromeUrlsAppElement extends CrLitElement {
     // </if>
   }
 
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('internalUrlInfos_') &&
+        this.internalUrlInfos_.length > 0) {
+      this.onHashChanged_(CrRouter.getInstance().getHash());
+    }
+  }
+
   // <if expr="is_ios">
   private onLoadUrlsTimeout_() {
     // Set a longer timeout for retries, because the backend reply needs to come
@@ -111,7 +111,7 @@ export class ChromeUrlsAppElement extends CrLitElement {
   // </if>
 
   private fetchUrls_() {
-    BrowserProxyImpl.getInstance().handler.getUrls().then(({urlsData}) => {
+    browserProxyFactory.getInstance().handler.getUrls().then(({urlsData}) => {
       // Since we use GURL on the C++ side, we need to remove the trailing
       // '/' here for nicer display.
       function getPrettyUrl(url: Url): Url {
@@ -156,7 +156,8 @@ export class ChromeUrlsAppElement extends CrLitElement {
   protected async onToggleDebugPagesClick_() {
     this.debugPagesButtonDisabled_ = true;
     const enabled = !this.internalUisEnabled_;
-    await BrowserProxyImpl.getInstance().handler.setDebugPagesEnabled(enabled);
+    await browserProxyFactory.getInstance().handler.setDebugPagesEnabled(
+        enabled);
     this.internalUisEnabled_ = enabled;
     this.debugPagesButtonDisabled_ = false;
     const params = new URLSearchParams(window.location.search);

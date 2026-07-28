@@ -126,8 +126,8 @@ TEST_P(PermissionManagerTest, GetCanonicalOriginSearch) {
   const GURL remote_ntp = GURL(std::string("chrome-search://") +
                                chrome::kChromeSearchRemoteNtpHost);
   const GURL other_chrome_search = GURL("chrome-search://not-local-ntp");
-  const GURL top_level_ntp(chrome::kChromeUINewTabURL);
-  const GURL webui_ntp = GURL(chrome::kChromeUINewTabPageURL);
+  const GURL& top_level_ntp = chrome::ChromeUINewTabURLAsGURL();
+  const GURL webui_ntp = chrome::ChromeUINewTabPageURLAsGURL();
 
   // "Normal" URLs are not affected by GetCanonicalOrigin.
   EXPECT_EQ(google_com, permissions::PermissionUtil::GetCanonicalOrigin(
@@ -174,7 +174,7 @@ TEST_P(PermissionManagerTest, GetCanonicalOriginPermissionDelegation) {
   EXPECT_EQ(requesting_origin, permissions::PermissionUtil::GetCanonicalOrigin(
                                    ContentSettingsType::NOTIFICATIONS,
                                    requesting_origin, embedding_origin));
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   const GURL extensions_requesting_origin(
       "chrome-extension://abcdefghijklmnopqrstuvxyz");
   EXPECT_EQ(extensions_requesting_origin,

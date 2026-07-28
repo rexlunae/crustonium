@@ -157,6 +157,11 @@ class PageInfo : private content_settings::CookieControlsObserver,
     base::Time last_used;
     // Whether the permission is in use.
     bool is_in_use = false;
+
+#if BUILDFLAG(IS_ANDROID)
+    // Whether the permission was requested in this session.
+    bool is_requested = false;
+#endif  // BUILDFLAG(IS_ANDROID)
   };
 
   // Creates a PageInfo for the passed |url| using the given |ssl| status
@@ -176,16 +181,6 @@ class PageInfo : private content_settings::CookieControlsObserver,
   // Called when the third-party blocking toggle in the cookies subpage gets
   // clicked.
   void OnThirdPartyToggleClicked(bool block_third_party_cookies);
-
-  // Checks whether this permission is currently the factory default, as set by
-  // Chrome. Specifically, that the following three conditions are true:
-  //   - The current active setting comes from the default or pref provider.
-  //   - The setting is the factory default setting (as opposed to a global
-  //     default setting set by the user).
-  //   - The setting is a wildcard setting applying to all origins (which can
-  //     only be set from the default provider).
-  static bool IsPermissionFactoryDefault(const PermissionInfo& info,
-                                         bool is_incognito);
 
   // Returns whether this page info is for an internal page.
   static bool IsFileOrInternalPage(const GURL& url);
@@ -283,6 +278,8 @@ class PageInfo : private content_settings::CookieControlsObserver,
   const SafeBrowsingStatus& safe_browsing_status() const {
     return safe_browsing_status_;
   }
+
+  const GURL& site_url() const { return site_url_; }
 
   // For most sites, this returns a human-friendly string based on site origin,
   // without scheme, the username and password, the path or trivial subdomains.

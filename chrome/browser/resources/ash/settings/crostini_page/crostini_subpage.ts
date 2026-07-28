@@ -28,9 +28,11 @@ import type {SettingsToggleButtonElement} from '../controls/settings_toggle_butt
 import {TERMINA_VM_TYPE} from '../guest_os/guest_os_browser_proxy.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import {type Route, Router, routes} from '../router.js';
+import {Router, routes} from '../router.js';
+import type {Route} from '../router.js';
 
-import {type CrostiniBrowserProxy, CrostiniBrowserProxyImpl, type CrostiniDiskInfo} from './crostini_browser_proxy.js';
+import {CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
+import type {CrostiniBrowserProxy, CrostiniDiskInfo} from './crostini_browser_proxy.js';
 import {getTemplate} from './crostini_subpage.html.js';
 
 /**
@@ -66,6 +68,18 @@ export class SettingsCrostiniSubpageElement extends
         },
       },
 
+      showArcAdbSideloading_: {
+        type: Boolean,
+        computed: 'and_(isArcAdbSideloadingSupported_, isAndroidEnabled_)',
+      },
+
+      isArcAdbSideloadingSupported_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('arcAdbSideloadingSupported');
+        },
+      },
+
       /**
        * Whether port-forwarding UI should be displayed.
        * Determined by policy setting and if current termina guest is of
@@ -77,6 +91,10 @@ export class SettingsCrostiniSubpageElement extends
           return loadTimeData.getBoolean('showCrostiniPortForwarding') &&
               !loadTimeData.getBoolean('isBaguette');
         },
+      },
+
+      isAndroidEnabled_: {
+        type: Boolean,
       },
 
       showDiskResizeConfirmationDialog_: {
@@ -126,6 +144,7 @@ export class SettingsCrostiniSubpageElement extends
   static get observers() {
     return [
       'onCrostiniEnabledChanged_(prefs.crostini.enabled.value)',
+      'onArcEnabledChanged_(prefs.arc.enabled.value)',
     ];
   }
 
@@ -137,18 +156,21 @@ export class SettingsCrostiniSubpageElement extends
   ]);
 
   private browserProxy_: CrostiniBrowserProxy;
-  private canDiskResize_: boolean;
-  private diskResizeButtonAriaLabel_: string;
-  private diskResizeButtonLabel_: string;
+  declare private canDiskResize_: boolean;
+  declare private diskResizeButtonAriaLabel_: string;
+  declare private diskResizeButtonLabel_: string;
   private diskResizeConfirmationState_: ConfirmationState;
-  private diskSizeLabel_: string;
-  private installerShowing_: boolean;
+  declare private diskSizeLabel_: string;
+  declare private installerShowing_: boolean;
+  declare private readonly isArcAdbSideloadingSupported_: boolean;
+  declare private isAndroidEnabled_: boolean;
   private isDiskUserChosenSize_: boolean;
-  private readonly showCrostiniExportImport_: boolean;
-  private showCrostiniMicPermissionDialog_: boolean;
-  private readonly showCrostiniPortForwarding_: boolean;
-  private showDiskResizeConfirmationDialog_: boolean;
-  private showDiskResizeDialog_: boolean;
+  declare private showArcAdbSideloading_: boolean;
+  declare private readonly showCrostiniExportImport_: boolean;
+  declare private showCrostiniMicPermissionDialog_: boolean;
+  declare private readonly showCrostiniPortForwarding_: boolean;
+  declare private showDiskResizeConfirmationDialog_: boolean;
+  declare private showDiskResizeDialog_: boolean;
 
   constructor() {
     super();
@@ -182,6 +204,7 @@ export class SettingsCrostiniSubpageElement extends
     this.addFocusConfig(
         r.CROSTINI_SHARED_USB_DEVICES, '#crostiniSharedUsbDevicesRow');
     this.addFocusConfig(r.CROSTINI_EXPORT_IMPORT, '#crostiniExportImportRow');
+    this.addFocusConfig(r.CROSTINI_ANDROID_ADB, '#crostiniEnableArcAdbRow');
     this.addFocusConfig(
         r.CROSTINI_PORT_FORWARDING, '#crostiniPortForwardingRow');
   }
@@ -209,8 +232,16 @@ export class SettingsCrostiniSubpageElement extends
     }
   }
 
+  private onArcEnabledChanged_(enabled: boolean): void {
+    this.isAndroidEnabled_ = enabled;
+  }
+
   private onExportImportClick_(): void {
     Router.getInstance().navigateTo(routes.CROSTINI_EXPORT_IMPORT);
+  }
+
+  private onEnableArcAdbClick_(): void {
+    Router.getInstance().navigateTo(routes.CROSTINI_ANDROID_ADB);
   }
 
   private loadDiskInfo_(): void {

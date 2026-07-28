@@ -8,6 +8,7 @@
 #include "base/containers/span.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "services/webnn/ort/context_impl_ort.h"
+#include "services/webnn/ort/ort_data_type.h"
 #include "services/webnn/ort/ort_status.h"
 #include "services/webnn/ort/platform_functions_ort.h"
 #include "services/webnn/public/mojom/webnn_tensor.mojom.h"
@@ -17,15 +18,12 @@ namespace webnn::ort {
 
 TensorImplOrt::TensorImplOrt(
     mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-    base::WeakPtr<WebNNContextImpl> context,
+    WebNNContextImpl& context,
     mojom::TensorInfoPtr tensor_info,
     size_t size,
     ScopedOrtValue tensor,
-    bool can_access_on_cpu,
     scoped_refptr<DeviceAllocator> device_allocator)
-    : WebNNTensorImpl(std::move(receiver),
-                      std::move(context),
-                      std::move(tensor_info)),
+    : WebNNTensorImpl(std::move(receiver), context, std::move(tensor_info)),
       device_allocator_((std::move(device_allocator))),
       tensor_(std::move(tensor)),
       size_(size) {
@@ -33,29 +31,30 @@ TensorImplOrt::TensorImplOrt(
   // will get random values.
   // TODO(crbug.com/461303833): check whether fast HW clears can be used
   // instead.
-  if (can_access_on_cpu) {
-    std::ranges::fill(AsSpan(), 0);
-  }
+  std::ranges::fill(AsSpan(), 0);
 }
 
 TensorImplOrt::TensorImplOrt(
     mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-    base::WeakPtr<WebNNContextImpl> context,
+    WebNNContextImpl& context,
     mojom::TensorInfoPtr tensor_info,
     RepresentationPtr representation,
     size_t size,
+    ScopedOrtExternalMemoryHandle d3d_heap_external_memory_handle,
     ScopedOrtValue tensor)
     : WebNNTensorImpl(std::move(receiver),
-                      std::move(context),
+                      context,
                       std::move(tensor_info),
                       std::move(representation)),
+      d3d_heap_external_memory_handle_(
+          std::move(d3d_heap_external_memory_handle)),
       tensor_(std::move(tensor)),
       size_(size) {}
 
 TensorImplOrt::~TensorImplOrt() = default;
 
 base::span<uint8_t> TensorImplOrt::AsSpan() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   void* ort_tensor_raw_data = nullptr;
   CHECK_STATUS(
@@ -69,7 +68,7 @@ base::span<uint8_t> TensorImplOrt::AsSpan() const {
 }
 
 void TensorImplOrt::ReadTensorImpl(ReadTensorCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   base::span<const uint8_t> buffer_span = AsSpan();
   CHECK_EQ(PackedByteLength(), buffer_span.size());
@@ -78,13 +77,13 @@ void TensorImplOrt::ReadTensorImpl(ReadTensorCallback callback) {
 }
 
 void TensorImplOrt::WriteTensorImpl(mojo_base::BigBuffer src_buffer) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   context_->ReadDataFromBigBufferOrDataPipe(std::move(src_buffer), AsSpan());
 }
 
 bool TensorImplOrt::ImportTensorImpl(ScopedAccessPtr access) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // No synchronization needed if there is no fence to acquire.
   scoped_refptr<gfx::D3DSharedFence> d3d_write_fence =
@@ -116,14 +115,11 @@ bool TensorImplOrt::ImportTensorImpl(ScopedAccessPtr access) {
   return true;
 }
 
-void TensorImplOrt::ExportTensorImpl(ScopedAccessPtr access,
-                                     ExportTensorCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
+void TensorImplOrt::ExportTensorImpl(ScopedAccessPtr access) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Since we wait for all WebNN operations to complete, we only need to release
   // the ScopedAccess to end WebNN access.
-
-  std::move(callback).Run(context_->GenVerifiedSyncToken());
 }
 
 }  // namespace webnn::ort

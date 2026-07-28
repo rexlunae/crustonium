@@ -40,6 +40,7 @@
           "project": "chromium"
         }
       ],
+      "retry_without_patch": false,
       "targets_spec_directory": "infra/config/generated/builders/try/ios-blink-rel-fyi/targets"
     }
   },
@@ -63,5 +64,5 @@
   },
   "builder_group": "tryserver.chromium.mac",
   "recipe": "chromium_trybot",
-  "xcode_build_version": "17a400"
+  "xcode_build_version": "17f42"
 }

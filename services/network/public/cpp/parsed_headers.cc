@@ -5,10 +5,10 @@
 #include "services/network/public/cpp/parsed_headers.h"
 
 #include <algorithm>
-#include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "build/build_config.h"
 #include "net/base/features.h"
@@ -25,6 +25,7 @@
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy_parser.h"
 #include "services/network/public/cpp/cross_origin_opener_policy_parser.h"
+#include "services/network/public/cpp/declarative_performance_observer_parser.h"
 #include "services/network/public/cpp/document_isolation_policy_parser.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/fence_event_reporting_parser.h"
@@ -63,6 +64,8 @@ mojom::ParsedHeadersPtr PopulateParsedHeaders(
   if (base::FeatureList::IsEnabled(network::features::kConnectionAllowlists)) {
     parsed_headers->connection_allowlists =
         ParseConnectionAllowlistsFromHeaders(*headers, url);
+    parsed_headers->allow_connection_allowlist_from =
+        ParseAllowConnectionAllowlistFromHeader(*headers);
   }
 
   if (base::FeatureList::IsEnabled(network::features::kIntegrityPolicyScript)) {
@@ -87,16 +90,12 @@ mojom::ParsedHeadersPtr PopulateParsedHeaders(
           .value_or(std::string());
   std::vector<std::string> clear_site_data_types =
       net::ClearSiteDataHeaderContents(clear_site_data_header);
-  std::set<std::string> clear_site_data_set(clear_site_data_types.begin(),
-                                            clear_site_data_types.end());
-  if (clear_site_data_set.find(net::kDatatypeCache) !=
-          clear_site_data_set.end() ||
-      clear_site_data_set.find(net::kDatatypeClientHints) !=
-          clear_site_data_set.end() ||
-      clear_site_data_set.find(net::kDatatypeCookies) !=
-          clear_site_data_set.end() ||
-      clear_site_data_set.find(net::kDatatypeWildcard) !=
-          clear_site_data_set.end()) {
+  base::flat_set<std::string> clear_site_data_set(
+      std::move(clear_site_data_types));
+  if (clear_site_data_set.contains(net::kDatatypeCache) ||
+      clear_site_data_set.contains(net::kDatatypeClientHints) ||
+      clear_site_data_set.contains(net::kDatatypeCookies) ||
+      clear_site_data_set.contains(net::kDatatypeWildcard)) {
     parsed_headers->client_hints_ignored_due_to_clear_site_data_header = true;
   }
   if (!features::ShouldBlockAcceptClientHintsFor(url::Origin::Create(url)) &&
@@ -174,6 +173,18 @@ mojom::ParsedHeadersPtr PopulateParsedHeaders(
 
   parsed_headers->allow_cross_origin_event_reporting =
       ParseAllowCrossOriginEventReportingFromHeader(*headers);
+
+  if (std::optional<std::string> performance_observer_header =
+          headers->GetNormalizedHeader("Performance-Observer")) {
+    parsed_headers->declarative_performance_observer_policy =
+        ParseDeclarativePerformanceObserverPolicy(*performance_observer_header);
+  }
+
+  if (std::optional<std::string> prefetch_activation_beacon =
+          headers->GetNormalizedHeader("on-prefetch-activation")) {
+    parsed_headers->prefetch_activation_beacon_endpoint =
+        url.Resolve(*prefetch_activation_beacon);
+  }
 
   return parsed_headers;
 }

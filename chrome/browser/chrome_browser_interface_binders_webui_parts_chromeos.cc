@@ -77,6 +77,7 @@
 #include "ash/webui/shortcut_customization_ui/mojom/shortcut_customization.mojom.h"
 #include "ash/webui/shortcut_customization_ui/shortcut_customization_app_ui.h"
 #include "ash/webui/vc_background_ui/vc_background_ui.h"
+#include "chrome/browser/ash/borealis/borealis_motd_ui_impl.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
 #include "chrome/browser/ui/webui/ash/add_supervision/add_supervision.mojom.h"
@@ -85,8 +86,6 @@
 #include "chrome/browser/ui/webui/ash/app_install/app_install_dialog.h"
 #include "chrome/browser/ui/webui/ash/app_install/app_install_ui.h"
 #include "chrome/browser/ui/webui/ash/bluetooth/bluetooth_pairing_dialog.h"
-#include "chrome/browser/ui/webui/ash/borealis_installer/borealis_installer.mojom.h"
-#include "chrome/browser/ui/webui/ash/borealis_installer/borealis_installer_ui.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload.mojom.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_dialog.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_ui.h"
@@ -141,8 +140,6 @@
 #include "chrome/browser/ui/webui/ash/skyvault/local_files_migration_ui.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_credentials_dialog.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_share_dialog.h"
-#include "chrome/browser/ui/webui/ash/vm/vm.mojom.h"
-#include "chrome/browser/ui/webui/ash/vm/vm_ui.h"
 #include "chrome/browser/ui/webui/feedback/feedback_ui.h"
 #include "chrome/browser/ui/webui/nearby_share/nearby_share.mojom.h"
 #include "chrome/browser/ui/webui/nearby_share/nearby_share_dialog_ui.h"
@@ -161,11 +158,10 @@
 #include "chromeos/ash/services/ime/public/mojom/input_method_user_data.mojom.h"
 #include "chromeos/ash/services/multidevice_setup/multidevice_setup_service.h"
 #include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
-#include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"  // nogncheck crbug.com/1125897
+#include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"  // nogncheck crbug.com/40147906
 #include "chromeos/ash/services/orca/public/mojom/orca_service.mojom.h"
 #include "chromeos/components/print_management/mojom/printing_manager.mojom.h"  // nogncheck
 #include "chromeos/constants/chromeos_features.h"
-#include "chromeos/crosapi/mojom/structured_metrics_service.mojom.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"  // nogncheck
 #include "chromeos/services/network_health/public/mojom/network_diagnostics.mojom.h"  // nogncheck
 #include "chromeos/services/network_health/public/mojom/network_health.mojom.h"  // nogncheck
@@ -280,12 +276,8 @@ void PopulateChromeWebUIFrameBindersPartsCros(
       ash::NetworkUI, ash::OobeUI>(map);
 
   RegisterWebUIControllerInterfaceBinder<
-      ash::borealis_installer::mojom::PageHandlerFactory,
-      ash::BorealisInstallerUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      ash::borealis_motd::mojom::PageHandlerFactory, borealis::BorealisMOTDUI>(
-      map);
+      ash::borealis_motd::mojom::PageHandlerFactory,
+      borealis::BorealisMotdUiImpl>(map);
 
   RegisterWebUIControllerInterfaceBinder<
       ash::crostini_installer::mojom::PageHandlerFactory,
@@ -391,9 +383,6 @@ void PopulateChromeWebUIFrameBindersPartsCros(
   RegisterWebUIControllerInterfaceBinder<
       ash::diagnostics::mojom::SystemRoutineController,
       ash::DiagnosticsDialogUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<ash::vm::mojom::VmDiagnosticsProvider,
-                                         ash::VmUI>(map);
 
   RegisterWebUIControllerInterfaceBinder<ash::scanning::mojom::ScanService,
                                          ash::ScanningUI>(map);
@@ -547,7 +536,7 @@ void PopulateChromeWebUIFrameBindersPartsCros(
       new_window_proxy::mojom::NewWindowProxy, ash::EmojiUI>(map);
 
   if (base::FeatureList::IsEnabled(features::kSkyVault) &&
-      base::FeatureList::IsEnabled(features::kSkyVaultV2)) {
+      base::FeatureList::IsEnabled(ash::features::kSkyVaultV2)) {
     RegisterWebUIControllerInterfaceBinder<
         policy::local_user_files::mojom::PageHandlerFactory,
         policy::local_user_files::LocalFilesMigrationUI>(map);
@@ -593,9 +582,7 @@ void PopulateChromeWebUIFrameBindersPartsCros(
 void PopulateChromeWebUIFrameInterfaceBrokersTrustedPartsCros(
     content::WebUIBrowserInterfaceBrokerRegistry& registry) {
   registry.ForWebUI<ash::RecorderAppUI>()
-      .Add<ash::recorder_app::mojom::PageHandler>()
-      .Add<crosapi::mojom::StructuredMetricsService>();
-
+      .Add<ash::recorder_app::mojom::PageHandler>();
   registry.ForWebUI<ash::CameraAppUI>()
       .Add<cros::mojom::CameraAppDeviceProvider>()
       .Add<ash::camera_app::mojom::CameraAppHelper>();
@@ -606,7 +593,6 @@ void PopulateChromeWebUIFrameInterfaceBrokersTrustedPartsCros(
   registry.ForWebUI<ash::file_manager::FileManagerUI>();
   registry.ForWebUI<ash::smb_dialog::SmbShareDialogUI>();
   registry.ForWebUI<ash::smb_dialog::SmbCredentialsDialogUI>();
-  registry.ForWebUI<FeedbackUI>();
   registry.ForWebUI<ash::MallUI>().Add<ash::mall::mojom::PageHandler>();
 
 #if !defined(OFFICIAL_BUILD)

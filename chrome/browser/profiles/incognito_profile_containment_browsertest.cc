@@ -18,7 +18,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -37,7 +38,7 @@ namespace {
 // For ChromeOS, a copy of all members of |kAllowListPrefixesForAllPlatforms|
 // that start with "/Default" is added to the allow list, replacing "/Default"
 // with "/test-user".
-// TODO(http://crbug.com/1234755): Add audit comment (or fix the issue) for all
+// TODO(http://crbug.com/40781663): Add audit comment (or fix the issue) for all
 // paths that do not have a comment.
 constexpr const char* kAllowListPrefixesForAllPlatforms[] = {
     "/Default/data_reduction_proxy_leveldb",
@@ -77,7 +78,7 @@ constexpr const char* kAllowListPrefixesForPlatform[] = {};
 
 // List of directory prefixes that are known to be added as an empty directory
 // during an Incognito session.
-// TODO(http://crbug.com/1234755): Add audit comment (or fix the issue) for all
+// TODO(http://crbug.com/40781663): Add audit comment (or fix the issue) for all
 // paths that do not have a comment.
 constexpr const char* kAllowListEmptyDirectoryPrefixesForAllPlatforms[] = {
     "/Default/AutofillStrikeDatabase",
@@ -144,7 +145,7 @@ void GetUserDirectorySnapshot(Snapshot& snapshot, bool compute_file_hashes) {
 }
 
 bool IsFileModified(FileData& before, FileData& after) {
-  // TODO(http://crbug.com/1234755): Also consider auditing files that are
+  // TODO(http://crbug.com/40781663): Also consider auditing files that are
   // touched or are unreadable.
   // If it was readable before, and is readable now, compare hash codes.
   if (before.file_hash_is_valid) {
@@ -197,7 +198,7 @@ bool AreFilesModified(Snapshot& snapshot_before,
                       std::set<std::string>& allow_list) {
   bool modified = false;
 
-  // TODO(http://crbug.com/1234755): Consider deleted files as well. Currently
+  // TODO(http://crbug.com/40781663): Consider deleted files as well. Currently
   // we only look for added and modified files, but file deletion is also
   // modifying disk and is best to be prevented.
   for (auto& fd : snapshot_after.files) {
@@ -213,7 +214,7 @@ bool AreFilesModified(Snapshot& snapshot_before,
       }
 
       // If an empty file is added or modified, ignore for now.
-      // TODO(http://crbug.com/1234755): Consider newly added empty files.
+      // TODO(http://crbug.com/40781663): Consider newly added empty files.
       if (!fd.second.size)
         continue;
 
@@ -296,8 +297,9 @@ IN_PROC_BROWSER_TEST_F(IncognitoProfileContainmentBrowserTest,
   GetUserDirectorySnapshot(before_incognito, /*compute_file_hashes=*/true);
 
   // Run an Incognito session.
-  Browser* browser = chrome::FindLastActive();
-  EXPECT_TRUE(browser->profile()->IsOffTheRecord());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+  EXPECT_TRUE(browser->GetProfile()->IsOffTheRecord());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser,
       embedded_test_server()->GetURL("/browsing_data/site_data.html")));
@@ -308,7 +310,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoProfileContainmentBrowserTest,
 
   for (const std::string& type : kStorageTypes) {
     ASSERT_TRUE(
-        content::EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+        content::EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                         "set" + type + "()")
             .ExtractBool())
         << "Couldn't create data for: " << type;
@@ -324,11 +326,11 @@ IN_PROC_BROWSER_TEST_F(IncognitoProfileContainmentBrowserTest,
   EXPECT_FALSE(
       AreFilesModified(before_incognito, after_incognito, allow_list_));
 
-  // TODO(http://crbug.com/1234755): Change to EXPECT_FALSE.
+  // TODO(http://crbug.com/40781663): Change to EXPECT_FALSE.
   if (AreDirectoriesModified(before_incognito, after_incognito, allow_list_)) {
     LOG(ERROR) << "Empty directories added.";
   }
 }
 
-// TODO(http://crbug.com/1234755): Add more complex naviagtions, triggering
+// TODO(http://crbug.com/40781663): Add more complex naviagtions, triggering
 // different APIs in "browsing_data/site_data.html" and more.

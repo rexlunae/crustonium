@@ -4,48 +4,74 @@
 
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_encoding.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
 #include <array>
-#include <cstdint>
+#include <concepts>
 #include <deque>
+#include <iterator>
+#include <map>
+#include <memory>
 #include <optional>
+#include <ostream>
+#include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/base64.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/types/expected.h"
 #include "base/types/optional_ref.h"
-#include "base/types/zip.h"
+#include "build/buildflag.h"
+#include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/crowdsourcing/randomized_encoder.h"
 #include "components/autofill/core/browser/crowdsourcing/server_prediction_overrides.h"
-#include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_type_utils.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/filling/filling_product.h"
+#include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_rationalizer.h"
-#include "components/autofill/core/browser/form_structure_sectioning_util.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/log_event.h"
+#include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_debug_features.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/label_source_util.h"
 #include "components/autofill/core/common/logging/log_buffer.h"
+#include "components/autofill/core/common/logging/log_macros.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/signatures.h"
-#include "components/version_info/version_info.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "components/version_info/version_info_with_user_agent.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
+#include "url/origin.h"
 
 namespace autofill {
 namespace {
@@ -76,7 +102,6 @@ FieldPrediction::Source ToSafeFieldPredictionSource(
     case FieldPrediction::SOURCE_UNSPECIFIED:
     case FieldPrediction::SOURCE_AUTOFILL_DEFAULT:
     case FieldPrediction::SOURCE_PASSWORDS_DEFAULT:
-    case FieldPrediction::SOURCE_ALL_APPROVED_EXPERIMENTS:
     case FieldPrediction::SOURCE_FIELD_RANKS:
     case FieldPrediction::SOURCE_OVERRIDE:
     case FieldPrediction::SOURCE_MANUAL_OVERRIDE:
@@ -89,7 +114,7 @@ FieldPrediction::Source ToSafeFieldPredictionSource(
   return result;
 }
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID)
 // Merges manual and server type predictions.
 //
 // The logic to merge manual and server overrides (which may differ in length),
@@ -150,7 +175,7 @@ void InsertParsedOverrides(
                                       /*server_overrides=*/field_types[key]));
   }
 }
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Helper for `EncodeUploadRequest()` that creates a bit field corresponding to
 // `available_field_types` and returns the hex representation as a string.
@@ -275,6 +300,27 @@ void PopulateRandomizedFormMetadata(const RandomizedEncoder& encoder,
   }
 }
 
+// The feature `AutofillBetterLocalHeuristicPlaceholderSupport` modifies the
+// form parsing logic for Label attribute. To avoid modifying the crowdsourced
+// values, the function below provides the backwards compatibility for
+// crowdsourcing of the Label attribute.
+std::u16string GetLabelValueForCrowdsourcing(
+    const std::u16string& label,
+    FormFieldData::LabelSource label_source,
+    const std::u16string& placeholder) {
+  if (!base::FeatureList::IsEnabled(
+          features::kAutofillBetterLocalHeuristicPlaceholderSupport)) {
+    return label;
+  }
+
+  if (placeholder.empty()) {
+    return label;
+  }
+
+  return IsLabelHigherQualityThanPlaceholder(label_source) ? label
+                                                           : placeholder;
+}
+
 void PopulateRandomizedFieldMetadata(
     const RandomizedEncoder& encoder,
     const FormStructure& form,
@@ -301,8 +347,10 @@ void PopulateRandomizedFieldMetadata(
   encode_value(RandomizedEncoder::kFieldControlType,
                FormControlTypeToString(field.form_control_type()),
                metadata->mutable_type());
-  if (!field.label().empty()) {
-    encode_value(RandomizedEncoder::kFieldLabel, field.label(),
+  std::u16string effective_label = GetLabelValueForCrowdsourcing(
+      field.label(), field.label_source(), field.placeholder());
+  if (!effective_label.empty()) {
+    encode_value(RandomizedEncoder::kFieldLabel, effective_label,
                  metadata->mutable_label());
   }
   if (!field.aria_label().empty()) {
@@ -402,8 +450,10 @@ void PopulateThreeBitHashedFieldMetadata(
   }
   field_metadata->set_type(
       StrToHash3Bit(FormControlTypeToString(field.form_control_type())));
-  if (!field.label().empty()) {
-    field_metadata->set_label(StrToHash3Bit(field.label()));
+  std::u16string effective_label = GetLabelValueForCrowdsourcing(
+      field.label(), field.label_source(), field.placeholder());
+  if (!effective_label.empty()) {
+    field_metadata->set_label(StrToHash3Bit(effective_label));
   }
   if (!field.aria_label().empty()) {
     field_metadata->set_aria_label(StrToHash3Bit(field.aria_label()));
@@ -412,8 +462,9 @@ void PopulateThreeBitHashedFieldMetadata(
     field_metadata->set_aria_description(
         StrToHash3Bit(field.aria_description()));
   }
-  if (!field.placeholder().empty()) {
-    field_metadata->set_placeholder(StrToHash3Bit(field.placeholder()));
+  if (!field.placeholder_attribute().empty()) {
+    field_metadata->set_placeholder(
+        StrToHash3Bit(field.placeholder_attribute()));
   }
   if (!field.autocomplete_attribute().empty()) {
     field_metadata->set_autocomplete(
@@ -439,14 +490,6 @@ void EncodeFormFieldsForUpload(
     if (IsCheckable(field->check_status())) {
       continue;
     }
-    // Do not upload fields that were filled with a fallback type, as this would
-    // introduce unnecessary noise in the field votes.
-    if (field->WasAutofilledWithFallback() &&
-        !base::FeatureList::IsEnabled(
-            features::kAutofillUploadManualFallbackFieldsToServer)) {
-      continue;
-    }
-
     const EncodeUploadRequestOptions::Field* field_options = nullptr;
     if (auto it = fields.find(field->global_id()); it != fields.end()) {
       field_options = &it->second;
@@ -597,8 +640,8 @@ void EncodeFormForQuery(const FormData& form,
 bool HasPasswordManagerPrediction(const FieldSuggestion& field_suggestion) {
   return std::ranges::any_of(
       field_suggestion.predictions(), [](const auto& prediction) {
-        auto group_type = GroupTypeOfFieldType(
-            ToSafeFieldType(prediction.type(), NO_SERVER_DATA));
+        std::optional<FieldTypeGroup> group_type =
+            ToSafeFieldType(prediction.type()).transform(&GroupTypeOfFieldType);
         return group_type == FieldTypeGroup::kPasswordField ||
                group_type == FieldTypeGroup::kUsernameField;
       });
@@ -611,8 +654,8 @@ void MergePasswordManagerPredictions(
     FieldSuggestion& merge_to_predictions) {
   CHECK_NE(&merge_to_predictions, &merge_from_predictions);
   for (const auto& prediction : merge_from_predictions.predictions()) {
-    FieldTypeGroup group_type = GroupTypeOfFieldType(
-        ToSafeFieldType(prediction.type(), NO_SERVER_DATA));
+    std::optional<FieldTypeGroup> group_type =
+        ToSafeFieldType(prediction.type()).transform(&GroupTypeOfFieldType);
     // Only add predictions relevant for PasswordManager.
     if (group_type == FieldTypeGroup::kPasswordField ||
         group_type == FieldTypeGroup::kUsernameField) {
@@ -670,7 +713,6 @@ std::optional<FieldSuggestion> GetFieldSuggestion(
           case FieldPrediction::SOURCE_UNSPECIFIED:
           case FieldPrediction::SOURCE_AUTOFILL_DEFAULT:
           case FieldPrediction::SOURCE_PASSWORDS_DEFAULT:
-          case FieldPrediction::SOURCE_ALL_APPROVED_EXPERIMENTS:
           case FieldPrediction::SOURCE_FIELD_RANKS:
           case FieldPrediction::SOURCE_AUTOFILL_COMBINED_TYPES:
             return std::ranges::all_of(suggestion->predictions(),
@@ -752,7 +794,7 @@ GetSuggestionsMapFromResponse(
       fields_suggestions[{form_signature, field_signature}].push_back(field);
     }
   }
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(
           features::debug::kAutofillOverridePredictions)) {
     if (std::string param =
@@ -796,12 +838,10 @@ void MaybeMergeServerPredictions(
     std::vector<FieldPrediction>& server_predictions) {
   const auto server_types =
       FieldTypeSet(server_predictions, [](const FieldPrediction& pred) {
-        return ToSafeFieldType(pred.type(), UNKNOWN_TYPE);
+        return ToSafeFieldType(pred.type()).value_or(UNKNOWN_TYPE);
       });
 
-  if (server_types.contains_all({EMAIL_ADDRESS, LOYALTY_MEMBERSHIP_ID}) &&
-      base::FeatureList::IsEnabled(
-          features::kAutofillEnableEmailOrLoyaltyCardsFilling)) {
+  if (server_types.contains_all({EMAIL_ADDRESS, LOYALTY_MEMBERSHIP_ID})) {
     // Remove email and loyalty card predictions.
     std::erase_if(server_predictions, [](const FieldPrediction& x) {
       return x.type() == EMAIL_ADDRESS || x.type() == LOYALTY_MEMBERSHIP_ID;
@@ -824,12 +864,12 @@ void ClearSmallAddressFormPredictions(
     AutofillQueryResponse::FormSuggestion& form_suggestion) {
   // If predictions are overridden for debugging via the command line, skip the
   // clearing of small address form predictions.
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(
           features::debug::kAutofillOverridePredictions)) {
     return;
   }
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   // Only forms with up to 2 fields are considered small forms.
   static constexpr int kSmallFormThreshold = 3;
@@ -840,12 +880,8 @@ void ClearSmallAddressFormPredictions(
   // A small form must contain only address fields (or undetermined field types)
   // to be a small address form.
   auto is_address_or_undetermined_type = [](const FieldPrediction& prediction) {
-    FieldType type = ToSafeFieldType(prediction.type(), NO_SERVER_DATA);
-    // For historic reasons, AutofillAI types are treated as "unknown type".
-    // They don't influence the small form handling.
-    if (GroupTypeOfFieldType(type) == FieldTypeGroup::kAutofillAi) {
-      return true;
-    }
+    FieldType type =
+        ToSafeFieldType(prediction.type()).value_or(NO_SERVER_DATA);
     return type == NO_SERVER_DATA || type == UNKNOWN_TYPE ||
            IsAddressType(type);
   };
@@ -874,7 +910,6 @@ void ClearSmallAddressFormPredictions(
         break;  // Continue below to check if this is an address prediction.
       case FieldPrediction::SOURCE_UNSPECIFIED:
       case FieldPrediction::SOURCE_PASSWORDS_DEFAULT:
-      case FieldPrediction::SOURCE_ALL_APPROVED_EXPERIMENTS:
       case FieldPrediction::SOURCE_OVERRIDE:
       case FieldPrediction::SOURCE_MANUAL_OVERRIDE:
       case FieldPrediction::SOURCE_AUTOFILL_COMBINED_TYPES:
@@ -883,8 +918,8 @@ void ClearSmallAddressFormPredictions(
         return false;
     }
     // Only address types should be wiped.
-    FieldType type = ToSafeFieldType(prediction.type(), NO_SERVER_DATA);
-    return IsAddressType(type);
+    std::optional<FieldType> type = ToSafeFieldType(prediction.type());
+    return type && IsAddressType(*type);
   };
 
   for (AutofillQueryResponse::FormSuggestion::FieldSuggestion& field :
@@ -1032,9 +1067,14 @@ std::vector<AutofillUploadContents> EncodeUploadRequest(
                               (*subform_begin)->renderer_form_id();
                      });
     // SAFETY: The iterators are from the same container.
-    EncodeFormFieldsForUpload(form, options.encoder, options.fields,
-                              UNSAFE_BUFFERS({subform_begin, subform_end}),
-                              &uploads.back());
+    EncodeFormFieldsForUpload(
+        form, options.encoder, options.fields,
+        base::span(upload_fields)
+            .subspan(
+                static_cast<size_t>(
+                    std::distance(upload_fields.begin(), subform_begin)),
+                static_cast<size_t>(std::distance(subform_begin, subform_end))),
+        &uploads.back());
     subform_begin = subform_end;
   }
   return uploads;
@@ -1076,7 +1116,8 @@ ServerPredictions::ServerPredictions(
     std::map<std::pair<FormSignature, FieldSignature>,
              std::deque<FieldSuggestion>>& field_signature_map,
     const FormData& form)
-    : may_run_autofill_ai_model_(may_run_autofill_ai_model) {
+    : version_(form.version()),
+      may_run_autofill_ai_model_(may_run_autofill_ai_model) {
   predictions_ =
       base::MakeFlatMap<FieldGlobalId, std::optional<FieldSuggestion>>(
           form.fields(), {}, [&](const FormFieldData& field) {
@@ -1098,6 +1139,10 @@ ServerPredictions& ServerPredictions::operator=(ServerPredictions&&) = default;
 ServerPredictions::~ServerPredictions() = default;
 
 void ServerPredictions::ApplyTo(FormStructure& form) const {
+  if (version_ < form.last_successfully_queried_version()) {
+    return;
+  }
+  form.set_last_successfully_queried_version(version_);
   form.set_may_run_autofill_ai_model(may_run_autofill_ai_model_);
 
   // Fields can share the same field signature. This map records for each
@@ -1119,7 +1164,12 @@ void ServerPredictions::ApplyTo(FormStructure& form) const {
         field_suggestion.predictions().end());
     MaybeMergeServerPredictions(server_predictions);
     field->set_server_predictions(std::move(server_predictions));
-    if (field_suggestion.has_password_requirements()) {
+    if (field_suggestion.has_password_requirements() &&
+        (field->origin().IsSameOriginWith(
+             url::Origin::Create(form.source_url())) ||
+         net::registry_controlled_domains::SameDomainOrHost(
+             field->origin(), url::Origin::Create(form.source_url()),
+             net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES))) {
       field->SetPasswordRequirements(field_suggestion.password_requirements());
     }
     if (field_suggestion.has_format_string()) {
@@ -1149,8 +1199,7 @@ void ServerPredictions::ApplyTo(FormStructure& form) const {
                                   : FieldPrediction::SOURCE_UNSPECIFIED,
         .server_type2 =
             field->server_predictions().size() >= 2
-                ? std::optional<FieldType>(ToSafeFieldType(
-                      field->server_predictions()[1].type(), NO_SERVER_DATA))
+                ? ToSafeFieldType(field->server_predictions()[1].type())
                 : std::nullopt,
         .prediction_source2 = field->server_predictions().size() >= 2
                                   ? field->server_predictions()[1].source()

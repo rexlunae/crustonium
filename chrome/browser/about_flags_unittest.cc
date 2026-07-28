@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -153,6 +154,12 @@ TEST(AboutFlagsTest, EveryFlagHasNonEmptyOwners) {
 // Ensures that owners conform to rules in flag-metadata.json.
 TEST(AboutFlagsTest, OwnersLookValid) {
   flags_ui::testing::EnsureOwnersLookValid();
+}
+
+// Ensures that every flag in `flag-never-expire-list.json` has a matching entry
+// in `flag-metadata.json`.
+TEST(AboutFlagsTest, NeverExpireFlagsExist) {
+  flags_ui::testing::EnsureNeverExpireFlagsExist();
 }
 
 // For some bizarre reason, far too many people see a file filled with

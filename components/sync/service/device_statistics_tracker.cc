@@ -11,8 +11,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/task/sequenced_task_runner.h"
-#include "components/prefs/pref_registry_simple.h"
-#include "components/prefs/pref_service.h"
+#include "build/build_config.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/time.h"
@@ -28,9 +27,6 @@
 namespace syncer {
 
 namespace {
-
-constexpr char kLastAttemptedToRecordPref[] =
-    "sync.device_statistics_timestamp";
 
 // A device is considered active if it has been used within this amount of time.
 constexpr base::TimeDelta kDeviceActivityTimeRange = base::Days(28);
@@ -82,6 +78,80 @@ std::optional<DeviceStatisticsTracker::Platform> PlatformFromProto(
   NOTREACHED();
 }
 
+std::optional<DeviceStatisticsTracker::PlatformAndFormFactor>
+PlatformAndFormFactorFromProto(
+    sync_pb::SyncEnums::OsType os_type,
+    sync_pb::SyncEnums::DeviceFormFactor form_factor) {
+  using Platform = DeviceStatisticsTracker::Platform;
+  using PlatformAndFormFactor = DeviceStatisticsTracker::PlatformAndFormFactor;
+
+  std::optional<Platform> platform = PlatformFromProto(os_type);
+  if (!platform) {
+    return std::nullopt;
+  }
+
+  switch (*platform) {
+    case Platform::kWindows:
+      return form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_DESKTOP
+                 ? PlatformAndFormFactor::kWindowsDesktop
+                 : PlatformAndFormFactor::kWindowsOther;
+    case Platform::kMac:
+      return form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_DESKTOP
+                 ? PlatformAndFormFactor::kMacDesktop
+                 : PlatformAndFormFactor::kMacOther;
+    case Platform::kLinux:
+      return form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_DESKTOP
+                 ? PlatformAndFormFactor::kLinuxDesktop
+                 : PlatformAndFormFactor::kLinuxOther;
+    case Platform::kChromeOS:
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_DESKTOP) {
+        return PlatformAndFormFactor::kChromeOSDesktop;
+      }
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_TABLET) {
+        return PlatformAndFormFactor::kChromeOSTablet;
+      }
+      return PlatformAndFormFactor::kChromeOSOther;
+    case Platform::kAndroid:
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_PHONE) {
+        return PlatformAndFormFactor::kAndroidPhone;
+      }
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_TABLET) {
+        return PlatformAndFormFactor::kAndroidTablet;
+      }
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_DESKTOP) {
+        return PlatformAndFormFactor::kAndroidDesktop;
+      }
+      return PlatformAndFormFactor::kAndroidOther;
+    case Platform::kIOS:
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_PHONE) {
+        return PlatformAndFormFactor::kIOSPhone;
+      }
+      if (form_factor == sync_pb::SyncEnums::DEVICE_FORM_FACTOR_TABLET) {
+        return PlatformAndFormFactor::kIOSTablet;
+      }
+      return PlatformAndFormFactor::kIOSOther;
+  }
+  NOTREACHED();
+}
+
+std::optional<DeviceStatisticsTracker::Platform> GetLocalPlatform() {
+#if BUILDFLAG(IS_WIN)
+  return DeviceStatisticsTracker::Platform::kWindows;
+#elif BUILDFLAG(IS_MAC)
+  return DeviceStatisticsTracker::Platform::kMac;
+#elif BUILDFLAG(IS_LINUX)
+  return DeviceStatisticsTracker::Platform::kLinux;
+#elif BUILDFLAG(IS_CHROMEOS)
+  return DeviceStatisticsTracker::Platform::kChromeOS;
+#elif BUILDFLAG(IS_ANDROID)
+  return DeviceStatisticsTracker::Platform::kAndroid;
+#elif BUILDFLAG(IS_IOS)
+  return DeviceStatisticsTracker::Platform::kIOS;
+#else
+  return std::nullopt;
+#endif
+}
+
 bool IsOptedInToHistory(const sync_pb::DeviceInfoSpecifics device_info) {
   // Check whether the device interested in history invalidations. Note that
   // it's better to check for `DataType::HISTORY_DELETE_DIRECTIVES` rather than
@@ -99,20 +169,47 @@ bool IsOptedInToHistory(const sync_pb::DeviceInfoSpecifics device_info) {
 
 }  // namespace
 
+// static
+DeviceStatisticsTracker::Platform DeviceStatisticsTracker::GetPlatform(
+    PlatformAndFormFactor platform_and_form_factor) {
+  switch (platform_and_form_factor) {
+    case PlatformAndFormFactor::kWindowsDesktop:
+    case PlatformAndFormFactor::kWindowsOther:
+      return Platform::kWindows;
+    case PlatformAndFormFactor::kMacDesktop:
+    case PlatformAndFormFactor::kMacOther:
+      return Platform::kMac;
+    case PlatformAndFormFactor::kLinuxDesktop:
+    case PlatformAndFormFactor::kLinuxOther:
+      return Platform::kLinux;
+    case PlatformAndFormFactor::kChromeOSDesktop:
+    case PlatformAndFormFactor::kChromeOSTablet:
+    case PlatformAndFormFactor::kChromeOSOther:
+      return Platform::kChromeOS;
+    case PlatformAndFormFactor::kAndroidPhone:
+    case PlatformAndFormFactor::kAndroidTablet:
+    case PlatformAndFormFactor::kAndroidDesktop:
+    case PlatformAndFormFactor::kAndroidOther:
+      return Platform::kAndroid;
+    case PlatformAndFormFactor::kIOSPhone:
+    case PlatformAndFormFactor::kIOSTablet:
+    case PlatformAndFormFactor::kIOSOther:
+      return Platform::kIOS;
+  }
+  NOTREACHED();
+}
+
 DeviceStatisticsTracker::DeviceStatisticsTracker(
-    PrefService* pref_service,
     signin::IdentityManager* identity_manager,
     const GURL& sync_server_url,
     RequestFactory request_factory,
     std::vector<std::string> current_device_cache_guids)
-    : pref_service_(pref_service),
-      identity_manager_(identity_manager),
+    : identity_manager_(identity_manager),
       sync_server_url_(sync_server_url),
       request_factory_(std::move(request_factory)),
       current_device_cache_guids_(std::move(current_device_cache_guids)),
       primary_account_(identity_manager_->GetPrimaryAccountInfo(
           signin::ConsentLevel::kSignin)) {
-  CHECK(pref_service_);
   CHECK(identity_manager_);
   CHECK(request_factory_);
 }
@@ -131,34 +228,35 @@ void DeviceStatisticsTracker::Start(base::OnceClosure callback) {
       !std::ranges::contains(accounts, primary_account_)) {
     // The primary account must have been removed between the constructor and
     // now, or something's wrong with the IdentityManager.
+    // Note: This is plumbed through a class method to ensure that the callback
+    // isn't run anymore if `this` gets destroyed first.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(callback_));
+        FROM_HERE,
+        base::BindOnce(&DeviceStatisticsTracker::RunCallback,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback_)));
     return;
   }
 
-  // Only send requests / record metrics once per day.
-  const base::Time last_recorded_at =
-      pref_service_->GetTime(kLastAttemptedToRecordPref);
-  const base::Time now = base::Time::Now();
-  const bool can_issue_requests =
-      last_recorded_at.is_null() ||
-      last_recorded_at.LocalMidnight() < now.LocalMidnight();
-  if (!can_issue_requests) {
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(callback_));
-    return;
-  }
-
-  pref_service_->SetTime(kLastAttemptedToRecordPref, now);
-
-  // If there are no accounts, there's not much to do.
-  if (accounts.empty()) {
-    RecordOverallOutcome();
+  if (primary_account_.IsEmpty()) {
+    // Record the PrimaryAccountMulti[Device|Platform]Readiness metrics for the
+    // signed-out case.
     RecordPrimaryAccountMultiDeviceReadiness(
         /*other_devices=*/0, /*other_devices_with_history_opt_in=*/0);
+    RecordPrimaryAccountMultiPlatformReadiness(
+        /*other_platforms=*/0, /*other_platforms_with_history_opt_in=*/0);
+  }
 
+  // If there are no accounts at all, there's not much to do.
+  if (accounts.empty()) {
+    RecordOverallDevicesOutcome();
+    RecordOverallPlatformsOutcome();
+
+    // Note: This is plumbed through a class method to ensure that the callback
+    // isn't run anymore if `this` gets destroyed first.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(callback_));
+        FROM_HERE,
+        base::BindOnce(&DeviceStatisticsTracker::RunCallback,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback_)));
     return;
   }
 
@@ -187,12 +285,6 @@ void DeviceStatisticsTracker::Start(base::OnceClosure callback) {
 
 DeviceStatisticsTracker::~DeviceStatisticsTracker() = default;
 
-// static
-void DeviceStatisticsTracker::RegisterProfilePrefs(
-    PrefRegistrySimple* registry) {
-  registry->RegisterTimePref(kLastAttemptedToRecordPref, base::Time());
-}
-
 void DeviceStatisticsTracker::RequestDoneForGaiaId(const GaiaId& gaia) {
   CHECK(requests_.contains(gaia));
   std::unique_ptr<DeviceStatisticsRequest> request = std::move(requests_[gaia]);
@@ -204,20 +296,24 @@ void DeviceStatisticsTracker::RequestDoneForGaiaId(const GaiaId& gaia) {
         DeduplicateEntities(request->GetResults(), current_device_cache_guids_);
 
     // If this request was for the primary account, figure out whether the user
-    // has opted in to history on the current device.
+    // has opted in to history on the current device, and on any device matching
+    // the current platform.
     if (gaia == primary_account_.gaia) {
       for (const sync_pb::SyncEntity& entity : request->GetResults()) {
         const sync_pb::DeviceInfoSpecifics& device_info =
             entity.specifics().device_info();
-        // Note: `current_device_cache_guids_` contains all known cache GUIDs
-        // for the current device, including some that may belong to other
-        // accounts. But since `device_info` belongs to the primary account, and
-        // cache GUIDs should be unique (and in particular, never shared across
-        // different accounts), that's okay.
-        if (current_device_cache_guids_.contains(device_info.cache_guid()) &&
-            IsOptedInToHistory(device_info)) {
-          primary_account_history_opt_in_ = true;
-          break;
+        if (IsOptedInToHistory(device_info)) {
+          // Note: `current_device_cache_guids_` contains all known cache GUIDs
+          // for the current device, including some that may belong to other
+          // accounts. But since `device_info` belongs to the primary account,
+          // and cache GUIDs should be unique (and in particular, never shared
+          // across different accounts), that's okay.
+          if (current_device_cache_guids_.contains(device_info.cache_guid())) {
+            primary_account_history_opt_in_ = true;
+          }
+          if (PlatformFromProto(device_info.os_type()) == GetLocalPlatform()) {
+            local_platform_history_opt_in_ = true;
+          }
         }
       }
     }
@@ -239,7 +335,8 @@ void DeviceStatisticsTracker::AllRequestsDone() {
       "Sync.DeviceStatistics.RequestsCompletedSuccess", success);
 
   if (ShouldRecordOutcomeMetrics(success)) {
-    RecordOverallOutcome();
+    RecordOverallDevicesOutcome();
+    RecordOverallPlatformsOutcome();
 
     for (const auto& [gaia, other_devices] : other_devices_by_gaia_) {
       if (!other_devices.has_value()) {
@@ -253,7 +350,7 @@ void DeviceStatisticsTracker::AllRequestsDone() {
 
       base::UmaHistogramCounts100(
           absl::StrFormat(
-              "Sync.DeviceStatistics.Outcome.%s.NumberOfAdditionalClients",
+              "Sync.DeviceStatistics.Outcome.%s.NumberOfAdditionalClients2",
               infix),
           other_devices->size());
 
@@ -262,26 +359,63 @@ void DeviceStatisticsTracker::AllRequestsDone() {
           [](const DeviceData& device) { return device.history_opt_in; });
       base::UmaHistogramCounts100(
           absl::StrFormat("Sync.DeviceStatistics.Outcome.%s."
-                          "NumberOfAdditionalClientsWithHistoryOptIn",
+                          "NumberOfAdditionalClientsWithHistoryOptIn2",
                           infix),
           other_devices_with_history_opt_in);
+
+      base::flat_map<Platform, bool> history_opt_in_by_platform;
+      for (const DeviceData& device : *other_devices) {
+        Platform platform = GetPlatform(device.platform_and_form_factor);
+        if (platform != GetLocalPlatform()) {
+          history_opt_in_by_platform[platform] |= device.history_opt_in;
+        }
+      }
+      size_t other_platforms = history_opt_in_by_platform.size();
+      size_t other_platforms_with_history_opt_in =
+          std::ranges::count_if(history_opt_in_by_platform,
+                                [](const auto& pair) { return pair.second; });
+
+      base::UmaHistogramCounts100(
+          absl::StrFormat(
+              "Sync.DeviceStatistics.Outcome.%s.NumberOfAdditionalPlatforms2",
+              infix),
+          other_platforms);
+      base::UmaHistogramCounts100(
+          absl::StrFormat("Sync.DeviceStatistics.Outcome.%s."
+                          "NumberOfAdditionalPlatformsWithHistoryOptIn2",
+                          infix),
+          other_platforms_with_history_opt_in);
 
       if (is_primary) {
         RecordPrimaryAccountMultiDeviceReadiness(
             other_devices->size(), other_devices_with_history_opt_in);
 
         base::UmaHistogramEnumeration(
-            "Sync.DeviceStatistics.Outcome.PrimaryAccount.HistoryOptIn",
-            GetHistoryOptInSummary(other_devices->size(),
-                                   other_devices_with_history_opt_in));
+            "Sync.DeviceStatistics.Outcome.PrimaryAccount.HistoryOptIn2",
+            GetHistoryOptInDevicesSummary(other_devices->size(),
+                                          other_devices_with_history_opt_in));
+
+        RecordPrimaryAccountMultiPlatformReadiness(
+            other_platforms, other_platforms_with_history_opt_in);
+
+        base::UmaHistogramEnumeration(
+            "Sync.DeviceStatistics.Outcome.PrimaryAccount."
+            "HistoryOptInMultiPlatform2",
+            GetHistoryOptInPlatformsSummary(
+                other_platforms, other_platforms_with_history_opt_in));
       }
 
       for (DeviceData device : *other_devices) {
         base::UmaHistogramEnumeration(
             absl::StrFormat(
-                "Sync.DeviceStatistics.Outcome.%s.PlatformOfAdditionalClient",
+                "Sync.DeviceStatistics.Outcome.%s.PlatformOfAdditionalClient2",
                 infix),
-            device.platform);
+            GetPlatform(device.platform_and_form_factor));
+        base::UmaHistogramEnumeration(
+            absl::StrFormat("Sync.DeviceStatistics.Outcome.%s."
+                            "PlatformAndFormFactorOfAdditionalClient2",
+                            infix),
+            device.platform_and_form_factor);
       }
     }
   }
@@ -290,18 +424,33 @@ void DeviceStatisticsTracker::AllRequestsDone() {
   // NOTE: `this` may be destroyed now; don't do anything else!
 }
 
-void DeviceStatisticsTracker::RecordOverallOutcome() const {
-  base::UmaHistogramEnumeration("Sync.DeviceStatistics.Outcome.Overall",
-                                GetOverallOutcome());
+void DeviceStatisticsTracker::RecordOverallDevicesOutcome() const {
+  base::UmaHistogramEnumeration("Sync.DeviceStatistics.Outcome.Overall2",
+                                GetOverallDevicesOutcome());
+}
+
+void DeviceStatisticsTracker::RecordOverallPlatformsOutcome() const {
+  base::UmaHistogramEnumeration(
+      "Sync.DeviceStatistics.Outcome.OverallMultiPlatform2",
+      GetOverallPlatformsOutcome());
 }
 
 void DeviceStatisticsTracker::RecordPrimaryAccountMultiDeviceReadiness(
     size_t other_devices,
     size_t other_devices_with_history_opt_in) const {
   base::UmaHistogramEnumeration(
-      "Sync.DeviceStatistics.Outcome.PrimaryAccount.MultiDeviceReadiness",
+      "Sync.DeviceStatistics.Outcome.PrimaryAccount.MultiDeviceReadiness2",
       GetPrimaryAccountMultiDeviceReadiness(other_devices,
                                             other_devices_with_history_opt_in));
+}
+
+void DeviceStatisticsTracker::RecordPrimaryAccountMultiPlatformReadiness(
+    size_t other_platforms,
+    size_t other_platforms_with_history_opt_in) const {
+  base::UmaHistogramEnumeration(
+      "Sync.DeviceStatistics.Outcome.PrimaryAccount.MultiPlatformReadiness2",
+      GetPrimaryAccountMultiPlatformReadiness(
+          other_platforms, other_platforms_with_history_opt_in));
 }
 
 DeviceStatisticsTracker::RequestsCompletedSuccess
@@ -343,7 +492,7 @@ DeviceStatisticsTracker::GetOverallSuccess() const {
 }
 
 DeviceStatisticsTracker::AccountsHaveOtherDevicesSummary
-DeviceStatisticsTracker::GetOverallOutcome() const {
+DeviceStatisticsTracker::GetOverallDevicesOutcome() const {
   if (other_devices_by_gaia_.empty()) {
     return AccountsHaveOtherDevicesSummary::kNoAccounts;
   }
@@ -387,6 +536,64 @@ DeviceStatisticsTracker::GetOverallOutcome() const {
   }
 }
 
+DeviceStatisticsTracker::AccountsHaveOtherPlatformsSummary
+DeviceStatisticsTracker::GetOverallPlatformsOutcome() const {
+  if (other_devices_by_gaia_.empty()) {
+    return AccountsHaveOtherPlatformsSummary::kNoAccounts;
+  }
+
+  bool primary_account_has_other_platforms = false;
+  bool non_primary_account_has_other_platforms = false;
+  std::optional<Platform> local_platform = GetLocalPlatform();
+
+  for (const auto& [gaia, other_devices] : other_devices_by_gaia_) {
+    if (other_devices.has_value() && !other_devices->empty()) {
+      bool has_other_platform = false;
+      for (const DeviceData& device : *other_devices) {
+        if (!local_platform ||
+            GetPlatform(device.platform_and_form_factor) != *local_platform) {
+          has_other_platform = true;
+          break;
+        }
+      }
+
+      if (has_other_platform) {
+        if (gaia == primary_account_.gaia) {
+          primary_account_has_other_platforms = true;
+        } else {
+          non_primary_account_has_other_platforms = true;
+        }
+      }
+    }
+  }
+
+  if (!primary_account_.IsEmpty()) {
+    CHECK(other_devices_by_gaia_.contains(primary_account_.gaia));
+    bool has_non_primary_account = other_devices_by_gaia_.size() > 1;
+    if (has_non_primary_account) {
+      if (non_primary_account_has_other_platforms) {
+        return primary_account_has_other_platforms
+                   ? AccountsHaveOtherPlatformsSummary::kPrimaryYesNonPrimaryYes
+                   : AccountsHaveOtherPlatformsSummary::kPrimaryNoNonPrimaryYes;
+      } else {
+        return primary_account_has_other_platforms
+                   ? AccountsHaveOtherPlatformsSummary::kPrimaryYesNonPrimaryNo
+                   : AccountsHaveOtherPlatformsSummary::kPrimaryNoNonPrimaryNo;
+      }
+    } else {
+      return primary_account_has_other_platforms
+                 ? AccountsHaveOtherPlatformsSummary::kPrimaryYesNonPrimaryNA
+                 : AccountsHaveOtherPlatformsSummary::kPrimaryNoNonPrimaryNA;
+    }
+  } else {
+    if (non_primary_account_has_other_platforms) {
+      return AccountsHaveOtherPlatformsSummary::kPrimaryNANonPrimaryYes;
+    } else {
+      return AccountsHaveOtherPlatformsSummary::kPrimaryNANonPrimaryNo;
+    }
+  }
+}
+
 DeviceStatisticsTracker::MultiDeviceReadiness
 DeviceStatisticsTracker::GetPrimaryAccountMultiDeviceReadiness(
     size_t other_devices,
@@ -404,28 +611,69 @@ DeviceStatisticsTracker::GetPrimaryAccountMultiDeviceReadiness(
   return MultiDeviceReadiness::kMultiDeviceWithHistory;
 }
 
-DeviceStatisticsTracker::HistoryOptInSummary
-DeviceStatisticsTracker::GetHistoryOptInSummary(
+DeviceStatisticsTracker::MultiPlatformReadiness
+DeviceStatisticsTracker::GetPrimaryAccountMultiPlatformReadiness(
+    size_t other_platforms,
+    size_t other_platforms_with_history_opt_in) const {
+  if (primary_account_.IsEmpty()) {
+    return MultiPlatformReadiness::kSignedOut;
+  }
+  if (other_platforms == 0) {
+    return MultiPlatformReadiness::kSinglePlatform;
+  }
+  if (!primary_account_history_opt_in_ ||
+      other_platforms_with_history_opt_in == 0) {
+    return MultiPlatformReadiness::kMultiPlatformWithoutHistory;
+  }
+  return MultiPlatformReadiness::kMultiPlatformWithHistory;
+}
+
+DeviceStatisticsTracker::HistoryOptInDevicesSummary
+DeviceStatisticsTracker::GetHistoryOptInDevicesSummary(
     size_t other_devices,
     size_t other_devices_with_history_opt_in) const {
   if (other_devices == 0) {
     if (primary_account_history_opt_in_) {
-      return HistoryOptInSummary::kThisDeviceYesOtherDevicesNA;
+      return HistoryOptInDevicesSummary::kThisDeviceYesOtherDevicesNA;
     }
-    return HistoryOptInSummary::kThisDeviceNoOtherDevicesNA;
+    return HistoryOptInDevicesSummary::kThisDeviceNoOtherDevicesNA;
   }
 
   if (other_devices_with_history_opt_in > 0) {
     if (primary_account_history_opt_in_) {
-      return HistoryOptInSummary::kThisDeviceYesOtherDevicesYes;
+      return HistoryOptInDevicesSummary::kThisDeviceYesOtherDevicesYes;
     }
-    return HistoryOptInSummary::kThisDeviceNoOtherDevicesYes;
+    return HistoryOptInDevicesSummary::kThisDeviceNoOtherDevicesYes;
   }
 
   if (primary_account_history_opt_in_) {
-    return HistoryOptInSummary::kThisDeviceYesOtherDevicesNo;
+    return HistoryOptInDevicesSummary::kThisDeviceYesOtherDevicesNo;
   }
-  return HistoryOptInSummary::kThisDeviceNoOtherDevicesNo;
+  return HistoryOptInDevicesSummary::kThisDeviceNoOtherDevicesNo;
+}
+
+DeviceStatisticsTracker::HistoryOptInPlatformsSummary
+DeviceStatisticsTracker::GetHistoryOptInPlatformsSummary(
+    size_t other_platforms,
+    size_t other_platforms_with_history_opt_in) const {
+  if (other_platforms == 0) {
+    if (local_platform_history_opt_in_) {
+      return HistoryOptInPlatformsSummary::kThisPlatformYesOtherPlatformsNA;
+    }
+    return HistoryOptInPlatformsSummary::kThisPlatformNoOtherPlatformsNA;
+  }
+
+  if (other_platforms_with_history_opt_in > 0) {
+    if (local_platform_history_opt_in_) {
+      return HistoryOptInPlatformsSummary::kThisPlatformYesOtherPlatformsYes;
+    }
+    return HistoryOptInPlatformsSummary::kThisPlatformNoOtherPlatformsYes;
+  }
+
+  if (local_platform_history_opt_in_) {
+    return HistoryOptInPlatformsSummary::kThisPlatformYesOtherPlatformsNo;
+  }
+  return HistoryOptInPlatformsSummary::kThisPlatformNoOtherPlatformsNo;
 }
 
 // static
@@ -444,8 +692,9 @@ DeviceStatisticsTracker::DeduplicateEntities(
   for (const sync_pb::SyncEntity& entity : entities) {
     const sync_pb::DeviceInfoSpecifics& device =
         entity.specifics().device_info();
-    // Only consider Chrome devices (not Google Play Services).
-    if (!device.has_chrome_version_info()) {
+    // Only consider Chrome devices (not Google Play Services or iGSA).
+    if (!device.has_chrome_version_info() ||
+        device.sync_user_agent().starts_with("iGSA")) {
       continue;
     }
 
@@ -490,23 +739,34 @@ DeviceStatisticsTracker::DeduplicateEntities(
         continue;
       }
 
-      // Figure out the platform/OS of the device, and skip unknown or
-      // uninteresting ones.
-      std::optional<DeviceStatisticsTracker::Platform> platform =
-          PlatformFromProto(entity.specifics().device_info().os_type());
-      if (!platform) {
+      // Figure out the platform/OS and form factor of the device, and skip
+      // unknown or uninteresting ones.
+      std::optional<DeviceStatisticsTracker::PlatformAndFormFactor>
+          platform_and_form_factor = PlatformAndFormFactorFromProto(
+              entity.specifics().device_info().os_type(),
+              entity.specifics().device_info().device_form_factor());
+      if (!platform_and_form_factor) {
         continue;
       }
+
+      std::optional<DeviceStatisticsTracker::Platform> platform =
+          PlatformFromProto(entity.specifics().device_info().os_type());
+      CHECK(platform);
+      CHECK_EQ(GetPlatform(*platform_and_form_factor), *platform);
 
       // Figure out whether the device has opted in to history.
       bool history_opt_in =
           IsOptedInToHistory(entity.specifics().device_info());
 
-      deduped_devices.emplace_back(*platform, history_opt_in);
+      deduped_devices.emplace_back(*platform_and_form_factor, history_opt_in);
     }
   }
 
   return deduped_devices;
+}
+
+void DeviceStatisticsTracker::RunCallback(base::OnceClosure callback) {
+  std::move(callback).Run();
 }
 
 }  // namespace syncer

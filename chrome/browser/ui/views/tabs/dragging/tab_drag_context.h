@@ -16,6 +16,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/view.h"
 
+class BrowserView;
 class Tab;
 class TabSlotView;
 class TabStrip;
@@ -29,6 +30,10 @@ class TabGroupId;
 
 namespace content {
 class WebContents;
+}
+
+namespace ui {
+class CustomElementEventType;
 }
 
 // A limited subset of TabDragPositioningDelegate for use by
@@ -130,7 +135,7 @@ class TabDragContext : public views::View {
   virtual content::WebContents* GetContentsForTab(TabSlotView* view) = 0;
   virtual bool IsTabDetachable(const TabSlotView* view) const = 0;
   virtual TabSlotView* GetTabGroupHeader(
-      const tab_groups::TabGroupId& group) const = 0;
+      const tab_groups::TabGroupId& group) = 0;
   virtual TabStripModel* GetTabStripModel() = 0;
 
   // Returns the tab drag controller owned by this delegate, or null if none.
@@ -164,6 +169,9 @@ class TabDragContext : public views::View {
   virtual void StoppedDragging() = 0;
 
   virtual TabDragPositioningDelegate* GetPositioningDelegate() = 0;
+
+  virtual bool NotifyCustomEvent(ui::CustomElementEventType event_type,
+                                 TabSlotView* tab_slot_view) = 0;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_DRAGGING_TAB_DRAG_CONTEXT_H_

@@ -10,18 +10,20 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/actor/actor_keyed_service_factory.h"
 #include "chrome/browser/actor/actor_keyed_service_fake.h"
-#include "chrome/browser/actor/actor_policy_checker.h"
 #include "chrome/browser/actor/resources/grit/actor_browser_resources.h"
 #include "chrome/browser/actor/ui/actor_ui_metrics.h"
 #include "chrome/browser/actor/ui/task_list_bubble/actor_task_list_bubble_controller.h"
+#include "chrome/browser/actor/ui/task_list_bubble/actor_task_list_bubble_row_button.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/tabs/public/mock_tab_interface.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/button/button.h"
@@ -30,20 +32,18 @@
 #include "ui/views/widget/unique_widget_ptr.h"
 
 using ::tabs::MockTabInterface;
-class ActorTaskListBubbleTest : public ChromeViewsTestBase,
-                                public testing::WithParamInterface<bool> {
+class ActorTaskListBubbleTest : public ChromeViewsTestBase {
  public:
   ActorTaskListBubbleTest() = default;
 
   void SetUp() override {
     ChromeViewsTestBase::SetUp();
-    if (GetParam()) {
-      feature_list_.InitAndEnableFeature(
-          features::kGlicActorUiGlobalTaskIndicator);
-    } else {
-      feature_list_.InitAndDisableFeature(
-          features::kGlicActorUiGlobalTaskIndicator);
-    }
+
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kGlicActor,
+         {{features::kGlicActorPolicyControlExemption.name, "true"}}}};
+    feature_list_.InitWithFeaturesAndParameters(std::move(enabled_features),
+                                                {});
 
     TestingProfile::Builder builder;
     builder.AddTestingFactory(
@@ -82,6 +82,7 @@ class ActorTaskListBubbleTest : public ChromeViewsTestBase,
     base::RunLoop loop;
     actor_service_->GetTask(id)->AddTab(
         mock_tab().GetHandle(),
+        /*stop_task_on_detach=*/true,
         base::BindLambdaForTesting([&](actor::mojom::ActionResultPtr result) {
           EXPECT_TRUE(actor::IsOk(*result));
           loop.Quit();
@@ -115,13 +116,13 @@ class ActorTaskListBubbleTest : public ChromeViewsTestBase,
   MockTabInterface& mock_tab() { return mock_tab_; }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<TestingProfile> profile_;
   MockTabInterface mock_tab_;
   views::UniqueWidgetPtr anchor_widget_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_P(ActorTaskListBubbleTest, CreateAndShowBubbleWithTasks) {
+TEST_F(ActorTaskListBubbleTest, CreateAndShowBubbleWithTasks) {
   absl::flat_hash_map<actor::TaskId, bool> task_list;
   task_list[CreatePausedTask()] = true;
   task_list[CreatePausedTask()] = false;
@@ -134,17 +135,17 @@ TEST_P(ActorTaskListBubbleTest, CreateAndShowBubbleWithTasks) {
       GetContentViewInActorTaskListBubble(std::move(actor_task_list_bubble));
 
   EXPECT_EQ(2u, content_view->children().size());
-  EXPECT_EQ(u"Test Task",
-            static_cast<RichHoverButton*>(content_view->children().front())
-                ->GetTitleText());
-  EXPECT_EQ(u"Test Task",
-            static_cast<RichHoverButton*>(content_view->children().back())
-                ->GetTitleText());
+  EXPECT_EQ(u"Test Task", static_cast<ActorTaskListBubbleRowButton*>(
+                              content_view->children().front())
+                              ->GetTitleText());
+  EXPECT_EQ(u"Test Task", static_cast<ActorTaskListBubbleRowButton*>(
+                              content_view->children().back())
+                              ->GetTitleText());
 }
 
 // TODO(crbug.com/469817191): Handle non-existent task_ids alongside completed
 // task ids.
-TEST_P(ActorTaskListBubbleTest, CreateShowBubbleWithInvalidTask) {
+TEST_F(ActorTaskListBubbleTest, CreateShowBubbleWithInvalidTask) {
   base::HistogramTester histogram_tester;
   absl::flat_hash_map<actor::TaskId, bool> task_list;
   task_list[actor::TaskId(1)] = true;
@@ -157,7 +158,7 @@ TEST_P(ActorTaskListBubbleTest, CreateShowBubbleWithInvalidTask) {
       actor::ui::ActorUiTaskIconError::kBubbleTaskDoesntExist, 1);
 }
 
-TEST_P(ActorTaskListBubbleTest, CreateAndShowBubbleWithClosedTabTask) {
+TEST_F(ActorTaskListBubbleTest, CreateAndShowBubbleWithClosedTabTask) {
   actor::TaskId id = actor_service_->CreateTaskForTesting();
   actor_service_->GetTask(id)->Pause(/*from_actor=*/true);
   absl::flat_hash_map<actor::TaskId, bool> task_list;
@@ -173,19 +174,84 @@ TEST_P(ActorTaskListBubbleTest, CreateAndShowBubbleWithClosedTabTask) {
 
   // Check for correct subtitle
   EXPECT_EQ(1u, content_view->children().size());
-  EXPECT_EQ(u"Tab closed",
-            static_cast<RichHoverButton*>(content_view->children().front())
-                ->GetSubtitleText());
+  EXPECT_EQ(u"Tab closed", static_cast<ActorTaskListBubbleRowButton*>(
+                               content_view->children().front())
+                               ->GetSubtitleText());
   // Check for disabled state correctly set (requires_processing is set to
   // false)
-  EXPECT_FALSE(static_cast<RichHoverButton*>(content_view->children().front())
+  EXPECT_FALSE(static_cast<ActorTaskListBubbleRowButton*>(
+                   content_view->children().front())
                    ->GetEnabled());
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         ActorTaskListBubbleTest,
-                         testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "GlobalIndicatorEnabled"
-                                             : "GlobalIndicatorDisabled";
-                         });
+TEST_F(ActorTaskListBubbleTest, CreateAndShowBubbleWithTasksInOrder) {
+  actor::TaskId id_1 = CreatePausedTask();
+  actor::TaskId id_2 = CreatePausedTask();
+  actor::TaskId id_3 = CreatePausedTask();
+  actor::TaskId id_4 = actor_service_->CreateTaskForTesting();
+
+  actor_service_->StopTaskForTesting(
+      id_3, actor::ActorTask::StoppedReason::kTaskComplete);
+
+  base::RunLoop loop;
+  actor_service_->GetTask(id_4)->AddTab(
+      mock_tab().GetHandle(),
+      /*stop_task_on_detach=*/true,
+      base::BindLambdaForTesting([&](actor::mojom::ActionResultPtr result) {
+        EXPECT_TRUE(actor::IsOk(*result));
+        loop.Quit();
+      }));
+  loop.Run();
+
+  absl::flat_hash_map<actor::TaskId, bool> task_list;
+  task_list[id_1] = true;   // Paused, requires processing.
+  task_list[id_2] = false;  // Paused, does not require processing.
+  task_list[id_3] = true;   // Completed, does require processing.
+  task_list[id_4] = false;  // Active, does not require processing.
+
+  views::Widget* actor_task_list_bubble =
+      CreateBubbleView(std::move(task_list));
+
+  EXPECT_TRUE(actor_task_list_bubble->IsVisible());
+
+  views::View* content_view =
+      GetContentViewInActorTaskListBubble(std::move(actor_task_list_bubble));
+
+  // Check for correct subtitles.
+  EXPECT_EQ(4u, content_view->children().size());
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_ACTOR_TASK_LIST_BUBBLE_ROW_CHECK_TASK_SUBTITLE),
+      static_cast<ActorTaskListBubbleRowButton*>(content_view->children().at(0))
+          ->GetSubtitleText());
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_ACTOR_TASK_LIST_BUBBLE_ROW_CHECK_TASK_SUBTITLE),
+      static_cast<ActorTaskListBubbleRowButton*>(content_view->children().at(1))
+          ->GetSubtitleText());
+  // Last tab is removed on Stop, so the finished task will have a tab closed
+  // subtitle.
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_ACTOR_TASK_LIST_BUBBLE_ROW_TAB_CLOSED_SUBTITLE),
+      static_cast<ActorTaskListBubbleRowButton*>(content_view->children().at(2))
+          ->GetSubtitleText());
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_ACTOR_TASK_LIST_BUBBLE_ROW_ACTING_TASK_SUBTITLE),
+      static_cast<ActorTaskListBubbleRowButton*>(content_view->children().at(3))
+          ->GetSubtitleText());
+}
+
+TEST_F(ActorTaskListBubbleTest,
+       ExperimentalTriggeringCompletedTaskSubtitleText) {
+  auto button = std::make_unique<ActorTaskListBubbleRowButton>(
+      views::Button::PressedCallback(), actor::ActorTask::State::kFinished,
+      u"Experimental Triggering Task", /*requires_processing=*/false,
+      /*has_tab=*/true, glic::mojom::FeatureMode::kExperimentalTriggering);
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_EXPERIMENTAL_TRIGGERING_TASK_LIST_BUBBLE_ROW_COMPLETED_TASK_SUBTITLE),
+      button->GetSubtitleText());
+}

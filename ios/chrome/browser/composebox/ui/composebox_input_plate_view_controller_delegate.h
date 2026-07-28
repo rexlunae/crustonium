@@ -5,13 +5,23 @@
 #ifndef IOS_CHROME_BROWSER_COMPOSEBOX_UI_COMPOSEBOX_INPUT_PLATE_VIEW_CONTROLLER_DELEGATE_H_
 #define IOS_CHROME_BROWSER_COMPOSEBOX_UI_COMPOSEBOX_INPUT_PLATE_VIEW_CONTROLLER_DELEGATE_H_
 
+#import <vector>
+
 enum class AiModeActivationSource;
 enum class ComposeboxDragAndDropType;
 @class ComposeboxInputPlateViewController;
 enum class ComposeboxMode;
+enum class ComposeboxModelOption;
+@class ComposeboxUIInputState;
+enum class FuseboxAttachmentButtonType;
 
 /// Delegate for the composebox input plate view controller.
 @protocol ComposeboxInputPlateViewControllerDelegate
+
+/// Informs the delegate that the input plate completed the initial
+/// presentation.
+- (void)composeboxViewControllerDidCompleteInitialPresentation:
+    (ComposeboxInputPlateViewController*)composeboxViewController;
 
 /// Informs the delegate that a user did tap on the gallery button.
 - (void)composeboxViewControllerDidTapGalleryButton:
@@ -36,12 +46,20 @@ enum class ComposeboxMode;
 - (void)composeboxViewControllerDidTapCameraButton:
     (ComposeboxInputPlateViewController*)composeboxViewController;
 
-/// Informs the delegate that a user did tap on the gallery button.
-- (void)composeboxViewControllerMayShowGalleryPicker:
-    (ComposeboxInputPlateViewController*)composeboxViewController;
+/// Informs the delegate that the plus menu opened and passes the visible
+/// attachment buttons.
+- (void)composeboxViewController:
+            (ComposeboxInputPlateViewController*)composeboxViewController
+    didOpenPlusMenuWithVisibleInternalButtons:
+        (const std::vector<FuseboxAttachmentButtonType>&)visibleInternalButtons
+                                 uiInputState:(ComposeboxUIInputState*)state;
 
 /// Informs the delegate that a user did tap on the file button.
 - (void)composeboxViewControllerDidTapFileButton:
+    (ComposeboxInputPlateViewController*)composeboxViewController;
+
+/// Informs the delegate that a user did tap on the drive button.
+- (void)composeboxViewControllerDidTapDriveButton:
     (ComposeboxInputPlateViewController*)composeboxViewController;
 
 /// Informs the delegate that a user did tap on the attach tabs button.
@@ -53,19 +71,22 @@ enum class ComposeboxMode;
             (ComposeboxInputPlateViewController*)viewController
        didAttemptDragAndDropType:(ComposeboxDragAndDropType)type;
 
-/// Informs the delegate that a user did tap on the AI button.
-- (void)composeboxViewControllerDidTapAIMButton:
+/// Informs the delegate that a user did tap on a tool button.
+- (void)composeboxViewController:
             (ComposeboxInputPlateViewController*)composeboxViewController
-                               activationSource:
-                                   (AiModeActivationSource)activationSource;
+                      didTapTool:(ComposeboxMode)toolMode
+                activationSource:(AiModeActivationSource)activationSource;
 
-/// Informs the delegate that a user did tap on the image generation button.
-- (void)composeboxViewControllerDidTapImageGenerationButton:
-    (ComposeboxInputPlateViewController*)composeboxViewController;
+/// Informs the delegate that a user did select a model option from the
+/// tool menu.
+- (void)composeboxViewController:
+            (ComposeboxInputPlateViewController*)composeboxViewController
+                  didSelectModel:(ComposeboxModelOption)modelOption;
 
-/// Informs the delegate that a user did tap on the canvas button.
-- (void)composeboxViewControllerDidTapCanvasButton:
-    (ComposeboxInputPlateViewController*)composeboxViewController;
+/// Informs the delegate that a user did tap on the plus button.
+- (void)composeboxViewControllerDidTapPlusButton:
+            (ComposeboxInputPlateViewController*)composeboxViewController
+                                withUIInputState:(ComposeboxUIInputState*)state;
 
 /// Informs the delegate that a user did tap on the lens button.
 - (void)composeboxViewController:

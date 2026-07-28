@@ -138,21 +138,24 @@ void AXTreeFormatterAuraLinux::RecursiveBuildTree(AtkObject* atk_node,
   if (!ShouldDumpChildren(*node))
     return;
 
-  auto child_count = atk_object_get_n_accessible_children(atk_node);
-  if (child_count <= 0)
+  gfx::NativeViewAccessible native_child = node->GetFirstChild();
+  if (!native_child) {
     return;
+  }
 
   base::ListValue children;
-  for (auto i = 0; i < child_count; i++) {
+  while (native_child) {
     base::DictValue child_dict;
-
-    AtkObject* atk_child = atk_object_ref_accessible_child(atk_node, i);
-    CHECK(atk_child);
-
-    RecursiveBuildTree(atk_child, &child_dict);
-    g_object_unref(atk_child);
-
+    RecursiveBuildTree(native_child, &child_dict);
     children.Append(std::move(child_dict));
+
+    AXPlatformNodeAuraLinux* platform_child =
+        AXPlatformNodeAuraLinux::FromAtkObject(native_child);
+    if (platform_child && platform_child->GetDelegate()) {
+      native_child = platform_child->GetDelegate()->GetNextSibling();
+    } else {
+      native_child = nullptr;
+    }
   }
 
   dict->Set(kChildrenDictAttr, std::move(children));
@@ -228,7 +231,7 @@ void AXTreeFormatterAuraLinux::AddHypertextProperties(
 
       AtkHyperlink* link = atk_hypertext_get_link(hypertext, link_index);
       if (!link)
-        continue;  // TODO(aleventhal) Change to DCHECK(link);
+        continue;  // ATK may return null; skip gracefully in inspector code.
 
 #if DCHECK_IS_ON()
       AtkObject* link_obj = atk_hyperlink_get_object(link, 0);
@@ -356,7 +359,8 @@ std::string AXTreeFormatterAuraLinux::ToString(AtkRelation* relation) {
     AtkObject* atk_target = static_cast<AtkObject*>(
         UNSAFE_TODO(g_ptr_array_index(relation_targets, i)));
     DCHECK(atk_target);
-    target_roles[i] = atk_role_get_name(atk_object_get_role(atk_target));
+    // Use the same stable mapping as the per-node role output.
+    target_roles[i] = AtkRoleToString(atk_object_get_role(atk_target));
   }
 
   // We need to alphabetically sort the roles so tests don't flake from the
@@ -631,6 +635,7 @@ const char* const ATK_OBJECT_ATTRIBUTES[] = {
     "explicit-name",
     "grabbed",
     "haspopup",
+    "has-actions",
     "has-interest-for",
     "hidden",
     "html-input-name",

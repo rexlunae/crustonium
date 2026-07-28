@@ -14,7 +14,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -64,7 +64,7 @@ ui::BaseWindow* FindMostRecentWindow(
 // and persistent state from the browser window and the user's profile.
 class DefaultStateProvider : public WindowSizer::StateProvider {
  public:
-  explicit DefaultStateProvider(const Browser* browser) : browser_(browser) {}
+  explicit DefaultStateProvider(Browser* browser) : browser_(browser) {}
 
   DefaultStateProvider(const DefaultStateProvider&) = delete;
   DefaultStateProvider& operator=(const DefaultStateProvider&) = delete;
@@ -77,12 +77,12 @@ class DefaultStateProvider : public WindowSizer::StateProvider {
     DCHECK(bounds);
     DCHECK(show_state);
 
-    if (!browser_ || !browser_->profile()->GetPrefs()) {
+    if (!browser_ || !browser_->GetProfile()->GetPrefs()) {
       return false;
     }
 
     const base::DictValue* pref = chrome::GetWindowPlacementDictionaryReadOnly(
-        chrome::GetWindowName(browser_), browser_->profile()->GetPrefs());
+        chrome::GetWindowName(browser_), browser_->GetProfile()->GetPrefs());
 
     std::optional<gfx::Rect> pref_bounds = RectFromPrefixedPref(pref, "");
     std::optional<gfx::Rect> pref_area =
@@ -113,22 +113,22 @@ class DefaultStateProvider : public WindowSizer::StateProvider {
     // Legacy Applications and Devtools are always restored with the same
     // position.
     if (browser_ && !web_app::AppBrowserController::IsWebApp(browser_) &&
-        (browser_->is_type_app() || browser_->is_type_app_popup() ||
-         browser_->is_type_devtools())) {
+        (browser_->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+         browser_->is_type_app_popup() || browser_->is_type_devtools())) {
       return false;
     }
 
     // If a reference browser is set, use its window. Otherwise find last
     // active. Depending on the type of browser being created, different logic
     // determines if a particular browser can be a reference browser.
-    ui::BaseWindow* window = nullptr;
+    const ui::BaseWindow* window = nullptr;
     // Window may be null if browser is just starting up.
-    if (browser_ && browser_->window()) {
-      window = browser_->window();
+    if (browser_ && browser_->GetWindow()) {
+      window = browser_->GetWindow();
     } else if (web_app::AppBrowserController::IsWebApp(browser_)) {
       window = FindMostRecentWindow(
-          [profile = browser_->profile(),
-           app_id = browser_->app_controller()->app_id(),
+          [profile = browser_->GetProfile(),
+           app_id = web_app::AppBrowserController::From(browser_)->app_id(),
            display = display::Screen::Get()->GetDisplayForNewWindows()](
               BrowserWindowInterface* browser) {
             if (browser->GetProfile() != profile) {
@@ -143,9 +143,7 @@ class DefaultStateProvider : public WindowSizer::StateProvider {
               return false;
             }
 #endif
-            if (!browser->GetBrowserForMigrationOnly()
-                     ->window()
-                     ->IsOnCurrentWorkspace())
+            if (!BrowserWindow::FromBrowser(browser)->IsOnCurrentWorkspace())
               return false;
             return true;
           });
@@ -162,7 +160,7 @@ class DefaultStateProvider : public WindowSizer::StateProvider {
       // maximized windows. Additionally creating a window with a maximized
       // show state results in an invisible window if the window is a PWA
       // (i.e. out-of-process remote cocoa) window
-      // (https://crbug.com/1441966). Never using WindowShowState::kMaximized
+      // (https://crbug.com/40910284). Never using WindowShowState::kMaximized
       // on Mac is also consistent with NativeWidgetMac::Show, which does not
       // support WindowShowState::kMaximized either.
 #if !BUILDFLAG(IS_MAC)
@@ -204,13 +202,13 @@ class DefaultStateProvider : public WindowSizer::StateProvider {
   std::string app_name_;
 
   // If set, is used as the reference browser for GetLastActiveWindowState.
-  raw_ptr<const Browser> browser_;
+  const raw_ptr<Browser> browser_;
 };
 
 }  // namespace
 
 WindowSizer::WindowSizer(std::unique_ptr<StateProvider> state_provider,
-                         const Browser* browser)
+                         Browser* browser)
     : state_provider_(std::move(state_provider)), browser_(browser) {}
 
 WindowSizer::~WindowSizer() = default;
@@ -218,7 +216,7 @@ WindowSizer::~WindowSizer() = default;
 // static
 void WindowSizer::GetBrowserWindowBoundsAndShowState(
     const gfx::Rect& specified_bounds,
-    const Browser* browser,
+    Browser* browser,
     gfx::Rect* window_bounds,
     ui::mojom::WindowShowState* show_state) {
   return GetBrowserWindowBoundsAndShowState(
@@ -232,7 +230,7 @@ void WindowSizer::GetBrowserWindowBoundsAndShowState(
 void WindowSizer::GetBrowserWindowBoundsAndShowState(
     std::unique_ptr<StateProvider> state_provider,
     const gfx::Rect& specified_bounds,
-    const Browser* browser,
+    Browser* browser,
     gfx::Rect* bounds,
     ui::mojom::WindowShowState* show_state) {
   DCHECK(bounds);
@@ -346,6 +344,15 @@ gfx::Rect WindowSizer::GetDefaultWindowBounds(
         static_cast<int>(work_area.width() / 2. - 1.5 * kWindowTilePixels);
   }
 #endif  // !BUILDFLAG(IS_MAC)
+
+  // When starting Chrome on a monitor in portrait orientation the default
+  // browser window height is equal to monitor work area height which looks
+  // weird, see http://crbug.com/493633417. So check if this is the case and if
+  // so, set the default height for 4:3 aspect ratio.
+  if (!display.is_landscape() && default_height > default_width) {
+    default_height = (default_width / 4) * 3;
+  }
+
   return gfx::Rect(kWindowTilePixels + work_area.x(),
                    kWindowTilePixels + work_area.y(), default_width,
                    default_height);
@@ -434,7 +441,7 @@ void WindowSizer::AdjustBoundsToBeVisibleOnDisplay(
 
 // static
 ui::mojom::WindowShowState WindowSizer::GetWindowDefaultShowState(
-    const Browser* browser) {
+    Browser* browser) {
   if (!browser) {
     return ui::mojom::WindowShowState::kDefault;
   }
@@ -445,8 +452,10 @@ ui::mojom::WindowShowState WindowSizer::GetWindowDefaultShowState(
 
 #if defined(USE_AURA)
   // We use the apps save state as well on aura.
-  use_command_line = use_command_line || browser->is_type_app() ||
-                     browser->is_type_app_popup();
+  use_command_line =
+      use_command_line ||
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+      browser->is_type_app_popup();
 #endif
 
   if (use_command_line && base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -454,7 +463,7 @@ ui::mojom::WindowShowState WindowSizer::GetWindowDefaultShowState(
     return ui::mojom::WindowShowState::kMaximized;
   }
 
-  return browser->initial_show_state();
+  return BrowserInitState::From(browser)->initial_show_state();
 }
 
 // static

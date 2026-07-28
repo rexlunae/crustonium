@@ -52,7 +52,6 @@ namespace extensions {
 class AutomationInternalApiDelegate;
 class AppViewGuestDelegate;
 class ContentRulesRegistry;
-class DevicePermissionsPrompt;
 class DisplayInfoProvider;
 class ExtensionOptionsGuest;
 class ExtensionOptionsGuestDelegate;
@@ -70,8 +69,10 @@ class NativeMessagePortDispatcher;
 class NonNativeFileSystemDelegate;
 class RulesCacheDelegate;
 class SupervisedUserExtensionsDelegate;
+class UsbDevicePermissionsPrompt;
 class ValueStoreCache;
 class VirtualKeyboardDelegate;
+class WebstorePrivateAPIDelegate;
 struct WebRequestInfo;
 class WebViewGuest;
 class WebViewGuestDelegate;
@@ -187,18 +188,18 @@ class ExtensionsAPIClient {
       content::BrowserContext* browser_context,
       RulesCacheDelegate* cache_delegate) const;
 
-  // Creates a DevicePermissionsPrompt appropriate for the embedder.
-  virtual std::unique_ptr<DevicePermissionsPrompt>
-  CreateDevicePermissionsPrompt(content::WebContents* web_contents) const;
+  // Creates a UsbDevicePermissionsPrompt appropriate for the embedder.
+  virtual std::unique_ptr<UsbDevicePermissionsPrompt>
+  CreateUsbDevicePermissionsPrompt(content::WebContents* web_contents) const;
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Returns true if device policy allows detaching a given USB device.
   virtual bool ShouldAllowDetachingUsb(int vid, int pid) const;
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Returns a delegate for some of VirtualKeyboardAPI's behavior.
   virtual std::unique_ptr<VirtualKeyboardDelegate>
   CreateVirtualKeyboardDelegate(content::BrowserContext* browser_context) const;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Creates a delegate for handling the management extension api.
   virtual ManagementAPIDelegate* CreateManagementAPIDelegate() const;
@@ -253,6 +254,10 @@ class ExtensionsAPIClient {
   // Gets keyed service factories that are used in the other methods on this
   // class.
   virtual std::vector<KeyedServiceBaseFactory*> GetFactoryDependencies();
+
+  // Returns a delegate for the webstore_private API, or nullptr if the API is
+  // not supported.
+  virtual WebstorePrivateAPIDelegate* GetWebstorePrivateAPIDelegate();
 
   virtual std::unique_ptr<NativeMessagePortDispatcher>
   CreateNativeMessagePortDispatcher(

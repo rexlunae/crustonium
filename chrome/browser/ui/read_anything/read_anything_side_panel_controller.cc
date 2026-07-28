@@ -13,13 +13,12 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/dom_distiller/tab_utils.h"
 #include "chrome/browser/language/language_model_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_omnibox_controller.h"
@@ -27,21 +26,19 @@
 #include "chrome/browser/ui/read_anything/read_anything_service.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_controller_utils.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_web_view.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
-#include "chrome/browser/ui/views/page_action/page_action_observer.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_ui.h"
 #include "chrome/browser/ui/webui_browser/webui_browser.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/accessibility/reading/distillable_pages.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/language/core/browser/language_model.h"
 #include "components/language/core/browser/language_model_manager.h"
 #include "components/language/core/common/locale_util.h"
@@ -56,11 +53,6 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_types.h"
 
-using SidePanelWebUIViewT_ReadAnythingUntrustedUI =
-    SidePanelWebUIViewT<ReadAnythingUntrustedUI>;
-DECLARE_TEMPLATE_METADATA(SidePanelWebUIViewT_ReadAnythingUntrustedUI,
-                          SidePanelWebUIViewT);
-
 WEB_CONTENTS_USER_DATA_KEY_IMPL(ReadAnythingSidePanelControllerGlue);
 
 ReadAnythingSidePanelControllerGlue::ReadAnythingSidePanelControllerGlue(
@@ -73,7 +65,9 @@ ReadAnythingSidePanelControllerGlue::ReadAnythingSidePanelControllerGlue(
 ReadAnythingSidePanelController::ReadAnythingSidePanelController(
     tabs::TabInterface* tab,
     SidePanelRegistry* side_panel_registry)
-    : tab_(tab), side_panel_registry_(side_panel_registry) {
+    : tabs::ContentsObservingTabFeature(*tab),
+      tab_(tab),
+      side_panel_registry_(side_panel_registry) {
   CHECK(!side_panel_registry_->GetEntryForKey(
       SidePanelEntry::Key(SidePanelEntry::Id::kReadAnything)));
 
@@ -93,7 +87,6 @@ ReadAnythingSidePanelController::ReadAnythingSidePanelController(
   tab_subscriptions_.push_back(tab_->RegisterDidActivate(
       base::BindRepeating(&ReadAnythingSidePanelController::TabForegrounded,
                           weak_factory_.GetWeakPtr())));
-  Observe(tab_->GetContents());
 
   // We do not know if the current tab is in the process of loading a page.
   // Assume that a page just finished loading to populate initial state.
@@ -124,12 +117,11 @@ ReadAnythingSidePanelController::~ReadAnythingSidePanelController() {
   observers_.Notify(&Observer::OnDestroyed);
 }
 
-void ReadAnythingSidePanelController::ResetForTabDiscard() {
-  auto* current_entry = side_panel_registry_->GetEntryForKey(
-      SidePanelEntry::Key(SidePanelEntry::Id::kReadAnything));
-  current_entry->RemoveObserver(this);
-  side_panel_registry_->Deregister(
-      SidePanelEntry::Key(SidePanelEntry::Id::kReadAnything));
+void ReadAnythingSidePanelController::RemoveReadAnythingControllerGlue() {
+  if (web_view_ && web_view_->contents_wrapper()) {
+    web_view_->contents_wrapper()->web_contents()->RemoveUserData(
+        ReadAnythingControllerGlue::UserDataKey());
+  }
 }
 
 void ReadAnythingSidePanelController::AddPageHandlerAsObserver(
@@ -167,12 +159,12 @@ void ReadAnythingSidePanelController::OnEntryShown(SidePanelEntry* entry) {
   // Build and record UKM record for SidePanelShown to true on the current
   // source Id
   std::optional<SidePanelOpenTrigger> open_trigger = entry->last_open_trigger();
-  std::optional<ReadAnythingOpenTrigger> read_anything_trigger =
+  ReadAnythingOpenTrigger read_anything_trigger =
       open_trigger.has_value()
           ? read_anything::SidePanelToReadAnythingOpenTrigger(
                 open_trigger.value())
-          : std::optional<ReadAnythingOpenTrigger>();
-  if (auto* contents = tab_->GetContents()) {
+          : ReadAnythingOpenTrigger::kUnknown;
+  if (auto* contents = web_contents()) {
     if (content::RenderFrameHost* main_frame =
             contents->GetPrimaryMainFrame()) {
       ukm::SourceId source_id = main_frame->GetPageUkmSourceId();
@@ -191,21 +183,20 @@ void ReadAnythingSidePanelController::OnEntryShown(SidePanelEntry* entry) {
     CHECK(controller);
     controller->OnEntryShown(read_anything_trigger);
   } else {
-    observers_.Notify(&Observer::Activate, true, read_anything_trigger);
+    observers_.Notify(&Observer::Activate, /*active=*/true,
+                      read_anything_trigger,
+                      /*completed_session_duration=*/std::nullopt);
   }
 }
 
 void ReadAnythingSidePanelController::OnEntryHidden(SidePanelEntry* entry) {
   CHECK_EQ(entry->key().id(), SidePanelEntry::Id::kReadAnything);
 
-  // Get the object that represents the content of the current tab
-  content::WebContents* web_contents = tab_->GetContents();
-
   // Build and record UKM record for SidePanelClosed to true on the current
   // source id
-  if (web_contents) {
+  if (web_contents()) {
     if (content::RenderFrameHost* main_frame =
-            web_contents->GetPrimaryMainFrame()) {
+            web_contents()->GetPrimaryMainFrame()) {
       ukm::SourceId source_id = main_frame->GetPageUkmSourceId();
       ukm::builders::Accessibility_ReadAnything_SidePanel(source_id)
           .SetClosed(true)
@@ -230,17 +221,44 @@ void ReadAnythingSidePanelController::OnEntryHidden(SidePanelEntry* entry) {
     CHECK(controller);
     controller->OnEntryHidden();
   } else {
-    observers_.Notify(&Observer::Activate, false,
-                      std::optional<ReadAnythingOpenTrigger>());
+    observers_.Notify(&Observer::Activate, /*active=*/false,
+                      /*trigger=*/ReadAnythingOpenTrigger::kUnknown,
+                      /*completed_session_duration=*/std::nullopt);
+  }
+
+  // When the reading mode side panel is replaced with another side panel,
+  // ownership of its WebContents is transferred back to the
+  // ReadAnythingController in OnEntryWillHide(). If the reading mode side
+  // panel is later reopened, it would attempt to use the previously cached
+  // view, which now lacks a valid WebContents, causing a crash. Clearing the
+  // cached view prevents this.
+  if (should_clear_cached_view_on_hidden_) {
+    entry->ClearCachedView();
+    should_clear_cached_view_on_hidden_ = false;
   }
 }
 
 void ReadAnythingSidePanelController::OnEntryWillHide(
     SidePanelEntry* entry,
     SidePanelEntryHideReason reason) {
-  if (reason == SidePanelEntryHideReason::kSidePanelClosed) {
+  if (reason == SidePanelEntryHideReason::kSidePanelClosed ||
+      reason == SidePanelEntryHideReason::kReplaced) {
     ReturnWebUIToController();
   }
+  if (features::IsImmersiveReadAnythingEnabled() &&
+      reason == SidePanelEntryHideReason::kReplaced) {
+    should_clear_cached_view_on_hidden_ = true;
+  }
+
+  if (!features::IsImmersiveReadAnythingEnabled()) {
+    return;
+  }
+
+  auto read_anything_close_reason =
+      reason == SidePanelEntryHideReason::kBackgrounded
+          ? ReadAnythingCloseReason::kTabSwitched
+          : ReadAnythingCloseReason::kClosedByUser;
+  observers_.Notify(&Observer::OnWillClose, read_anything_close_reason);
 }
 
 void ReadAnythingSidePanelController::ReturnWebUIToController() {
@@ -254,7 +272,9 @@ void ReadAnythingSidePanelController::ReturnWebUIToController() {
       ReadAnythingSidePanelControllerGlue::UserDataKey());
   auto* controller = ReadAnythingController::From(tab_);
   CHECK(controller);
-  controller->TransferWebUiOwnership(web_view_->TakeContentsWrapper());
+  controller->TransferWebUiOwnership(
+      web_view_->TakeContentsWrapper(),
+      ReadAnythingController::PresentationState::kInSidePanel);
 }
 
 std::unique_ptr<views::View>
@@ -292,7 +312,7 @@ int ReadAnythingSidePanelController::GetPreferredDefaultWidth() {
 }
 
 bool ReadAnythingSidePanelController::IsActivePageDistillable() const {
-  auto url = tab_->GetContents()->GetLastCommittedURL();
+  auto url = web_contents()->GetLastCommittedURL();
 
   for (const std::string& distillable_domain : a11y::GetDistillableDomains()) {
     // If the url's domain is found in distillable domains AND the url has a
@@ -311,9 +331,6 @@ void ReadAnythingSidePanelController::TabForegrounded(tabs::TabInterface* tab) {
 void ReadAnythingSidePanelController::TabWillDetach(
     tabs::TabInterface* tab,
     tabs::TabInterface::DetachReason reason) {
-  if (!features::IsImmersiveReadAnythingEnabled()) {
-    observers_.Notify(&Observer::OnTabWillDetach);
-  }
 
   if (!tab_->IsActivated()) {
     return;
@@ -341,8 +358,7 @@ void ReadAnythingSidePanelController::TabWillDetach(
     SidePanelEntry* const entry =
         side_panel_registry_->GetEntryForKey(read_anything_key);
     CHECK(entry);
-    side_panel_ui->Close(entry->type(),
-                         SidePanelEntryHideReason::kSidePanelClosed,
+    side_panel_ui->Close(SidePanelEntryHideReason::kSidePanelClosed,
                          /*suppress_animations=*/true);
   }
 }

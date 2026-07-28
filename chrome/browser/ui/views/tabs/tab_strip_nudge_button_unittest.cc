@@ -6,11 +6,8 @@
 
 #include <memory>
 
-#include "base/time/time.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/tabs/fake_base_tab_strip_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,9 +25,9 @@ class TabStripNudgeButtonTest : public ChromeViewsTestBase {
                             base::Unretained(this)),
         base::BindRepeating(&TabStripNudgeButtonTest::MockButtonCallback,
                             base::Unretained(this)),
-        l10n_util::GetStringUTF16(IDS_TAB_ORGANIZE),
-        kAutoTabGroupButtonElementId, Edge::kRight,
-        gfx::VectorIcon::EmptyIcon(), /*show_close_button=*/true);
+        l10n_util::GetStringUTF16(IDS_GLIC_BUTTON_ENTRYPOINT_ASK_GEMINI_LABEL),
+        kGlicNudgeButtonElementId, Edge::kRight, gfx::VectorIcon::EmptyIcon(),
+        /*show_close_button=*/true);
   }
 
   void MockButtonCallback() { button_callback_count_++; }

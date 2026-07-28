@@ -91,14 +91,14 @@ HttpStreamPool::TcpBasedAttempt::TcpBasedAttempt(AttemptManager* manager,
   if (manager_->using_tls()) {
     attempt_ = std::make_unique<TlsStreamAttempt>(
         manager_->pool()->stream_attempt_params(), std::move(ip_endpoint),
-        track_,
+        manager_->stream_key().target_network(), track_,
         HostPortPair::FromSchemeHostPort(manager_->stream_key().destination()),
         manager_->GetBaseSSLConfig(),
         /*delegate=*/this);
   } else {
     attempt_ = std::make_unique<TcpStreamAttempt>(
         manager_->pool()->stream_attempt_params(), std::move(ip_endpoint),
-        track_);
+        manager_->stream_key().target_network(), track_);
   }
 }
 
@@ -355,9 +355,8 @@ HttpStreamPool::TcpBasedAttemptSlot::TakeAttempt(TcpBasedAttempt* raw_attempt) {
     NOTREACHED();
   };
 
-  UpdateIsSlow();
-
   std::unique_ptr<TcpBasedAttempt> attempt = take_attempt();
+  UpdateIsSlow();
   // Reset slot to avoid dangling pointer.
   attempt->ResetSlot();
   return attempt;
@@ -440,6 +439,9 @@ void HttpStreamPool::TcpBasedAttemptSlot::UpdateIsSlow() {
 }
 
 bool HttpStreamPool::TcpBasedAttemptSlot::CalculateIsSlow() const {
+  if (empty()) {
+    return false;
+  }
   if (ipv4_attempt_ && !ipv4_attempt_->is_slow()) {
     return false;
   }

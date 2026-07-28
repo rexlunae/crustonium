@@ -16,6 +16,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/url_and_id.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
@@ -26,14 +27,15 @@
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/incognito_allowed_url.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_menu_utils.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -127,7 +129,7 @@ OpenedWebContentsSet OpenAllHelper(
   bookmarks::BookmarkNavigationWrapper nav_wrapper;
   Profile* profile = nullptr;
   if (browser) {
-    profile = browser->profile();
+    profile = browser->GetProfile();
   }
   bool opening_urls_in_incognito = false;
   if (profile) {
@@ -140,6 +142,12 @@ OpenedWebContentsSet OpenAllHelper(
   }
 
   for (const auto& bookmark_url : bookmark_urls) {
+    // Javascript URLs should not open in a new tab. See crbug.com/528757894.
+    if (disposition != WindowOpenDisposition::CURRENT_TAB &&
+        bookmark_url.url.SchemeIs(url::kJavaScriptScheme)) {
+      continue;
+    }
+
     const bool url_allowed_in_incognito =
         IsURLAllowedInIncognito(bookmark_url.url);
 
@@ -158,7 +166,7 @@ OpenedWebContentsSet OpenAllHelper(
       }
     }
     if (browser_to_use) {
-      profile = browser_to_use->profile();
+      profile = browser_to_use->GetProfile();
     }
     NavigateParams params(profile, bookmark_url.url,
                           ui::PAGE_TRANSITION_AUTO_BOOKMARK);
@@ -168,7 +176,9 @@ OpenedWebContentsSet OpenAllHelper(
         nav_wrapper.NavigateTo(&params);
     if (handle) {
       page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-          *handle, navigation_type);
+          *handle, navigation_type,
+          StringifyChromeInitiatorLocation(
+              GetChromeInitiatorLocation(navigation_type)));
     }
     content::WebContents* opened_tab =
         handle ? handle->GetWebContents() : nullptr;
@@ -200,7 +210,7 @@ OpenedWebContentsSet OpenAllHelper(
     // there is a URL that is not allowed in incognito mode.
     // In this case we don't set the disposition to `NEW_BACKGROUND_TAB`
     // until we have opened the first URL that can be opened in incognito.
-    // See crbug.com/1349283.
+    // See crbug.com/40855833.
     if (opening_in_new_window) {
       if (!opening_urls_in_incognito || url_allowed_in_incognito) {
         disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
@@ -213,11 +223,19 @@ OpenedWebContentsSet OpenAllHelper(
         Profile::FromBrowserContext(opened_tab->GetBrowserContext());
     if (new_tab_profile->IsIncognitoProfile()) {
       if (!incognito_browser) {
-        incognito_browser = chrome::FindBrowserWithTab(opened_tab);
+        auto* tab_browser =
+            ProfileBrowserCollection::GetForProfile(new_tab_profile)
+                ->FindBrowserWithTab(opened_tab);
+        incognito_browser =
+            tab_browser ? tab_browser->GetBrowserForMigrationOnly() : nullptr;
       }
     } else {
       if (!regular_browser) {
-        regular_browser = chrome::FindBrowserWithTab(opened_tab);
+        auto* tab_browser =
+            ProfileBrowserCollection::GetForProfile(new_tab_profile)
+                ->FindBrowserWithTab(opened_tab);
+        regular_browser =
+            tab_browser ? tab_browser->GetBrowserForMigrationOnly() : nullptr;
       }
     }
 
@@ -273,19 +291,19 @@ int ChildURLCountTotal(const BookmarkNode* node) {
 
 // Returns in |urls|, the url and title pairs for each open tab in browser.
 void GetURLsAndFoldersForOpenTabs(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::vector<BookmarkEditor::EditDetails::BookmarkData>* folder_data) {
   std::vector<std::pair<GURL, std::u16string>> tab_entries;
   base::flat_map<int, TabGroupData> groups_by_index;
-  for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
+  for (int i = 0; i < browser->GetTabStripModel()->count(); ++i) {
     std::pair<GURL, std::u16string> entry;
-    auto* contents = browser->tab_strip_model()->GetWebContentsAt(i);
+    auto* contents = browser->GetTabStripModel()->GetWebContentsAt(i);
     chrome::GetURLAndTitleToBookmark(contents, &(entry.first), &(entry.second));
     tab_entries.push_back(entry);
-    auto tab_group_id = browser->tab_strip_model()->GetTabGroupForTab(i);
+    auto tab_group_id = browser->GetTabStripModel()->GetTabGroupForTab(i);
     std::u16string title;
     if (tab_group_id.has_value()) {
-      title = browser->tab_strip_model()
+      title = browser->GetTabStripModel()
                   ->group_model()
                   ->GetTabGroup(tab_group_id.value())
                   ->visual_data()
@@ -353,6 +371,11 @@ void DoOpen(Browser* browser,
     auto* const single_web_contents = *(opened_web_contents.begin());
     const int opened_web_contents_index =
         model->GetIndexOfWebContents(single_web_contents);
+    // Handle the situation where the bookmark is opened in a different window
+    // (happens when opening certain internal pages in incognito mode).
+    if (opened_web_contents_index == TabStripModel::kNoTab) {
+      return;
+    }
     model->AddToNewSplit(
         {opened_web_contents_index}, split_tabs::SplitTabVisualData(),
         split_tabs::SplitTabCreatedSource::kBookmarkContextMenu);
@@ -375,7 +398,7 @@ void DoOpen(Browser* browser,
 
     tab_groups::TabGroupSyncService* tab_group_sync_service =
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-            browser->profile());
+            browser->GetProfile());
 
     std::optional<base::Uuid> connected_group_id =
         GetConnectedTabGroupIdFromBookmarkFolder(tab_group_sync_service,
@@ -436,10 +459,9 @@ void DoOpen(Browser* browser,
 
       // Open existing group and replace existing tabs with the new ones.
       std::optional<tab_groups::TabGroupId> existing_group_id =
-          tab_group_sync_service->OpenTabGroup(
-              connected_group_id.value(),
-              std::make_unique<tab_groups::TabGroupActionContextDesktop>(
-                  browser, tab_groups::OpeningSource::kConnectOnGroupShare));
+          tab_groups::SavedTabGroupUtils::OpenSavedTabGroup(
+              browser, connected_group_id.value(),
+              tab_groups::OpeningSource::kConnectOnGroupShare);
 
       if (!existing_group_id.has_value()) {
         return;
@@ -453,6 +475,7 @@ void DoOpen(Browser* browser,
         existing_tabs_in_group.push_back(model->GetWebContentsAt(index));
       }
       model->AddToExistingGroup(tab_indices, existing_group_id.value());
+
       for (content::WebContents* existing_tab : existing_tabs_in_group) {
         model->CloseWebContentsAt(model->GetIndexOfWebContents(existing_tab),
                                   TabCloseTypes::CLOSE_NONE);
@@ -477,7 +500,8 @@ void DoOpenPromptConfirm(
   }
 
   tab_groups::TabGroupSyncService* tab_group_sync_service =
-      tab_groups::TabGroupSyncServiceFactory::GetForProfile(browser->profile());
+      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+          browser->GetProfile());
   std::optional<base::Uuid> connected_group_id =
       GetConnectedTabGroupIdFromBookmarkFolder(tab_group_sync_service,
                                                bookmark_folder_node_id);
@@ -518,6 +542,50 @@ void DoOpenPromptConfirm(
   }
 }
 
+// Populates |folder_data| with all tabs from the saved tab group.
+void GetURLsAndFoldersForSavedTabGroup(
+    const tab_groups::SavedTabGroup& group,
+    std::vector<BookmarkEditor::EditDetails::BookmarkData>* folder_data) {
+  for (const auto& tab : group.saved_tabs()) {
+    BookmarkEditor::EditDetails::BookmarkData bookmark_data;
+    bookmark_data.url = tab.url();
+    bookmark_data.title = tab_groups::TabGroupMenuUtils::GetMenuTextForTab(tab);
+    folder_data->push_back(bookmark_data);
+  }
+}
+
+void ShowBookmarkTabGroupDialogHelper(
+    Browser* browser,
+    const std::u16string& title,
+    std::vector<BookmarkEditor::EditDetails::BookmarkData> children,
+    base::OnceClosure on_confirm_callback) {
+  Profile* profile = browser->GetProfile();
+  BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile);
+  DCHECK(model && model->loaded());
+
+  const BookmarkNode* parent = GetParentForNewNodes(model);
+  BookmarkEditor::EditDetails details =
+      BookmarkEditor::EditDetails::TabGroupToFolder(
+          parent, parent->children().size(), title);
+
+  details.bookmark_data.children = std::move(children);
+  DCHECK(!details.bookmark_data.children.empty());
+  BookmarkEditor::Show(
+      browser->GetWindow()->GetNativeWindow(), profile, details,
+      BookmarkEditor::SHOW_TREE,
+      base::BindOnce(
+          [](Browser* browser, base::OnceClosure callback) {
+            RecordBookmarksAdded(browser->GetProfile());
+            base::RecordAction(base::UserMetricsAction(
+                "BookmarkTabGroupConversion_ConvertToBookmarkConfirmed"));
+            if (callback) {
+              std::move(callback).Run();
+            }
+          },
+          base::Unretained(browser), std::move(on_confirm_callback)));
+  base::RecordAction(base::UserMetricsAction(
+      "BookmarkTabGroupConversion_ConvertToBookmarkSelected"));
+}
 }  // namespace
 
 void OpenAllIfAllowed(
@@ -557,7 +625,7 @@ void OpenAllIfAllowed(
   // before the user can answer "Yes".
 
   chrome::ShowQuestionMessageBoxAsync(
-      browser->window()->GetNativeWindow(),
+      browser->GetWindow()->GetNativeWindow(),
       l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
       l10n_util::GetStringFUTF16(IDS_BOOKMARK_BAR_SHOULD_OPEN_ALL,
                                  base::NumberToString16(child_count)),
@@ -597,8 +665,8 @@ bool ConfirmDeleteBookmarkNode(gfx::NativeWindow window,
                  ChildURLCountTotal(node))) == chrome::MESSAGE_BOX_RESULT_YES;
 }
 
-void ShowBookmarkAllTabsDialog(Browser* browser) {
-  Profile* profile = browser->profile();
+void ShowBookmarkAllTabsDialog(BrowserWindowInterface* browser) {
+  Profile* profile = browser->GetProfile();
   BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile);
   DCHECK(model && model->loaded());
 
@@ -608,8 +676,8 @@ void ShowBookmarkAllTabsDialog(Browser* browser) {
 
   GetURLsAndFoldersForOpenTabs(browser, &(details.bookmark_data.children));
   DCHECK(!details.bookmark_data.children.empty());
-  BookmarkEditor::Show(browser->window()->GetNativeWindow(), profile, details,
-                       BookmarkEditor::SHOW_TREE,
+  BookmarkEditor::Show(browser->GetWindow()->GetNativeWindow(), profile,
+                       details, BookmarkEditor::SHOW_TREE,
                        base::BindOnce(
                            [](const Profile* profile) {
                              // We record the profile that invoked this option.
@@ -623,37 +691,59 @@ void ShowBookmarkTabGroupDialog(
     const TabGroup& tab_group,
     base::OnceCallback<void(Browser*, const tab_groups::TabGroupId&)>
         on_save_callback) {
-  Profile* profile = browser->profile();
-  BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile);
-  DCHECK(model && model->loaded());
+  std::vector<BookmarkEditor::EditDetails::BookmarkData> children;
+  GetURLsAndFoldersForTabGroup(browser->tab_strip_model(), tab_group,
+                               &children);
 
-  const BookmarkNode* parent = GetParentForNewNodes(model);
-  BookmarkEditor::EditDetails details =
-      BookmarkEditor::EditDetails::TabGroupToFolder(
-          parent, parent->children().size(), tab_group.visual_data()->title());
-
-  GetURLsAndFoldersForTabGroup(browser, tab_group,
-                               &(details.bookmark_data.children));
-  DCHECK(!details.bookmark_data.children.empty());
-  BookmarkEditor::Show(
-      browser->window()->GetNativeWindow(), profile, details,
-      BookmarkEditor::SHOW_TREE,
+  ShowBookmarkTabGroupDialogHelper(
+      browser, tab_group.visual_data()->title(), std::move(children),
       base::BindOnce(
           [](Browser* browser, const tab_groups::TabGroupId& tab_group_id,
              base::OnceCallback<void(Browser*, const tab_groups::TabGroupId&)>
                  callback) {
-            // We record the profile that invoked this option.
-            RecordBookmarksAdded(browser->profile());
-            base::RecordAction(base::UserMetricsAction(
-                "BookmarkTabGroupConversion_ConvertToBookmarkConfirmed"));
             if (callback) {
               std::move(callback).Run(browser, tab_group_id);
             }
           },
           base::Unretained(browser), tab_group.id(),
           std::move(on_save_callback)));
-  base::RecordAction(base::UserMetricsAction(
-      "BookmarkTabGroupConversion_ConvertToBookmarkSelected"));
+}
+
+void ShowBookmarkSavedTabGroupDialog(Browser* browser,
+                                     const tab_groups::SavedTabGroup& group) {
+  std::vector<BookmarkEditor::EditDetails::BookmarkData> children;
+  GetURLsAndFoldersForSavedTabGroup(group, &children);
+
+  ShowBookmarkTabGroupDialogHelper(
+      browser, group.title(), std::move(children),
+      base::BindOnce(
+          [](Browser* browser, const base::Uuid& saved_guid) {
+            tab_groups::TabGroupSyncService* tab_group_service =
+                tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+                    browser->GetProfile());
+            if (!tab_group_service) {
+              return;
+            }
+
+            std::optional<tab_groups::SavedTabGroup> saved_group =
+                tab_group_service->GetGroup(saved_guid);
+
+            // Do not delete shared tab group.
+            if (!saved_group || saved_group->is_shared_tab_group()) {
+              return;
+            }
+
+            // Remove the group directly without prompt dialog since the
+            // bookmark editor dialog already did that.
+            std::optional<tab_groups::TabGroupId> local_group_id =
+                saved_group->local_group_id();
+            if (local_group_id) {
+              tab_groups::SavedTabGroupUtils::RemoveGroupFromTabstrip(
+                  nullptr, local_group_id.value());
+            }
+            tab_group_service->RemoveGroup(saved_group->saved_guid());
+          },
+          base::Unretained(browser), group.saved_guid()));
 }
 
 bool HasBookmarkURLs(
@@ -707,10 +797,9 @@ void GetURLsAndFoldersForTabEntries(
 }
 
 void GetURLsAndFoldersForTabGroup(
-    const Browser* browser,
+    const TabStripModel* tab_strip_model,
     const TabGroup& tab_group,
     std::vector<BookmarkEditor::EditDetails::BookmarkData>* folder_data) {
-  TabStripModel* const tab_strip_model = browser->tab_strip_model();
   const gfx::Range tab_range = tab_group.ListTabs();
 
   for (size_t i = tab_range.start(); i < tab_range.end(); ++i) {
@@ -735,10 +824,9 @@ std::u16string SuggestUniqueTabGroupName(
 
   std::vector<tab_groups::SavedTabGroup> saved_groups =
       tab_group_sync_service->GetAllGroups();
-  base::flat_set<std::u16string> existing_titles;
-  for (const auto& group : saved_groups) {
-    existing_titles.insert(group.title());
-  }
+  auto existing_titles = base::MakeFlatSet<std::u16string>(
+      saved_groups, /*comp=*/{},
+      [&](const auto& group) { return group.title(); });
 
   if (!existing_titles.contains(folder_title)) {
     return folder_title;

@@ -27,8 +27,13 @@
 #include "ui/base/window_open_disposition.h"
 
 class Browser;
+class BrowserWindowInterface;
 class GURL;
 class Profile;
+
+namespace views {
+class View;
+}  // namespace views
 
 namespace content {
 class RenderFrameHost;
@@ -69,7 +74,7 @@ class IsolatedWebAppBrowserTestHarness : public WebAppBrowserTestBase {
       const GURL& url,
       WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB);
 
-  Browser* GetBrowserFromFrame(content::RenderFrameHost* frame);
+  BrowserWindowInterface* GetBrowserFromFrame(content::RenderFrameHost* frame);
 
  private:
   base::test::ScopedFeatureList iwa_scoped_feature_list_;
@@ -82,7 +87,7 @@ class IsolatedWebAppBrowserTestHarness : public WebAppBrowserTestBase {
 class UpdateDiscoveryTaskResultWaiter
     : public IsolatedWebAppUpdateManager::Observer {
   using TaskResultCallback = base::OnceCallback<void(
-      IsolatedWebAppUpdateDiscoveryTask::CompletionStatus status)>;
+      IsolatedWebAppUpdateCheckAndPrepareTask::CompletionStatus status)>;
 
  public:
   UpdateDiscoveryTaskResultWaiter(WebAppProvider& provider,
@@ -91,9 +96,10 @@ class UpdateDiscoveryTaskResultWaiter
   ~UpdateDiscoveryTaskResultWaiter() override;
 
   // IsolatedWebAppUpdateManager::Observer:
-  void OnUpdateDiscoveryTaskCompleted(
+  void OnUpdateDiscoverAndPrepareTaskCompleted(
       const webapps::AppId& app_id,
-      IsolatedWebAppUpdateDiscoveryTask::CompletionStatus status) override;
+      IsolatedWebAppUpdateCheckAndPrepareTask::CompletionStatus status)
+      override;
 
  private:
   const webapps::AppId expected_app_id_;
@@ -231,6 +237,9 @@ MATCHER_P3(PendingUpdateInfoIs, location, version, integrity_block_data, "") {
                 integrity_block_data))),
       arg, result_listener);
 }
+
+bool HasChildLabelWithSubstring(views::View* parent,
+                                const std::u16string& substring);
 
 }  // namespace test
 

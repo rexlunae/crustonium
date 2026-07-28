@@ -28,6 +28,8 @@ inline constexpr char kManagedDefaultAdsSetting[] =
     "profile.managed_default_content_settings.ads";
 inline constexpr char kManagedDefaultClipboardSetting[] =
     "profile.managed_default_content_settings.clipboard";
+inline constexpr char kManagedDefaultAutomaticDownloadsSetting[] =
+    "profile.managed_default_content_settings.automatic_downloads";
 inline constexpr char kManagedDefaultCookiesSetting[] =
     "profile.managed_default_content_settings.cookies";
 inline constexpr char kManagedDefaultGeolocationSetting[] =
@@ -75,6 +77,8 @@ inline constexpr char kManagedDefaultDirectSocketsSetting[] =
 inline constexpr char
     kManagedDefaultDirectSocketsPrivateNetworkAccessSetting[] =
         "profile.managed_default_content_settings.direct_sockets_pna";
+inline constexpr char kManagedDefaultSubAppsWithoutPromptsSetting[] =
+    "profile.managed_default_content_settings.sub_apps_without_prompts";
 inline constexpr char kManagedDefaultLegacyCookieScope[] =
     "profile.managed_default_content_settings.legacy_cookie_scope";
 inline constexpr char kManagedDefaultControlledFrameSetting[] =
@@ -88,6 +92,10 @@ inline constexpr char kManagedDefaultDeviceAttributesSetting[] =
 
 // Preferences that are exclusively used to store managed content settings
 // patterns.
+inline constexpr char kManagedAutomaticDownloadsAllowedForUrls[] =
+    "profile.managed_automatic_downloads_allowed_for_urls";
+inline constexpr char kManagedAutomaticDownloadsBlockedForUrls[] =
+    "profile.managed_automatic_downloads_blocked_for_urls";
 inline constexpr char kManagedAutomaticFullscreenAllowedForUrls[] =
     "profile.managed_automatic_fullscreen_allowed_for_urls";
 inline constexpr char kManagedAutomaticFullscreenBlockedForUrls[] =
@@ -194,6 +202,10 @@ inline constexpr char
 inline constexpr char
     kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls[] =
         "profile.managed_direct_sockets_pna_blocked_for_urls";
+inline constexpr char kManagedSubAppsWithoutPromptsAllowedForOrigins[] =
+    "profile.managed_sub_apps_without_prompts_allowed_for_origins";
+inline constexpr char kManagedSubAppsWithoutPromptsBlockedForOrigins[] =
+    "profile.managed_sub_apps_without_prompts_blocked_for_origins";
 inline constexpr char kManagedLegacyCookieScopeForDomains[] =
     "profile.managed_legacy_cookie_scope_for_domains";
 #if BUILDFLAG(IS_CHROMEOS)
@@ -215,6 +227,14 @@ inline constexpr char kManagedLocalNetworkAccessAllowedForUrls[] =
     "profile.managed_local_network_access_allowed_for_urls";
 inline constexpr char kManagedLocalNetworkAccessBlockedForUrls[] =
     "profile.managed_local_network_access_blocked_for_urls";
+inline constexpr char kManagedLocalNetworkAllowedForUrls[] =
+    "profile.managed_local_network_allowed_for_urls";
+inline constexpr char kManagedLocalNetworkBlockedForUrls[] =
+    "profile.managed_local_network_blocked_for_urls";
+inline constexpr char kManagedLoopbackNetworkAllowedForUrls[] =
+    "profile.managed_loopback_network_allowed_for_urls";
+inline constexpr char kManagedLoopbackNetworkBlockedForUrls[] =
+    "profile.managed_loopback_network_blocked_for_urls";
 
 // Boolean indicating whether the quiet UI is enabled for notification
 // permission requests. This and kEnableNotificationCPSS can't both be true

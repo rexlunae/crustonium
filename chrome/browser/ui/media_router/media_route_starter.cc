@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/media_router/media_cast_mode.h"
 #include "chrome/browser/ui/media_router/media_router_ui_helper.h"
 #include "chrome/browser/ui/media_router/query_result_manager.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/media_message_center/media_notification_util.h"
 #include "components/media_router/browser/issue_manager.h"
 #include "components/media_router/browser/media_router.h"
@@ -78,7 +77,7 @@ MediaRouteStarter::MediaRouteStarter(MediaRouterUIParameters params)
               : nullptr),
       query_result_manager_(
           std::make_unique<QueryResultManager>(GetMediaRouter())) {
-  if (presentation_manager_) {
+  if (presentation_manager_ && !start_presentation_context_) {
     presentation_manager_->AddObserver(this);
   }
   InitPresentationSources(params.initial_modes);

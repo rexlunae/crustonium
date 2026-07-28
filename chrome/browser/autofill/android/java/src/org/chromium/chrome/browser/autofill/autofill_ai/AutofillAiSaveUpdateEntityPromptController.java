@@ -8,9 +8,11 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.autofill.autofill_ai.EntityInstance;
 
 /** JNI wrapper for C++ AutofillAiSaveUpdateEntityPromptController. */
 @JNINamespace("autofill")
@@ -37,10 +39,10 @@ final class AutofillAiSaveUpdateEntityPromptController {
         mNativeAutofillAiSaveUpdateEntityPromptController = 0;
     }
 
-    public void openManagePasses() {
+    public void onWalletLinkClicked() {
         if (mNativeAutofillAiSaveUpdateEntityPromptController != 0) {
             AutofillAiSaveUpdateEntityPromptControllerJni.get()
-                    .openManagePasses(mNativeAutofillAiSaveUpdateEntityPromptController);
+                    .onWalletLinkClicked(mNativeAutofillAiSaveUpdateEntityPromptController);
         }
     }
 
@@ -58,6 +60,14 @@ final class AutofillAiSaveUpdateEntityPromptController {
         }
     }
 
+    public void onUserEdited(EntityInstance entityInstance) {
+        if (mNativeAutofillAiSaveUpdateEntityPromptController != 0) {
+            AutofillAiSaveUpdateEntityPromptControllerJni.get()
+                    .onUserEdited(
+                            mNativeAutofillAiSaveUpdateEntityPromptController, entityInstance);
+        }
+    }
+
     public void onUserDeclined() {
         if (mNativeAutofillAiSaveUpdateEntityPromptController != 0) {
             AutofillAiSaveUpdateEntityPromptControllerJni.get()
@@ -67,11 +77,15 @@ final class AutofillAiSaveUpdateEntityPromptController {
 
     @NativeMethods
     interface Natives {
-        void openManagePasses(long nativeAutofillAiSaveUpdateEntityPromptController);
+        void onWalletLinkClicked(long nativeAutofillAiSaveUpdateEntityPromptController);
 
         void onPromptDismissed(long nativeAutofillAiSaveUpdateEntityPromptController);
 
         void onUserAccepted(long nativeAutofillAiSaveUpdateEntityPromptController);
+
+        void onUserEdited(
+                long nativeAutofillAiSaveUpdateEntityPromptController,
+                @JniType("autofill::EntityInstanceAndroid") EntityInstance entityInstance);
 
         void onUserDeclined(long nativeAutofillAiSaveUpdateEntityPromptController);
     }

@@ -7,6 +7,7 @@
  * 'site-details' show the details (permissions and usage) for a given origin
  * under Site Settings.
  */
+import 'chrome://resources/cr_components/localized_link/localized_link.js';
 import 'chrome://resources/cr_elements/action_link.css.js';
 import 'chrome://resources/js/action_link.js';
 import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
@@ -151,6 +152,13 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
               'enableSmartCardReadersContentSetting');
         },
       },
+      enableWebPrintingContentSetting_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean(
+              'enableWebPrintingContentSetting');
+        },
+      },
       // </if>
 
       enableHandTrackingContentSetting_: {
@@ -162,12 +170,6 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
       enableCapturedSurfaceControl_: {
         type: Boolean,
         value: () => loadTimeData.getBoolean('enableCapturedSurfaceControl'),
-      },
-
-      enablePermissionSiteSettingsRadioButton_: {
-        type: Boolean,
-        value: () =>
-            loadTimeData.getBoolean('enablePermissionSiteSettingsRadioButton'),
       },
 
       contentSettingsTypesEnum_: {
@@ -195,12 +197,6 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
         value: () => loadTimeData.getBoolean('enableLocalNetworkAccessSetting'),
       },
 
-      enableLocalNetworkAccessSplitPermissions_: {
-        type: Boolean,
-        value: () =>
-            loadTimeData.getBoolean('enableLocalNetworkAccessSplitPermissions'),
-      },
-
       /**
        * Whether the "Block if site is unfamiliar" label should be used for the
        * default javascript-optimizer content setting.
@@ -210,6 +206,16 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
         computed:
             'computeShouldUseBlockIfUnfamiliarLabelForV8OptimizerDefault_(' +
             'prefs.generated.javascript_optimizer.value)',
+      },
+
+      /**
+       * When the app at url is an isolated web app or an isolated sub app,
+       * this returns a string explaining that sub apps share permissions
+       * with the parent app that installed them.
+       */
+      subAppsPermissionExplanation_: {
+        type: String,
+        value: '',
       },
     };
   }
@@ -225,17 +231,18 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
   declare private enableWebBluetoothNewPermissionsBackend_: boolean;
   // <if expr="is_chromeos">
   declare private enableSmartCardReadersContentSetting_: boolean;
+  declare private enableWebPrintingContentSetting_: boolean;
   // </if>
   declare private enableCapturedSurfaceControl_: boolean;
   declare private enableHandTrackingContentSetting_: boolean;
-  declare private enablePermissionSiteSettingsRadioButton_: boolean;
   declare private enableWebAppInstallation_: boolean;
   private websiteUsageProxy_: WebsiteUsageBrowserProxy =
       WebsiteUsageBrowserProxyImpl.getInstance();
   declare private enableKeyboardLockPrompt_: boolean;
   declare private enableLocalNetworkAccessSetting_: boolean;
-  declare private enableLocalNetworkAccessSplitPermissions_: boolean;
   declare private useBlockIfUnfamiliarLabelForV8OptimizerDefault_: boolean;
+  declare private subAppsPermissionExplanation_: string;
+  private parentAppOrigin_: string|null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -282,6 +289,24 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
         this.browserProxy.getCategoryList(this.origin_).then((categoryList) => {
           this.updatePermissions_(categoryList, /*hideOthers=*/ true);
         });
+
+        this.browserProxy.getSubAppsPermissionExplanation(this.origin_)
+            .then((info) => {
+              if (info.isSubApp && info.appName && info.parentAppName &&
+                  info.parentAppOrigin) {
+                this.parentAppOrigin_ = info.parentAppOrigin;
+                this.subAppsPermissionExplanation_ = this.i18n(
+                    'siteSettingsSubAppPermissionExplanation', info.appName,
+                    info.parentAppName);
+              } else if (info.hasSubApps && info.appName) {
+                this.parentAppOrigin_ = null;
+                this.subAppsPermissionExplanation_ = this.i18n(
+                    'siteSettingsParentAppPermissionExplanation', info.appName);
+              } else {
+                this.parentAppOrigin_ = null;
+                this.subAppsPermissionExplanation_ = '';
+              }
+            });
       }
     });
   }
@@ -468,6 +493,158 @@ export class SiteDetailsElement extends SiteDetailsElementBase {
   // SettingsViewMixin implementation.
   override focusBackButton() {
     this.shadowRoot!.querySelector('settings-subpage')!.focusBackButton();
+  }
+
+  private onSubAppPermissionExplanationLinkClicked_() {
+    if (this.parentAppOrigin_) {
+      Router.getInstance().navigateTo(
+          routes.SITE_SETTINGS_SITE_DETAILS,
+          new URLSearchParams('site=' + this.parentAppOrigin_));
+    }
+  }
+
+  protected getShoppingmodeIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'all-sites:shoppingmode' :
+        'all-sites:tag-old';
+  }
+
+  protected getAccountCircleIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:account-circle' :
+        'privacy:account-circle-old';
+  }
+
+  protected getCardboardIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:cardboard' :
+        'privacy:cardboard-old';
+  }
+
+  protected getCodeIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:code' :
+        'privacy:code-old';
+  }
+
+  protected getContentPasteIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:content-paste' :
+        'privacy:content-paste-old';
+  }
+
+  protected getCreditCardIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:credit-card' :
+        'privacy:credit-card-old';
+  }
+
+  protected getDeveloperBoardIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:developer-board' :
+        'privacy:developer-board-old';
+  }
+
+  protected getFileSaveIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:file-save' :
+        'privacy:file-save-old';
+  }
+
+  protected getFontDownloadIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:font-download' :
+        'privacy:font-download-old';
+  }
+
+  protected getHandGestureIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:hand-gesture' :
+        'privacy:hand-gesture-old';
+  }
+
+  protected getImagesmodeIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:imagesmode' :
+        'privacy:imagesmode-old';
+  }
+
+  protected getMicIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:mic' :
+        'privacy:mic-old';
+  }
+
+  protected getNotificationsIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:notifications' :
+        'privacy:notifications-old';
+  }
+
+  protected getPianoIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:piano' :
+        'privacy:piano-old';
+  }
+
+  protected getSelectWindowIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:select-window' :
+        'privacy:select-window-old';
+  }
+
+  protected getSensorsIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:sensors' :
+        'privacy:sensors-old';
+  }
+
+  protected getSmartCardReaderIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:smart-card-reader' :
+        'privacy:smart-card-reader-old';
+  }
+
+  protected getSyncSavedLocallyIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:sync-saved-locally' :
+        'privacy:sync-saved-locally-old';
+  }
+
+  protected getUsbIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:usb' :
+        'privacy:usb-old';
+  }
+
+  protected getV8Icon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:v8' :
+        'privacy:v8-old';
+  }
+
+  protected getVideogameAssetIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:videogame-asset' :
+        'privacy:videogame-asset-old';
+  }
+
+  protected getVolumeUpIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:volume-up' :
+        'privacy:volume-up-old';
+  }
+
+  protected getWarningIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:warning' :
+        'privacy:warning-old';
+  }
+
+  protected getWebAssetIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:web-asset' :
+        'privacy:web-asset-old';
   }
 }
 

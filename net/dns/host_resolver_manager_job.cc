@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/containers/linked_list.h"
+#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
@@ -29,6 +30,7 @@
 #include "net/base/url_util.h"
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_task_results_manager.h"
+#include "net/dns/dns_transaction.h"
 #include "net/dns/host_cache.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/host_resolver_dns_task.h"
@@ -87,11 +89,24 @@ base::DictValue NetLogJobAttachParams(const NetLogSource& source,
   return dict;
 }
 
+bool IsAttemptModeSecure(DnsTransactionFactory::AttemptMode attempt_mode) {
+  switch (attempt_mode) {
+    case DnsTransactionFactory::AttemptMode::kHttp:
+      return true;
+    case DnsTransactionFactory::AttemptMode::kClassic:
+    case DnsTransactionFactory::AttemptMode::kPlatform:
+      return false;
+  }
+}
+
 }  // namespace
 
 HostResolverManager::JobKey::JobKey(HostResolver::Host host,
+                                    handles::NetworkHandle target_network,
                                     ResolveContext* resolve_context)
-    : host(std::move(host)), resolve_context(resolve_context->GetWeakPtr()) {}
+    : host(std::move(host)),
+      resolve_context(resolve_context->GetWeakPtr()),
+      target_network(target_network) {}
 
 HostResolverManager::JobKey::~JobKey() = default;
 
@@ -100,13 +115,17 @@ HostResolverManager::JobKey& HostResolverManager::JobKey::operator=(
     const JobKey& other) = default;
 
 bool HostResolverManager::JobKey::operator<(const JobKey& other) const {
+  // Use `GetTargetNetwork()` instead of `target_network` to ensure a consistent
+  // view of a JobKey's target network. This makes sure every piece of code has
+  // a consistent view of a JobKey's target network. See the comments in
+  // `GetTargetNetwork()` for more details.
   return std::forward_as_tuple(query_types.ToEnumBitmask(), flags, source,
                                secure_dns_mode, &*resolve_context, host,
-                               network_anonymization_key) <
-         std::forward_as_tuple(other.query_types.ToEnumBitmask(), other.flags,
-                               other.source, other.secure_dns_mode,
-                               &*other.resolve_context, other.host,
-                               other.network_anonymization_key);
+                               network_anonymization_key, GetTargetNetwork()) <
+         std::forward_as_tuple(
+             other.query_types.ToEnumBitmask(), other.flags, other.source,
+             other.secure_dns_mode, &*other.resolve_context, other.host,
+             other.network_anonymization_key, other.GetTargetNetwork());
 }
 
 bool HostResolverManager::JobKey::operator==(const JobKey& other) const {
@@ -133,14 +152,78 @@ HostCache::Key HostResolverManager::JobKey::ToCacheKey(bool secure) const {
     host_for_cache = std::string(host.GetHostnameWithoutBrackets());
   }
   HostCache::Key key(std::move(host_for_cache), query_type_for_key, flags,
-                     source, network_anonymization_key);
+                     source, network_anonymization_key, GetTargetNetwork());
   key.secure = secure;
   return key;
 }
 
 handles::NetworkHandle HostResolverManager::JobKey::GetTargetNetwork() const {
-  return resolve_context ? resolve_context->GetTargetNetwork()
-                         : handles::kInvalidNetworkHandle;
+  // Multi-network support for Cronet and CCT was originally implemented by
+  // creating multiple URLRequestContexts/ResolveContexts. Until this historical
+  // artifact is removed, we need to maintain this compat layer between:
+  // 1) The old way of doing multi-networking, piggybacking on ResolveContext
+  // 2) The new way of doing multi-networking, using the target_network field
+  //    in the JobKey.
+  // TODO(crbug.com/495684670): Clean this up once multi-network Cronet and CCT
+  // no longer depend on network-bound URLRequestContexts.
+
+  // If there is a ResolveContext, and it has a target network, we are in the
+  // "old way of doing multi-networking" scenario. In this case, there should
+  // never be a non-default target_network set in the JobKey.
+  if (resolve_context &&
+      resolve_context->GetTargetNetwork() != handles::kInvalidNetworkHandle) {
+    CHECK_EQ(target_network, handles::kInvalidNetworkHandle);
+    return resolve_context->GetTargetNetwork();
+  }
+
+  // Otherwise, we are in the "new way of doing multi-networking" scenario. We
+  // can just rely on the target_network field in the JobKey.
+  return target_network;
+}
+
+// static
+// WARNING: This method assumes the current task ordering configured by
+// HostResolverManager::ResolveLocally() and
+// HostResolverManager::CreateTaskSequence(). If you modify the task ordering
+// in those methods, update this method accordingly.
+std::optional<HostResolverManager::Job::ResolveFallbackPath>
+HostResolverManager::Job::CalculateResolvePath(TaskType task_type,
+                                               bool secure_dns_failed,
+                                               bool classic_dns_failed,
+                                               bool platform_dns_failed) {
+  switch (task_type) {
+    case TaskType::SECURE_DNS:
+      return ResolveFallbackPath::kSecureSuccess;
+    case TaskType::DNS:
+      return secure_dns_failed
+                 ? ResolveFallbackPath::kSecureFallbackToClassicSuccess
+                 : ResolveFallbackPath::kClassicSuccess;
+    case TaskType::DNS_PLATFORM:
+      return secure_dns_failed
+                 ? ResolveFallbackPath::kSecureFallbackToPlatformSuccess
+                 : ResolveFallbackPath::kPlatformSuccess;
+    case TaskType::SYSTEM:
+      if (secure_dns_failed) {
+        if (classic_dns_failed) {
+          return ResolveFallbackPath::
+              kSecureFallbackToClassicFallbackToSystemSuccess;
+        }
+        if (platform_dns_failed) {
+          return ResolveFallbackPath::
+              kSecureFallbackToPlatformFallbackToSystemSuccess;
+        }
+        return ResolveFallbackPath::kSecureFallbackToSystemSuccess;
+      }
+      if (classic_dns_failed) {
+        return ResolveFallbackPath::kClassicFallbackToSystemSuccess;
+      }
+      if (platform_dns_failed) {
+        return ResolveFallbackPath::kPlatformFallbackToSystemSuccess;
+      }
+      return ResolveFallbackPath::kSystemSuccess;
+    default:
+      return std::nullopt;
+  }
 }
 
 HostResolverManager::Job::Job(
@@ -200,6 +283,18 @@ HostResolverManager::Job::~Job() {
         service_endpoint_requests_.head()->value();
     request->RemoveFromList();
     request->OnJobCancelled();
+  }
+}
+
+HostResolverManager::TaskType HostResolverManager::Job::AttemptModeToTaskType(
+    DnsTransactionFactory::AttemptMode attempt_mode) {
+  switch (attempt_mode) {
+    case DnsTransactionFactory::AttemptMode::kHttp:
+      return HostResolverManager::TaskType::SECURE_DNS;
+    case DnsTransactionFactory::AttemptMode::kClassic:
+      return HostResolverManager::TaskType::DNS;
+    case DnsTransactionFactory::AttemptMode::kPlatform:
+      return HostResolverManager::TaskType::DNS_PLATFORM;
   }
 }
 
@@ -323,10 +418,22 @@ void HostResolverManager::Job::AbortInsecureDnsTask(int error,
   bool has_system_fallback = std::ranges::contains(tasks_, TaskType::SYSTEM);
   if (has_system_fallback) {
     for (auto it = tasks_.begin(); it != tasks_.end();) {
-      if (*it == TaskType::DNS) {
-        it = tasks_.erase(it);
-      } else {
-        ++it;
+      switch (*it) {
+        case TaskType::DNS:
+        case TaskType::DNS_PLATFORM:
+          it = tasks_.erase(it);
+          break;
+        case TaskType::CACHE_LOOKUP:
+        case TaskType::CONFIG_PRESET:
+        case TaskType::HOSTS:
+        case TaskType::INSECURE_CACHE_LOOKUP:
+        case TaskType::MDNS:
+        case TaskType::NAT64:
+        case TaskType::SECURE_CACHE_LOOKUP:
+        case TaskType::SECURE_DNS:
+        case TaskType::SYSTEM:
+          ++it;
+          break;
       }
     }
   }
@@ -409,23 +516,39 @@ void HostResolverManager::Job::RunNextTask() {
     for (size_t i = 0; i < completion_results_.size() - 1; ++i) {
       const auto& result = completion_results_[i];
       DCHECK_NE(OK, result.entry.error());
-      MaybeCacheResult(result.entry, result.ttl, result.secure);
+      MaybeCacheResult(result.entry, result.ttl,
+                       IsAttemptModeSecure(result.attempt_mode));
     }
     const auto& last_result = completion_results_.back();
     DCHECK_NE(OK, last_result.entry.error());
     CompleteRequests(last_result.entry, last_result.ttl, true /* allow_cache */,
-                     last_result.secure,
-                     last_result.secure ? TaskType::SECURE_DNS : TaskType::DNS);
+                     IsAttemptModeSecure(last_result.attempt_mode),
+                     AttemptModeToTaskType(last_result.attempt_mode));
     return;
   }
 
   TaskType next_task = tasks_.front();
 
-  // Schedule insecure DnsTasks and HostResolverSystemTasks with the
-  // dispatcher.
-  if (!dispatched_ &&
-      (next_task == TaskType::DNS || next_task == TaskType::SYSTEM ||
-       next_task == TaskType::MDNS)) {
+  bool do_dispatch = false;
+  switch (next_task) {
+    // Schedule insecure DnsTasks and HostResolverSystemTasks with the
+    // dispatcher.
+    case TaskType::DNS:
+    case TaskType::DNS_PLATFORM:
+    case TaskType::SYSTEM:
+    case TaskType::MDNS:
+      do_dispatch = true;
+      break;
+    case TaskType::CACHE_LOOKUP:
+    case TaskType::CONFIG_PRESET:
+    case TaskType::HOSTS:
+    case TaskType::INSECURE_CACHE_LOOKUP:
+    case TaskType::NAT64:
+    case TaskType::SECURE_CACHE_LOOKUP:
+    case TaskType::SECURE_DNS:
+      break;
+  }
+  if (!dispatched_ && do_dispatch) {
     dispatched_ = true;
     job_running_ = false;
     Schedule(false);
@@ -453,10 +576,13 @@ void HostResolverManager::Job::RunNextTask() {
       StartSystemTask();
       break;
     case TaskType::DNS:
-      StartDnsTask(false /* secure */);
+      StartDnsTask(DnsTransactionFactory::AttemptMode::kClassic);
+      break;
+    case TaskType::DNS_PLATFORM:
+      StartDnsTask(DnsTransactionFactory::AttemptMode::kPlatform);
       break;
     case TaskType::SECURE_DNS:
-      StartDnsTask(true /* secure */);
+      StartDnsTask(DnsTransactionFactory::AttemptMode::kHttp);
       break;
     case TaskType::MDNS:
       StartMdnsTask();
@@ -620,13 +746,14 @@ void HostResolverManager::Job::StartSystemTask() {
   std::optional<HostResolverSystemTask::CacheParams> cache_params;
   if (key_.resolve_context->host_resolver_cache()) {
     cache_params.emplace(*key_.resolve_context->host_resolver_cache(),
-                         key_.network_anonymization_key);
+                         key_.network_anonymization_key,
+                         key_.GetTargetNetwork());
   }
 
   system_task_ = HostResolverSystemTask::Create(
       std::string(key_.host.GetHostnameWithoutBrackets()),
       HostResolver::DnsQueryTypeSetToAddressFamily(key_.query_types),
-      key_.flags, resolver_->host_resolver_system_params_, net_log_,
+      key_.flags, priority(), resolver_->host_resolver_system_params_, net_log_,
       key_.GetTargetNetwork(), std::move(cache_params));
 
   // Start() could be called from within Resolve(), hence it must NOT directly
@@ -677,7 +804,7 @@ void HostResolverManager::Job::OnSystemTaskComplete(
           net_error,
           net_error == OK ? addr_list.endpoints() : std::vector<IPEndPoint>(),
           std::move(aliases), HostCache::Entry::SOURCE_UNKNOWN),
-      ttl, /*allow_cache=*/true, /*secure=*/false, TaskType::SYSTEM);
+      ttl, /*allow_cache=*/true, /*secure=*/false, TaskType::SYSTEM, duration);
 }
 
 void HostResolverManager::Job::InsecureCacheLookup() {
@@ -699,7 +826,9 @@ void HostResolverManager::Job::InsecureCacheLookup() {
   }
 }
 
-void HostResolverManager::Job::StartDnsTask(bool secure) {
+void HostResolverManager::Job::StartDnsTask(
+    DnsTransactionFactory::AttemptMode attempt_mode) {
+  const bool secure = IsAttemptModeSecure(attempt_mode);
   DCHECK_EQ(secure, !dispatched_);
   DCHECK_EQ(dispatched_ ? 1 : 0, num_occupied_job_slots_);
   DCHECK(!resolver_->ShouldForceSystemResolverDueToTestOverride());
@@ -708,11 +837,16 @@ void HostResolverManager::Job::StartDnsTask(bool secure) {
   // running it, as a "started" job needs a task to be properly cleaned up.
   dns_task_ = std::make_unique<HostResolverDnsTask>(
       resolver_->dns_client_.get(), key_.host, key_.network_anonymization_key,
-      key_.query_types, &*key_.resolve_context, secure, key_.secure_dns_mode,
-      this, net_log_, tick_clock_, !tasks_.empty() /* fallback_available */,
+      key_.query_types, &*key_.resolve_context, attempt_mode,
+      key_.secure_dns_mode, key_.GetTargetNetwork(), this, net_log_,
+      tick_clock_, !tasks_.empty() /* fallback_available */,
       https_svcb_options_);
   dns_task_executed_ = true;
-  if (resolver_->IsHappyEyeballsV3Enabled()) {
+  if (secure) {
+    secure_dns_attempted_ = true;
+  }
+  if (base::FeatureList::IsEnabled(features::kEnableIntermediateDnsResults) ||
+      resolver_->IsHappyEyeballsV3Enabled()) {
     dns_task_results_manager_ = std::make_unique<DnsTaskResultsManager>(
         this, key_.host, key_.query_types, net_log_);
   }
@@ -743,12 +877,13 @@ void HostResolverManager::Job::OnDnsTaskFailure(
     base::TimeDelta duration,
     bool allow_fallback,
     const HostCache::Entry& failure_results,
-    bool secure) {
+    DnsTransactionFactory::AttemptMode attempt_mode) {
   DCHECK_NE(OK, failure_results.error());
 
   base::UmaHistogramLongTimes100(
-      base::StrCat(
-          {"Net.DNS.DnsTask.", secure ? "Secure" : "Insecure", ".FailureTime"}),
+      base::StrCat({"Net.DNS.DnsTask.",
+                    IsAttemptModeSecure(attempt_mode) ? "Secure" : "Insecure",
+                    ".FailureTime"}),
       duration);
 
   if (!dns_task) {
@@ -762,7 +897,7 @@ void HostResolverManager::Job::OnDnsTaskFailure(
   // to use during request completion.
   base::TimeDelta ttl =
       failure_results.has_ttl() ? failure_results.ttl() : base::Seconds(0);
-  completion_results_.emplace_back(failure_results, ttl, secure);
+  completion_results_.emplace_back(failure_results, ttl, attempt_mode);
 
   dns_task_error_ = failure_results.error();
   KillDnsTask();
@@ -778,7 +913,7 @@ void HostResolverManager::Job::OnDnsTaskComplete(
     base::TimeTicks start_time,
     bool allow_fallback,
     HostResolverDnsTask::Results results,
-    bool secure) {
+    DnsTransactionFactory::AttemptMode attempt_mode) {
   DCHECK(dns_task_);
 
   HostCache::Entry legacy_results(results, base::Time::Now(),
@@ -797,12 +932,13 @@ void HostResolverManager::Job::OnDnsTaskComplete(
   base::TimeDelta duration = tick_clock_->NowTicks() - start_time;
   if (legacy_results.error() != OK) {
     OnDnsTaskFailure(dns_task_->AsWeakPtr(), duration, allow_fallback,
-                     legacy_results, secure);
+                     legacy_results, attempt_mode);
     return;
   }
 
   dns_task_https_disabled_ = dns_task_->https_disabled();
 
+  const bool secure = IsAttemptModeSecure(attempt_mode);
   base::UmaHistogramLongTimes100(
       base::StrCat(
           {"Net.DNS.DnsTask.", secure ? "Secure" : "Insecure", ".SuccessTime"}),
@@ -822,12 +958,13 @@ void HostResolverManager::Job::OnDnsTaskComplete(
 
   if (ContainsIcannNameCollisionIp(legacy_results.ip_endpoints())) {
     CompleteRequestsWithError(ERR_ICANN_NAME_COLLISION,
-                              secure ? TaskType::SECURE_DNS : TaskType::DNS);
+                              AttemptModeToTaskType(attempt_mode));
     return;
   }
 
   CompleteRequests(legacy_results, bounded_ttl, true /* allow_cache */, secure,
-                   secure ? TaskType::SECURE_DNS : TaskType::DNS);
+                   AttemptModeToTaskType(attempt_mode), duration,
+                   dns_task_->GetDohResolutionDetails());
 }
 
 void HostResolverManager::Job::OnIntermediateTransactionsComplete(
@@ -902,11 +1039,12 @@ void HostResolverManager::Job::StartMdnsTask() {
   int rv = resolver_->GetOrCreateMdnsClient(&client);
   mdns_task_ = std::make_unique<HostResolverMdnsTask>(
       client, std::string(key_.host.GetHostnameWithoutBrackets()),
-      key_.query_types);
+      key_.query_types, priority());
 
   if (rv == OK) {
-    mdns_task_->Start(
-        base::BindOnce(&Job::OnMdnsTaskComplete, base::Unretained(this)));
+    mdns_task_->Start(base::BindOnce(&Job::OnMdnsTaskComplete,
+                                     base::Unretained(this),
+                                     tick_clock_->NowTicks()));
   } else {
     // Could not create an mDNS client. Since we cannot complete synchronously
     // from here, post a failure without starting the task.
@@ -916,7 +1054,7 @@ void HostResolverManager::Job::StartMdnsTask() {
   }
 }
 
-void HostResolverManager::Job::OnMdnsTaskComplete() {
+void HostResolverManager::Job::OnMdnsTaskComplete(base::TimeTicks start_time) {
   DCHECK(mdns_task_);
   // TODO(crbug.com/40577881): Consider adding MDNS-specific logging.
 
@@ -930,10 +1068,12 @@ void HostResolverManager::Job::OnMdnsTaskComplete() {
     CompleteRequestsWithError(ERR_ICANN_NAME_COLLISION, TaskType::MDNS);
     return;
   }
+
   // MDNS uses a separate cache, so skip saving result to cache.
   // TODO(crbug.com/40611558): Consider merging caches.
   CompleteRequestsWithoutCache(legacy_results, /*stale_info=*/std::nullopt,
-                               TaskType::MDNS);
+                               TaskType::MDNS,
+                               tick_clock_->NowTicks() - start_time);
 }
 
 void HostResolverManager::Job::OnMdnsImmediateFailure(int rv) {
@@ -947,12 +1087,15 @@ void HostResolverManager::Job::StartNat64Task() {
   DCHECK(!nat64_task_);
   nat64_task_ = std::make_unique<HostResolverNat64Task>(
       key_.host.GetHostnameWithoutBrackets(), key_.network_anonymization_key,
-      net_log_, &*key_.resolve_context, resolver_);
+      key_.GetTargetNetwork(), net_log_, &*key_.resolve_context, resolver_,
+      priority());
   nat64_task_->Start(base::BindOnce(&Job::OnNat64TaskComplete,
-                                    weak_ptr_factory_.GetWeakPtr()));
+                                    weak_ptr_factory_.GetWeakPtr(),
+                                    tick_clock_->NowTicks()));
 }
 
 void HostResolverManager::Job::OnNat64TaskComplete(
+    base::TimeTicks start_time,
     std::unique_ptr<HostResolverInternalResult> result) {
   CHECK(nat64_task_);
   CHECK(result);
@@ -964,7 +1107,8 @@ void HostResolverManager::Job::OnNat64TaskComplete(
                                   HostCache::Entry::SOURCE_UNKNOWN);
 
   CompleteRequestsWithoutCache(legacy_results, /*stale_info=*/std::nullopt,
-                               TaskType::NAT64);
+                               TaskType::NAT64,
+                               tick_clock_->NowTicks() - start_time);
 }
 
 void HostResolverManager::Job::RecordJobHistograms(
@@ -1014,6 +1158,34 @@ void HostResolverManager::Job::RecordJobHistograms(
       base::UmaHistogramSparse("Net.DNS.ResolveError.Fast", std::abs(error));
     } else {
       base::UmaHistogramSparse("Net.DNS.ResolveError.Slow", std::abs(error));
+    }
+  }
+
+  // Record the complete fallback path taken to achieve a successful
+  // resolution.
+  if (category == RESOLVE_SUCCESS && task_type.has_value()) {
+    bool secure_dns_failed = false;
+    bool classic_dns_failed = false;
+    bool platform_dns_failed = false;
+
+    for (const auto& result : completion_results_) {
+      if (IsAttemptModeSecure(result.attempt_mode)) {
+        secure_dns_failed = true;
+      } else if (result.attempt_mode ==
+                 DnsTransactionFactory::AttemptMode::kClassic) {
+        classic_dns_failed = true;
+      } else if (result.attempt_mode ==
+                 DnsTransactionFactory::AttemptMode::kPlatform) {
+        platform_dns_failed = true;
+      }
+    }
+
+    std::optional<ResolveFallbackPath> path =
+        CalculateResolvePath(task_type.value(), secure_dns_failed,
+                             classic_dns_failed, platform_dns_failed);
+    if (path.has_value()) {
+      base::UmaHistogramEnumeration("Net.DNS.ResolveFallbackPath",
+                                    path.value());
     }
   }
 }
@@ -1067,8 +1239,46 @@ void HostResolverManager::Job::CompleteRequests(
     base::TimeDelta ttl,
     bool allow_cache,
     bool secure,
-    std::optional<TaskType> task_type) {
+    std::optional<TaskType> task_type,
+    std::optional<base::TimeDelta> task_completion_delay,
+    std::optional<DohResolutionDetails> doh_details) {
   CHECK(resolver_.get());
+
+  ResolutionDetails resolution_details;
+  constexpr auto to_resolution_source = [](TaskType type) {
+    switch (type) {
+      case TaskType::SECURE_DNS:
+        return ResolutionSource::kSecure;
+      case TaskType::DNS:
+        return ResolutionSource::kInsecure;
+      case TaskType::SYSTEM:
+        return ResolutionSource::kSystem;
+      case TaskType::DNS_PLATFORM:
+        return ResolutionSource::kPlatform;
+      case TaskType::MDNS:
+        return ResolutionSource::kMdns;
+      case TaskType::NAT64:
+        return ResolutionSource::kNat64;
+      case TaskType::INSECURE_CACHE_LOOKUP:
+        return ResolutionSource::kCache;
+      case TaskType::SECURE_CACHE_LOOKUP:
+      case TaskType::CACHE_LOOKUP:
+      case TaskType::CONFIG_PRESET:
+      case TaskType::HOSTS:
+        // These task types should have been handled synchronously in
+        // ResolveLocally() prior to Job creation.
+        NOTREACHED() << "type=" << static_cast<int>(type);
+    }
+  };
+
+  if (task_type) {
+    resolution_details.source = to_resolution_source(*task_type);
+  }
+  if (results.error() == OK) {
+    resolution_details.task_completion_delay = task_completion_delay;
+  }
+  resolution_details.secure_dns_attempted = secure_dns_attempted_;
+  resolution_details.doh_details = std::move(doh_details);
 
   // This job must be removed from resolver's |jobs_| now to make room for a
   // new job with the same key in case one of the OnComplete callbacks decides
@@ -1082,9 +1292,8 @@ void HostResolverManager::Job::CompleteRequests(
   Finish();
 
   if (results.error() == ERR_DNS_REQUEST_CANCELLED) {
-    net_log_.AddEvent(NetLogEventType::CANCELLED);
-    net_log_.EndEventWithNetErrorCode(
-        NetLogEventType::HOST_RESOLVER_MANAGER_JOB, OK);
+    CancelRequests();
+    // `this` may be deleted. Do not access `this` after this point.
     return;
   }
 
@@ -1111,8 +1320,9 @@ void HostResolverManager::Job::CompleteRequests(
     CHECK(key_ == req->GetJobKey());
 
     if (results.error() == OK && !req->parameters().is_speculative) {
-      req->set_results(
-          results.CopyWithDefaultPort(req->request_host().GetPort()));
+      req->SetResults(
+          results.CopyWithDefaultPort(req->request_host().GetPort()),
+          resolution_details);
     }
     req->OnJobCompleted(
         key_, results.error(),
@@ -1129,7 +1339,7 @@ void HostResolverManager::Job::CompleteRequests(
     ServiceEndpointRequestImpl* request =
         service_endpoint_requests_.head()->value();
     request->RemoveFromList();
-    request->OnJobCompleted(results, secure);
+    request->OnJobCompleted(results, secure, resolution_details);
     if (!resolver_.get()) {
       return;
     }
@@ -1143,7 +1353,8 @@ void HostResolverManager::Job::CompleteRequests(
 void HostResolverManager::Job::CompleteRequestsWithoutCache(
     const HostCache::Entry& results,
     std::optional<HostCache::EntryStaleness> stale_info,
-    TaskType task_type) {
+    TaskType task_type,
+    std::optional<base::TimeDelta> task_completion_delay) {
   // Record the stale_info for all non-speculative requests, if it exists.
   if (stale_info) {
     for (auto* node = requests_.head(); node != requests_.end();
@@ -1154,7 +1365,7 @@ void HostResolverManager::Job::CompleteRequestsWithoutCache(
     }
   }
   CompleteRequests(results, base::TimeDelta(), false /* allow_cache */,
-                   false /* secure */, task_type);
+                   false /* secure */, task_type, task_completion_delay);
 }
 
 void HostResolverManager::Job::CompleteRequestsWithError(
@@ -1164,6 +1375,35 @@ void HostResolverManager::Job::CompleteRequestsWithError(
   CompleteRequests(
       HostCache::Entry(net_error, HostCache::Entry::SOURCE_UNKNOWN),
       base::TimeDelta(), true /* allow_cache */, false /* secure */, task_type);
+}
+
+void HostResolverManager::Job::CancelRequests() {
+  net_log_.AddEvent(NetLogEventType::CANCELLED);
+  net_log_.EndEventWithNetErrorCode(NetLogEventType::HOST_RESOLVER_MANAGER_JOB,
+                                    OK);
+
+  // In the following while loops, we check if the resolver was destroyed as a
+  // result of running the callback. If it was, we could continue, but we choose
+  // to bail.
+
+  while (!requests_.empty()) {
+    RequestImpl* req = requests_.head()->value();
+    req->RemoveFromList();
+    req->OnJobCancelled(key_);
+    if (!resolver_.get()) {
+      return;
+    }
+  }
+
+  while (!service_endpoint_requests_.empty()) {
+    ServiceEndpointRequestImpl* request =
+        service_endpoint_requests_.head()->value();
+    request->RemoveFromList();
+    request->OnJobCancelled();
+    if (!resolver_.get()) {
+      return;
+    }
+  }
 }
 
 RequestPriority HostResolverManager::Job::priority() const {

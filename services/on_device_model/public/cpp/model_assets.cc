@@ -6,8 +6,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <variant>
+
+#include "third_party/dawn/include/dawn/dawn_proc.h"
 
 #include "base/check.h"
 #include "base/files/file.h"
@@ -33,14 +36,18 @@ namespace {
 // though nothing should write through to the file.
 #if BUILDFLAG(IS_FUCHSIA)
 constexpr uint32_t kWeightsFlags =
-    base::File::FLAG_OPEN | base::File::FLAG_READ | base::File::FLAG_WRITE;
+    base::File::AddFlagsForPassingToUntrustedProcess(
+        base::File::FLAG_OPEN | base::File::FLAG_READ | base::File::FLAG_WRITE);
 constexpr uint32_t kCacheFlags = kWeightsFlags;
 #else
 constexpr uint32_t kWeightsFlags =
-    base::File::FLAG_OPEN | base::File::FLAG_READ | base::File::FLAG_ASYNC |
-    base::File::FLAG_WIN_SEQUENTIAL_SCAN;
-constexpr uint32_t kCacheFlags = base::File::FLAG_OPEN_ALWAYS |
-                                 base::File::FLAG_READ | base::File::FLAG_WRITE;
+    base::File::AddFlagsForPassingToUntrustedProcess(
+        base::File::FLAG_OPEN | base::File::FLAG_READ | base::File::FLAG_ASYNC |
+        base::File::FLAG_WIN_SEQUENTIAL_SCAN);
+constexpr uint32_t kCacheFlags =
+    base::File::AddFlagsForPassingToUntrustedProcess(
+        base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ |
+        base::File::FLAG_WRITE);
 #endif
 
 // Attempts to make sure `file` will be read from disk quickly when needed.
@@ -60,6 +67,38 @@ void PrefetchFile(const base::FilePath& path) {
 #else
   base::PreReadFile(path, kIsExecutable, kSequential);
 #endif
+}
+
+base::File OpenAndValidateProgramCache(const base::FilePath& path) {
+  // dawnProcGetVersion() returns a static array of uint8_t of size 20.
+  constexpr int kDawnVersionSize = 20;
+
+  if (path.empty()) {
+    return base::File();
+  }
+
+  PrefetchFile(path);
+  base::File cache_file(path, kCacheFlags);
+  if (!cache_file.IsValid()) {
+    return cache_file;
+  }
+
+  base::FilePath version_path =
+      path.AddExtension(FILE_PATH_LITERAL(".dawn_version"));
+  std::string current_version(
+      reinterpret_cast<const char*>(dawnProcGetVersion()), kDawnVersionSize);
+  std::string cached_version;
+
+  bool version_match = base::ReadFileToString(version_path, &cached_version) &&
+                       cached_version == current_version;
+
+  if (!version_match) {
+    // Dawn version changed (or first run). Invalidate by truncating file to 0.
+    cache_file.SetLength(0);
+    base::WriteFile(version_path, current_version);
+  }
+
+  return cache_file;
 }
 
 }  // namespace
@@ -138,7 +177,10 @@ ModelAssets::ModelAssets(const ModelAssets& other)
       sp_model_path(other.sp_model_path),
       cache(other.cache.Duplicate()),
       encoder_cache(other.encoder_cache.Duplicate()),
-      adapter_cache(other.adapter_cache.Duplicate()) {}
+      adapter_cache(other.adapter_cache.Duplicate()),
+      program_cache(other.program_cache.Duplicate()),
+      encoder_program_cache(other.encoder_program_cache.Duplicate()),
+      adapter_program_cache(other.adapter_program_cache.Duplicate()) {}
 
 ModelAssets& ModelAssets::operator=(const ModelAssets& other) {
   weights = other.weights;
@@ -146,6 +188,9 @@ ModelAssets& ModelAssets::operator=(const ModelAssets& other) {
   cache = other.cache.Duplicate();
   encoder_cache = other.encoder_cache.Duplicate();
   adapter_cache = other.adapter_cache.Duplicate();
+  program_cache = other.program_cache.Duplicate();
+  encoder_program_cache = other.encoder_program_cache.Duplicate();
+  adapter_program_cache = other.adapter_program_cache.Duplicate();
   return *this;
 }
 
@@ -177,6 +222,20 @@ ModelAssets LoadModelAssets(const ModelAssetPaths& paths) {
   if (!paths.adapter_cache.empty()) {
     PrefetchFile(paths.adapter_cache);
     assets.adapter_cache = base::File(paths.adapter_cache, kCacheFlags);
+  }
+
+  if (!paths.program_cache.empty()) {
+    assets.program_cache = OpenAndValidateProgramCache(paths.program_cache);
+  }
+
+  if (!paths.encoder_program_cache.empty()) {
+    assets.encoder_program_cache =
+        OpenAndValidateProgramCache(paths.encoder_program_cache);
+  }
+
+  if (!paths.adapter_program_cache.empty()) {
+    assets.adapter_program_cache =
+        OpenAndValidateProgramCache(paths.adapter_program_cache);
   }
 
   return assets;

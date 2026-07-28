@@ -164,19 +164,19 @@ void ReportInstallationStageTimes(
         installation.download_CRX_finish_time.value() -
             installation.download_CRX_started_time.value());
   }
-  if (installation.copying_started_time) {
-    DCHECK(installation.verification_started_time);
-    base::UmaHistogramLongTimes(
-        "Extensions.ForceInstalledTime.VerificationStartTo.CopyingStart",
-        installation.copying_started_time.value() -
-            installation.verification_started_time.value());
-  }
-  if (installation.unpacking_started_time &&
+  if (installation.verification_started_time &&
       installation.copying_started_time) {
     base::UmaHistogramLongTimes(
-        "Extensions.ForceInstalledTime.CopyingStartTo.UnpackingStart",
-        installation.unpacking_started_time.value() -
+        "Extensions.ForceInstalledTime.CopyingStartTo.VerificationStart",
+        installation.verification_started_time.value() -
             installation.copying_started_time.value());
+  }
+  if (installation.unpacking_started_time &&
+      installation.verification_started_time) {
+    base::UmaHistogramLongTimes(
+        "Extensions.ForceInstalledTime.VerificationStartTo.UnpackingStart",
+        installation.unpacking_started_time.value() -
+            installation.verification_started_time.value());
   }
   if (installation.checking_expectations_started_time &&
       installation.unpacking_started_time) {
@@ -549,8 +549,9 @@ void ForceInstalledMetrics::ReportMetrics() {
   const ExtensionSet& blocklisted_extensions =
       registry_->blocklisted_extensions();
   for (const auto& entry : installed_extensions) {
-    if (missing_forced_extensions.count(entry->id())) {
-      missing_forced_extensions.erase(entry->id());
+    if (auto it = missing_forced_extensions.find(entry->id());
+        it != missing_forced_extensions.end()) {
+      missing_forced_extensions.erase(it);
       ReportDisableReason(entry->id());
       if (blocklisted_extensions.Contains(entry->id())) {
         blocklisted_count++;

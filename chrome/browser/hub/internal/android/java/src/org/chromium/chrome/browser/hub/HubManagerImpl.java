@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.hub;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
+import android.graphics.Color;
 import android.view.View;
 import android.widget.FrameLayout.LayoutParams;
 
@@ -19,6 +20,7 @@ import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -26,14 +28,20 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.ParentOverrideSlot;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
+import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController.MenuOrKeyboardActionHandler;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler.BackPressResult;
-import org.chromium.ui.util.TokenHolder;
 
 /**
  * Implementation of {@link HubManager} and {@link HubController}.
@@ -54,21 +62,32 @@ public class HubManagerImpl implements HubManager, HubController {
     private final BackPressManager mBackPressManager;
     private final MenuOrKeyboardActionController mMenuOrKeyboardActionController;
     private final SnackbarManager mSnackbarManager;
+    private final BottomSheetController mBottomSheetController;
+    private final SettableNonNullObservableSupplier<Integer> mSnackbarMarginSupplier =
+            ObservableSuppliers.createNonNull(0);
+    private final BottomSheetObserver mBottomSheetObserver =
+            new EmptyBottomSheetObserver() {
+                @Override
+                public void onSheetOffsetChanged(float heightFraction, float offsetPx) {
+                    mSnackbarMarginSupplier.set(Math.round(offsetPx));
+                }
+            };
     private final NullableObservableSupplier<Tab> mTabSupplier;
     private final MenuButtonCoordinator mMenuButtonCoordinator;
     private final HubShowPaneHelper mHubShowPaneHelper;
     private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
     private final SearchActivityClient mSearchActivityClient;
     private final HubColorMixer mHubColorMixer;
+    private final @Nullable BottomBarHostManager mBottomBarHostManager;
+    private final NonNullObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
+    private final @PaneId int mDefaultPaneId;
 
     // This is effectively NonNull and final once the HubLayout is initialized.
     private @MonotonicNonNull HubLayoutController mHubLayoutController;
     private @Nullable HubCoordinator mHubCoordinator;
-    private int mSnackbarOverrideToken;
+    private boolean mHasSnackbarOverride;
     private int mStatusIndicatorHeight;
     private int mAppHeaderHeight;
-    private final @Nullable MonotonicObservableSupplier<Boolean> mXrSpaceModeObservableSupplier;
-    private final @PaneId int mDefaultPaneId;
 
     /** See {@link HubManagerFactory#createHubManager}. */
     public HubManagerImpl(
@@ -78,12 +97,14 @@ public class HubManagerImpl implements HubManager, HubController {
             BackPressManager backPressManager,
             MenuOrKeyboardActionController menuOrKeyboardActionController,
             SnackbarManager snackbarManager,
+            BottomSheetController bottomSheetController,
+            @Nullable BottomBarHostManager bottomBarHostManager,
             NullableObservableSupplier<Tab> tabSupplier,
             MenuButtonCoordinator menuButtonCoordinator,
             HubShowPaneHelper hubShowPaneHelper,
             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             SearchActivityClient searchActivityClient,
-            @Nullable MonotonicObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
+            NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
             @PaneId int defaultPaneId) {
         mActivity = activity;
         mProfileProviderSupplier = profileProviderSupplier;
@@ -91,6 +112,9 @@ public class HubManagerImpl implements HubManager, HubController {
         mBackPressManager = backPressManager;
         mMenuOrKeyboardActionController = menuOrKeyboardActionController;
         mSnackbarManager = snackbarManager;
+        mBottomSheetController = bottomSheetController;
+        mBottomSheetController.addObserver(mBottomSheetObserver);
+        mBottomBarHostManager = bottomBarHostManager;
         mTabSupplier = tabSupplier;
         mMenuButtonCoordinator = menuButtonCoordinator;
         mHubShowPaneHelper = hubShowPaneHelper;
@@ -104,16 +128,28 @@ public class HubManagerImpl implements HubManager, HubController {
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
         mHubContainerView.setLayoutParams(params);
 
-        mPaneManager.getFocusedPaneSupplier().addObserver(mOnFocusedPaneChanged);
+        mPaneManager
+                .getFocusedPaneSupplier()
+                .addSyncObserverAndPostIfNonNull(mOnFocusedPaneChanged);
         mHubColorMixer =
                 new HubColorMixerImpl(
                         mActivity, mHubVisibilitySupplier, mPaneManager.getFocusedPaneSupplier());
+        mHubColorMixer.registerBlend(
+                new SingleHubViewColorBlend(
+                        HubAnimationConstants.PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
+                        colorScheme -> {
+                            return VerticalTabUtils.isVerticalTabsEnabled(mActivity)
+                                    ? HubColors.getBackgroundColor(mActivity, colorScheme)
+                                    : Color.TRANSPARENT;
+                        },
+                        mHubContainerView::setBackgroundColor));
         mXrSpaceModeObservableSupplier = xrSpaceModeObservableSupplier;
         mDefaultPaneId = defaultPaneId;
     }
 
     @Override
     public void destroy() {
+        mBottomSheetController.removeObserver(mBottomSheetObserver);
         mHubVisibilitySupplier.set(false);
         mPaneManager.getFocusedPaneSupplier().removeObserver(mOnFocusedPaneChanged);
         mPaneManager.destroy();
@@ -143,21 +179,24 @@ public class HubManagerImpl implements HubManager, HubController {
 
     @Override
     public void setStatusIndicatorHeight(int height) {
-        LayoutParams params = (LayoutParams) mHubContainerView.getLayoutParams();
-        assert params != null : "HubContainerView should always have layout params.";
         mStatusIndicatorHeight = height;
-        params.topMargin = mStatusIndicatorHeight + mAppHeaderHeight;
-        mHubContainerView.setLayoutParams(params);
+        updateContainerLayoutParams();
     }
 
     @Override
     public void setAppHeaderHeight(int height) {
         if (mAppHeaderHeight == height) return;
+        mAppHeaderHeight = height;
+        updateContainerLayoutParams();
+    }
+
+    private void updateContainerLayoutParams() {
         LayoutParams params = (LayoutParams) mHubContainerView.getLayoutParams();
         assert params != null : "HubContainerView should always have layout params.";
-        mAppHeaderHeight = height;
-        params.topMargin = mStatusIndicatorHeight + mAppHeaderHeight;
+        boolean isVerticalTabsOn = VerticalTabUtils.isVerticalTabsEnabled(mActivity);
+        params.topMargin = mStatusIndicatorHeight + (isVerticalTabsOn ? 0 : mAppHeaderHeight);
         mHubContainerView.setLayoutParams(params);
+        mHubContainerView.setPadding(0, isVerticalTabsOn ? mAppHeaderHeight : 0, 0, 0);
     }
 
     @Override
@@ -198,10 +237,19 @@ public class HubManagerImpl implements HubManager, HubController {
     public void onHubLayoutShow() {
         mHubVisibilitySupplier.set(true);
         ensureHubCoordinatorIsInitialized();
+
+        if (mBottomBarHostManager != null && BottomBarConfigUtils.shouldShowOnGts()) {
+            mBottomBarHostManager.takeOwnership(
+                    BottomBarHostManager.Host.HUB, mHubCoordinator::attachBottomBarView);
+        }
     }
 
     @Override
     public void onHubLayoutDoneHiding() {
+        if (mBottomBarHostManager != null && BottomBarConfigUtils.shouldShowOnGts()) {
+            mBottomBarHostManager.resetOwnership();
+        }
+
         // TODO(crbug.com/40283238): Consider deferring this destruction till after a timeout.
         mHubContainerView.removeAllViews();
         mHubVisibilitySupplier.set(false);
@@ -228,6 +276,7 @@ public class HubManagerImpl implements HubManager, HubController {
         return mHubColorMixer;
     }
 
+    @EnsuresNonNull("mHubCoordinator")
     private void ensureHubCoordinatorIsInitialized() {
         if (mHubCoordinator != null) return;
 
@@ -264,10 +313,6 @@ public class HubManagerImpl implements HubManager, HubController {
         }
     }
 
-    @Nullable HubCoordinator getHubCoordinatorForTesting() {
-        return mHubCoordinator;
-    }
-
     private void onFocusedPaneChanged(Pane newPane, @Nullable Pane oldPane) {
         detachPaneDependencies(oldPane);
         if (mHubCoordinator != null) {
@@ -285,9 +330,9 @@ public class HubManagerImpl implements HubManager, HubController {
             mMenuOrKeyboardActionController.unregisterMenuOrKeyboardActionHandler(
                     menuOrKeyboardActionHandler);
         }
-        if (mSnackbarOverrideToken != TokenHolder.INVALID_TOKEN) {
-            mSnackbarManager.popParentViewFromOverrideStack(mSnackbarOverrideToken);
-            mSnackbarOverrideToken = TokenHolder.INVALID_TOKEN;
+        if (mHasSnackbarOverride) {
+            mSnackbarManager.popParentViewOverride(ParentOverrideSlot.HUB);
+            mHasSnackbarOverride = false;
         }
     }
 
@@ -302,8 +347,16 @@ public class HubManagerImpl implements HubManager, HubController {
             mMenuOrKeyboardActionController.registerMenuOrKeyboardActionHandler(
                     menuOrKeyboardActionHandler);
         }
-        mSnackbarOverrideToken =
-                mSnackbarManager.pushParentViewToOverrideStack(
-                        mHubCoordinator.getSnackbarContainer());
+        boolean hasBottomToolbar = mHubCoordinator.hasBottomToolbar();
+        mSnackbarMarginSupplier.set(mBottomSheetController.getCurrentOffset());
+        mHasSnackbarOverride = true;
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.HUB,
+                mHubCoordinator.getSnackbarContainer(),
+                hasBottomToolbar ? mSnackbarMarginSupplier : null);
+    }
+
+    public @Nullable HubCoordinator getHubCoordinatorForTesting() {
+        return mHubCoordinator;
     }
 }

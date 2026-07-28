@@ -5,8 +5,8 @@
 package org.chromium.chrome.browser.bookmarks;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalBookmarksUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeBookmarksUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeBookmarksUrl;
 import static org.chromium.components.browser_ui.widget.ListItemBuilder.buildSimpleMenuItem;
 
 import android.app.Activity;
@@ -40,6 +40,7 @@ import org.chromium.chrome.browser.bookmarks.ImprovedBookmarkRow.Location;
 import org.chromium.chrome.browser.bookmarks.ImprovedBookmarkRowProperties.ImageVisibility;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.partnerbookmarks.PartnerBookmarksReader;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManager;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -80,6 +81,7 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
@@ -116,7 +118,15 @@ class BookmarkManagerMediator
             boolean enabled =
                     !AccessibilityState.isPerformGesturesEnabled()
                             && mBookmarkDelegate.getCurrentUiMode() == BookmarkUiMode.FOLDER;
+            // On tablets, search is an in-place filter that stays in FOLDER mode,
+            // but drag-reorder must still be disabled during search because the
+            // model list only contains filtered results, not the full folder
+            // contents needed by setOrder() / reorderBookmarks().
+            boolean isTabletSearch =
+                    DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
+                            && !TextUtils.isEmpty(getCurrentSearchText());
             return enabled
+                    && !isTabletSearch
                     && mBookmarkUiPrefs.getBookmarkRowSortOrder() == BookmarkRowSortOrder.MANUAL
                     && mCurrentPowerFilter.isEmpty();
         }
@@ -263,10 +273,7 @@ class BookmarkManagerMediator
                 @Override
                 public void onSelectionStateChange(List<BookmarkId> selectedBookmarks) {
                     clearHighlight();
-
-                    if (mIsSelectionEnabled != mSelectionDelegate.isSelectionEnabled()) {
-                        changeSelectionMode(mSelectionDelegate.isSelectionEnabled());
-                    }
+                    changeSelectionMode(mSelectionDelegate.isSelectionEnabled());
                 }
             };
 
@@ -441,7 +448,7 @@ class BookmarkManagerMediator
         mSelectableListLayout = selectableListLayout;
         mSelectableListLayout
                 .getHandleBackPressChangedSupplier()
-                .addObserver((x) -> onBackPressStateChanged());
+                .addSyncObserverAndPostIfNonNull((x) -> onBackPressStateChanged());
         mSelectionDelegate = selectionDelegate;
         mRecyclerView = recyclerView;
         mDragReorderableRecyclerViewAdapter = dragReorderableRecyclerViewAdapter;
@@ -521,7 +528,7 @@ class BookmarkManagerMediator
 
         updateShoppingFilterVisible();
 
-        // TODO(https://crbug.com/1413463): This logic is here to keep the same execution order
+        // TODO(https://crbug.com/40255666): This logic is here to keep the same execution order
         // from when it was in the original adapter. It doesn't conceptually make sense to be here,
         // and should happen earlier.
         addUiObserver(mBookmarkUiObserver);
@@ -956,7 +963,7 @@ class BookmarkManagerMediator
             // If a loading state is replaced by another loading state, do not notify this change.
             if (mNativePage != null) {
                 boolean replaceLastUrl =
-                        TextUtils.equals(mNativePage.getUrl(), getOriginalNonNativeBookmarksUrl())
+                        TextUtils.equals(mNativePage.getUrl(), getOriginalBookmarksUrl())
                                 || TextUtils.equals(
                                         mNativePage.getUrl(), getOriginalNativeBookmarksUrl());
                 mNativePage.onStateChange(state.mUrl, replaceLastUrl);
@@ -1100,6 +1107,15 @@ class BookmarkManagerMediator
 
         updateAllLocations();
         syncAdapterAndSelectionDelegate();
+
+        String query = getCurrentSearchText();
+        if (getCurrentUiMode() == BookmarkUiMode.SEARCHING && !TextUtils.isEmpty(query)) {
+            int count = bookmarkListEntryList.size();
+            String announcement =
+                    mContext.getResources()
+                            .getQuantityString(R.plurals.bookmark_search_num_results, count, count);
+            mSelectableListLayout.announceAccessibilityText(announcement);
+        }
     }
 
     private void updateOrAdd(int index, ListItem listItem) {
@@ -1442,13 +1458,11 @@ class BookmarkManagerMediator
                 mImprovedBookmarkRowCoordinator.createBasePropertyModel(bookmarkId);
         propertyModel.set(BookmarkManagerProperties.BOOKMARK_LIST_ENTRY, bookmarkListEntry);
 
-        if (ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled()) {
-            // Include #isReorderable because Mobile bookmarks, Bookmarks bar, and Reading list
-            // should not be draggable.
-            boolean isDragEnabled =
-                    mDragStateDelegate.getDragEnabled() && isReorderable(bookmarkListEntry);
-            propertyModel.set(ImprovedBookmarkRowProperties.IS_DRAG_ENABLED, isDragEnabled);
-        }
+        // Include #isReorderable because Mobile bookmarks, Bookmarks bar, and Reading list
+        // should not be draggable.
+        boolean isDragEnabled =
+                mDragStateDelegate.getDragEnabled() && isReorderable(bookmarkListEntry);
+        propertyModel.set(ImprovedBookmarkRowProperties.IS_DRAG_ENABLED, isDragEnabled);
 
         // Menu
         propertyModel.set(
@@ -1490,13 +1504,11 @@ class BookmarkManagerMediator
         boolean canMove = BookmarkUtils.isMovable(mBookmarkModel, bookmarkItem);
 
         if (bookmarkId.getType() == BookmarkType.READING_LIST) {
-            if (bookmarkItem != null) {
-                listItems.add(
-                        buildSimpleMenuItem(
-                                bookmarkItem.isRead()
-                                        ? R.string.reading_list_mark_as_unread
-                                        : R.string.reading_list_mark_as_read));
-            }
+            listItems.add(
+                    buildSimpleMenuItem(
+                            bookmarkItem.isRead()
+                                    ? R.string.reading_list_mark_as_unread
+                                    : R.string.reading_list_mark_as_read));
         }
 
         listItems.add(buildSimpleMenuItem(R.string.bookmark_item_select));
@@ -1548,6 +1560,16 @@ class BookmarkManagerMediator
                                     : R.string.enable_price_tracking_menu_item));
         }
 
+        if (!bookmarkItem.isFolder()) {
+            listItems.add(buildSimpleMenuItem(R.string.contextmenu_open_in_new_tab));
+            if (!mProfile.isOffTheRecord() && IncognitoUtils.isIncognitoModeEnabled(mProfile)) {
+                listItems.add(buildSimpleMenuItem(R.string.contextmenu_open_in_incognito_tab));
+            }
+            if (mBookmarkOpener.isOpenInNewWindowSupported()) {
+                listItems.add(buildSimpleMenuItem(R.string.contextmenu_open_in_new_window));
+            }
+        }
+
         return listItems;
     }
 
@@ -1560,7 +1582,16 @@ class BookmarkManagerMediator
         ListMenu.Delegate delegate =
                 (item, view) -> {
                     int textId = item.get(ListMenuItemProperties.TITLE_ID);
-                    if (textId == R.string.bookmark_item_select) {
+                    if (textId == R.string.contextmenu_open_in_new_tab) {
+                        mBookmarkOpener.openBookmarksInNewTabs(
+                                Collections.singletonList(bookmarkId), mProfile.isOffTheRecord());
+                    } else if (textId == R.string.contextmenu_open_in_incognito_tab) {
+                        mBookmarkOpener.openBookmarksInNewTabs(
+                                Collections.singletonList(bookmarkId), /* incognito= */ true);
+                    } else if (textId == R.string.contextmenu_open_in_new_window) {
+                        mBookmarkOpener.openBookmarksInNewWindow(
+                                Collections.singletonList(bookmarkId), mProfile.isOffTheRecord());
+                    } else if (textId == R.string.bookmark_item_select) {
                         mSelectionDelegate.toggleSelectionForItem(bookmarkId);
                         RecordUserAction.record("Android.BookmarkPage.SelectFromMenu");
                         if (bookmarkId.getType() == BookmarkType.READING_LIST) {
@@ -1771,7 +1802,7 @@ class BookmarkManagerMediator
     /** The search box only focused on LFF device with a hardware keyboard attached. */
     private void maybeAutoFocusSearchBox() {
         if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
-                && DeviceInput.supportsKeyboard()) {
+                && DeviceInput.supportsKeyboard(mContext)) {
             mRecyclerView.post(
                     () -> {
                         // The search box might not be in the model list yet, so guard this call.

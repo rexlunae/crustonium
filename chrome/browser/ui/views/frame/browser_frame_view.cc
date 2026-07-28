@@ -8,39 +8,28 @@
 
 #include "base/command_line.h"
 #include "base/memory/raw_ref.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/numerics/safe_conversions.h"
-#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/themes/custom_theme_supplier.h"
 #include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/tab_style.h"
-#include "chrome/browser/ui/tabs/tab_types.h"
-#include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/grit/theme_resources.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/base/hit_test.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/theme_provider.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/gfx/scoped_canvas.h"
 #include "ui/views/background.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
@@ -48,6 +37,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/taskbar/taskbar_decorator_win.h"
+#include "chrome/browser/ui/layout_constants.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
@@ -121,6 +111,7 @@ BrowserFrameView::BrowserFrameView(BrowserWidget* browser_widget,
     : browser_widget_(browser_widget), browser_view_(browser_view) {
   DCHECK(browser_widget_);
   DCHECK(browser_view_);
+  SetProperty(views::kElementIdentifierKey, kBrowserFrameElementId);
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           kShowBrowserFrameRegionsCommandLineSwitch)) {
     AddChildView(std::make_unique<ShowBrowserFrameRegionsView>(*this));
@@ -168,6 +159,10 @@ void BrowserFrameView::OnBrowserViewInitViewsComplete() {
 
 void BrowserFrameView::OnFullscreenStateChanged() {}
 
+void BrowserFrameView::OnTabStripStateChanged() {
+  InvalidateLayout();
+}
+
 bool BrowserFrameView::CaptionButtonsOnLeadingEdge() const {
   return false;
 }
@@ -178,6 +173,10 @@ bool BrowserFrameView::CaptionButtonsOnTrailingEdge() const {
 
 views::LayoutAlignment BrowserFrameView::GetWindowTitleAlignment() const {
   return views::LayoutAlignment::kStart;
+}
+
+gfx::RoundedCornersF BrowserFrameView::GetWindowRoundedCorners() const {
+  return gfx::RoundedCornersF();
 }
 
 void BrowserFrameView::UpdateFullscreenTopUI() {}
@@ -376,7 +375,7 @@ views::View::Views BrowserFrameView::GetChildrenInZOrder() {
 // Sending the WM_NCPOINTERDOWN, WM_NCPOINTERUPDATE, and WM_NCPOINTERUP to the
 // default window proc does not bring up the system menu on long press, so we
 // use the gesture recognizer to turn it into a LONG_TAP gesture and handle it
-// here. See https://crbug.com/1327506 for more info.
+// here. See https://crbug.com/40841210 for more info.
 void BrowserFrameView::OnGestureEvent(ui::GestureEvent* event) {
   gfx::Point event_loc = event->location();
   // This opens the title bar system context menu on long press in the titlebar.

@@ -91,7 +91,7 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
                 return 0;
             }
             int currentId = currentTab.getId();
-            int currentIndex = TabModelUtils.getTabIndexById(currentModel, currentId);
+            int currentIndex = currentModel.indexOf(currentTab);
 
             // If the current tab is a pinned tab, new tabs are inserted after the last pinned tab.
             if (currentTab.getIsPinned()) {
@@ -104,8 +104,7 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
                 // adjacent to the current tab that opened that link.
                 Tab parentTab = currentModel.getTabById(newTab.getParentId());
                 if (parentTab != null && currentTab != parentTab) {
-                    int parentTabIndex =
-                            TabModelUtils.getTabIndexById(currentModel, parentTab.getId());
+                    int parentTabIndex = currentModel.indexOf(parentTab);
                     return parentTabIndex + 1;
                 }
                 return currentIndex + 1;
@@ -126,10 +125,10 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
     }
 
     /**
-     * Returns the index of the last tab in the model opened by the specified
-     * opener, starting at startIndex. To clarify, the tabs are traversed in the
-     * descending order of their position in the model. This means that the tab
-     * furthest in the stack with the given opener id will be returned.
+     * Returns the index of the last tab in the model opened by the specified opener, starting at
+     * startIndex. To clarify, the tabs are traversed in the descending order of their position in
+     * the model. This means that the tab furthest in the stack with the given opener id will be
+     * returned.
      *
      * @param openerId The opener of interest.
      * @param startIndex The start point of the search.
@@ -151,9 +150,8 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
     }
 
     private int getValidPositionConsideringRelatedTabs(Tab newTab, int position) {
-        TabGroupModelFilter filter = mTabModelSelector.getTabGroupModelFilter(newTab.isIncognito());
-        assumeNonNull(filter);
-        return filter.getValidPosition(newTab, position);
+        TabModel tabModel = mTabModelSelector.getModel(newTab.isIncognito());
+        return tabModel.getValidPosition(newTab, position);
     }
 
     /** Clear the opener attribute on all tabs in the model. */
@@ -201,7 +199,8 @@ class TabModelOrderControllerImpl implements TabModelOrderController {
                         && type != TabLaunchType.FROM_COLLABORATION_BACKGROUND_IN_GROUP
                         && type != TabLaunchType.FROM_BOOKMARK_BAR_BACKGROUND
                         && type != TabLaunchType.FROM_REPARENTING_BACKGROUND
-                        && type != TabLaunchType.FROM_HISTORY_NAVIGATION_BACKGROUND)
+                        && type != TabLaunchType.FROM_HISTORY_NAVIGATION_BACKGROUND
+                        && type != TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND)
                 || isCurrentModelIncognitoBranded != isNewTabIncognitoBranded;
     }
 

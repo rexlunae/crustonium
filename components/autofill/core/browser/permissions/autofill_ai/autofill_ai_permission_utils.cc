@@ -5,39 +5,59 @@
 #include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
 
 #include <algorithm>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
+#include "base/check.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/containers/flat_set.h"
+#include "base/feature.h"
 #include "base/feature_list.h"
+#include "base/functional/function_ref.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/system/sys_info.h"
+#include "base/values.h"
+#include "build/build_config.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_personal_context_enablement_utils.h"
 #include "components/autofill/core/common/autofill_debug_features.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "components/personal_context/core/personal_context_prefs.h"
+#include "components/personal_context/core/personal_context_types.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/gaia_id_hash.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
+#include "components/subscription_eligibility/subscription_eligibility_service.h"
 #include "components/sync/base/account_pref_utils.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
+#include "google_apis/gaia/gaia_id.h"
+#include "url/gurl.h"
 
 #if !BUILDFLAG(IS_FUCHSIA)
 #include "components/variations/service/google_groups_manager.h"  // nogncheck
 #endif  // !BUILDFLAG(IS_FUCHSIA)
 
 namespace autofill {
-
 namespace {
 
 using ::signin::GaiaIdHash;
@@ -48,6 +68,19 @@ using FeatureCheck = base::FunctionRef<bool(const base::Feature&)>;
 void MaybeOutputReason(std::string* out, std::string_view message) {
   if (out) {
     *out = std::string(message);
+  }
+}
+
+// Returns true if the account is eligible for Personal Context (e.g. to
+// determine whether to show Personal Context settings UI).
+[[nodiscard]] bool IsPersonalContextEligible(
+    personal_context::PersonalContextEligibilityState state) {
+  using personal_context::PersonalContextEligibilityState;
+  switch (state) {
+    case PersonalContextEligibilityState::kEligible:
+      return true;
+    case PersonalContextEligibilityState::kDisabledNotEligible:
+      return false;
   }
 }
 
@@ -129,10 +162,25 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
   return GaiaIdHash::FromGaiaId(gaia_id);
 }
 
-// Returns the default `GaiaIdHash` to use for account-keyed prefs if no user
-// is signed in.
-[[nodiscard]] GaiaIdHash GetDefaultGaiaIdHash() {
-  return {};
+// Returns whether the `entity_type` is enabled in settings.
+[[nodiscard]] bool EntityTypeIsEnabledInSettings(
+    const PrefService& prefs,
+    std::optional<EntityType> entity_type) {
+  switch (entity_type->name()) {
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kPassport:
+    case EntityTypeName::kDriversLicense:
+      return prefs.GetBoolean(prefs::kAutofillAiIdentityEntitiesEnabled);
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kFlightReservation:
+    case EntityTypeName::kRedressNumber:
+    case EntityTypeName::kKnownTravelerNumber:
+      return prefs.GetBoolean(prefs::kAutofillAiTravelEntitiesEnabled);
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      return prefs.GetBoolean(prefs::kAutofillAiShoppingEntitiesEnabled);
+  }
+  NOTREACHED();
 }
 
 // Returns whether `action` is relevant for data transparency, i.e. viewing
@@ -151,6 +199,10 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
     case AutofillAiAction::kServerClassificationModel:
     case AutofillAiAction::kUseCachedServerClassificationModelResults:
     case AutofillAiAction::kImportToWallet:
+    case AutofillAiAction::kWalletDataSharingPromotion:
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData:
       return false;
     case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
     case AutofillAiAction::kListEntityInstancesInSettings:
@@ -161,15 +213,40 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
 
 // Checks whether all requirements for `base::Feature` state are satisfied
 // (`kAutofillAiWithDataSchema`, `kAutofillAiServerModel`).
-[[nodiscard]] bool SatisfiesFeatureRequirements(FeatureCheck is_enabled,
-                                                AutofillAiAction action,
-                                                std::string* debug_message) {
+[[nodiscard]] bool SatisfiesFeatureRequirements(
+    FeatureCheck is_enabled,
+    bool has_entity_data_saved,
+    AutofillAiAction action,
+    std::optional<EntityType> entity_type,
+    std::string* debug_message) {
+  if (IsRelevantForDataTransparency(action) && has_entity_data_saved) {
+    return true;
+  }
+
   // Everything requires that `kAutofillAiWithDataSchema` is enabled.
   if (!is_enabled(features::kAutofillAiWithDataSchema)) {
     MaybeOutputReason(debug_message,
                       "AutofillAiWithDataSchema is not enabled.");
     return false;
   }
+
+  auto entity_type_can_be_upstreamed = [&](EntityType type) {
+    switch (type.name()) {
+      case EntityTypeName::kVehicle:
+        return is_enabled(features::kAutofillAiWalletVehicleRegistration);
+      case EntityTypeName::kNationalIdCard:
+      case EntityTypeName::kPassport:
+      case EntityTypeName::kDriversLicense:
+      case EntityTypeName::kRedressNumber:
+      case EntityTypeName::kKnownTravelerNumber:
+        return is_enabled(features::kAutofillAiWalletPrivatePasses);
+      case EntityTypeName::kFlightReservation:
+      case EntityTypeName::kOrder:
+      case EntityTypeName::kShipment:
+        return false;
+    }
+    NOTREACHED();
+  };
 
   switch (action) {
     case AutofillAiAction::kIphForOptIn:
@@ -180,18 +257,29 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
       return is_enabled(features::kAutofillAiServerModel) &&
              features::kAutofillAiServerModelUseCacheResults.Get();
     case AutofillAiAction::kImportToWallet:
-      return is_enabled(features::kAutofillAiWalletVehicleRegistration);
+      CHECK(entity_type) << "An entity type is required to check if an entity "
+                            "can be upstreamed";
+      return entity_type_can_be_upstreamed(*entity_type);
+    case AutofillAiAction::kWalletDataSharingPromotion:
+      return is_enabled(features::kAutofillAiWalletVehicleRegistration) ||
+             is_enabled(features::kAutofillAiWalletFlightReservation) ||
+             is_enabled(features::kAutofillAiWalletPrivatePasses);
     case AutofillAiAction::kAddLocalEntityInstanceInSettings:
     case AutofillAiAction::kCrowdsourcingVote:
     case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
     case AutofillAiAction::kFilling:
     case AutofillAiAction::kImport:
     case AutofillAiAction::kListEntityInstancesInSettings:
-    case AutofillAiAction::kLogToMqls:
     case AutofillAiAction::kOptIn:
       return true;
+    case AutofillAiAction::kLogToMqls:
+      return !is_enabled(features::kAutofillAiUsePrivateAi);
     case AutofillAiAction::kEnableOrDisable:
       return is_enabled(features::kAutofillAiAvailableByDefault);
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData:
+      return is_enabled(features::kAutofillAmbientAutofill);
   }
   NOTREACHED();
 }
@@ -202,6 +290,7 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
     const syncer::SyncService* sync_service) {
   switch (action) {
     case AutofillAiAction::kImportToWallet:
+    case AutofillAiAction::kWalletDataSharingPromotion:
       return sync_service &&
              sync_service->GetUserSettings()->GetSelectedTypes().Has(
                  syncer::UserSelectableType::kPayments) &&
@@ -218,88 +307,32 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
     case AutofillAiAction::kLogToMqls:
     case AutofillAiAction::kOptIn:
     case AutofillAiAction::kEnableOrDisable:
-      return true;
-  }
-  NOTREACHED();
-}
-
-// Checks if the `entity_type` safistifes specific action requirements.
-[[nodiscard]] bool SatisfiesEntityTypeRequirements(
-    const AutofillClient& client,
-    AutofillAiAction action,
-    std::optional<EntityType> entity_type,
-    std::string* debug_message) {
-  auto entity_type_can_be_upstreamed = [](EntityType type) {
-    switch (type.name()) {
-      case EntityTypeName::kVehicle:
-        return true;
-      case EntityTypeName::kFlightReservation:
-      case EntityTypeName::kNationalIdCard:
-      case EntityTypeName::kPassport:
-      case EntityTypeName::kDriversLicense:
-      case EntityTypeName::kRedressNumber:
-      case EntityTypeName::kKnownTravelerNumber:
-        return false;
-    }
-    NOTREACHED();
-  };
-  auto entity_type_is_enabled_in_settings = [&](EntityType type) {
-    const PrefService* const prefs = client.GetPrefs();
-    if (!prefs) {
-      MaybeOutputReason(debug_message, "Prefs are not available.");
-      return false;
-    }
-    switch (type.name()) {
-      case EntityTypeName::kNationalIdCard:
-      case EntityTypeName::kPassport:
-      case EntityTypeName::kDriversLicense:
-        return prefs->GetBoolean(prefs::kAutofillAiIdentityEntitiesEnabled);
-      case EntityTypeName::kVehicle:
-      case EntityTypeName::kFlightReservation:
-      case EntityTypeName::kRedressNumber:
-      case EntityTypeName::kKnownTravelerNumber:
-        return prefs->GetBoolean(prefs::kAutofillAiTravelEntitiesEnabled);
-    }
-    NOTREACHED();
-  };
-  switch (action) {
-    case AutofillAiAction::kImportToWallet:
-      CHECK(entity_type) << "An entity type is required to check if an entity "
-                            "can be upstreamed";
-      return entity_type_can_be_upstreamed(*entity_type);
-    case AutofillAiAction::kFilling:
-    case AutofillAiAction::kImport:
-    case AutofillAiAction::kIphForOptIn:
-      CHECK(entity_type)
-          << "An entity type is required to check if an entity "
-             "can be filled or imported, and IPH requires import";
-      return entity_type_is_enabled_in_settings(*entity_type);
-    case AutofillAiAction::kServerClassificationModel:
-    case AutofillAiAction::kUseCachedServerClassificationModelResults:
-    case AutofillAiAction::kAddLocalEntityInstanceInSettings:
-    case AutofillAiAction::kCrowdsourcingVote:
-    case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
-    case AutofillAiAction::kListEntityInstancesInSettings:
-    case AutofillAiAction::kLogToMqls:
-    case AutofillAiAction::kOptIn:
-    case AutofillAiAction::kEnableOrDisable:
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData:
       return true;
   }
   NOTREACHED();
 }
 
 // Checks whether preference-related requirements are satisfied.
-[[nodiscard]] bool SatisfiesPreferenceRequirements(const AutofillClient& client,
-                                                   bool has_entity_data_saved,
-                                                   AutofillAiAction action,
-                                                   std::string* debug_message) {
+[[nodiscard]] bool SatisfiesPreferenceRequirements(
+#if !BUILDFLAG(IS_FUCHSIA)
+    const GoogleGroupsManager* google_groups_manager,
+#endif
+    const PrefService* prefs,
+    const signin::IdentityManager* identity_manager,
+    bool is_wallet_public_pass_storage_enabled,
+    bool has_entity_data_saved,
+    AutofillAiAction action,
+    std::optional<EntityType> entity_type,
+    std::string* debug_message) {
   // No pref state can prevent actions that are relevant for data transparency
   // (i.e., showing/updating/removing existing data in settings).
   if (IsRelevantForDataTransparency(action) && has_entity_data_saved) {
     return true;
   }
 
-  const PrefService* const prefs = client.GetPrefs();
   if (!prefs) {
     MaybeOutputReason(debug_message, "Prefs are not available.");
     return false;
@@ -308,54 +341,91 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
   // State of the Address-Autofill pref.
   if (!prefs->GetBoolean(prefs::kAutofillProfileEnabled) &&
       !base::FeatureList::IsEnabled(
-          features::kAutofillAiIgnoresWhetherAddressPrefIsEnabled)) {
+          features::kAutofillEnableAutofillSettingsEnterprisePolicy)) {
     MaybeOutputReason(debug_message, "Address Autofill is not enabled.");
     return false;
   }
 
-  // State of the AutofillAI-specific enterprise policy pref.
-  constexpr int kAutofillPredictionSettingsAllowWithoutLogging =
-      std::to_underlying(
-          optimization_guide::model_execution::prefs::
-              ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
-  constexpr int kAutofillPredictionSettingsDisabled =
-      std::to_underlying(optimization_guide::model_execution::prefs::
-                             ModelExecutionEnterprisePolicyValue::kDisable);
-  static_assert(kAutofillPredictionSettingsAllowWithoutLogging == 1);
-  static_assert(kAutofillPredictionSettingsDisabled == 2);
-
-  const int policy_pref_state = prefs->GetInteger(
-      optimization_guide::prefs::
-          kAutofillPredictionImprovementsEnterprisePolicyAllowed);
   const bool policy_pref_enabled =
-      policy_pref_state != kAutofillPredictionSettingsDisabled;
+      !IsAutofillAiDisabledByEnterprisePolicy(prefs);
+  const bool personal_context_pref_enabled = prefs->GetBoolean(
+      personal_context::prefs::kPersonalContextInAutofillSettingsToggleStatus);
   const bool autofill_ai_available =
-      GetAutofillAiOptInStatus(client) ||
+      GetAutofillAiOptInStatus(prefs, identity_manager) ||
       base::FeatureList::IsEnabled(features::kAutofillAiAvailableByDefault);
   // Note that the policy can become disabled even after a user has opted in.
+  const bool is_allowed_by_opt_in_or_default =
+      base::FeatureList::IsEnabled(features::kAutofillAiAvailableByDefault) ||
+      (policy_pref_enabled && autofill_ai_available);
   switch (action) {
     case AutofillAiAction::kLogToMqls:
     case AutofillAiAction::kServerClassificationModel:
-      return policy_pref_enabled && GetAutofillAiOptInStatus(client);
+      return policy_pref_enabled &&
+             GetAutofillAiOptInStatus(prefs, identity_manager);
     case AutofillAiAction::kAddLocalEntityInstanceInSettings:
     case AutofillAiAction::kCrowdsourcingVote:
     case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
+    case AutofillAiAction::kUseCachedServerClassificationModelResults:
+      return is_allowed_by_opt_in_or_default;
     case AutofillAiAction::kFilling:
     case AutofillAiAction::kImport:
-    case AutofillAiAction::kUseCachedServerClassificationModelResults:
-      return policy_pref_enabled && autofill_ai_available;
+      return EntityTypeIsEnabledInSettings(*prefs, *entity_type) &&
+             is_allowed_by_opt_in_or_default;
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+      return is_allowed_by_opt_in_or_default;
+    case AutofillAiAction::kAmbientAutofill:
+      return personal_context_pref_enabled && is_allowed_by_opt_in_or_default;
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData: {
+      if (!entity_type) {
+        return false;
+      }
+      switch (entity_type->name()) {
+        case EntityTypeName::kPassport:
+        case EntityTypeName::kDriversLicense:
+        case EntityTypeName::kNationalIdCard:
+        case EntityTypeName::kFlightReservation:
+        case EntityTypeName::kShipment:
+        case EntityTypeName::kOrder:
+        case EntityTypeName::kVehicle:
+          break;
+        case EntityTypeName::kRedressNumber:
+        case EntityTypeName::kKnownTravelerNumber:
+          return false;
+      }
+      if (!personal_context_pref_enabled) {
+        return false;
+      }
+      return EntityTypeIsEnabledInSettings(*prefs, *entity_type) &&
+             is_allowed_by_opt_in_or_default;
+    }
     case AutofillAiAction::kImportToWallet:
-      return policy_pref_enabled && autofill_ai_available &&
-             client.IsWalletStorageEnabled();
+      if (!EntityTypeIsEnabledInSettings(*prefs, *entity_type)) {
+        return false;
+      }
+      // If `*entity_type` is a public pass, respect
+      // `is_wallet_public_pass_storage_enabled`.
+      if (!is_wallet_public_pass_storage_enabled &&
+          GetWalletPassType(*entity_type,
+                            EntityInstance::RecordType::kServerWallet) ==
+              EntityInstance::WalletPassType::kPublic) {
+        return false;
+      }
+      return is_allowed_by_opt_in_or_default;
     case AutofillAiAction::kIphForOptIn:
       // The IPH should only show if the user has not opted in yet.
-      return policy_pref_enabled && !autofill_ai_available;
+      return policy_pref_enabled && !autofill_ai_available &&
+             EntityTypeIsEnabledInSettings(*prefs, *entity_type);
     case AutofillAiAction::kOptIn:
-    case AutofillAiAction::kEnableOrDisable:
       if (!policy_pref_enabled) {
         MaybeOutputReason(debug_message, "Enterprise policy is not enabled.");
       }
       return policy_pref_enabled;
+    case AutofillAiAction::kWalletDataSharingPromotion:
+      return !is_wallet_public_pass_storage_enabled &&
+             (policy_pref_enabled ||
+              base::FeatureList::IsEnabled(
+                  features::kAutofillAiAvailableByDefault));
+    case AutofillAiAction::kEnableOrDisable:
     case AutofillAiAction::kListEntityInstancesInSettings:
       return true;
   }
@@ -366,8 +436,11 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
 // met.
 [[nodiscard]] bool SatisfiesAccountRequirements(
     const IdentityManager* identity_manager,
+    const subscription_eligibility::SubscriptionEligibilityService*
+        subscription_service,
     bool has_entity_data_saved,
     AutofillAiAction action,
+    std::optional<EntityType> entity_type,
     std::string* debug_message) {
   if (IsRelevantForDataTransparency(action) && has_entity_data_saved) {
     return true;
@@ -387,6 +460,86 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
                       "User's sign-in is in a persistent error state.");
     return false;
   }
+  switch (action) {
+    case AutofillAiAction::kImportToWallet: {
+      CHECK(entity_type) << "An entity type is required to check if an entity "
+                            "can be upstreamed";
+      if (GetWalletPassType(*entity_type,
+                            EntityInstance::RecordType::kServerWallet) !=
+          EntityInstance::WalletPassType::kPrivate) {
+        // For non-private passes, there are no additional account requirements.
+        break;
+      }
+
+      AccountInfo account_info = identity_manager->FindExtendedAccountInfo(
+          identity_manager->GetPrimaryAccountInfo(
+              signin::ConsentLevel::kSignin));
+      const AccountCapabilities& capabilities =
+          account_info.GetAccountCapabilities();
+      if (base::FeatureList::IsEnabled(
+              features::kAutofillAiWalletPrivatePassesCapability) &&
+          capabilities.supports_wallet_private_passes_in_autofill() !=
+              signin::Tribool::kTrue) {
+        MaybeOutputReason(
+            debug_message,
+            "Account doesn't support private passes in Autofill.");
+        return false;
+      }
+      // For private passes, underaged users are not allowed to save.
+      // TODO(crbug.com/495779639): Using can_use_model_execution_features() is
+      // a very hacky way to check whether the user is underaged. Instead, the
+      // minor check should be integrated into
+      // supports_wallet_private_passes_in_autofill().
+      if (capabilities.can_use_model_execution_features() !=
+          signin::Tribool::kTrue) {
+        MaybeOutputReason(debug_message, "User is underaged.");
+        return false;
+      }
+      break;
+    }
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData: {
+      if (base::FeatureList::IsEnabled(
+              features::debug::kAutofillAmbientAutofillSkipEligibilityChecks)) {
+        return true;
+      }
+      if (!subscription_service) {
+        MaybeOutputReason(debug_message,
+                          "Subscription eligibility service not available.");
+        return false;
+      }
+      const int32_t tier = subscription_service->GetAiSubscriptionTier();
+      if (GetAutofillAmbientAutofillEligibleTiers().contains(tier) ||
+          IsAndroidDeviceEligibleForAmbientAutofill()) {
+        break;
+      }
+
+      MaybeOutputReason(debug_message,
+                        "User subscription tier is not eligible and device is "
+                        "not eligible.");
+      return false;
+    }
+    case AutofillAiAction::kOptIn: {
+      if (!GetAccountGaiaIdHash(identity_manager).has_value()) {
+        return false;
+      }
+      break;
+    }
+    case AutofillAiAction::kAddLocalEntityInstanceInSettings:
+    case AutofillAiAction::kCrowdsourcingVote:
+    case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
+    case AutofillAiAction::kFilling:
+    case AutofillAiAction::kImport:
+    case AutofillAiAction::kIphForOptIn:
+    case AutofillAiAction::kListEntityInstancesInSettings:
+    case AutofillAiAction::kLogToMqls:
+    case AutofillAiAction::kEnableOrDisable:
+    case AutofillAiAction::kServerClassificationModel:
+    case AutofillAiAction::kUseCachedServerClassificationModelResults:
+    case AutofillAiAction::kWalletDataSharingPromotion:
+      break;
+  }
   return true;
 }
 
@@ -394,9 +547,13 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
 // are satisfied.
 [[nodiscard]] bool SatisfiesMiscellaneousRequirements(
     bool is_off_the_record,
+    bool supports_reauth,
     bool has_entity_data_saved,
     const GeoIpCountryCode& country_code,
+    personal_context::PersonalContextEligibilityState
+        personal_context_eligibility_state,
     AutofillAiAction action,
+    std::optional<EntityType> entity_type,
     std::string* debug_message) {
   // Off-the-record.
   switch (action) {
@@ -410,7 +567,11 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
     case AutofillAiAction::kOptIn:
     case AutofillAiAction::kEnableOrDisable:
     case AutofillAiAction::kImportToWallet:
-    case AutofillAiAction::kServerClassificationModel: {
+    case AutofillAiAction::kWalletDataSharingPromotion:
+    case AutofillAiAction::kServerClassificationModel:
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData: {
       if (is_off_the_record) {
         MaybeOutputReason(debug_message, "Off the record.");
         return false;
@@ -426,6 +587,7 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
   // Wallet-supported country.
   switch (action) {
     case AutofillAiAction::kImportToWallet:
+    case AutofillAiAction::kWalletDataSharingPromotion:
       if (!IsWalletSupportedCountry(country_code)) {
         return false;
       }
@@ -442,6 +604,86 @@ void MaybeOutputReason(std::string* out, std::string_view message) {
     case AutofillAiAction::kServerClassificationModel:
     case AutofillAiAction::kFilling:
     case AutofillAiAction::kUseCachedServerClassificationModelResults:
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData:
+      break;
+  }
+
+  // Personal Context eligibility requirements
+  switch (action) {
+    case AutofillAiAction::kImportToWallet:
+    case AutofillAiAction::kWalletDataSharingPromotion:
+    case AutofillAiAction::kAddLocalEntityInstanceInSettings:
+    case AutofillAiAction::kCrowdsourcingVote:
+    case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
+    case AutofillAiAction::kImport:
+    case AutofillAiAction::kIphForOptIn:
+    case AutofillAiAction::kListEntityInstancesInSettings:
+    case AutofillAiAction::kLogToMqls:
+    case AutofillAiAction::kOptIn:
+    case AutofillAiAction::kEnableOrDisable:
+    case AutofillAiAction::kServerClassificationModel:
+    case AutofillAiAction::kFilling:
+    case AutofillAiAction::kUseCachedServerClassificationModelResults:
+      break;
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData: {
+      if (base::FeatureList::IsEnabled(
+              features::debug::kAutofillAmbientAutofillSkipEligibilityChecks)) {
+        return true;
+      }
+      if (!IsPersonalContextEligible(personal_context_eligibility_state)) {
+        return false;
+      }
+      break;
+    }
+  }
+
+  // Re-auth availability.
+  switch (action) {
+    case AutofillAiAction::kImportToWallet:
+      CHECK(entity_type) << "An entity type is required to check if an entity "
+                            "can be upstreamed";
+      // Importing Wallet private passes is only supported on devices with
+      // re-auth.
+      if (!supports_reauth &&
+          GetWalletPassType(*entity_type,
+                            EntityInstance::RecordType::kServerWallet) ==
+              EntityInstance::WalletPassType::kPrivate &&
+          !base::FeatureList::IsEnabled(
+              features::debug::kAutofillAiDisableReauthRequirement)) {
+        return false;
+      }
+      break;
+    case AutofillAiAction::kTypeSupportsAmbientAutofillData:
+      CHECK(entity_type) << "An entity type is required to check if an entity "
+                            "type supports ambient autofill data";
+      if (!supports_reauth &&
+          GetPersonalContextSpiiType(
+              *entity_type, EntityInstance::RecordType::kPersonalContext) ==
+              EntityInstance::PersonalContextSpiiType::kSpii &&
+          !base::FeatureList::IsEnabled(
+              features::debug::kAutofillAiDisableReauthRequirement)) {
+        return false;
+      }
+      break;
+    case AutofillAiAction::kWalletDataSharingPromotion:
+    case AutofillAiAction::kAddLocalEntityInstanceInSettings:
+    case AutofillAiAction::kCrowdsourcingVote:
+    case AutofillAiAction::kEditAndDeleteEntityInstanceInSettings:
+    case AutofillAiAction::kImport:
+    case AutofillAiAction::kIphForOptIn:
+    case AutofillAiAction::kListEntityInstancesInSettings:
+    case AutofillAiAction::kLogToMqls:
+    case AutofillAiAction::kOptIn:
+    case AutofillAiAction::kEnableOrDisable:
+    case AutofillAiAction::kServerClassificationModel:
+    case AutofillAiAction::kFilling:
+    case AutofillAiAction::kUseCachedServerClassificationModelResults:
+    case AutofillAiAction::kAmbientAutofill:
+    case AutofillAiAction::kShowAmbientAutofillInSettings:
       break;
   }
 
@@ -462,10 +704,37 @@ bool MayPerformAutofillAiAction(const AutofillClient& client,
                                 AutofillAiAction action,
                                 std::optional<EntityType> entity_type,
                                 std::string* debug_message) {
+  return MayPerformAutofillAiAction(
 #if !BUILDFLAG(IS_FUCHSIA)
-  const GoogleGroupsManager* const google_groups_manager =
-      client.GetGoogleGroupsManager();
+      client.GetGoogleGroupsManager(),
 #endif
+      client.GetPrefs(), client.GetEntityDataManager(),
+      client.GetIdentityManager(), client.GetSyncService(),
+      client.IsWalletPublicPassStorageEnabled(), client.IsOffTheRecord(),
+      client.GetVariationConfigCountryCode(),
+      client.GetSubscriptionEligibilityService(),
+      client.GetPersonalContextEligibilityState(), action, entity_type,
+      debug_message);
+}
+
+bool MayPerformAutofillAiAction(
+#if !BUILDFLAG(IS_FUCHSIA)
+    const GoogleGroupsManager* google_groups_manager,
+#endif
+    const PrefService* prefs,
+    const EntityDataManager* edm,
+    const signin::IdentityManager* identity_manager,
+    const syncer::SyncService* sync_service,
+    bool is_wallet_public_pass_storage_enabled,
+    bool is_off_the_record,
+    const GeoIpCountryCode& country_code,
+    const subscription_eligibility::SubscriptionEligibilityService*
+        subscription_service,
+    personal_context::PersonalContextEligibilityState
+        personal_context_eligibility_state,
+    AutofillAiAction action,
+    std::optional<EntityType> entity_type,
+    std::string* debug_message) {
   auto feature_check = [&](const base::Feature& feature) {
 #if !BUILDFLAG(IS_FUCHSIA)
     return google_groups_manager
@@ -476,40 +745,41 @@ bool MayPerformAutofillAiAction(const AutofillClient& client,
 #endif
   };
 
-  if (!SatisfiesFeatureRequirements(feature_check, action, debug_message)) {
-    return false;
-  }
-
-  const EntityDataManager* const edm = client.GetEntityDataManager();
   if (!edm) {
     MaybeOutputReason(debug_message, "No EDM.");
     return false;
   }
   const bool has_entity_data_saved = !edm->GetEntityInstances().empty();
 
-  if (!SatisfiesAccountRequirements(client.GetIdentityManager(),
-                                    has_entity_data_saved, action,
+  if (!SatisfiesFeatureRequirements(feature_check, has_entity_data_saved,
+                                    action, entity_type, debug_message)) {
+    return false;
+  }
+
+  if (!SatisfiesAccountRequirements(identity_manager, subscription_service,
+                                    has_entity_data_saved, action, entity_type,
                                     debug_message)) {
     return false;
   }
 
-  if (!SatisfiesPreferenceRequirements(client, has_entity_data_saved, action,
-                                       debug_message)) {
+  if (!SatisfiesPreferenceRequirements(
+#if !BUILDFLAG(IS_FUCHSIA)
+          google_groups_manager,
+#endif
+          prefs, identity_manager, is_wallet_public_pass_storage_enabled,
+          has_entity_data_saved, action, entity_type, debug_message)) {
     return false;
   }
 
-  if (!SatisfiesSyncingRequirements(action, client.GetSyncService())) {
+  if (!SatisfiesSyncingRequirements(action, sync_service)) {
     return false;
   }
 
-  if (!SatisfiesEntityTypeRequirements(client, action, entity_type,
-                                       debug_message)) {
-    return false;
-  }
-
+  // If the re-auth availability is unknown, error on the side of caution.
   return SatisfiesMiscellaneousRequirements(
-      client.IsOffTheRecord(), has_entity_data_saved,
-      client.GetVariationConfigCountryCode(), action, debug_message);
+      is_off_the_record, edm->GetReauthAvailability().value_or(false),
+      has_entity_data_saved, country_code, personal_context_eligibility_state,
+      action, entity_type, debug_message);
 }
 
 bool GetAutofillAiOptInStatus(const AutofillClient& client) {
@@ -527,14 +797,14 @@ bool GetAutofillAiOptInStatus(const PrefService* prefs,
     return true;
   }
 
-  // Check the account-independent opt-in setting.
-  if (const base::Value* value = syncer::GetAccountKeyedPrefValue(
-          prefs, prefs::kAutofillAiOptInStatus, GetDefaultGaiaIdHash());
-      value && value->GetIfBool().value_or(false)) {
-    return true;
+  if (base::FeatureList::IsEnabled(features::kAutofillAiUsePrivateAi)) {
+    return prefs->GetBoolean(prefs::kAutofillAiPrivateInferenceOptInStatus) &&
+           !prefs
+                ->GetTime(
+                    prefs::kAutofillAiPrivateInferenceNoticeFirstShownTimestamp)
+                .is_null();
   }
 
-  // Check the account-dependent opt-in setting.
   const std::optional<GaiaIdHash> signed_in_hash =
       GetAccountGaiaIdHash(identity_manager);
   if (!signed_in_hash) {
@@ -547,41 +817,111 @@ bool GetAutofillAiOptInStatus(const PrefService* prefs,
 
 bool SetAutofillAiOptInStatus(AutofillClient& client,
                               AutofillAiOptInStatus opt_in_status) {
-  if (!MayPerformAutofillAiAction(client, AutofillAiAction::kOptIn)) {
+  return SetAutofillAiOptInStatus(
+#if !BUILDFLAG(IS_FUCHSIA)
+      client.GetGoogleGroupsManager(),
+#endif
+      client.GetPrefs(), client.GetEntityDataManager(),
+      client.GetIdentityManager(), client.GetSyncService(),
+      client.IsWalletPublicPassStorageEnabled(), client.IsOffTheRecord(),
+      client.GetVariationConfigCountryCode(),
+      client.GetSubscriptionEligibilityService(),
+      client.GetPersonalContextEligibilityState(), opt_in_status);
+}
+
+bool SetAutofillAiOptInStatus(
+#if !BUILDFLAG(IS_FUCHSIA)
+    const GoogleGroupsManager* google_groups_manager,
+#endif
+    PrefService* prefs,
+    const EntityDataManager* edm,
+    const signin::IdentityManager* identity_manager,
+    const syncer::SyncService* sync_service,
+    bool is_wallet_public_pass_storage_enabled,
+    bool is_off_the_record,
+    const GeoIpCountryCode& country_code,
+    const subscription_eligibility::SubscriptionEligibilityService*
+        subscription_service,
+    personal_context::PersonalContextEligibilityState
+        personal_context_eligibility_state,
+    AutofillAiOptInStatus opt_in_status) {
+  if (!MayPerformAutofillAiAction(
+#if !BUILDFLAG(IS_FUCHSIA)
+          google_groups_manager,
+#endif
+          prefs, edm, identity_manager, sync_service,
+          is_wallet_public_pass_storage_enabled, is_off_the_record,
+          country_code, subscription_service,
+          personal_context_eligibility_state, AutofillAiAction::kOptIn)) {
     return false;
   }
 
   const std::optional<GaiaIdHash> signed_in_hash =
-      GetAccountGaiaIdHash(client.GetIdentityManager());
-  if (signed_in_hash) {
-    syncer::SetAccountKeyedPrefValue(
-        client.GetPrefs(), prefs::kAutofillAiOptInStatus, *signed_in_hash,
-        base::Value(opt_in_status == AutofillAiOptInStatus::kOptedIn));
-  }
-
-  // If the user is signed out or is an opt-out, then we need to make sure that
-  // it also applies to the pref for the signed out state.
-  if (!signed_in_hash || opt_in_status == AutofillAiOptInStatus::kOptedOut) {
-    syncer::SetAccountKeyedPrefValue(
-        client.GetPrefs(), prefs::kAutofillAiOptInStatus,
-        GetDefaultGaiaIdHash(),
-        base::Value(opt_in_status == AutofillAiOptInStatus::kOptedIn));
-  }
+      GetAccountGaiaIdHash(identity_manager);
+  // Guaranteed by MayPerformAutofillAiAction(kOptIn).
+  CHECK(signed_in_hash.has_value());
+  syncer::SetAccountKeyedPrefValue(
+      prefs, prefs::kAutofillAiOptInStatus, *signed_in_hash,
+      base::Value(opt_in_status == AutofillAiOptInStatus::kOptedIn));
 
   base::UmaHistogramEnumeration("Autofill.Ai.OptIn.Change", opt_in_status);
   return true;
 }
 
-[[nodiscard]] bool HasSetLocalAutofillAiOptInStatus(
-    const PrefService* prefs,
-    const signin::IdentityManager* identity_manager) {
-  const std::optional<GaiaIdHash> signed_in_hash =
-      GetAccountGaiaIdHash(identity_manager);
-  return syncer::GetAccountKeyedPrefValue(prefs, prefs::kAutofillAiOptInStatus,
-                                          GetDefaultGaiaIdHash()) ||
-         (signed_in_hash &&
-          syncer::GetAccountKeyedPrefValue(prefs, prefs::kAutofillAiOptInStatus,
-                                           *signed_in_hash));
+bool IsAutofillAiEntityTypeBlockedByPolicy(const AutofillClient& client,
+                                           const GURL& url,
+                                           EntityType entity_type) {
+  switch (entity_type.name()) {
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kPassport:
+    case EntityTypeName::kDriversLicense:
+      return client.IsAutofillTypeBlockedByPolicy(
+          url, AutofillClient::AutofillPolicyDataCategory::kIdentityDocs);
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kFlightReservation:
+    case EntityTypeName::kRedressNumber:
+    case EntityTypeName::kKnownTravelerNumber:
+      return client.IsAutofillTypeBlockedByPolicy(
+          url, AutofillClient::AutofillPolicyDataCategory::kTravel);
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      return client.IsAutofillTypeBlockedByPolicy(
+          url, AutofillClient::AutofillPolicyDataCategory::kShopping);
+  }
+  return false;
+}
+
+[[nodiscard]] bool IsAutofillAiDisabledByEnterprisePolicy(
+    const PrefService* prefs) {
+  // State of the AutofillAI-specific enterprise policy pref.
+  constexpr int kAutofillPredictionSettingsAllowWithoutLogging =
+      std::to_underlying(
+          optimization_guide::model_execution::prefs::
+              ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  constexpr int kAutofillPredictionSettingsDisabled =
+      std::to_underlying(optimization_guide::model_execution::prefs::
+                             ModelExecutionEnterprisePolicyValue::kDisable);
+  static_assert(kAutofillPredictionSettingsAllowWithoutLogging == 1);
+  static_assert(kAutofillPredictionSettingsDisabled == 2);
+
+  const int policy_pref_state = prefs->GetInteger(
+      optimization_guide::prefs::
+          kAutofillPredictionImprovementsEnterprisePolicyAllowed);
+  return policy_pref_state == kAutofillPredictionSettingsDisabled;
+}
+
+[[nodiscard]] bool IsAutofillAiAllowedByEnterprisePolicy(
+    const PrefService* prefs) {
+  // State of the AutofillAI-specific enterprise policy pref.
+  constexpr int kAutofillPredictionSettingsAllow =
+      std::to_underlying(optimization_guide::model_execution::prefs::
+                             ModelExecutionEnterprisePolicyValue::kAllow);
+  static_assert(kAutofillPredictionSettingsAllow == 0);
+
+  return prefs->GetInteger(
+             optimization_guide::prefs::
+                 kAutofillPredictionImprovementsEnterprisePolicyAllowed) ==
+         kAutofillPredictionSettingsAllow;
 }
 
 }  // namespace autofill

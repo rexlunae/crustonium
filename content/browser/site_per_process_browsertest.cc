@@ -42,11 +42,13 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "base/test/test_mock_time_task_runner.h"
 #include "base/test/test_timeouts.h"
-#include "base/test/test_trace_processor.h"
+#include "base/test/tracing/test_trace_processor.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
@@ -59,7 +61,6 @@
 #include "components/input/switches.h"
 #include "components/input/utils.h"
 #include "components/viz/host/host_frame_sink_manager.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
@@ -103,6 +104,7 @@
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_process_host_priority_client.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
@@ -1327,8 +1329,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   if (ShouldCreateSiteInstanceForDataUrls()) {
     // Site A and Site C are in the same SiteInstanceGroup, so there are no
     // proxies for each other.
-    // TODO(crbug.com/341741267, yangsharon): Update output to show that A and C
-    // are in the same SiteInstanceGroup.
+    // TODO(crbug.com/341741267): Update output to show that A and C are in the
+    // same SiteInstanceGroup.
     EXPECT_EQ(
         " Site A\n"
         "   |--Site C\n"
@@ -1720,12 +1722,22 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
   EXPECT_EQ(2, shell()->web_contents()->GetController().GetEntryCount());
 
   // Ensure that we have created a new process for the subframe.
-  EXPECT_EQ(
-      " Site A ------------ proxies for B\n"
-      "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://b.com/",
-      DepictFrameTree(root));
+  if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(
+          /*in_main_frame=*/false)) {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = chrome-error://chromewebdata/",
+        DepictFrameTree(root));
+  } else {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = http://b.com/",
+        DepictFrameTree(root));
+  }
   EXPECT_NE(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
 
@@ -1754,12 +1766,21 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
             child->current_origin().Serialize() + '/');
 
   // Ensure that we have created a new process for the subframe.
-  EXPECT_EQ(
-      " Site A ------------ proxies for B\n"
-      "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://b.com/",
-      DepictFrameTree(root));
+  if (base::FeatureList::IsEnabled(features::kIsolateSubframeErrorPages)) {
+    EXPECT_EQ(
+        " Site A ------------ proxies for C\n"
+        "   +--Site C ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      C = http://b.com/",
+        DepictFrameTree(root));
+  } else {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = http://b.com/",
+        DepictFrameTree(root));
+  }
   EXPECT_NE(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
 
@@ -5868,8 +5889,12 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, DataUrlsHaveUniqueSiteURLs) {
 
   auto* main_frame = shell()->web_contents()->GetPrimaryMainFrame();
   auto* new_frame = new_shell->web_contents()->GetPrimaryMainFrame();
-  GURL main_url = main_frame->GetSiteInstance()->GetSiteURL();
-  GURL new_url = new_frame->GetSiteInstance()->GetSiteURL();
+  GURL main_url = main_frame->GetSiteInstance()
+                      ->GetSecurityPrincipal()
+                      .GetDeprecatedSiteURL();
+  GURL new_url = new_frame->GetSiteInstance()
+                     ->GetSecurityPrincipal()
+                     .GetDeprecatedSiteURL();
   EXPECT_NE(new_frame->GetSiteInstance(), main_frame->GetSiteInstance());
 
   // The site URL is the data scheme followed by a serialized nonce, which is
@@ -6263,172 +6288,6 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_EQ(orig_site_instance, child->current_frame_host()->GetSiteInstance());
 }
 
-// Intercepts calls to LocalMainFrame's ShowCreatedWindow mojo method, and
-// invokes the provided callback.
-class ShowCreatedWindowInterceptor
-    : public blink::mojom::LocalMainFrameHostInterceptorForTesting {
- public:
-  // The caller has to guarantee that `render_frame_host` lives at least as long
-  // as ShowCreatedWindowInterceptor.
-  ShowCreatedWindowInterceptor(
-      RenderFrameHostImpl* render_frame_host,
-      base::OnceCallback<void(int32_t pending_widget_routing_id)> test_callback)
-      : render_frame_host_(render_frame_host),
-        test_callback_(std::move(test_callback)),
-        swapped_impl_(
-            render_frame_host_->local_main_frame_host_receiver_for_testing(),
-            this) {}
-
-  ~ShowCreatedWindowInterceptor() override = default;
-
-  blink::mojom::LocalMainFrameHost* GetForwardingInterface() override {
-    return swapped_impl_.old_impl();
-  }
-
-  void ShowCreatedWindow(const blink::LocalFrameToken& opener_frame_token,
-                         WindowOpenDisposition disposition,
-                         blink::mojom::WindowFeaturesPtr window_features,
-                         bool user_gesture,
-                         ShowCreatedWindowCallback callback) override {
-    show_callback_ = std::move(callback);
-    opener_frame_token_ = opener_frame_token;
-    user_gesture_ = user_gesture;
-    window_features_ = std::move(window_features);
-    disposition_ = disposition;
-    std::move(test_callback_)
-        .Run(render_frame_host_->GetRenderWidgetHost()->GetRoutingID());
-  }
-
-  void ResumeShowCreatedWindow() {
-    GetForwardingInterface()->ShowCreatedWindow(
-        opener_frame_token_, disposition_, std::move(window_features_),
-        user_gesture_, std::move(show_callback_));
-  }
-
- private:
-  raw_ptr<RenderFrameHostImpl> render_frame_host_;
-  base::OnceCallback<void(int32_t pending_widget_routing_id)> test_callback_;
-  ShowCreatedWindowCallback show_callback_;
-  blink::LocalFrameToken opener_frame_token_;
-  blink::mojom::WindowFeaturesPtr window_features_;
-  bool user_gesture_ = false;
-  WindowOpenDisposition disposition_;
-  mojo::test::ScopedSwapImplForTesting<blink::mojom::LocalMainFrameHost>
-      swapped_impl_;
-};
-
-// Listens for the source WebContents opening the new WebContents then attaches
-// a show listener to the widget.
-class NewWindowCreatedObserver : public WebContentsObserver {
- public:
-  NewWindowCreatedObserver(
-      WebContents* web_contents,
-      base::OnceCallback<void(int32_t pending_widget_routing_id)> test_callback)
-      : WebContentsObserver(web_contents),
-        test_callback_(std::move(test_callback)) {}
-
-  // WebContentsObserver overrides.
-  void DidOpenRequestedURL(WebContents* new_contents,
-                           RenderFrameHost* source_render_frame_host,
-                           const GURL& url,
-                           const Referrer& referrer,
-                           WindowOpenDisposition disposition,
-                           ui::PageTransition transition,
-                           bool started_from_context_menu,
-                           bool renderer_initiated) override {
-    show_interceptor_ = std::make_unique<ShowCreatedWindowInterceptor>(
-        static_cast<RenderFrameHostImpl*>(new_contents->GetPrimaryMainFrame()),
-        std::move(test_callback_));
-
-    // Stop observing now.
-    Observe(nullptr);
-  }
-
-  void ResumeShowCreatedWindow() {
-    show_interceptor_->ResumeShowCreatedWindow();
-  }
-
- private:
-  std::unique_ptr<ShowCreatedWindowInterceptor> show_interceptor_;
-  base::OnceCallback<void(int32_t pending_widget_routing_id)> test_callback_;
-};
-
-// Test for https://crbug.com/612276.  Simultaneously open two new windows from
-// two subframes in different processes, where each subframe process's next
-// routing ID is the same.  Make sure that both windows are created properly.
-//
-// Each new window requires two IPCs to first create it (handled by
-// CreateNewWindow) and then show it (ShowCreatedWindow).  In the bug, both
-// CreateNewWindow calls arrived before the ShowCreatedWindow calls, resulting
-// in the two pending windows colliding in the pending WebContents map, which
-// used to be keyed only by routing_id.
-IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
-                       TwoSubframesCreatePopupsSimultaneously) {
-  // This test covers a scenario which can only happen when creating and showing
-  // a new window is split between to IPC's and some conflicting update happens
-  // between them. kCombineNewWindowIPCs eliminates this possibility by
-  // combining the function of the two IPC's into one.
-  if (base::FeatureList::IsEnabled(blink::features::kCombineNewWindowIPCs)) {
-    return;
-  }
-  GURL main_url(embedded_test_server()->GetURL(
-      "a.com", "/cross_site_iframe_factory.html?a(b,c)"));
-  EXPECT_TRUE(NavigateToURL(shell(), main_url));
-
-  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
-  FrameTreeNode* child1 = root->child_at(0);
-  FrameTreeNode* child2 = root->child_at(1);
-  RenderFrameHostImpl* frame1 = child1->current_frame_host();
-  RenderFrameHostImpl* frame2 = child2->current_frame_host();
-  RenderProcessHost* process1 = frame1->GetProcess();
-  RenderProcessHost* process2 = frame2->GetProcess();
-
-  // Call window.open simultaneously in both subframes to create two popups.
-  // Wait for and then drop both ShowCreatedWindow messages.  This will ensure
-  // that both CreateNewWindow calls happen before either ShowCreatedWindow
-  // call.
-  base::RunLoop run_loop1;
-  int32_t routing_id1;
-  NewWindowCreatedObserver interceptor1(
-      web_contents(),
-      base::BindLambdaForTesting([&](int32_t pending_widget_routing_id) {
-        routing_id1 = pending_widget_routing_id;
-        run_loop1.Quit();
-      }));
-  EXPECT_TRUE(ExecJs(child1, "window.open();"));
-  run_loop1.Run();
-
-  base::RunLoop run_loop2;
-  int32_t routing_id2;
-  NewWindowCreatedObserver interceptor2(
-      web_contents(),
-      base::BindLambdaForTesting([&](int32_t pending_widget_routing_id) {
-        routing_id2 = pending_widget_routing_id;
-        run_loop2.Quit();
-      }));
-
-  EXPECT_TRUE(ExecJs(child2, "window.open();"));
-  run_loop2.Run();
-
-  // At this point, we should have two pending WebContents.
-  EXPECT_TRUE(web_contents()->pending_contents_.contains(
-      GlobalRoutingID(process1->GetDeprecatedID(), routing_id1)));
-  EXPECT_TRUE(web_contents()->pending_contents_.contains(
-      GlobalRoutingID(process2->GetDeprecatedID(), routing_id2)));
-
-  // Both subframes were set up in the same way, so the next routing ID for the
-  // new popup windows should match up (this led to the collision in the
-  // pending contents map in the original bug).
-  EXPECT_EQ(routing_id1, routing_id2);
-
-  // Now, resuming processing the show messages.
-  interceptor1.ResumeShowCreatedWindow();
-  interceptor2.ResumeShowCreatedWindow();
-
-  // Verify that both shells were properly created.
-  EXPECT_EQ(3u, Shell::windows().size());
-}
-
 // Intercepts calls to PopupWidgetHost's ShowPopup mojo method, and
 // invokes the provided callback. The caller has to guarantee that
 // `render_widget_host` lives at least as long as
@@ -6564,8 +6423,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       event);
   run_loop1.Run();
 
-  auto first_popup_global_id =
-      GlobalRoutingID(process1->GetDeprecatedID(), routing_id1);
+  auto first_popup_global_id = GlobalRoutingID(process1->GetID(), routing_id1);
   // Add an interceptor for first popup widget so it doesn't get closed
   // immediately while the other one is being opened.
   EXPECT_TRUE(web_contents()->pending_widgets_.contains(first_popup_global_id));
@@ -6590,7 +6448,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   // At this point, we should have two pending widgets.
   EXPECT_TRUE(web_contents()->pending_widgets_.contains(first_popup_global_id));
   EXPECT_TRUE(web_contents()->pending_widgets_.contains(
-      GlobalRoutingID(process2->GetDeprecatedID(), routing_id2)));
+      GlobalRoutingID(process2->GetID(), routing_id2)));
 
   // Both subframes were set up in the same way, so the next routing ID for the
   // new popup widgets should match up (this led to the collision in the
@@ -6601,9 +6459,9 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   interceptor1.ResumeShowPopupWidget();
   interceptor2.ResumeShowPopupWidget();
   EXPECT_FALSE(web_contents()->pending_widgets_.contains(
-      GlobalRoutingID(process1->GetDeprecatedID(), routing_id1)));
+      GlobalRoutingID(process1->GetID(), routing_id1)));
   EXPECT_FALSE(web_contents()->pending_widgets_.contains(
-      GlobalRoutingID(process2->GetDeprecatedID(), routing_id2)));
+      GlobalRoutingID(process2->GetID(), routing_id2)));
 
   // There are posted tasks that must be run before the test shuts down, lest
   // they access deleted state.
@@ -7005,7 +6863,9 @@ class NavigationHandleWatcher : public WebContentsObserver {
       : WebContentsObserver(web_contents) {}
   void DidStartNavigation(NavigationHandle* navigation_handle) override {
     DCHECK_EQ(GURL("http://b.com/"),
-              navigation_handle->GetStartingSiteInstance()->GetSiteURL());
+              navigation_handle->GetStartingSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL());
   }
 };
 
@@ -9520,21 +9380,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_FALSE(mock_handler_speculative.did_receive_event());
 }
 
-class SitePerProcessBrowserTestWithSubframePriority
-    : public SitePerProcessBrowserTest {
- public:
-  SitePerProcessBrowserTestWithSubframePriority() {
-    scoped_feature_list_.InitWithFeatures(
-        /* enabled_features= */ {features::kSubframeImportance},
-        /* disabled_features= */ {});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSubframePriority,
-                       TestChildProcessImportance) {
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, TestChildProcessImportance) {
   web_contents()->SetPrimaryPageImportance(ChildProcessImportance::IMPORTANT,
                                            ChildProcessImportance::MODERATE);
 
@@ -10004,7 +9850,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   // Load test URL with cross-process child.
   SetupTest();
 
-  EXPECT_EQ(ui::TouchSelectionController::INACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kInactive,
             root_rwhv()->touch_selection_controller()->active_status());
   // Find the location of some text to select.
   gfx::PointF point_f = GetPointInChild();
@@ -10019,7 +9865,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   selection_controller_client()->Wait();
 
   // Check that selection is active and the quick menu is showing.
-  EXPECT_EQ(ui::TouchSelectionController::SELECTION_ACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kSelectionActive,
             root_rwhv()->touch_selection_controller()->active_status());
 
   // Make sure handles are correctly positioned.
@@ -10036,7 +9882,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   SimpleTap(gfx::Point(point_inside_iframe.x(), point_inside_iframe.y()));
   selection_controller_client()->Wait();
 
-  EXPECT_EQ(ui::TouchSelectionController::INACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kInactive,
             root_rwhv()->touch_selection_controller()->active_status());
 
   // Let's wait for the previous events to clear the round-trip to the renders
@@ -10054,7 +9900,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   selection_controller_client()->Wait();
 
   // Check that selection is active and the quick menu is showing.
-  EXPECT_EQ(ui::TouchSelectionController::SELECTION_ACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kSelectionActive,
             root_rwhv()->touch_selection_controller()->active_status());
 
   // Tap inside/outside the iframe and make sure the selection handles go away.
@@ -10068,7 +9914,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   SimpleTap(gfx::Point(point_outside_iframe.x(), point_outside_iframe.y()));
   selection_controller_client()->Wait();
 
-  EXPECT_EQ(ui::TouchSelectionController::INACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kInactive,
             root_rwhv()->touch_selection_controller()->active_status());
 
   // Cleanup before shutting down.
@@ -10087,7 +9933,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   // Load test URL with cross-process child.
   SetupTest();
 
-  EXPECT_EQ(ui::TouchSelectionController::INACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kInactive,
             root_rwhv()->touch_selection_controller()->active_status());
   // Find the location of some text to select.
   gfx::PointF point_f = GetPointInChild();
@@ -10102,7 +9948,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAndroidSiteIsolationTest,
   selection_controller_client()->Wait();
 
   // Check that selection is active and the quick menu is showing.
-  EXPECT_EQ(ui::TouchSelectionController::SELECTION_ACTIVE,
+  EXPECT_EQ(ui::TouchSelectionController::ActiveStatus::kSelectionActive,
             root_rwhv()->touch_selection_controller()->active_status());
 
   // Make sure handles are correctly positioned.
@@ -10349,8 +10195,10 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
     // In per-origin IsolatedSandboxedIframes mode, the server port is retained
     // in the site URL.
     GURL main_site(embedded_test_server()->GetURL("a.com", "/"));
-    EXPECT_EQ(main_site,
-              root->current_frame_host()->GetSiteInstance()->GetSiteURL());
+    EXPECT_EQ(main_site, root->current_frame_host()
+                             ->GetSiteInstance()
+                             ->GetSecurityPrincipal()
+                             .GetDeprecatedSiteURL());
   }
 
   FrameTreeNode* child_node = root->child_at(0);
@@ -10889,9 +10737,10 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       child->current_frame_host()->GetSiteInstance()->process_reuse_policy());
 
   EXPECT_TRUE(child->current_frame_host()->IsCrossProcessSubframe());
-  EXPECT_EQ(
-      bar_url.GetHost(),
-      child->current_frame_host()->GetSiteInstance()->GetSiteURL().GetHost());
+  EXPECT_EQ(bar_url.GetHost(), child->current_frame_host()
+                                   ->GetSiteInstance()
+                                   ->GetSecurityPrincipal()
+                                   .GetHost());
 
   // The subframe's SiteInstance should still be different from second_shell's
   // SiteInstance, and they should be in separate BrowsingInstances.
@@ -12602,9 +12451,14 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_NE(
       subframe->current_frame_host()->GetSiteInstance()->GetProcess(),
       popup_subframe->current_frame_host()->GetSiteInstance()->GetProcess());
-  EXPECT_NE(
-      subframe->current_frame_host()->GetSiteInstance()->GetSiteURL(),
-      popup_subframe->current_frame_host()->GetSiteInstance()->GetSiteURL());
+  EXPECT_NE(subframe->current_frame_host()
+                ->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetDeprecatedSiteURL(),
+            popup_subframe->current_frame_host()
+                ->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetDeprecatedSiteURL());
 }
 
 // Ensure that when a process is about to be destroyed after the last active
@@ -14070,10 +13924,55 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, GestureTapUnconfirmedOOPIF) {
       std::ceil((iframe_bounds.y() - root_view->GetViewBounds().y() + 10) *
                 scale_factor));
 
+  {
+    // A touch cancel to initialize gesture provider in Aura.
+    const std::string pointer_actions_json = R"HTML(
+        [{"source": "touch", "id": 0,
+              "actions": [
+              { "name": "pointerDown", "x": 50, "y": 50 },
+              { "name": "pointerCancel"}]}]
+        )HTML";
+
+    ASSERT_OK_AND_ASSIGN(
+        auto parsed_json,
+        base::JSONReader::ReadAndReturnValueWithError(
+            pointer_actions_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+    ActionsParser actions_parser(std::move(parsed_json));
+
+    ASSERT_TRUE(actions_parser.Parse());
+
+    auto run_loop = std::make_unique<base::RunLoop>();
+
+    root_rwh->QueueSyntheticGesture(
+        std::make_unique<SyntheticPointerAction>(
+            actions_parser.pointer_action_params()),
+        base::BindOnce(
+            [](base::RunLoop* run_loop, SyntheticGesture::Result result) {
+              EXPECT_EQ(SyntheticGesture::GESTURE_FINISHED, result);
+              run_loop->Quit();
+            },
+            run_loop.get()));
+
+    // Runs until we get the OnSyntheticGestureCompleted callback
+    run_loop->Run();
+  }
+
   SyntheticTapGestureParams params;
   params.gesture_source_type = content::mojom::GestureSourceType::kTouchInput;
   params.position = tap_pos;
   params.duration_ms = 100;
+
+  ui::GestureDetector* gesture_detector =
+      root_rwh->GetView()
+          ->GetFilteredGestureProviderForTesting()
+          ->GetGestureDetectorForTesting();
+  auto task_runner = base::MakeRefCounted<base::TestMockTimeTaskRunner>();
+  gesture_detector->SetGestureTimeoutHandlerTaskRunnerForTesting(task_runner);
+
+  GestureTapEventObserver tap_observer;
+  iframe_node->current_frame_host()
+      ->GetRenderWidgetHost()
+      ->AddInputEventObserver(&tap_observer);
 
   auto run_loop = std::make_unique<base::RunLoop>();
   root_rwh->QueueSyntheticGesture(
@@ -14083,10 +13982,17 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, GestureTapUnconfirmedOOPIF) {
                      run_loop.get()));
 
   run_loop->Run();
-  // After the tap gesture has been completed, the timer should be gone.
-  EXPECT_FALSE(root_rwh->GetView()
-                   ->GetFilteredGestureProviderForTesting()
-                   ->HasPendingTapTimeoutForTesting());
+
+  EXPECT_EQ(1, tap_observer.num_gesture_tap_seen());
+
+  // Advance the task runner clock by timeout delay, to make sure the tap
+  // timeout task runs.
+  task_runner->FastForwardBy(gesture_detector->GetDoubleTapTimeoutForTesting());
+
+  // No extra tap is seen by input observers.
+  EXPECT_EQ(1, tap_observer.num_gesture_tap_seen());
+
+  root_rwh->RemoveInputEventObserver(&tap_observer);
 }
 
 // Tests that verify the feature disabling process reuse.
@@ -14757,12 +14663,12 @@ class CrossProcessSubframeRenderProcessGoneLogger
     crashed_rfhs_.push_back(render_frame_host);
   }
 
-  const std::vector<RenderFrameHost*>& crashed_rfhs() const {
+  const std::vector<raw_ptr<RenderFrameHost>>& crashed_rfhs() const {
     return crashed_rfhs_;
   }
 
  private:
-  std::vector<RenderFrameHost*> crashed_rfhs_;
+  std::vector<raw_ptr<RenderFrameHost>> crashed_rfhs_;
 };
 
 // Test that when a process hosting multiple subframes dies,
@@ -14803,6 +14709,297 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_FALSE(std::ranges::contains(test_client.crashed_rfhs(), rfh_b3));
 }
 
+namespace {
+
+// Intercepts DidCommitNavigation to capture the renderer-reported committed
+// origin from DidCommitProvisionalLoadParams for a specific URL, for
+// comparison with the browser-computed origin.
+class CommittedOriginInterceptor : public DidCommitNavigationInterceptor {
+ public:
+  CommittedOriginInterceptor(WebContents* web_contents, const GURL& target_url)
+      : DidCommitNavigationInterceptor(web_contents), target_url_(target_url) {}
+
+  const std::optional<url::Origin>& committed_origin() const {
+    return committed_origin_;
+  }
+
+  // Blocks until a DidCommit for |target_url_| is received.
+  void WaitForCommit() {
+    if (committed_origin_.has_value()) {
+      return;
+    }
+    base::RunLoop run_loop;
+    quit_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+ private:
+  bool WillProcessDidCommitNavigation(
+      RenderFrameHost* render_frame_host,
+      NavigationRequest* navigation_request,
+      mojom::DidCommitProvisionalLoadParamsPtr* params,
+      mojom::DidCommitProvisionalLoadInterfaceParamsPtr* interface_params)
+      override {
+    if ((*params)->url == target_url_) {
+      committed_origin_ = (*params)->origin;
+      if (quit_closure_) {
+        std::move(quit_closure_).Run();
+      }
+    }
+    return true;
+  }
+
+  const GURL target_url_;
+  std::optional<url::Origin> committed_origin_;
+  base::OnceClosure quit_closure_;
+};
+
+// Verifies that |origin|'s nonce equals the sandbox_origin_token recorded by
+// |rfh|, confirming the origin was derived from it.
+void VerifySandboxTokenNonce(RenderFrameHostImpl* rfh,
+                             const url::Origin& origin) {
+  const std::optional<base::UnguessableToken> token =
+      rfh->last_sandbox_origin_token_for_testing();
+  const base::UnguessableToken* nonce = origin.GetNonceForTesting();
+  ASSERT_TRUE(token.has_value());
+  ASSERT_TRUE(nonce);
+  EXPECT_EQ(*token, *nonce);
+}
+
+}  // namespace
+
+// Verify that a sandboxed iframe's initial about:blank document has an opaque
+// origin derived deterministically from the sandbox_origin_token, and that the
+// renderer agrees on this origin.
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
+                       SandboxedIframeInitialEmptyDocumentOrigin) {
+  GURL main_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+
+  GURL about_blank_url("about:blank");
+
+  // Set up an interceptor to capture the renderer's committed origin for
+  // about:blank from DidCommitParams.
+  CommittedOriginInterceptor interceptor(shell()->web_contents(),
+                                         about_blank_url);
+
+  // Create a sandboxed iframe with src="about:blank". The renderer performs a
+  // synchronous about:blank navigation and sends DidCommit with the origin
+  // derived from the sandbox_origin_token.
+  {
+    std::string script =
+        "var iframe = document.createElement('iframe');\n"
+        "iframe.sandbox = 'allow-scripts';\n"
+        "iframe.src = 'about:blank';\n"
+        "document.body.appendChild(iframe);\n";
+    ExecuteScriptAsync(root, script);
+  }
+
+  // Wait for the synchronous about:blank DidCommit.
+  interceptor.WaitForCommit();
+
+  FrameTreeNode* child = root->child_at(0);
+  RenderFrameHostImpl* child_rfh = child->current_frame_host();
+
+  EXPECT_TRUE(child_rfh->IsSandboxed(network::mojom::WebSandboxFlags::kOrigin));
+
+  // about:blank committed origin: opaque with parent's precursor (a.com),
+  // derived from sandbox_origin_token via SetOriginDependentStateOfNewFrame().
+  url::Origin about_blank_origin = child->current_origin();
+  EXPECT_TRUE(about_blank_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(main_url),
+            about_blank_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // Verify the origin was derived from the sandbox_origin_token.
+  VerifySandboxTokenNonce(child_rfh, about_blank_origin);
+
+  // Verify the renderer's committed origin for about:blank matches the
+  // browser-side origin (browser-renderer agreement on token-derived origin).
+  auto about_blank_committed = interceptor.committed_origin();
+  ASSERT_TRUE(about_blank_committed.has_value());
+  EXPECT_EQ(about_blank_origin, *about_blank_committed);
+
+  // Renderer-side origin is opaque ("null").
+  EXPECT_EQ("null", GetOriginFromRenderer(child));
+}
+
+// Verify that a popup from a CSP-sandboxed page has an opaque about:blank
+// origin derived deterministically from the sandbox_origin_token, and that the
+// renderer agrees on this origin.
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
+                       SandboxedPopupInitialEmptyDocumentOrigin) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com",
+      "/set-header?"
+      "Content-Security-Policy: sandbox allow-scripts allow-popups"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+  EXPECT_TRUE(root->current_frame_host()->IsSandboxed(
+      network::mojom::WebSandboxFlags::kOrigin));
+
+  // Open a popup to about:blank from the sandboxed main frame. The renderer
+  // performs a synchronous about:blank navigation and sends DidCommit with the
+  // origin derived from the sandbox_origin_token.
+  GURL about_blank_url("about:blank");
+  Shell* popup_shell = nullptr;
+  std::unique_ptr<CommittedOriginInterceptor> commit_interceptor;
+  Shell::SetShellCreatedCallback(
+      base::BindLambdaForTesting([&](Shell* created_shell) {
+        popup_shell = created_shell;
+        commit_interceptor = std::make_unique<CommittedOriginInterceptor>(
+            created_shell->web_contents(), about_blank_url);
+      }));
+
+  EXPECT_TRUE(
+      ExecJs(root, JsReplace("window.open($1, 'popup')", about_blank_url)));
+  ASSERT_TRUE(popup_shell);
+  ASSERT_TRUE(commit_interceptor);
+
+  // Wait for the synchronous about:blank DidCommit.
+  commit_interceptor->WaitForCommit();
+
+  FrameTreeNode* popup_frame =
+      static_cast<WebContentsImpl*>(popup_shell->web_contents())
+          ->GetPrimaryFrameTree()
+          .root();
+  RenderFrameHostImpl* popup_rfh = popup_frame->current_frame_host();
+
+  EXPECT_TRUE(popup_rfh->IsSandboxed(network::mojom::WebSandboxFlags::kOrigin));
+
+  // about:blank committed origin: opaque with opener's precursor (a.com),
+  // derived from sandbox_origin_token via SetOriginDependentStateOfNewFrame().
+  url::Origin about_blank_origin = popup_frame->current_origin();
+  EXPECT_TRUE(about_blank_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(main_url),
+            about_blank_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // Verify the origin was derived from the sandbox_origin_token.
+  VerifySandboxTokenNonce(popup_rfh, about_blank_origin);
+
+  // Verify the renderer's committed origin for about:blank matches the
+  // browser-side origin (browser-renderer agreement on token-derived origin).
+  auto about_blank_committed = commit_interceptor->committed_origin();
+  ASSERT_TRUE(about_blank_committed.has_value());
+  EXPECT_EQ(about_blank_origin, *about_blank_committed);
+
+  // Renderer-side origin is opaque ("null").
+  EXPECT_EQ("null", GetOriginFromRenderer(popup_frame));
+}
+
+// Verify that a noopener popup from a CSP-sandboxed page has an opaque origin
+// derived deterministically from the sandbox_origin_token (with no precursor
+// since the creator_frame is null for noopener), and that the origin changes to
+// a new opaque origin with the navigated site's precursor after the navigation
+// commits.
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
+                       SandboxedNoopenerPopupInitialEmptyDocumentOrigin) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com",
+      "/set-header?"
+      "Content-Security-Policy: sandbox allow-scripts allow-popups"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+  EXPECT_TRUE(root->current_frame_host()->IsSandboxed(
+      network::mojom::WebSandboxFlags::kOrigin));
+
+  // The popup will navigate to a cross-site URL via a noopener link.
+  GURL popup_url(embedded_test_server()->GetURL("b.com", "/title1.html"));
+
+  Shell* popup_shell = nullptr;
+  std::optional<base::UnguessableToken> initial_sandbox_token;
+  url::Origin initial_empty_doc_origin;
+  std::unique_ptr<TestNavigationManager> popup_manager;
+  std::unique_ptr<CommittedOriginInterceptor> commit_interceptor;
+  Shell::SetShellCreatedCallback(
+      base::BindLambdaForTesting([&](Shell* created_shell) {
+        popup_shell = created_shell;
+        // Capture the sandbox_origin_token and initial empty document origin
+        // here, inside the Shell-created callback. For noopener popups the
+        // browser calls AddNewContents (which fires this callback) *before*
+        // LoadURLWithParams starts the navigation to b.com. The initial RFH
+        // may be replaced by a speculative RFH once the navigation starts, so
+        // we save values rather than the RFH pointer.
+        FrameTreeNode* popup_root =
+            static_cast<WebContentsImpl*>(created_shell->web_contents())
+                ->GetPrimaryFrameTree()
+                .root();
+        initial_empty_doc_origin = popup_root->current_origin();
+        initial_sandbox_token = popup_root->current_frame_host()
+                                    ->last_sandbox_origin_token_for_testing();
+        popup_manager = std::make_unique<TestNavigationManager>(
+            created_shell->web_contents(), popup_url);
+        commit_interceptor = std::make_unique<CommittedOriginInterceptor>(
+            created_shell->web_contents(), popup_url);
+      }));
+
+  // Dynamically create and click a noopener link to open a cross-site popup.
+  EXPECT_TRUE(ExecJs(root, JsReplace("var a = document.createElement('a');"
+                                     "a.href = $1;"
+                                     "a.rel = 'noopener';"
+                                     "a.target = '_blank';"
+                                     "document.body.appendChild(a);"
+                                     "a.click();",
+                                     popup_url)));
+  ASSERT_TRUE(popup_shell);
+  ASSERT_TRUE(popup_manager);
+  ASSERT_TRUE(commit_interceptor);
+
+  FrameTreeNode* popup_frame =
+      static_cast<WebContentsImpl*>(popup_shell->web_contents())
+          ->GetPrimaryFrameTree()
+          .root();
+
+  // Verify the initial empty document origin (captured in the Shell callback
+  // before LoadURLWithParams, avoiding any race with the navigation to b.com).
+  // Opaque with no precursor: noopener suppresses the opener (new
+  // BrowsingInstance), so creator_frame is null and the precursor is empty.
+  EXPECT_TRUE(initial_empty_doc_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(),
+            initial_empty_doc_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // Verify the origin was derived from the sandbox_origin_token.
+  ASSERT_TRUE(initial_sandbox_token.has_value());
+  const base::UnguessableToken* pre_commit_nonce =
+      initial_empty_doc_origin.GetNonceForTesting();
+  ASSERT_TRUE(pre_commit_nonce);
+  EXPECT_EQ(*initial_sandbox_token, *pre_commit_nonce);
+
+  // Let the navigation to b.com commit.
+  ASSERT_TRUE(popup_manager->WaitForNavigationFinished());
+
+  // Post-commit origin: new opaque origin with the navigated site (b.com) as
+  // precursor, assigned by the browser via origin_to_commit.
+  EXPECT_TRUE(popup_frame->current_frame_host()->IsSandboxed(
+      network::mojom::WebSandboxFlags::kOrigin));
+
+  url::Origin post_commit_origin = popup_frame->current_origin();
+  EXPECT_TRUE(post_commit_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(popup_url),
+            post_commit_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // The initial and post-commit origins must differ.
+  EXPECT_NE(initial_empty_doc_origin, post_commit_origin);
+
+  // Verify the renderer's committed origin matches the browser's post-commit
+  // origin.
+  auto noopener_committed = commit_interceptor->committed_origin();
+  ASSERT_TRUE(noopener_committed.has_value());
+  EXPECT_EQ(post_commit_origin, *noopener_committed);
+
+  // The post-commit nonce must differ from the initial (token-derived) nonce.
+  const base::UnguessableToken* post_commit_nonce =
+      post_commit_origin.GetNonceForTesting();
+  ASSERT_TRUE(post_commit_nonce);
+  EXPECT_NE(*pre_commit_nonce, *post_commit_nonce);
+
+  // Renderer-side origin is opaque ("null").
+  EXPECT_EQ("null", GetOriginFromRenderer(popup_frame));
+}
+
 INSTANTIATE_TEST_SUITE_P(All,
                          RequestDelayingSitePerProcessBrowserTest,
                          testing::ValuesIn(RenderDocumentFeatureLevelValues()));
@@ -14812,9 +15009,6 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::ValuesIn(RenderDocumentFeatureLevelValues()));
 INSTANTIATE_TEST_SUITE_P(All,
                          AndroidInputBrowserTest,
-                         testing::ValuesIn(RenderDocumentFeatureLevelValues()));
-INSTANTIATE_TEST_SUITE_P(All,
-                         SitePerProcessBrowserTestWithSubframePriority,
                          testing::ValuesIn(RenderDocumentFeatureLevelValues()));
 #endif  // BUILDFLAG(IS_ANDROID)
 INSTANTIATE_TEST_SUITE_P(All,

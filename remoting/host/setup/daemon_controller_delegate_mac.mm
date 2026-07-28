@@ -227,14 +227,15 @@ DaemonControllerDelegateMac::~DaemonControllerDelegateMac() {
 }
 
 DaemonController::State DaemonControllerDelegateMac::GetState() {
-  pid_t job_pid = base::mac::PIDForJob(kServiceName);
-  if (job_pid < 0) {
-    return DaemonController::STATE_UNKNOWN;
-  } else if (job_pid == 0) {
-    // Service is stopped, or a start attempt failed.
-    return DaemonController::STATE_STOPPED;
-  } else {
-    return DaemonController::STATE_STARTED;
+  pid_t job_pid = base::mac::PIDForJobIfLoaded(kServiceName);
+  switch (job_pid) {
+    case -1:  // Error.
+      return DaemonController::STATE_UNKNOWN;
+    case -2:  // Not loaded.
+    case 0:   // Loaded but not running.
+      return DaemonController::STATE_STOPPED;
+    default:  // Loaded and running with specified pid.
+      return DaemonController::STATE_STARTED;
   }
 }
 
@@ -320,6 +321,13 @@ DaemonControllerDelegateMac::GetUsageStatsConsent() {
   }
 
   return consent;
+}
+
+bool DaemonControllerDelegateMac::is_privileged() const {
+  // Note: the daemon controller actually runs the helper script elevated, so
+  // the daemon controller itself is always privileged to perform state-changing
+  // operations.
+  return true;
 }
 
 scoped_refptr<DaemonController> DaemonController::Create() {

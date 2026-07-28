@@ -11,12 +11,12 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
@@ -127,7 +127,7 @@ class SidePanelWebUIViewTest : public InProcessBrowserTest {
               return std::make_unique<TestSidePanelWebUIView>(
                   scope, std::make_unique<TestWebUIContentsWrapper>(profile));
             },
-            browser()->profile()),
+            browser()->GetProfile()),
         /*default_content_width_callback=*/base::NullCallback());
 
     SidePanelRegistry::From(browser())->Register(std::move(entry));
@@ -144,14 +144,11 @@ class SidePanelWebUIViewTest : public InProcessBrowserTest {
               return std::make_unique<TestSidePanelWebUIView>(
                   scope, std::make_unique<TestWebUIContentsWrapper>(profile));
             },
-            browser()->profile()),
+            browser()->GetProfile()),
         /*default_content_width_callback=*/base::NullCallback());
-    browser()
-        ->tab_strip_model()
-        ->GetActiveTab()
-        ->GetTabFeatures()
-        ->side_panel_registry()
-        ->Register(std::move(entry));
+    auto* registry =
+        SidePanelRegistry::From(browser()->GetActiveTabInterface());
+    registry->Register(std::move(entry));
   }
 };
 
@@ -192,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(SidePanelWebUIViewTest,
             webui::GetBrowserWindowInterface(side_panel_webui_contents));
 
   // Create another browser as a test interference.
-  Browser* another_browser = CreateBrowser(browser()->profile());
+  Browser* another_browser = CreateBrowser(browser()->GetProfile());
   EXPECT_TRUE(another_browser);
   EXPECT_NE(browser(), another_browser);
 
@@ -262,7 +259,7 @@ IN_PROC_BROWSER_TEST_F(SidePanelWebUIViewTest,
 
   // A new browser instance is created as a confounding variable, and it should
   // not interfere with API calls in the `side_panel_webui_contents`.
-  Browser* new_browser = CreateBrowser(browser()->profile());
+  Browser* new_browser = CreateBrowser(browser()->GetProfile());
   EXPECT_TRUE(new_browser);
   new_browser->OpenGURL(GURL(kTestUrl1ForNewBrowser),
                         WindowOpenDisposition::CURRENT_TAB);

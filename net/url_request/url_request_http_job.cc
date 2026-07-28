@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/base_switches.h"
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
@@ -87,6 +88,7 @@
 #include "net/log/net_log_util.h"
 #include "net/log/net_log_values.h"
 #include "net/log/net_log_with_source.h"
+#include "net/net_buildflags.h"
 #include "net/nqe/network_quality_estimator.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
@@ -121,6 +123,14 @@
 namespace net {
 
 namespace {
+
+const size_t kMaxNestedSourceStreamDepth = 10;
+
+bool ShouldForceIgnoreSiteForCookies(const URLRequest& request) {
+  NetworkDelegate* network_delegate = request.network_delegate();
+  return network_delegate &&
+         network_delegate->ShouldForceIgnoreSiteForCookies(request);
+}
 
 base::DictValue FirstPartySetMetadataNetLogParams(
     const FirstPartySetMetadata& first_party_set_metadata,
@@ -184,22 +194,29 @@ base::DictValue CookieInclusionStatusNetLogParams(
 // which is expected to be ordered with the leaf cert first and the root cert
 // last. This complements the per-verification histogram
 // Net.Certificate.TrustAnchor.Verify
-void LogTrustAnchor(const std::vector<SHA256HashValue>& spki_hashes) {
+void LogTrustAnchor(const SSLInfo& ssl_info) {
   // Don't record metrics if there are no hashes; this is true if the HTTP
   // load did not come from an active network connection, such as the disk
   // cache or a synthesized response.
-  if (spki_hashes.empty()) {
-    return;
+  if (!ssl_info.public_key_hashes.empty()) {
+    int32_t id = 0;
+    for (const auto& hash : ssl_info.public_key_hashes) {
+      id = GetNetTrustAnchorHistogramIdForSPKI(hash);
+      if (id != 0) {
+        break;
+      }
+    }
+    // TODO(crbug.com/347047630): Remove this after the new histogram has
+    // accumulated sufficient history.
+    base::UmaHistogramSparse("Net.Certificate.TrustAnchor.Request", id);
   }
 
-  int32_t id = 0;
-  for (const auto& hash : spki_hashes) {
-    id = GetNetTrustAnchorHistogramIdForSPKI(hash);
-    if (id != 0) {
-      break;
-    }
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+  if (ssl_info.crs_root_id.has_value()) {
+    base::UmaHistogramSparse("Net.Certificate.TrustAnchor2.Request",
+                             *ssl_info.crs_root_id);
   }
-  base::UmaHistogramSparse("Net.Certificate.TrustAnchor.Request", id);
+#endif
 }
 
 CookieOptions CreateCookieOptions(
@@ -263,16 +280,6 @@ ContentEncodingType ToContentEncodingType(SourceStreamType type) {
   }
 }
 
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class HttpRequestStsState {
-  kUnknown = 0,
-  kUnprotectedHttps = 1,
-  kProtectedHttps = 2,
-  kUnprotectedHttp = 3,
-  kProtectedHttp = 4,
-  kMaxValue = kProtectedHttp,
-};
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -324,16 +331,6 @@ void RecordSTSHistograms(SSLUpgradeDecision upgrade_decision,
   if (!(load_flags & LOAD_MAIN_FRAME_DEPRECATED)) {
     return;
   }
-  const bool sts_enabled = upgrade_decision != SSLUpgradeDecision::kNoUpgrade;
-  HttpRequestStsState sts_state = HttpRequestStsState::kUnknown;
-  if (is_secure) {
-    sts_state = (sts_enabled ? HttpRequestStsState::kProtectedHttps
-                             : HttpRequestStsState::kUnprotectedHttps);
-  } else {
-    sts_state = (sts_enabled ? HttpRequestStsState::kProtectedHttp
-                             : HttpRequestStsState::kUnprotectedHttp);
-  }
-  UMA_HISTOGRAM_ENUMERATION("Net.HttpRequestStsState", sts_state);
 
   UMA_HISTOGRAM_ENUMERATION(
       "Net.HttpRequestSSLUpgradeDecision",
@@ -358,6 +355,11 @@ const scoped_refptr<base::SingleThreadTaskRunner>& TaskRunner(
     return net::GetTaskRunner(priority);
   }
   return base::SingleThreadTaskRunner::GetCurrentDefault();
+}
+
+bool ShouldBlockAllCookies(PrivacyMode privacy_mode) {
+  return privacy_mode == PRIVACY_MODE_ENABLED ||
+         privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS;
 }
 
 }  // namespace
@@ -473,6 +475,7 @@ void URLRequestHttpJob::Start() {
   request_info_.reporting_upload_depth = request_->reporting_upload_depth();
 #endif
   request_info_.is_shared_resource = request_->is_shared_resource();
+  request_info_.target_network = request_->target_network();
 
   CookieStore* cookie_store = request()->context()->cookie_store();
   const CookieAccessDelegate* delegate =
@@ -480,34 +483,10 @@ void URLRequestHttpJob::Start() {
 
   request_->net_log().BeginEvent(NetLogEventType::FIRST_PARTY_SETS_METADATA);
 
-  std::optional<
-      std::pair<FirstPartySetMetadata, FirstPartySetsCacheFilter::MatchInfo>>
-      maybe_metadata = cookie_util::ComputeFirstPartySetMetadataMaybeAsync(
-          SchemefulSite(request()->url()), request()->isolation_info(),
-          delegate,
-          base::BindOnce(&URLRequestHttpJob::OnGotFirstPartySetMetadata,
-                         weak_factory_.GetWeakPtr()));
-
-  if (maybe_metadata.has_value()) {
-    auto [metadata, match_info] = std::move(maybe_metadata).value();
-    OnGotFirstPartySetMetadata(std::move(metadata), std::move(match_info));
-  }
-}
-
-namespace {
-
-bool ShouldBlockAllCookies(PrivacyMode privacy_mode) {
-  return privacy_mode == PRIVACY_MODE_ENABLED ||
-         privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS;
-}
-
-}  // namespace
-
-void URLRequestHttpJob::OnGotFirstPartySetMetadata(
-    FirstPartySetMetadata first_party_set_metadata,
-    FirstPartySetsCacheFilter::MatchInfo match_info) {
-  TRACE_EVENT("net", "URLRequestHttpJob::OnGotFirstPartySetMetadata",
-              NetLogWithSourceToFlow(request_->net_log()));
+  auto [first_party_set_metadata, match_info] =
+      cookie_util::ComputeFirstPartySetMetadata(SchemefulSite(request()->url()),
+                                                request()->isolation_info(),
+                                                delegate);
 
   first_party_set_metadata_ = std::move(first_party_set_metadata);
   request_info_.fps_cache_filter = match_info.clear_at_run_id;
@@ -825,10 +804,12 @@ void URLRequestHttpJob::AddCookieHeaderAndStart() {
   DCHECK(cookie_store);
   DCHECK(ShouldAddCookieHeader());
   bool force_ignore_site_for_cookies =
-      request_->force_ignore_site_for_cookies();
+      ShouldForceIgnoreSiteForCookies(*request_);
   if (cookie_store->cookie_access_delegate() &&
       cookie_store->cookie_access_delegate()->ShouldIgnoreSameSiteRestrictions(
-          request_->url(), request_->site_for_cookies())) {
+          request_->url(), request_->site_for_cookies(),
+          request_->isolation_info().top_frame_origin().value_or(
+              url::Origin()))) {
     force_ignore_site_for_cookies = true;
   }
   bool is_main_frame_navigation =
@@ -1050,10 +1031,12 @@ void URLRequestHttpJob::SaveCookiesAndNotifyHeadersComplete(int result) {
   std::optional<base::Time> server_time = GetResponseHeaders()->GetDateValue();
 
   bool force_ignore_site_for_cookies =
-      request_->force_ignore_site_for_cookies();
+      ShouldForceIgnoreSiteForCookies(*request_);
   if (cookie_store->cookie_access_delegate() &&
       cookie_store->cookie_access_delegate()->ShouldIgnoreSameSiteRestrictions(
-          request_->url(), request_->site_for_cookies())) {
+          request_->url(), request_->site_for_cookies(),
+          request_->isolation_info().top_frame_origin().value_or(
+              url::Origin()))) {
     force_ignore_site_for_cookies = true;
   }
   bool is_main_frame_navigation =
@@ -1179,6 +1162,13 @@ void URLRequestHttpJob::OnSetCookieResult(const CookieOptions& options,
 
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 void URLRequestHttpJob::ProcessDeviceBoundSessionsHeader() {
+  DCHECK(response_info_);
+  const SSLInfo& ssl_info = response_info_->ssl_info;
+  // Do not process DBSC headers on connections with certificate errors.
+  if (!ssl_info.is_valid() || IsCertStatusError(ssl_info.cert_status)) {
+    return;
+  }
+
   device_bound_sessions::SessionService* service =
       request_->context()->device_bound_session_service();
   if (!service) {
@@ -1245,7 +1235,7 @@ void URLRequestHttpJob::OnStartCompleted(int result) {
   if (transaction_ && transaction_->GetResponseInfo()) {
     const SSLInfo& ssl_info = transaction_->GetResponseInfo()->ssl_info;
     if (!IsCertificateError(result)) {
-      LogTrustAnchor(ssl_info.public_key_hashes);
+      LogTrustAnchor(ssl_info);
     }
   }
 
@@ -1309,6 +1299,8 @@ void URLRequestHttpJob::OnStartCompleted(int result) {
   } else if (result == ERR_SSL_CLIENT_AUTH_CERT_NEEDED) {
     NotifyCertificateRequested(
         transaction_->GetResponseInfo()->cert_request_info.get());
+  } else if (result == ERR_LOCAL_NETWORK_PERMISSION_MISSING) {
+    NotifyPlatformLocalNetworkAccessPermissionRequired();
   } else if (result == ERR_DNS_NAME_HTTPS_ONLY) {
     // If DNS indicated the name is HTTPS-only, synthesize a redirect to either
     // HTTPS or WSS.
@@ -1549,6 +1541,10 @@ std::unique_ptr<SourceStream> URLRequestHttpJob::SetUpSourceStream() {
       FilterSourceStream::GetContentEncodingTypes(
           request_->accepted_stream_types(), *headers);
 
+  if (types.size() > kMaxNestedSourceStreamDepth) {
+    return nullptr;
+  }
+
   if (request()->client_side_content_decoding_enabled() &&
       !headers->HasHeader("use-as-dictionary")) {
     // When client side content encoding is enabled, the client will decode the
@@ -1581,6 +1577,14 @@ bool URLRequestHttpJob::CopyFragmentOnRedirect(const GURL& location) const {
 }
 
 bool URLRequestHttpJob::IsSafeRedirect(const GURL& location) {
+  // When the caller has indicated all redirects should be treated as safe,
+  // skip the scheme check. The caller is responsible for filtering unsafe
+  // redirects (e.g., returning an opaque-redirect response instead of
+  // following the redirect).
+  if (request_->treat_all_redirects_as_safe()) {
+    return true;
+  }
+
   // HTTP is always safe.
   // TODO(pauljensen): Remove once crbug.com/146591 is fixed.
   if (location.is_valid() &&
@@ -1744,6 +1748,32 @@ void URLRequestHttpJob::ContinueWithCertificate(
                                 weak_factory_.GetWeakPtr(), rv));
 }
 
+void URLRequestHttpJob::SetPlatformLocalNetworkAccessGranted() {
+  DCHECK(transaction_);
+
+  DCHECK(!response_info_) << "should not have a response yet";
+  DCHECK(!override_response_headers_);
+  receive_headers_end_ = base::TimeTicks();
+
+  ResetTimer();
+
+  int rv = transaction_->RestartIgnoringLastError(base::BindOnce(
+      &URLRequestHttpJob::OnStartCompleted, base::Unretained(this)));
+  // RestartIgnoringLastError() always returns ERR_IO_PENDING. See
+  // HttpNetworkTransaction.
+  CHECK_EQ(rv, ERR_IO_PENDING);
+}
+
+void URLRequestHttpJob::CancelPlatformLocalNetworkAccessRequest() {
+  DCHECK(transaction_);
+
+  DCHECK(!response_info_) << "should not have a response yet";
+  DCHECK(!override_response_headers_);
+  receive_headers_end_ = base::TimeTicks();
+
+  NotifyStartError(ERR_LOCAL_NETWORK_PERMISSION_MISSING);
+}
+
 void URLRequestHttpJob::ContinueDespiteLastError() {
   // If the transaction was destroyed, then the job was cancelled.
   if (!transaction_.get()) {
@@ -1777,14 +1807,16 @@ bool URLRequestHttpJob::ShouldFixMismatchedContentLength(int rv) const {
   if (rv == ERR_CONTENT_LENGTH_MISMATCH ||
       rv == ERR_INCOMPLETE_CHUNKED_ENCODING) {
     if (request_->response_headers()) {
-      std::optional<base::ByteCount> content_length =
+      std::optional<base::ByteSize> content_length =
           request_->response_headers()->GetContentLength();
-      int expected_length = content_length ? content_length->InBytes() : -1;
       VLOG(1) << __func__ << "() \"" << request_->url().spec() << "\""
-              << " content-length = " << expected_length
+              << " content-length = "
+              << content_length.transform(&base::ByteSizeDelta::FromByteSize)
+                     .value_or(base::ByteSizeDelta(-1))
               << " pre total = " << prefilter_bytes_read()
               << " post total = " << postfilter_bytes_read();
-      if (postfilter_bytes_read() == expected_length) {
+      if (content_length.has_value() &&
+          postfilter_bytes_read() == content_length.value()) {
         // Clear the error.
         return true;
       }
@@ -1817,8 +1849,8 @@ int URLRequestHttpJob::ReadRawData(IOBuffer* buf, int buf_size) {
   return rv;
 }
 
-int64_t URLRequestHttpJob::GetTotalReceivedBytes() const {
-  int64_t total_received_bytes =
+base::ByteSize URLRequestHttpJob::GetTotalReceivedBytes() const {
+  base::ByteSize total_received_bytes =
       total_received_bytes_from_previous_transactions_;
   if (transaction_) {
     total_received_bytes += transaction_->GetTotalReceivedBytes();
@@ -1826,19 +1858,20 @@ int64_t URLRequestHttpJob::GetTotalReceivedBytes() const {
   return total_received_bytes;
 }
 
-int64_t URLRequestHttpJob::GetTotalSentBytes() const {
-  int64_t total_sent_bytes = total_sent_bytes_from_previous_transactions_;
+base::ByteSize URLRequestHttpJob::GetTotalSentBytes() const {
+  base::ByteSize total_sent_bytes =
+      total_sent_bytes_from_previous_transactions_;
   if (transaction_) {
     total_sent_bytes += transaction_->GetTotalSentBytes();
   }
   return total_sent_bytes;
 }
 
-int64_t URLRequestHttpJob::GetReceivedBodyBytes() const {
+base::ByteSize URLRequestHttpJob::GetReceivedBodyBytes() const {
   if (transaction_) {
     return transaction_->GetReceivedBodyBytes();
   }
-  return 0;
+  return base::ByteSize(0);
 }
 
 void URLRequestHttpJob::DoneReading() {
@@ -1903,6 +1936,26 @@ void URLRequestHttpJob::RecordTimer() {
       HasGoogleHost(request()->url())) {
     base::UmaHistogramMediumTimes("Net.HttpTimeToFirstByte.TLS13.Google",
                                   to_start);
+  }
+
+  // Record additional metric for handshakes that contain padding from the
+  // server.
+  if (transaction_ && transaction_->GetResponseInfo() &&
+      transaction_->GetResponseInfo()->ssl_info.server_padding_received) {
+    base::UmaHistogramMediumTimes("Net.HttpTimeToFirstByte.ServerPadding",
+                                  to_start);
+
+    LoadTimingInfo load_timing_info;
+    if (transaction_->GetLoadTimingInfo(&load_timing_info)) {
+      // Only log this histogram if connection wasn't reused and request wasn't
+      // served from cache.
+      if (!load_timing_info.socket_reused &&
+          !transaction_->GetResponseInfo()->was_cached) {
+        base::UmaHistogramMediumTimes(
+            "Net.HttpTimeToFirstByte.ServerPaddingFirstConnectionOnly",
+            to_start);
+      }
+    }
   }
 }
 
@@ -1978,13 +2031,15 @@ void URLRequestHttpJob::RecordCompletionHistograms(CompletionCause reason) {
   // content's length only.
   const bool bypassedNetwork = response_info_ && response_info_->was_cached &&
                                !response_info_->network_accessed &&
-                               GetTotalSentBytes() == 0 &&
-                               GetTotalReceivedBytes() == 0;
+                               GetTotalSentBytes().is_zero() &&
+                               GetTotalReceivedBytes().is_zero();
   if (!bypassedNetwork) {
     base::UmaHistogramCustomCounts("Net.HttpJob.BytesSent2",
-                                   GetTotalSentBytes(), 1, 50000000, 50);
+                                   GetTotalSentBytes().InBytes(), 1, 50000000,
+                                   50);
     base::UmaHistogramCustomCounts("Net.HttpJob.BytesReceived2",
-                                   GetTotalReceivedBytes(), 1, 50000000, 50);
+                                   GetTotalReceivedBytes().InBytes(), 1,
+                                   50000000, 50);
   }
 
   if (response_info_) {
@@ -2010,19 +2065,23 @@ void URLRequestHttpJob::RecordCompletionHistograms(CompletionCause reason) {
     }
 
     base::UmaHistogramCustomCounts("Net.HttpJob.PrefilterBytesRead",
-                                   prefilter_bytes_read(), 1, 50000000, 50);
+                                   prefilter_bytes_read().InBytes(), 1,
+                                   50000000, 50);
     if (response_info_->was_cached) {
       base::UmaHistogramTimes("Net.HttpJob.TotalTimeCached", total_time);
       base::UmaHistogramCustomCounts("Net.HttpJob.PrefilterBytesRead.Cache",
-                                     prefilter_bytes_read(), 1, 50000000, 50);
+                                     prefilter_bytes_read().InBytes(), 1,
+                                     50000000, 50);
     } else {
       base::UmaHistogramTimes("Net.HttpJob.TotalTimeNotCached", total_time);
       base::UmaHistogramCustomCounts("Net.HttpJob.PrefilterBytesRead.Net",
-                                     prefilter_bytes_read(), 1, 50000000, 50);
+                                     prefilter_bytes_read().InBytes(), 1,
+                                     50000000, 50);
 
       if (request_->ad_tagged()) {
         base::UmaHistogramCustomCounts("Net.HttpJob.PrefilterBytesRead.Ads.Net",
-                                       prefilter_bytes_read(), 1, 50000000, 50);
+                                       prefilter_bytes_read().InBytes(), 1,
+                                       50000000, 50);
       }
 
       if (is_https_google && used_quic) {
@@ -2057,7 +2116,8 @@ void URLRequestHttpJob::DoneWithRequest(CompletionCause reason) {
   }
 
   RecordCompletionHistograms(reason);
-  request()->set_received_response_content_length(prefilter_bytes_read());
+  request()->set_received_response_content_length(
+      prefilter_bytes_read().InBytes());
 }
 
 HttpResponseHeaders* URLRequestHttpJob::GetResponseHeaders() const {

@@ -15,8 +15,6 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
@@ -25,12 +23,13 @@ import org.chromium.base.metrics.TimingMetric;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownEmbedder.OmniboxAlignment;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewBinder;
 import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.ViewUtils;
@@ -48,12 +47,11 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
 
     private int mListViewMaxHeight;
     private int mLastBroadcastedListViewMaxHeight;
-    private int mTopPaddingForEdgeToEdge;
     private boolean mShouldRoundTopCorners = true;
     private final Callback<OmniboxAlignment> mOmniboxAlignmentObserver =
             this::onOmniboxAlignmentChanged;
 
-    public OmniboxSuggestionsContainer(@NonNull Context context, @Nullable AttributeSet attrs) {
+    public OmniboxSuggestionsContainer(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
     }
 
@@ -65,7 +63,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        boolean isTablet = mEmbedder != null && mEmbedder.isTablet();
+        boolean shouldWrapDropdownHeight = mEmbedder != null && !mEmbedder.isPhoneStyleWindow();
 
         try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Measure");
                 TimingMetric metric = OmniboxMetrics.recordSuggestionListMeasureTime();
@@ -80,9 +78,9 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             heightMeasureSpec =
                     MeasureSpec.makeMeasureSpec(
                             availableViewportHeight,
-                            isTablet ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
+                            shouldWrapDropdownHeight ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            if (isTablet) {
+            if (shouldWrapDropdownHeight) {
                 setRoundingCorners(mShouldRoundTopCorners, shouldRoundBottomCorners());
             }
         }
@@ -96,15 +94,6 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
     @Override
     @SuppressLint("ClickableViewAccessibility")
     public boolean onTouchEvent(MotionEvent event) {
-        // Propagate touch events, to make possible touch elements behind this container. Omnibox
-        // autofocus feature prevents the Scrim to be shown as a result tab content is covered by
-        // this transparent container.
-        boolean shouldPassThroughUnhandledTouchEvents =
-                mEmbedder != null && mEmbedder.shouldPassThroughUnhandledTouchEvents();
-        if (shouldPassThroughUnhandledTouchEvents) {
-            return false;
-        }
-
         // Swallow all touch events, especially if these were not consumed by the Dropdown.
         // This ensures that touching the blank areas of the container does not dismiss the
         // Omnibox.
@@ -230,7 +219,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             mEmbedder.removeAlignmentObserver(mOmniboxAlignmentObserver);
         }
 
-        if (!OmniboxFeatures.shouldPreWarmRecyclerViewPool()) {
+        if (!OmniboxCapabilities.shouldPreWarmRecyclerViewPool()) {
             mDropdown.getRecycledViewPool().clear();
         }
     }
@@ -242,7 +231,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         mOmniboxAlignment = omniboxAlignment;
         mDropdown.setPaddingRelative(
                 mDropdown.getPaddingStart(),
-                mDropdown.getPaddingTop(),
+                mDropdown.getBaseTopPadding() + mOmniboxAlignment.paddingTop,
                 mDropdown.getPaddingEnd(),
                 mDropdown.getBaseBottomPadding() + mOmniboxAlignment.paddingBottom);
 
@@ -293,25 +282,13 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         mHeightChangeListener = null;
     }
 
-    /**
-     * Called when the toolbar's embedder surface layout changes between edge-to-edge and standard.
-     * When the toolbar is positioned at the bottom and edge-to-edge mode is active, the omnibox
-     * suggestions container needs top padding to avoid content entering the status bar area.
-     *
-     * @param topPadding The top padding to apply for edge-to-edge mode. This equals the status bar
-     *     height when edge-to-edge is active and the toolbar is at the bottom, otherwise 0.
-     */
-    void onToEdgeChange(int topPadding) {
-        if (mTopPaddingForEdgeToEdge == topPadding) {
-            return;
-        }
-        mTopPaddingForEdgeToEdge = topPadding;
-        setPaddingRelative(
-                getPaddingStart(), mTopPaddingForEdgeToEdge, getPaddingEnd(), getPaddingBottom());
-    }
-
     @VisibleForTesting
     void setSuggestionsDropdownForTest(OmniboxSuggestionsDropdown dropdown) {
         mDropdown = dropdown;
+    }
+
+    public OmniboxSuggestionsDropdown takeDropdownView() {
+        removeView(mDropdown);
+        return mDropdown;
     }
 }

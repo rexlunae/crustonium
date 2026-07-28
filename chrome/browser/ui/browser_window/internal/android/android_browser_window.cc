@@ -9,22 +9,31 @@
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/check_deref.h"
+#include "base/memory/weak_ptr.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/blocked_content/chrome_popup_navigation_delegate.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/internal/jni/AndroidBrowserWindow_jni.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "components/blocked_content/popup_blocker.h"
 #include "components/sessions/core/session_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/extensions/extension_browser_window_helper.h"
+#include "chrome/common/pref_names.h"
+#include "content/public/browser/devtools_agent_host.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 namespace {
 using base::android::AttachCurrentThread;
@@ -51,9 +60,21 @@ AndroidBrowserWindow::AndroidBrowserWindow(
       profile_(CHECK_DEREF(profile)),
       session_id_(SessionID::NewUnique()) {
   java_android_browser_window_.Reset(env, java_android_browser_window);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  extension_browser_window_helper_ =
+      std::make_unique<extensions::ExtensionBrowserWindowHelper>(this, profile);
+
+  profile_pref_registrar_.Init(profile_->GetPrefs());
+  profile_pref_registrar_.Add(
+      prefs::kDevToolsAvailability,
+      base::BindRepeating(&AndroidBrowserWindow::OnDevToolsAvailabilityChanged,
+                          base::Unretained(this)));
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 AndroidBrowserWindow::~AndroidBrowserWindow() {
+  browser_did_close_callback_list_.Notify(this);
   Java_AndroidBrowserWindow_clearNativePtr(AttachCurrentThread(),
                                            java_android_browser_window_);
 }
@@ -100,8 +121,22 @@ const SessionID& AndroidBrowserWindow::GetSessionID() const {
   return session_id_;
 }
 
+bool AndroidBrowserWindow::IsDeleteScheduled() const {
+  return Java_AndroidBrowserWindow_isDeleteScheduled(
+      AttachCurrentThread(), java_android_browser_window_);
+}
+
+base::CallbackListSubscription AndroidBrowserWindow::RegisterBrowserDidClose(
+    BrowserDidCloseCallback callback) {
+  return browser_did_close_callback_list_.Add(std::move(callback));
+}
+
 BrowserWindowInterface::Type AndroidBrowserWindow::GetType() const {
   return type_;
+}
+
+base::WeakPtr<BrowserWindowInterface> AndroidBrowserWindow::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 content::WebContents* AndroidBrowserWindow::OpenURL(
@@ -172,5 +207,16 @@ base::android::ScopedJavaLocalRef<jobject> AndroidBrowserWindow::GetActivity() {
   return Java_AndroidBrowserWindow_getActivity(AttachCurrentThread(),
                                                java_android_browser_window_);
 }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+void AndroidBrowserWindow::OnDevToolsAvailabilityChanged() {
+  for (auto& agent_host : content::DevToolsAgentHost::GetAll()) {
+    if (!DevToolsWindow::AllowDevToolsFor(&profile_.get(),
+                                          agent_host->GetWebContents())) {
+      agent_host->ForceDetachAllSessions();
+    }
+  }
+}
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 DEFINE_JNI(AndroidBrowserWindow)

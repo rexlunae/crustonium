@@ -100,6 +100,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 
 namespace blink {
@@ -264,7 +265,7 @@ String WebFrameSerializerImpl::PostActionAfterSerializeEndTag(
   return result.ToString();
 }
 
-void WebFrameSerializerImpl::SaveHTMLContentToBuffer(const String& result,
+void WebFrameSerializerImpl::SaveHTMLContentToBuffer(const StringView& result,
                                                      SerializeDomParam* param) {
   data_buffer_.Append(result);
   EncodeAndFlushBuffer(WebFrameSerializerClient::kCurrentFrameIsNotFinished,
@@ -280,11 +281,9 @@ void WebFrameSerializerImpl::EncodeAndFlushBuffer(
       data_buffer_.length() <= kDataBufferCapacity)
     return;
 
-  String content = data_buffer_.ToString();
-  data_buffer_.Clear();
-
   std::string encoded_content = param->text_encoding.Encode(
-      content, UnencodableHandling::kEntitiesForUnencodables);
+      data_buffer_, UnencodableHandling::kXmlCharRef);
+  data_buffer_.Clear();
 
   // Send result to the client.
   client_->DidSerializeDataForFrame(base::ToVector(encoded_content), status);
@@ -341,7 +340,7 @@ void WebFrameSerializerImpl::OpenTagToString(Element* element,
     // Rewrite the attribute value if requested.
     if (element->HasLegalLinkAttribute(attr_name)) {
       // For links start with "javascript:", we do not change it.
-      if (!attr_value.StartsWithIgnoringASCIICase("javascript:")) {
+      if (!attr_value.StartsWithIgnoringAsciiCase("javascript:")) {
         // Get the absolute link.
         KURL complete_url = param->document->CompleteURL(attr_value);
 
@@ -381,7 +380,7 @@ void WebFrameSerializerImpl::OpenTagToString(Element* element,
   // Append the added contents generate in  post action of open tag.
   result.Append(added_contents);
   // Save the result to data buffer.
-  SaveHTMLContentToBuffer(result.ToString(), param);
+  SaveHTMLContentToBuffer(result, param);
 }
 
 // Serialize end tag of an specified element.
@@ -419,7 +418,7 @@ void WebFrameSerializerImpl::EndTagToString(Element* element,
   // Do post action for end tag.
   result.Append(PostActionAfterSerializeEndTag(element, param));
   // Save the result to data buffer.
-  SaveHTMLContentToBuffer(result.ToString(), param);
+  SaveHTMLContentToBuffer(result, param);
 }
 
 void WebFrameSerializerImpl::ShadowRootTagToString(ShadowRoot* shadow_root,
@@ -434,9 +433,14 @@ void WebFrameSerializerImpl::ShadowRootTagToString(ShadowRoot* shadow_root,
     result.Append(" shadowrootdelegatesfocus");
   }
 
+  if (RuntimeEnabledFeatures::ShadowRootSlotAssignmentEnabled() &&
+      shadow_root->GetSlotAssignmentMode() == SlotAssignmentMode::kManual) {
+    result.Append(" shadowrootslotassignment=\"manual\"");
+  }
+
   result.Append('>');
 
-  SaveHTMLContentToBuffer(result.ToString(), param);
+  SaveHTMLContentToBuffer(result, param);
 }
 
 void WebFrameSerializerImpl::BuildContentForNode(Node* node,

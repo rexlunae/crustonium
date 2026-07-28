@@ -9,6 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -176,6 +177,8 @@ class TypedNavigationUpgradeThrottleBrowserTest
       disabled_features.push_back(omnibox::kDefaultTypedNavigationsToHttps);
     }
     disabled_features.push_back(features::kHttpsFirstBalancedModeAutoEnable);
+    disabled_features.push_back(
+        features::kHttpsUpgradesTypedSchemelessNavigationNoTimeoutFallback);
     feature_list_.InitWithFeaturesAndParameters(enabled_features,
                                                 disabled_features);
   }
@@ -253,7 +256,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
   bool IsFeatureEnabled() const { return GetParam(); }
 
   LocationBar* GetLocationBar() {
-    return browser()->window()->GetLocationBar();
+    return BrowserWindow::FromBrowser(browser())->GetLocationBar();
   }
 
   OmniboxView* omnibox() { return GetLocationBar()->GetOmniboxView(); }
@@ -267,7 +270,8 @@ class TypedNavigationUpgradeThrottleBrowserTest
           ->OnFocusChanged(OMNIBOX_FOCUS_VISIBLE,
                            OMNIBOX_FOCUS_CHANGE_EXPLICIT);
     } else {
-      browser()->window()->GetLocationBar()->FocusLocation(false);
+      BrowserWindow::FromBrowser(browser())->GetLocationBar()->FocusLocation(
+          /*is_user_initiated=*/false, /*clear_focus_if_failed=*/false);
     }
   }
 
@@ -295,6 +299,11 @@ class TypedNavigationUpgradeThrottleBrowserTest
         ui::ClipboardBuffer::kCopyPaste);
     SetClipboardText(base::UTF8ToUTF16(hostname));
     EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_PASTE));
+
+    // Wait for the asynchronous paste to complete.
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return omnibox()->GetText() == base::UTF8ToUTF16(hostname); }));
+
     WaitForAutocompleteControllerDone();
     // Hit enter and wait for the navigation(s).
     content::TestNavigationObserver navigation_observer(contents,
@@ -375,7 +384,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
   void WaitForHistoryToLoad() {
     history::HistoryService* const history_service =
         HistoryServiceFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     ui_test_utils::WaitForHistoryToLoad(history_service);
   }
 
@@ -391,7 +400,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
     ASSERT_TRUE(controller->done());
   }
 
-  // Regression check for crbug.com/1184872: The first autocomplete result
+  // Regression check for crbug.com/40171835: The first autocomplete result
   // should be the same as the typed text, without a scheme.
   void CheckPopupText(const std::string& text) {
     ASSERT_TRUE(GetLocationBar()->GetOmniboxController()->IsPopupOpen());
@@ -415,7 +424,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
     CheckPopupText(url_without_scheme);
     PressEnterAndWaitForNavigations(num_expected_navigations, ctrl_enter);
 
-    ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+    ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     const GURL http_url = MakeHttpURL(url_without_scheme);
@@ -487,7 +496,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
 
   histograms.ExpectTotalCount(kEventHistogram, 0);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_TRUE(std::ranges::contains(enumerator.urls(), url));
 }
 
@@ -509,7 +518,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
 
   histograms.ExpectTotalCount(kEventHistogram, 0);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_TRUE(std::ranges::contains(enumerator.urls(), url));
 }
 
@@ -537,7 +546,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
 
   // Broken SSL results in an interstitial and interstitial pages aren't added
   // to history.
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_FALSE(std::ranges::contains(enumerator.urls(), url));
 }
 
@@ -619,7 +628,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   CheckPopupText(text);
   PressEnterAndWaitForNavigations(1, /*ctrl_key=*/true);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   const GURL http_url("http://www.site-with-http.com");
@@ -651,7 +660,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   CheckPopupText(text);
   PressEnterAndWaitForNavigations(1, /*ctrl_key=*/true);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   const GURL http_url("http://www.site-with-good-https.com");
@@ -687,7 +696,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   TypeUrlAndExpectSuccessfulUpgrade(kSiteWithGoodHttps, /*ctrl_enter=*/true);
 }
 
-// Regression test for crbug.com/1202967: Paste a hostname in the omnibox and
+// Regression test for crbug.com/40763267: Paste a hostname in the omnibox and
 // press enter. This should default to HTTPS and the upgrade should succeed.
 IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
                        PasteUrlWithoutASchemeAndHitEnter_GoodHttps) {
@@ -701,7 +710,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   // with a single navigation attempt.
   PasteHostnameAndWaitForNavigations(contents, kSiteWithGoodHttps, 1);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url = MakeHttpURL(kSiteWithGoodHttps);
   const GURL https_url = MakeHttpsURL(kSiteWithGoodHttps);
 
@@ -723,7 +732,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   histograms.ExpectBucketCount(kEventHistogram, Event::kHttpsLoadSucceeded, 1);
 }
 
-// Regression test for crbug.com/1202967: Paste a hostname in the omnibox and
+// Regression test for crbug.com/40763267: Paste a hostname in the omnibox and
 // press enter. This should hit a bad HTTPS URL and fallback to HTTP, never
 // showing an interstitial.
 // TODO(crbug.com/375004882): Disabled as the test no longer works correctly
@@ -743,7 +752,7 @@ IN_PROC_BROWSER_TEST_P(
   // attempt and one for the fallback.
   PasteHostnameAndWaitForNavigations(contents, kSiteWithBadHttps, 2);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url = MakeHttpURL(kSiteWithBadHttps);
   const GURL https_url = MakeHttpsURL(kSiteWithBadHttps);
 
@@ -787,7 +796,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   model->PasteAndGo(base::UTF8ToUTF16(kSiteWithGoodHttps));
   navigation_observer.Wait();
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url = MakeHttpURL(kSiteWithGoodHttps);
   const GURL https_url = MakeHttpsURL(kSiteWithGoodHttps);
 
@@ -1009,7 +1018,7 @@ class TypedNavigationUpgradeThrottleRedirectBrowserTest
     SetOmniboxText(url_without_scheme);
     PressEnterAndWaitForNavigations(1);
 
-    ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+    ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     const GURL http_url =
@@ -1043,7 +1052,7 @@ class TypedNavigationUpgradeThrottleRedirectBrowserTest
     SetOmniboxText(url_without_scheme);
     PressEnterAndWaitForNavigations(2);
 
-    ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+    ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     const GURL http_url =
@@ -1240,7 +1249,7 @@ IN_PROC_BROWSER_TEST_P(
   histograms.ExpectBucketCount(kNetErrorHistogram,
                                error_page::NETWORK_ERROR_PAGE_SHOWN, 2);
 
-  // Regression test for crbug.com/1182760: This time type the hostname of the
+  // Regression test for crbug.com/40170929: This time type the hostname of the
   // redirect target (site-with-bad-https.com). This should attempt an HTTPS
   // load, encounter an SSL error and fall back to HTTP.
   const std::string url_without_scheme = GetURLWithoutScheme(target_url);
@@ -1251,7 +1260,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_FALSE(chrome_browser_interstitials::IsShowingInterstitial(contents));
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url =
       embedded_test_server()->GetURL(kSiteWithBadHttps, "/title1.html");
   const GURL https_url = MakeHttpsURL(url_without_scheme);
@@ -1337,4 +1346,4 @@ IN_PROC_BROWSER_TEST_P(
 // - Various types of navigation states such as downloads, external protocols
 // etc.
 // - Non-cert errors such as HTTP 4XX or 5XX.
-// - Test cases for crbug.com/1161620.
+// - Test cases for crbug.com/40162528.

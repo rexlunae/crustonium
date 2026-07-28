@@ -13,14 +13,12 @@ import androidx.test.runner.lifecycle.Stage;
 
 import org.junit.Assert;
 
-import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 
 import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Methods used for testing Application-level behavior. */
@@ -150,6 +148,7 @@ public class ApplicationTestUtils {
      * @param backgroundThreadTrigger The Runnable that will trigger the state change to wait for,
      *     which will be run on the UI thread.
      */
+    @SuppressWarnings("unchecked")
     public static <T extends Activity> T waitForActivityWithClass(
             Class<? extends Activity> activityClass,
             EnumSet<Stage> stages,
@@ -158,26 +157,13 @@ public class ApplicationTestUtils {
         ThreadUtils.assertOnBackgroundThread();
         final CallbackHelper activityCallback = new CallbackHelper();
         final AtomicReference<T> activityRef = new AtomicReference<>();
-        final AtomicBoolean hadOnCreateCall = new AtomicBoolean();
         ActivityLifecycleCallback stateListener =
                 (Activity newActivity, Stage newStage) -> {
-                    // TODO(crbug.com/475316033): There is currently an issue in AndroidX where
-                    //  the MonitoringInstrumentation is not notified of PRE_ON_CREATE and CREATED
-                    //  for Activities with persistAcrossReboots. Note that #onCreate() is still
-                    //  called, it is just the notification to the test instrumentation that is
-                    //  missing. PersistAcrossReboots is currently only enabled on desktop builds.
-                    boolean hasSkippedOnCreate =
-                            DeviceInfo.isDesktop()
-                                    && !hadOnCreateCall.get()
-                                    && (newStage == Stage.STARTED)
-                                    && stages.contains(Stage.CREATED);
-                    if (stages.contains(newStage) || hasSkippedOnCreate) {
+                    if (stages.contains(newStage)) {
                         if (!activityClass.isAssignableFrom(newActivity.getClass())) return;
 
                         activityRef.set((T) newActivity);
                         ThreadUtils.postOnUiThread(() -> activityCallback.notifyCalled());
-
-                        if (newStage == Stage.CREATED) hadOnCreateCall.set(true);
                     }
                 };
         sMonitor.addLifecycleCallback(stateListener);

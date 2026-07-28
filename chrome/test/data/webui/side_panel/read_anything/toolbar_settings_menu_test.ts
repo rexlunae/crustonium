@@ -7,7 +7,7 @@ import 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js'
 import type {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import {MENU_SHOW_DELAY_MS} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {ReadAnythingToolbarElement, SettingsMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {SettingsOption} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {SettingsOption, ToolbarEvent} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertFalse, assertNotEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {keyDownOn} from 'chrome-untrusted://webui-test/keyboard_mock_interactions.js';
 import {MockTimer} from 'chrome-untrusted://webui-test/mock_timer.js';
@@ -21,6 +21,8 @@ suite('Toolbar Settings Menu', () => {
   let shadowRoot: ShadowRoot;
   let menuButton: CrIconButtonElement;
   let settingsMenu: SettingsMenuElement;
+
+  const preventResizeClose = (e: Event) => e.stopImmediatePropagation();
 
   async function createToolbar(): Promise<void> {
     toolbar = document.createElement('read-anything-toolbar');
@@ -50,7 +52,6 @@ suite('Toolbar Settings Menu', () => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     const readingMode = new FakeReadingMode();
     chrome.readingMode = readingMode as unknown as typeof chrome.readingMode;
-    chrome.readingMode.isReadAloudEnabled = true;
     chrome.readingMode.isImmersiveEnabled = true;
     stubAnimationFrame();
     await createToolbar();
@@ -60,12 +61,19 @@ suite('Toolbar Settings Menu', () => {
     menuButton = moreButton;
 
     settingsMenu = toolbar.$.settingsMenu;
-    menuButton.click();
 
+    // cr-action-menu listens for window resizes to auto-close. In headless
+    // test environments, the constrained viewport and deferred layout
+    // calculations when opening a <dialog> often trigger phantom resize events,
+    // causing the menu to close immediately and flake the test.
+    window.addEventListener('resize', preventResizeClose, true);
+
+    menuButton.click();
     await microtasksFinished();
   });
 
   teardown(async () => {
+    window.removeEventListener('resize', preventResizeClose, true);
     if (settingsMenu) {
       const lazyMenu = settingsMenu.$.lazyMenu.getIfExists();
       if (lazyMenu && lazyMenu.open) {
@@ -79,12 +87,34 @@ suite('Toolbar Settings Menu', () => {
     assertTrue(settingsMenu.$.lazyMenu.get().open);
   });
 
+  test('isSpeechActive is passed to settings menu', async () => {
+    toolbar.isSpeechActive = true;
+    await microtasksFinished();
+    assertTrue(settingsMenu.isSpeechActive);
+
+    toolbar.isSpeechActive = false;
+    await microtasksFinished();
+    assertFalse(settingsMenu.isSpeechActive);
+  });
+
   test('settings menu opens submenus on click', () => {
     const targetItem = getMenuItem(SettingsOption.FONT);
     assertTrue(!!targetItem);
     targetItem.click();
     assertTrue(toolbar.$.fontMenu.$.menu.$.lazyMenu.get().open);
   });
+
+  test(
+      'settings menu opens appearance submenu on click when flag enabled',
+      async () => {
+        chrome.readingMode.isImprovedReadAloudEnabled = true;
+        toolbar.$.settingsMenu.isImmersiveMode = true;
+        await microtasksFinished();
+        const targetItem = getMenuItem(SettingsOption.APPEARANCE);
+        assertTrue(!!targetItem);
+        targetItem.click();
+        assertTrue(toolbar.$.appearanceMenu.$.menu.$.lazyMenu.get().open);
+      });
 
   test('settings menu opens submenus on hover', () => {
     const targetItem = getMenuItem(SettingsOption.FONT);
@@ -265,5 +295,60 @@ suite('Toolbar Settings Menu', () => {
 
     assertFalse(toolbar.$.fontMenu.$.menu.$.lazyMenu.get().open);
     timer.uninstall();
+  });
+
+  test('close button appears in immersive mode', async () => {
+    toolbar.isImmersiveMode = true;
+    await microtasksFinished();
+    const closeButton = getButton('close');
+    assertTrue(!!closeButton);
+  });
+
+  test('close button does not appear in side panel mode', () => {
+    const closeButton = getButton('close');
+    assertFalse(!!closeButton);
+  });
+
+  test(
+      'opened menu is not closed if mouse moves directly into the submenu',
+      () => {
+        const targetItem = getMenuItem(SettingsOption.FONT);
+        assertTrue(!!targetItem);
+        const timer = new MockTimer();
+        timer.install();
+
+        targetItem.dispatchEvent(new PointerEvent(
+            'pointerenter', {bubbles: true, cancelable: true, view: window}));
+        timer.tick(MENU_SHOW_DELAY_MS + 10);
+
+        const fontSubmenu = toolbar.$.fontMenu;
+        assertTrue(fontSubmenu.$.menu.$.lazyMenu.get().open);
+
+        // Simulate that mouse moved out of item, but we specify that the new
+        // element is directly under the cursor.
+        targetItem.dispatchEvent(new PointerEvent('pointerleave', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          relatedTarget: fontSubmenu,
+        }));
+
+        timer.tick(MENU_SHOW_DELAY_MS + 10);
+        timer.uninstall();
+
+        const actionMenu = settingsMenu.$.lazyMenu.get();
+        assertTrue(actionMenu.open);
+        assertTrue(fontSubmenu.$.menu.$.lazyMenu.get().open);
+      });
+
+  test('translate event from settings menu invokes readingMode', () => {
+    chrome.readingMode.isReadAnythingTranslateEntryPointEnabled = true;
+    let translateCalled = false;
+    chrome.readingMode.onTranslationRequested = () => {
+      translateCalled = true;
+    };
+    settingsMenu.dispatchEvent(
+        new CustomEvent(ToolbarEvent.TRANSLATION_REQUESTED));
+    assertTrue(translateCalled);
   });
 });

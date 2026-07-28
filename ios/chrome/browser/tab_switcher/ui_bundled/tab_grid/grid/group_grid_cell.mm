@@ -58,6 +58,10 @@ const CGFloat kTopBarLargeInset = 20;
 @property(nonatomic, strong) UIView* groupingBackgroundView;
 // Dimming view over the cell contents while cell is highlighted.
 @property(nonatomic, strong) UIView* dimmingView;
+// The trait change registration object for system trait changes.
+@property(nonatomic, strong) id<UITraitChangeRegistration> traitRegistration;
+// The window scene that the trait change registration is registered on.
+@property(nonatomic, weak) UIWindowScene* registeredWindowScene;
 
 @end
 
@@ -107,22 +111,20 @@ const CGFloat kTopBarLargeInset = 20;
     self.contentView.layer.masksToBounds = YES;
     UIView* contentContainer = self.contentView;
 
-    if (IsTabGridDragAndDropEnabled()) {
-      UIView* containerView = [[UIView alloc] init];
-      containerView.translatesAutoresizingMaskIntoConstraints = NO;
-      containerView.backgroundColor =
-          [UIColor colorNamed:kSecondaryBackgroundColor];
-      containerView.layer.cornerRadius = kGridCellCornerRadius;
-      containerView.layer.masksToBounds = YES;
-      [self.contentView addSubview:containerView];
-      _containerView = containerView;
-      AddSameConstraints(self.contentView, containerView);
-      contentContainer = _containerView;
-    }
+    UIView* containerView = [[UIView alloc] init];
+    containerView.translatesAutoresizingMaskIntoConstraints = NO;
+    containerView.backgroundColor =
+        [UIColor colorNamed:kSecondaryBackgroundColor];
+    containerView.layer.cornerRadius = kGridCellCornerRadius;
+    containerView.layer.masksToBounds = YES;
+    [self.contentView addSubview:containerView];
+    _containerView = containerView;
+    AddSameConstraints(self.contentView, containerView);
+    contentContainer = _containerView;
 
     [self setupTopBar];
     _groupSnapshotsView = [[TabGroupSnapshotsView alloc]
-        initWithLightInterface:self.theme == GridThemeLight
+        initWithLightInterface:self.theme == GridTheme::kDynamic
                           cell:YES];
     _groupSnapshotsView.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -180,33 +182,30 @@ const CGFloat kTopBarLargeInset = 20;
     ];
     [NSLayoutConstraint activateConstraints:constraints];
 
-    if (IsTabGridDragAndDropEnabled()) {
-      self.groupingBackgroundView = [[UIView alloc] initWithFrame:self.bounds];
-      self.groupingBackgroundView.translatesAutoresizingMaskIntoConstraints =
-          NO;
-      self.groupingBackgroundView.backgroundColor =
-          [UIColor colorNamed:kStaticBlue400Color];
-      self.groupingBackgroundView.layer.cornerRadius = kGridCellCornerRadius;
-      self.groupingBackgroundView.layer.masksToBounds = YES;
-      self.groupingBackgroundView.alpha = 0.0;
-      self.groupingBackgroundView.hidden = YES;
-      // Insert it behind the cell's contentView
-      [self addSubview:self.groupingBackgroundView];
-      [self.contentView insertSubview:self.groupingBackgroundView
-                         belowSubview:self.containerView];
-      AddSameConstraints(self.groupingBackgroundView, self);
+    self.groupingBackgroundView = [[UIView alloc] initWithFrame:self.bounds];
+    self.groupingBackgroundView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.groupingBackgroundView.backgroundColor =
+        [UIColor colorNamed:kStaticBlue400Color];
+    self.groupingBackgroundView.layer.cornerRadius = kGridCellCornerRadius;
+    self.groupingBackgroundView.layer.masksToBounds = YES;
+    self.groupingBackgroundView.alpha = 0.0;
+    self.groupingBackgroundView.hidden = YES;
+    // Insert it behind the cell's contentView
+    [self addSubview:self.groupingBackgroundView];
+    [self.contentView insertSubview:self.groupingBackgroundView
+                       belowSubview:self.containerView];
+    AddSameConstraints(self.groupingBackgroundView, self);
 
-      self.dimmingView = [[UIView alloc] initWithFrame:self.bounds];
-      self.dimmingView.translatesAutoresizingMaskIntoConstraints = NO;
-      self.dimmingView.backgroundColor =
-          [[UIColor blackColor] colorWithAlphaComponent:0.5];
-      self.dimmingView.hidden = YES;
-      self.dimmingView.alpha = 0.0;
-      self.dimmingView.layer.cornerRadius =
-          kGridCellCornerRadius - kSnapshotViewLeadingOffset;
-      [contentContainer addSubview:self.dimmingView];
-      AddSameConstraints(self.dimmingView, contentContainer);
-    }
+    self.dimmingView = [[UIView alloc] initWithFrame:self.bounds];
+    self.dimmingView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.dimmingView.backgroundColor =
+        [[UIColor blackColor] colorWithAlphaComponent:0.5];
+    self.dimmingView.hidden = YES;
+    self.dimmingView.alpha = 0.0;
+    self.dimmingView.layer.cornerRadius =
+        kGridCellCornerRadius - kSnapshotViewLeadingOffset;
+    [contentContainer addSubview:self.dimmingView];
+    AddSameConstraints(self.dimmingView, contentContainer);
 
     [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                        withAction:@selector(updateTopBarConstraints)];
@@ -214,11 +213,15 @@ const CGFloat kTopBarLargeInset = 20;
   return self;
 }
 
+- (void)dealloc {
+  [self updateInterfaceStyleForWindow:nil];
+}
+
 #pragma mark - UIView
 
 - (void)didMoveToWindow {
   [super didMoveToWindow];
-  if (self.theme == GridThemeLight) {
+  if (self.theme == GridTheme::kDynamic) {
     [self updateInterfaceStyleForWindow:self.window];
   }
 }
@@ -231,14 +234,13 @@ const CGFloat kTopBarLargeInset = 20;
 
 - (void)prepareForReuse {
   [super prepareForReuse];
+  [self updateInterfaceStyleForWindow:nil];
   self.title = nil;
   self.selected = NO;
   self.opacity = 1.0;
   self.hidden = NO;
   self.facePileProvider = nil;
-  if (IsTabGridDragAndDropEnabled()) {
-    [self setHighlightForGrouping:NO];
-  }
+  [self setHighlightForGrouping:NO];
 }
 
 #pragma mark - UIAccessibility
@@ -281,7 +283,6 @@ const CGFloat kTopBarLargeInset = 20;
 }
 
 - (void)setHighlightForGrouping:(BOOL)highlight {
-  CHECK(IsTabGridDragAndDropEnabled());
   if (_highlighted == highlight) {
     return;
   }
@@ -311,23 +312,24 @@ const CGFloat kTopBarLargeInset = 20;
 
 #pragma mark - Setters
 
-// Updates the theme to either dark or light. Updating is only done if the
-// current theme is not the desired theme.
+// Updates the theme to either forced dark or dynamic. Updating is only done if
+// the current theme is not the desired theme.
 - (void)setTheme:(GridTheme)theme {
-  if (_theme == theme) {
+  if (self.registeredWindowScene && _theme == theme) {
     return;
   }
 
-  // The light and dark themes have different colored borders based on the
-  // theme, regardless of dark mode, so `overrideUserInterfaceStyle` is not
-  // enough here.
+  // The dynamic and dark themes have different colored borders based on the
+  // mode (incognito/regular), regardless of dark mode, so
+  // `overrideUserInterfaceStyle` is not enough here.
   switch (theme) {
-    case GridThemeLight:
+    case GridTheme::kDynamic:
       [self updateInterfaceStyleForWindow:self.window];
       _border.layer.borderColor =
           [UIColor colorNamed:kStaticBlue400Color].CGColor;
       break;
-    case GridThemeDark:
+    case GridTheme::kDark:
+      [self updateInterfaceStyleForWindow:nil];
       self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
       _border.layer.borderColor = UIColor.whiteColor.CGColor;
       break;
@@ -336,26 +338,13 @@ const CGFloat kTopBarLargeInset = 20;
   _theme = theme;
 }
 
-- (void)setGroupColor:(UIColor*)groupColor {
-  _groupColor = groupColor;
 
-  if (!IsTabGroupColorOnSurfaceEnabled()) {
-    // Apply the default coloring to each surfaces.
-    _dotContainer.color = _groupColor;
-    UIColor* backgroundColor = [UIColor colorNamed:kSecondaryBackgroundColor];
-    _topBar.backgroundColor = backgroundColor;
-    self.contentView.backgroundColor = backgroundColor;
-    _groupSnapshotsView.backgroundColor = backgroundColor;
-    return;
-  }
-
-  // Generate a color palette fromt the group color.
-  TabGroupColorPalette* tabGroupColorPalette =
-      [[TabGroupColorPalette alloc] initWithSeedColor:_groupColor];
+- (void)setTabGroupColorPalette:(TabGroupColorPalette*)tabGroupColorPalette {
+  _tabGroupColorPalette = tabGroupColorPalette;
 
   // Apply the right tone to each surfaces.
-  UIColor* commonColor = tabGroupColorPalette.commonColor;
-  UIColor* backgroundColor = tabGroupColorPalette.backgroundColor;
+  UIColor* commonColor = _tabGroupColorPalette.commonColor;
+  UIColor* backgroundColor = _tabGroupColorPalette.backgroundColor;
 
   _border.layer.borderColor = commonColor.CGColor;
   _dotContainer.color = commonColor;
@@ -452,7 +441,7 @@ const CGFloat kTopBarLargeInset = 20;
   _closeIconView.contentMode = UIViewContentModeCenter;
   _closeIconView.hidden = [self isInSelectionMode];
   _closeIconView.image =
-      DefaultSymbolTemplateWithPointSize(kXMarkSymbol, kIconSymbolPointSize);
+      SymbolTemplateWithPointSize(SymbolXMark, kIconSymbolPointSize);
 
   _selectIconView = [[UIImageView alloc] init];
   _selectIconView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -539,11 +528,10 @@ const CGFloat kTopBarLargeInset = 20;
 
 - (UIImage*)selectIconImageForCurrentState {
   if (_state == GridCellStateEditingUnselected) {
-    return DefaultSymbolTemplateWithPointSize(kCircleSymbol,
-                                              kIconSymbolPointSize);
+    return SymbolTemplateWithPointSize(SymbolCircle, kIconSymbolPointSize);
   }
-  return DefaultSymbolTemplateWithPointSize(kCheckmarkCircleFillSymbol,
-                                            kIconSymbolPointSize);
+  return SymbolTemplateWithPointSize(SymbolCheckmarkCircleFill,
+                                     kIconSymbolPointSize);
 }
 
 - (void)configureCloseOrSelectIconConstraints {
@@ -634,16 +622,23 @@ const CGFloat kTopBarLargeInset = 20;
 // If window is not nil, register for updates to its interface style updates and
 // set the user interface style to be the same as the window.
 - (void)updateInterfaceStyleForWindow:(UIWindow*)window {
+  if (self.traitRegistration && self.registeredWindowScene) {
+    [self.registeredWindowScene
+        unregisterForTraitChanges:self.traitRegistration];
+    self.traitRegistration = nil;
+    self.registeredWindowScene = nil;
+  }
   if (!window) {
     return;
   }
-  [self.window.windowScene
+  self.registeredWindowScene = window.windowScene;
+  self.traitRegistration = [window.windowScene
       registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                    withTarget:self
                        action:@selector(interfaceStyleChangedForWindow:
                                                        traitCollection:)];
   self.overrideUserInterfaceStyle =
-      self.window.windowScene.traitCollection.userInterfaceStyle;
+      window.windowScene.traitCollection.userInterfaceStyle;
 }
 
 // Callback for the observation of the user interface style trait of the window
@@ -651,7 +646,7 @@ const CGFloat kTopBarLargeInset = 20;
 - (void)interfaceStyleChangedForWindow:(UIView*)window
                        traitCollection:(UITraitCollection*)traitCollection {
   self.overrideUserInterfaceStyle =
-      self.window.windowScene.traitCollection.userInterfaceStyle;
+      self.registeredWindowScene.traitCollection.userInterfaceStyle;
 }
 
 // Updates the top bar constraints accoring to the availability of

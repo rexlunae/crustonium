@@ -17,7 +17,6 @@
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/system/sys_info.h"
@@ -28,9 +27,9 @@
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "third_party/lss/linux_syscall_support.h"
 #elif BUILDFLAG(IS_MAC)
-// TODO(crbug.com/40641285): Waiting for this header to appear in the iOS SDK.
-// (See below.)
 #include <sys/random.h>
+#elif BUILDFLAG(IS_IOS)
+#include <CommonCrypto/CommonRandom.h>
 #endif
 
 namespace base {
@@ -97,7 +96,7 @@ namespace {
 // rand_util_win.cc.
 std::atomic<bool> g_use_boringssl;
 
-BASE_FEATURE(kUseBoringSSLForRandBytes, FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kUseBoringSSLForRandBytes, FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace
 
@@ -130,9 +129,11 @@ void RandBytesInternal(span<uint8_t> output, bool avoid_allocation) {
     return;
   }
 #elif BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/40641285): Enable this on iOS too, when sys/random.h arrives
-  // in its SDK.
   if (getentropy(output.data(), output.size()) == 0) {
+    return;
+  }
+#elif BUILDFLAG(IS_IOS)
+  if (CCRandomGenerateBytes(output.data(), output.size()) == kCCSuccess) {
     return;
   }
 #endif

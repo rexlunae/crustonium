@@ -250,6 +250,27 @@ void MaybeWriteConstraintsConstant(
       constraint_params.push_back("{}");
     }
 
+    constraint_params.push_back(
+        constraint.has_index_not_after()
+            ? base::NumberToString(constraint.index_not_after())
+            : kNulloptString);
+
+    constraint_params.push_back(
+        constraint.has_index_after()
+            ? base::NumberToString(constraint.index_after())
+            : kNulloptString);
+
+    constraint_params.push_back(
+        constraint.has_validity_starts_not_after_sec()
+            ? SecondsFromEpochToBaseTime(
+                  constraint.validity_starts_not_after_sec())
+            : kNulloptString);
+
+    constraint_params.push_back(
+        constraint.has_validity_starts_after_sec()
+            ? SecondsFromEpochToBaseTime(constraint.validity_starts_after_sec())
+            : kNulloptString);
+
     constraint_strings.push_back(
         base::StrCat({"{", base::JoinString(constraint_params, ","), "}"}));
 
@@ -325,6 +346,12 @@ bool WriteRootCppFile(const RootStore& root_store,
     } else {
       base::StringAppendF(&string_to_write, ", kChromeRootTrustAnchorID%d", i);
     }
+
+    if (anchor.has_crs_root_id()) {
+      base::StringAppendF(&string_to_write, ", %d", anchor.crs_root_id());
+    } else {
+      string_to_write += ", std::nullopt";
+    }
     string_to_write += "},\n";
   }
   // Append additional_certs as TLS trust anchors, if they are marked as such.
@@ -350,6 +377,12 @@ bool WriteRootCppFile(const RootStore& root_store,
       string_to_write += ", {}";
     } else {
       base::StringAppendF(&string_to_write, ", kAdditionalTrustAnchorID%d", i);
+    }
+
+    if (anchor.has_crs_root_id()) {
+      base::StringAppendF(&string_to_write, ", %d", anchor.crs_root_id());
+    } else {
+      string_to_write += ", std::nullopt";
     }
     string_to_write += "},\n";
   }
@@ -401,6 +434,11 @@ bool WriteRootCppFile(const RootStore& root_store,
       base::StringAppendF(&string_to_write, ", kMtcAnchorConstraints%d", i);
     } else {
       string_to_write += ", {}";
+    }
+    if (anchor.has_crs_root_id()) {
+      base::StringAppendF(&string_to_write, ", %d", anchor.crs_root_id());
+    } else {
+      string_to_write += ", std::nullopt";
     }
     string_to_write += "},\n";
   }
@@ -480,7 +518,7 @@ bool WriteEvCppFile(const RootStore& root_store,
       if (i < oids_size) {
         oid = anchor.ev_policy_oids(i);
       }
-      string_to_write += "            \"" + oid + "\",\n";
+      base::StrAppend(&string_to_write, {"            \"", oid, "\",\n"});
     }
 
     // End struct

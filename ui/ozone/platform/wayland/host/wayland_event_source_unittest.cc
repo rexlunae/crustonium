@@ -280,6 +280,298 @@ TEST_P(WaylandEventSourceTest, ReleasesAllPressedPointerButtons) {
       pointer_delegate_->IsPointerButtonPressed(EF_MIDDLE_MOUSE_BUTTON));
 }
 
+// Verify that pressed buttons are released when pointer focus is lost and not
+// regained within the same frame (e.g. focus goes to the compositor's own UI).
+TEST_P(WaylandEventSourceTest, SyntheticReleaseOnFocusLoss) {
+  PostToServerAndWait([](wl::TestWaylandServerThread* server) {
+    wl_seat_send_capabilities(server->seat()->resource(),
+                              WL_SEAT_CAPABILITY_POINTER);
+  });
+  ASSERT_TRUE(connection_->seat()->pointer());
+
+  // Enter and press the right mouse button.
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(2);
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+
+    wl_pointer_send_enter(pointer, server->GetNextSerial(), surface, 0, 0);
+    wl_pointer_send_frame(pointer);
+    wl_pointer_send_button(pointer, server->GetNextSerial(),
+                           server->GetNextTime(), BTN_RIGHT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+    wl_pointer_send_frame(pointer);
+  });
+
+  EXPECT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+
+  // Leave with no subsequent enter in the same frame — the button should be
+  // synthetically released at the frame event.
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(testing::AtLeast(1));
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+
+    wl_pointer_send_leave(pointer, server->GetNextSerial(), surface);
+    wl_pointer_send_frame(pointer);
+  });
+
+  EXPECT_FALSE(
+      pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+}
+
+// Verify that pressed buttons are NOT synthetically released when pointer focus
+// leaves and enters within the same frame.
+// Regression test for https://crbug.com/500653052.
+TEST_P(WaylandEventSourceTest, NoSyntheticReleaseOnIntraClientFocusChange) {
+  PostToServerAndWait([](wl::TestWaylandServerThread* server) {
+    wl_seat_send_capabilities(server->seat()->resource(),
+                              WL_SEAT_CAPABILITY_POINTER);
+  });
+  ASSERT_TRUE(connection_->seat()->pointer());
+
+  // Enter and press the right mouse button.
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(2);
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+
+    wl_pointer_send_enter(pointer, server->GetNextSerial(), surface, 0, 0);
+    wl_pointer_send_frame(pointer);
+    wl_pointer_send_button(pointer, server->GetNextSerial(),
+                           server->GetNextTime(), BTN_RIGHT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+    wl_pointer_send_frame(pointer);
+  });
+
+  EXPECT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+
+  // Leave and re-enter (same surface for simplicity) within the same frame.
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(testing::AtLeast(1));
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+
+    wl_pointer_send_leave(pointer, server->GetNextSerial(), surface);
+    wl_pointer_send_enter(pointer, server->GetNextSerial(), surface, 0, 0);
+    wl_pointer_send_frame(pointer);
+  });
+
+  EXPECT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+}
+
+// Verify that pressed buttons are NOT synthetically released when pointer focus
+// leaves but a window is still capturing the pointer (e.g., a menu popup).
+// Regression test for https://crbug.com/500653052.
+TEST_P(WaylandEventSourceTest, NoSyntheticReleaseWhileMenuHasCapture) {
+  PostToServerAndWait([](wl::TestWaylandServerThread* server) {
+    wl_seat_send_capabilities(server->seat()->resource(),
+                              WL_SEAT_CAPABILITY_POINTER);
+  });
+  ASSERT_TRUE(connection_->seat()->pointer());
+
+  // Enter and press the right mouse button.
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(2);
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+
+    wl_pointer_send_enter(pointer, server->GetNextSerial(), surface, 0, 0);
+    wl_pointer_send_frame(pointer);
+    wl_pointer_send_button(pointer, server->GetNextSerial(),
+                           server->GetNextTime(), BTN_RIGHT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+    wl_pointer_send_frame(pointer);
+  });
+
+  EXPECT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+
+  // A menu opens and takes capture.
+  window_->SetCapture();
+  ASSERT_TRUE(window_->HasCapture());
+
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(testing::AnyNumber());
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+
+    wl_pointer_send_leave(pointer, server->GetNextSerial(), surface);
+    wl_pointer_send_frame(pointer);
+  });
+
+  EXPECT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+
+  window_->ReleaseCapture();
+}
+
+TEST_P(WaylandEventSourceTest, TabletToolProximityInUAF) {
+  auto* event_source = connection_->event_source();
+
+  // Create two windows.
+  MockWaylandPlatformWindowDelegate delegate1(connection_.get());
+  auto window1 = CreateWaylandWindowWithParams(PlatformWindowType::kWindow,
+                                               kDefaultBounds, &delegate1);
+
+  MockWaylandPlatformWindowDelegate delegate2(connection_.get());
+  auto window2 = CreateWaylandWindowWithParams(PlatformWindowType::kWindow,
+                                               kDefaultBounds, &delegate2);
+
+  // Set `window1` as focused.
+  event_source->OnTabletToolProximityIn(window1.get(), gfx::PointF(), {},
+                                        base::TimeTicks::Now());
+
+  // Set up `delegate1` to destroy `window2` when it receives `kMouseExited`.
+  // When `window1` is the `tablet_tool_focused_window_`, calling
+  // `OnTabletToolProximityIn(window2)` will call `OnTabletToolProximityOut()`,
+  // which dispatches `kMouseExited` to `window1`.
+
+  EXPECT_CALL(delegate1, DispatchEvent(::testing::_))
+      .WillOnce([&](Event* event) {
+        if (event->type() == EventType::kMouseExited) {
+          window2.reset();
+        }
+      });
+
+  // This should not crash.
+  event_source->OnTabletToolProximityIn(window2.get(), gfx::PointF(), {},
+                                        base::TimeTicks::Now());
+}
+
+// Check that if an event dispatched by ReleasePressedPointerButtons causes the
+// target window to be destroyed, we don't cause a UAF or dangling pointer.
+TEST_P(WaylandEventSourceTest, ReleasePressedPointerButtonsUAF) {
+  PostToServerAndWait([](wl::TestWaylandServerThread* server) {
+    wl_seat_send_capabilities(server->seat()->resource(),
+                              WL_SEAT_CAPABILITY_POINTER);
+  });
+  ASSERT_TRUE(connection_->seat()->pointer());
+
+  // Record two pressed buttons so ReleasePressedPointerButtons iterates twice.
+  EXPECT_CALL(delegate_, DispatchEvent(_)).Times(::testing::AnyNumber());
+  PostToServerAndWait([surface_id = window_->root_surface()->get_surface_id()](
+                          wl::TestWaylandServerThread* server) {
+    auto* const surface =
+        server->GetObject<wl::MockSurface>(surface_id)->resource();
+    auto* const pointer = server->seat()->pointer()->resource();
+    wl_pointer_send_enter(pointer, server->GetNextSerial(), surface, 0, 0);
+    wl_pointer_send_button(pointer, server->GetNextSerial(),
+                           server->GetNextTime(), BTN_LEFT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+    wl_pointer_send_button(pointer, server->GetNextSerial(),
+                           server->GetNextTime(), BTN_RIGHT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+    wl_pointer_send_frame(pointer);
+  });
+  ASSERT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_LEFT_MOUSE_BUTTON));
+  ASSERT_TRUE(pointer_delegate_->IsPointerButtonPressed(EF_RIGHT_MOUSE_BUTTON));
+
+  // Destroy the window on the first mouse release.
+  EXPECT_CALL(delegate_, DispatchEvent(_))
+      .WillOnce([&](Event* event) {
+        EXPECT_EQ(event->type(), EventType::kMouseReleased);
+        window_.reset();
+      })
+      .WillRepeatedly(::testing::Return());
+
+  // Release both pressed buttons.
+  pointer_delegate_->ReleasePressedPointerButtons(window_.get(),
+                                                  base::TimeTicks::Now());
+}
+
+TEST_P(WaylandEventSourceTest, TabletToolButtonEvents) {
+  auto* event_source = connection_->event_source();
+
+  MockWaylandPlatformWindowDelegate delegate(connection_.get());
+  auto window = CreateWaylandWindowWithParams(PlatformWindowType::kWindow,
+                                              kDefaultBounds, &delegate);
+
+  // Set `window` as focused under tablet proximity.
+  event_source->OnTabletToolProximityIn(window.get(), gfx::PointF(100, 100), {},
+                                        base::TimeTicks::Now());
+
+  // Test BTN_STYLUS press (which maps to EF_MIDDLE_MOUSE_BUTTON).
+  {
+    EXPECT_CALL(delegate, DispatchEvent(::testing::_))
+        .WillOnce([](Event* event) {
+          ASSERT_TRUE(event->IsMouseEvent());
+          auto* mouse_event = event->AsMouseEvent();
+          EXPECT_EQ(mouse_event->type(), EventType::kMousePressed);
+          EXPECT_EQ(mouse_event->changed_button_flags(),
+                    EF_MIDDLE_MOUSE_BUTTON);
+          EXPECT_EQ(mouse_event->button_flags(), EF_MIDDLE_MOUSE_BUTTON);
+        });
+
+    event_source->OnTabletToolButton(EF_MIDDLE_MOUSE_BUTTON, /*pressed=*/true,
+                                     {}, base::TimeTicks::Now());
+    ::testing::Mock::VerifyAndClearExpectations(&delegate);
+  }
+
+  // Test BTN_STYLUS2 press (which maps to EF_RIGHT_MOUSE_BUTTON).
+  {
+    EXPECT_CALL(delegate, DispatchEvent(::testing::_))
+        .WillOnce([](Event* event) {
+          ASSERT_TRUE(event->IsMouseEvent());
+          auto* mouse_event = event->AsMouseEvent();
+          EXPECT_EQ(mouse_event->type(), EventType::kMousePressed);
+          EXPECT_EQ(mouse_event->changed_button_flags(), EF_RIGHT_MOUSE_BUTTON);
+          EXPECT_EQ(mouse_event->button_flags(),
+                    EF_MIDDLE_MOUSE_BUTTON | EF_RIGHT_MOUSE_BUTTON);
+        });
+
+    event_source->OnTabletToolButton(EF_RIGHT_MOUSE_BUTTON, /*pressed=*/true,
+                                     {}, base::TimeTicks::Now());
+    ::testing::Mock::VerifyAndClearExpectations(&delegate);
+  }
+
+  // Test BTN_STYLUS release (EF_MIDDLE_MOUSE_BUTTON).
+  {
+    EXPECT_CALL(delegate, DispatchEvent(::testing::_))
+        .WillOnce([](Event* event) {
+          ASSERT_TRUE(event->IsMouseEvent());
+          auto* mouse_event = event->AsMouseEvent();
+          EXPECT_EQ(mouse_event->type(), EventType::kMouseReleased);
+          EXPECT_EQ(mouse_event->changed_button_flags(),
+                    EF_MIDDLE_MOUSE_BUTTON);
+          // Button release flags include the released button per
+          // OnTabletToolButton.
+          EXPECT_EQ(mouse_event->button_flags(),
+                    EF_RIGHT_MOUSE_BUTTON | EF_MIDDLE_MOUSE_BUTTON);
+        });
+
+    event_source->OnTabletToolButton(EF_MIDDLE_MOUSE_BUTTON, /*pressed=*/false,
+                                     {}, base::TimeTicks::Now());
+    ::testing::Mock::VerifyAndClearExpectations(&delegate);
+  }
+
+  // Test BTN_STYLUS2 release (EF_RIGHT_MOUSE_BUTTON).
+  {
+    EXPECT_CALL(delegate, DispatchEvent(::testing::_))
+        .WillOnce([](Event* event) {
+          ASSERT_TRUE(event->IsMouseEvent());
+          auto* mouse_event = event->AsMouseEvent();
+          EXPECT_EQ(mouse_event->type(), EventType::kMouseReleased);
+          EXPECT_EQ(mouse_event->changed_button_flags(), EF_RIGHT_MOUSE_BUTTON);
+          EXPECT_EQ(mouse_event->button_flags(), EF_RIGHT_MOUSE_BUTTON);
+        });
+
+    event_source->OnTabletToolButton(EF_RIGHT_MOUSE_BUTTON, /*pressed=*/false,
+                                     {}, base::TimeTicks::Now());
+    ::testing::Mock::VerifyAndClearExpectations(&delegate);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     EventsDispatchPolicyTest,
     WaylandEventSourceTest,

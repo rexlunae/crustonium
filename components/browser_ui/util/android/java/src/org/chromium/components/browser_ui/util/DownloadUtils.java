@@ -34,21 +34,27 @@ public class DownloadUtils {
     public static final int MAX_ORIGIN_LENGTH_FOR_NOTIFICATION = 40;
     public static final int MAX_ORIGIN_LENGTH_FOR_DOWNLOAD_HOME_CAPTION = 25;
 
+    // Use SI units (base-10) so KB/MB/GB labels match decimal byte conversion.
+    private static final long BYTES_PER_KILOBYTE = 1000;
+    private static final long BYTES_PER_MEGABYTE = BYTES_PER_KILOBYTE * 1000;
+    private static final long BYTES_PER_GIGABYTE = BYTES_PER_MEGABYTE * 1000;
+
     /**
      * Format the number of bytes into KB, MB, or GB and return the corresponding generated string.
+     *
      * @param context Context to use.
-     * @param bytes   Number of bytes needed to display.
-     * @return        The formatted string to be displayed.
+     * @param bytes Number of bytes needed to display.
+     * @return The formatted string to be displayed.
      */
     public static String getStringForBytes(Context context, long bytes) {
         return getStringForBytes(context, BYTES_STRINGS, bytes);
     }
 
     /**
-     * Format the number of bytes into KB, or MB, or GB and return the corresponding string
-     * resource.
+     * Formats bytes as KB, MB, or GB (SI base-10) using the provided string resources.
+     *
      * @param context Context to use.
-     * @param stringSet The string resources for displaying bytes in KB, MB and GB.
+     * @param stringSet String resources for KB/MB/GB display.
      * @param bytes Number of bytes.
      * @return A formatted string to be displayed.
      */
@@ -56,15 +62,15 @@ public class DownloadUtils {
         int resourceId;
         float bytesInCorrectUnits;
 
-        if (ConversionUtils.bytesToMegabytes(bytes) < 1) {
+        if (bytes < BYTES_PER_MEGABYTE) {
             resourceId = stringSet[0];
-            bytesInCorrectUnits = bytes / (float) ConversionUtils.BYTES_PER_KILOBYTE;
-        } else if (ConversionUtils.bytesToGigabytes(bytes) < 1) {
+            bytesInCorrectUnits = bytes / (float) BYTES_PER_KILOBYTE;
+        } else if (bytes < BYTES_PER_GIGABYTE) {
             resourceId = stringSet[1];
-            bytesInCorrectUnits = bytes / (float) ConversionUtils.BYTES_PER_MEGABYTE;
+            bytesInCorrectUnits = bytes / (float) BYTES_PER_MEGABYTE;
         } else {
             resourceId = stringSet[2];
-            bytesInCorrectUnits = bytes / (float) ConversionUtils.BYTES_PER_GIGABYTE;
+            bytesInCorrectUnits = bytes / (float) BYTES_PER_GIGABYTE;
         }
 
         return context.getString(resourceId, bytesInCorrectUnits);
@@ -126,6 +132,18 @@ public class DownloadUtils {
         // careful to only parse for eTLD+1 if the origin has a host portion (some URL schemes
         // don't).
         GURL originAsUrl = url.getOrigin();
+        if (GURL.isEmptyOrInvalid(originAsUrl) && url.getScheme().equals("blob")) {
+            Origin origin = Origin.create(url);
+            if (!origin.isOpaque()) {
+                originAsUrl =
+                        new GURL(
+                                origin.getScheme()
+                                        + "://"
+                                        + origin.getHost()
+                                        + ":"
+                                        + origin.getPort());
+            }
+        }
         String fallback =
                 !GURL.isEmptyOrInvalid(originAsUrl) && !originAsUrl.getHost().isEmpty()
                         ? UrlUtilities.getDomainAndRegistry(
@@ -147,16 +165,23 @@ public class DownloadUtils {
         // show warning UI for. In the future, this may or may not expand to other danger types.
         // Note that this is a stricter subset of danger types than we count as
         // {@link OfflineItem#isDangerous}.
-        boolean dangerTypeShouldDisplayAsDangerous =
-                dangerType == DownloadDangerType.DANGEROUS_CONTENT
-                        || dangerType == DownloadDangerType.POTENTIALLY_UNWANTED;
-        return dangerTypeShouldDisplayAsDangerous && state != OfflineItemState.CANCELLED;
+        return dangerType == DownloadDangerType.DANGEROUS_CONTENT
+                && state != OfflineItemState.CANCELLED;
     }
 
     /** Returns whether a download is blocked due to sensitive content. */
+    // LINT.IfChange(isBlockedSensitiveDownload)
     public static boolean isBlockedSensitiveDownload(OfflineItem item) {
-        return item.state == OfflineItemState.FAILED
-                && item.failState == FailState.FILE_BLOCKED
-                && item.dangerType == DownloadDangerType.SENSITIVE_CONTENT_BLOCK;
+        if (item.state != OfflineItemState.FAILED || item.failState != FailState.FILE_BLOCKED) {
+            return false;
+        }
+        @DownloadDangerType int dangerType = item.dangerType;
+        return dangerType == DownloadDangerType.BLOCKED_PASSWORD_PROTECTED
+                || dangerType == DownloadDangerType.BLOCKED_TOO_LARGE
+                || dangerType == DownloadDangerType.SENSITIVE_CONTENT_BLOCK
+                || dangerType == DownloadDangerType.BLOCKED_SCAN_FAILED
+                || dangerType == DownloadDangerType.FORCE_SAVE_TO_GDRIVE
+                || dangerType == DownloadDangerType.FORCE_SAVE_TO_ONEDRIVE;
     }
+    // LINT.ThenChange(//chrome/browser/download/android/download_controller.cc:isEnterpriseBlockDownloadDangerType)
 }

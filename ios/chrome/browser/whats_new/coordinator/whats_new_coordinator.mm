@@ -15,7 +15,6 @@
 #import "ios/chrome/browser/promos_manager/coordinator/promos_manager_ui_handler.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
-#import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/whats_new_commands.h"
@@ -26,8 +25,8 @@
 #import "ios/chrome/browser/whats_new/public/constants.h"
 #import "ios/chrome/browser/whats_new/ui/whats_new_table_view_controller.h"
 
-@interface WhatsNewCoordinator () <UINavigationControllerDelegate,
-                                   UIAdaptivePresentationControllerDelegate>
+@interface WhatsNewCoordinator () <UIAdaptivePresentationControllerDelegate,
+                                   UINavigationControllerDelegate>
 
 // The mediator to display What's New data.
 @property(nonatomic, strong) WhatsNewMediator* mediator;

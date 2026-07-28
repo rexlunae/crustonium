@@ -215,7 +215,7 @@ TraceConfig::EventFilterConfig& TraceConfig::EventFilterConfig::operator=(
 bool TraceConfig::EventFilterConfig::IsEquivalentTo(
     const EventFilterConfig& other) const {
   return predicate_name_ == other.predicate_name_ &&
-         category_filter_.IsEquivalentTo(category_filter_) &&
+         category_filter_.IsEquivalentTo(other.category_filter_) &&
          args_ == other.args_;
 }
 
@@ -515,9 +515,9 @@ void TraceConfig::InitializeFromStrings(std::string_view category_filter_string,
   enable_argument_filter_ = false;
   enable_event_package_name_filter_ = false;
   if (!trace_options_string.empty()) {
-    std::vector<std::string> split =
-        SplitString(trace_options_string, ",", TRIM_WHITESPACE, SPLIT_WANT_ALL);
-    for (const std::string& token : split) {
+    std::vector<std::string_view> split = SplitStringPiece(
+        trace_options_string, ",", TRIM_WHITESPACE, SPLIT_WANT_ALL);
+    for (std::string_view token : split) {
       if (token == kRecordUntilFull) {
         record_mode_ = RECORD_UNTIL_FULL;
       } else if (token == kRecordContinuously) {
@@ -534,7 +534,7 @@ void TraceConfig::InitializeFromStrings(std::string_view category_filter_string,
           enable_systrace_ = true;
           continue;
         }
-        const auto system_events_not_trimmed =
+        std::string_view system_events_not_trimmed =
             token.substr(kEnableSystraceLength);
         const auto system_events =
             TrimString(system_events_not_trimmed, kWhitespaceASCII, TRIM_ALL);
@@ -543,10 +543,10 @@ void TraceConfig::InitializeFromStrings(std::string_view category_filter_string,
           continue;
         }
         enable_systrace_ = true;
-        const std::vector<std::string> split_systrace_events = SplitString(
+        std::vector<std::string_view> split_systrace_events = SplitStringPiece(
             system_events.substr(1), " ", TRIM_WHITESPACE, SPLIT_WANT_NONEMPTY);
-        for (const std::string& systrace_event : split_systrace_events) {
-          systrace_events_.insert(systrace_event);
+        for (std::string_view systrace_event : split_systrace_events) {
+          systrace_events_.emplace(systrace_event);
         }
       } else if (token == kEnableArgumentFilter) {
         enable_argument_filter_ = true;
@@ -660,9 +660,8 @@ void TraceConfig::SetEventFiltersFromConfigList(
         event_filter_dict.FindString(kFilterPredicateParam);
     CHECK(predicate_name) << "Invalid predicate name in category event filter.";
 
-    EventFilterConfig new_config(*predicate_name);
-    new_config.InitializeFromConfigDict(event_filter_dict);
-    event_filters_.push_back(new_config);
+    event_filters_.emplace_back(*predicate_name)
+        .InitializeFromConfigDict(event_filter_dict);
   }
 }
 

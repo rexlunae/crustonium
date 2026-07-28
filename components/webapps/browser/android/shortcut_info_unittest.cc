@@ -76,7 +76,6 @@ TEST_F(ShortcutInfoTest, CreateShortcutInfo) {
   metadata->application_url = GURL("https://example.com/path/application-url");
 
   manifest_.display = blink::mojom::DisplayMode::kFullscreen;
-  manifest_.has_theme_color = true;
   manifest_.theme_color = 0xffcc0000;
   manifest_.id = GURL("https://example.com/path/id");
 
@@ -116,19 +115,15 @@ TEST_F(ShortcutInfoTest, AllAttributesUpdate) {
   manifest_.display = blink::mojom::DisplayMode::kFullscreen;
 
   info_.theme_color = 0xffff0000;
-  manifest_.has_theme_color = true;
   manifest_.theme_color = 0xffcc0000;
 
   info_.background_color = 0xffaa0000;
-  manifest_.has_background_color = true;
   manifest_.background_color = 0xffbb0000;
 
   info_.dark_theme_color = 0x000000;
-  manifest_.has_dark_theme_color = true;
   manifest_.dark_theme_color = 0x7a7a7a;
 
   info_.dark_background_color = 0x000000;
-  manifest_.has_dark_background_color = true;
   manifest_.dark_background_color = 0x7a7a7a;
 
   info_.icon_urls.push_back("https://old.com/icon.png");
@@ -152,12 +147,13 @@ TEST_F(ShortcutInfoTest, AllAttributesUpdate) {
 }
 
 TEST_F(ShortcutInfoTest, UpdateFromWebPageMetadata) {
-  info_ = ShortcutInfo(GURL());
+  const GURL kAppUrl("https://new.com/start");
+  info_ = ShortcutInfo(kAppUrl);
   webapps::mojom::WebPageMetadataPtr metadata =
       webapps::mojom::WebPageMetadata::New();
   metadata->application_name = u"new title";
   metadata->description = u"new description";
-  metadata->application_url = GURL("https://new.com/start");
+  metadata->application_url = kAppUrl;
   metadata->mobile_capable = mojom::WebPageMobileCapable::ENABLED;
 
   info_.UpdateFromWebPageMetadata(*metadata);
@@ -169,6 +165,19 @@ TEST_F(ShortcutInfoTest, UpdateFromWebPageMetadata) {
   ASSERT_EQ(metadata->application_url, info_.url);
   ASSERT_EQ(GURL("https://new.com/"), info_.scope);
   ASSERT_EQ(blink::mojom::DisplayMode::kStandalone, info_.display);
+}
+
+TEST_F(ShortcutInfoTest, UpdateFromWebPageMetadataCrossOrigin) {
+  const GURL kInitialUrl("https://old.com/start");
+  info_ = ShortcutInfo(kInitialUrl);
+  webapps::mojom::WebPageMetadataPtr metadata =
+      webapps::mojom::WebPageMetadata::New();
+  metadata->application_url = GURL("https://new.com/start");
+
+  info_.UpdateFromWebPageMetadata(*metadata);
+
+  // URL should not change if cross-origin
+  ASSERT_EQ(kInitialUrl, info_.url);
 }
 
 TEST_F(ShortcutInfoTest, WebPageMetadataTitleAppName) {

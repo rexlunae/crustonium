@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//media/media_options.gni")
+import("//third_party/libgav1/options.gni")
 
 source_set("video") {
   # Do not expand the visibility here without double-checking with OWNERS, this
@@ -79,6 +80,7 @@ source_set("video") {
       "openh264_video_encoder.h",
     ]
     public_deps += [ "//third_party/openh264:encoder" ]
+    deps += [ "//media/parsers" ]
   }
 
   if (is_apple) {
@@ -141,4 +143,9 @@ source_set("unit_tests") {
     "//third_party/libyuv",
     "//ui/gfx",
   ]
+
+  if (use_libgav1_parser) {
+    sources += [ "libgav1_decoder_unittest.cc" ]
+    deps += [ "//third_party/libgav1:libgav1_decoder" ]
+  }
 }

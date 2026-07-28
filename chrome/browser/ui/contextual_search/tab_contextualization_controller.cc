@@ -16,6 +16,7 @@
 #include "components/page_content_annotations/core/page_content_extraction_types.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -79,6 +80,24 @@ void TabContextualizationController::PrimaryPageChanged(content::Page& page) {
   is_page_context_eligible_ = false;
 }
 
+void TabContextualizationController::DidFinishLoad(
+    content::RenderFrameHost* render_frame_host,
+    const GURL& validated_url) {
+  if (render_frame_host && render_frame_host->IsInPrimaryMainFrame()) {
+    FlushPendingPageContextCallbacks();
+  }
+}
+
+void TabContextualizationController::FlushPendingPageContextCallbacks() {
+  std::vector<GetPageContextCallback> callbacks =
+      std::move(pending_page_context_callbacks_);
+  pending_page_context_callbacks_.clear();
+
+  for (auto& callback : callbacks) {
+    FetchPageContextInternal(std::move(callback));
+  }
+}
+
 void TabContextualizationController::OnEligibilityChecked(
     bool is_page_context_eligible,
     optimization_guide::AIPageContentResultOrError apc) {
@@ -103,7 +122,10 @@ void TabContextualizationController::GetAnnotatedPageContent(
       optimization_guide::DefaultAIPageContentOptions(
           /*on_critical_path=*/true);
   ai_page_content_options->max_meta_elements = 20;
-  ai_page_content_options->include_same_site_only = true;
+  ai_page_content_options->include_same_site_only =
+      base::FeatureList::IsEnabled(
+          lens::features::
+              kLensRestrictAnnotatedPageContentToSameSiteFramesForNextQueries);
   optimization_guide::GetAIPageContent(tab_->GetContents(),
                                        std::move(ai_page_content_options),
                                        std::move(callback));
@@ -174,14 +196,10 @@ bool TabContextualizationController::GetInitialPageContextEligibility() {
     return false;
   }
 
-  std::optional<page_content_annotations::ExtractedPageContentResult>
-      extracted_page_content_result =
-          page_content_extraction_service
-              ->GetExtractedPageContentAndEligibilityForPage(
-                  web_contents->GetPrimaryPage());
-
-  return !extracted_page_content_result ||
-         extracted_page_content_result->is_eligible_for_server_upload;
+  std::optional<bool> server_upload_eligibility =
+      page_content_extraction_service->GetServerUploadEligibilityForPage(
+          web_contents->GetPrimaryPage());
+  return server_upload_eligibility.value_or(true);
 }
 
 bool TabContextualizationController::GetCurrentPageContextEligibility() {
@@ -190,17 +208,39 @@ bool TabContextualizationController::GetCurrentPageContextEligibility() {
 
 void TabContextualizationController::GetPageContext(
     GetPageContextCallback callback) {
-  auto contextual_input_data = std::make_unique<lens::ContextualInputData>();
-
-  // TODO(crbug.com/439595898): Get contextual input bytes using APC. Also,
-  // populate the mime type, tab eligibility, and pdf current page.
-  contextual_input_data->context_input = {};
+  // If the tab doesn't have an active renderer (e.g. tabs after restart on
+  // android), or if the tab was discarded, first load the tab on-demand.
+  tab_->LoadIfNeeded();
 
   content::WebContents* web_contents = tab_->GetContents();
   if (!web_contents) {
     std::move(callback).Run(nullptr);
     return;
   }
+
+  Observe(web_contents);
+
+  if (web_contents->IsLoading()) {
+    pending_page_context_callbacks_.push_back(std::move(callback));
+    return;
+  }
+
+  FetchPageContextInternal(std::move(callback));
+}
+
+void TabContextualizationController::FetchPageContextInternal(
+    GetPageContextCallback callback) {
+  content::WebContents* web_contents = tab_->GetContents();
+  if (!web_contents) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  auto contextual_input_data = std::make_unique<lens::ContextualInputData>();
+
+  // TODO(crbug.com/439595898): Get contextual input bytes using APC. Also,
+  // populate the mime type, tab eligibility, and pdf current page.
+  contextual_input_data->context_input = {};
 
   contextual_input_data->tab_session_id =
       sessions::SessionTabHelper::IdForTab(web_contents);

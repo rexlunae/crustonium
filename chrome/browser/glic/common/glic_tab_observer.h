@@ -20,6 +20,8 @@ class TabInterface;
 
 enum class TabCreationType {
   kUserInitiated,
+  kFromLink,
+  kFromBookmark,
   kUnknown,
 };
 
@@ -31,6 +33,10 @@ struct TabCreationEvent {
   // The previously active tab, if any. Only valid for the duration of the
   // callback.
   raw_ptr<tabs::TabInterface> old_tab = nullptr;
+
+  // The tab that opened the new tab, if known. Only valid for the duration of
+  // the callback.
+  raw_ptr<tabs::TabInterface> opener = nullptr;
 
   TabCreationType creation_type = TabCreationType::kUnknown;
 };
@@ -48,8 +54,16 @@ struct TabActivationEvent {
   raw_ptr<tabs::TabInterface> old_active_tab = nullptr;
 };
 
-using GlicTabEvent =
-    std::variant<TabCreationEvent, TabMutationEvent, TabActivationEvent>;
+// Event fired when a tab is added to or removed from a tab group.
+struct TabGroupingChangedEvent {
+  raw_ptr<tabs::TabInterface> tab = nullptr;
+  bool is_added = false;
+};
+
+using GlicTabEvent = std::variant<TabCreationEvent,
+                                  TabMutationEvent,
+                                  TabActivationEvent,
+                                  TabGroupingChangedEvent>;
 
 // Observes tab events across all windows for a specific profile.
 class GlicTabObserver {

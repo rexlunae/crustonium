@@ -249,11 +249,9 @@ export interface SyncBrowserProxy {
    */
   pauseSync(): void;
 
-  /**
-   * Function to invoke when the account settings page with the account storage
-   * per type settings is shown.
-   */
-  didNavigateToAccountSettingsPage(): void;
+  recordSigninPendingOffered(): void;
+  recordSigninOffered(accessPoint: ChromeSigninAccessPoint): void;
+  // </if>
 
   /**
    * Sets a single type of data to sync.
@@ -261,8 +259,11 @@ export interface SyncBrowserProxy {
   setSyncDatatype(pref: UserSelectableType, value: boolean):
       Promise<PageStatus>;
 
-  recordSigninPendingOffered(): void;
-  // </if>
+  /**
+   * Function to invoke when the account settings page with the account storage
+   * per type settings is shown.
+   */
+  didNavigateToAccountSettingsPage(): void;
 
   // <if expr="is_chromeos">
   /**
@@ -396,18 +397,22 @@ export class SyncBrowserProxyImpl implements SyncBrowserProxy {
     chrome.send('SyncSetupPauseSync');
   }
 
-  didNavigateToAccountSettingsPage() {
-    chrome.send('ShowAccountSettingsUI');
-  }
-
-  setSyncDatatype(pref: UserSelectableType, value: boolean) {
-    return sendWithPromise('SetDatatype', pref, value);
-  }
-
   recordSigninPendingOffered() {
     chrome.send('RecordSigninPendingOffered');
   }
+
+  recordSigninOffered(accessPoint: ChromeSigninAccessPoint) {
+    chrome.send('RecordSigninOffered', [accessPoint]);
+  }
   // </if>
+
+  setSyncDatatype(pref: UserSelectableType, value: boolean) {
+    return sendWithPromise<PageStatus>('SetDatatype', pref, value);
+  }
+
+  didNavigateToAccountSettingsPage() {
+    chrome.send('ShowAccountSettingsUI');
+  }
 
   // <if expr="is_chromeos">
   attemptUserExit() {
@@ -436,15 +441,15 @@ export class SyncBrowserProxyImpl implements SyncBrowserProxy {
   }
 
   getSyncStatus() {
-    return sendWithPromise('SyncSetupGetSyncStatus');
+    return sendWithPromise<SyncStatus>('SyncSetupGetSyncStatus');
   }
 
   getStoredAccounts() {
-    return sendWithPromise('SyncSetupGetStoredAccounts');
+    return sendWithPromise<StoredAccount[]>('SyncSetupGetStoredAccounts');
   }
 
   getProfileAvatar() {
-    return sendWithPromise('SyncSetupGetProfileAvatar');
+    return sendWithPromise<string>('SyncSetupGetProfileAvatar');
   }
 
   didNavigateToSyncPage() {
@@ -456,15 +461,18 @@ export class SyncBrowserProxyImpl implements SyncBrowserProxy {
   }
 
   setSyncDatatypes(syncPrefs: SyncPrefs) {
-    return sendWithPromise('SyncSetupSetDatatypes', JSON.stringify(syncPrefs));
+    return sendWithPromise<PageStatus>(
+        'SyncSetupSetDatatypes', JSON.stringify(syncPrefs));
   }
 
   setEncryptionPassphrase(passphrase: string) {
-    return sendWithPromise('SyncSetupSetEncryptionPassphrase', passphrase);
+    return sendWithPromise<boolean>(
+        'SyncSetupSetEncryptionPassphrase', passphrase);
   }
 
   setDecryptionPassphrase(passphrase: string) {
-    return sendWithPromise('SyncSetupSetDecryptionPassphrase', passphrase);
+    return sendWithPromise<boolean>(
+        'SyncSetupSetDecryptionPassphrase', passphrase);
   }
 
   startSyncingWithEmail(email: string, isDefaultPromoAccount: boolean) {
@@ -491,7 +499,8 @@ export class SyncBrowserProxyImpl implements SyncBrowserProxy {
   }
 
   getChromeSigninUserChoiceInfo(): Promise<ChromeSigninUserChoiceInfo> {
-    return sendWithPromise('GetChromeSigninUserChoiceInfo');
+    return sendWithPromise<ChromeSigninUserChoiceInfo>(
+        'GetChromeSigninUserChoiceInfo');
   }
 
   static getInstance(): SyncBrowserProxy {

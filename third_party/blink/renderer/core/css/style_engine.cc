@@ -34,6 +34,7 @@
 #include "base/auto_reset.h"
 #include "base/containers/adapters.h"
 #include "base/feature_list.h"
+#include "base/functional/function_ref.h"
 #include "base/hash/hash.h"
 #include "base/rand_util.h"
 #include "third_party/blink/public/common/features.h"
@@ -57,6 +58,7 @@
 #include "third_party/blink/renderer/core/css/media_feature_overrides.h"
 #include "third_party/blink/renderer/core/css/media_values.h"
 #include "third_party/blink/renderer/core/css/mixin_map.h"
+#include "third_party/blink/renderer/core/css/navigation_query.h"
 #include "third_party/blink/renderer/core/css/out_of_flow_data.h"
 #include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
 #include "third_party/blink/renderer/core/css/property_registration.h"
@@ -65,6 +67,7 @@
 #include "third_party/blink/renderer/core/css/resolver/scoped_style_resolver.h"
 #include "third_party/blink/renderer/core/css/resolver/selector_filter_parent_scope.h"
 #include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
+#include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver_stats.h"
 #include "third_party/blink/renderer/core/css/resolver/style_rule_usage_tracker.h"
 #include "third_party/blink/renderer/core/css/resolver/viewport_style_resolver.h"
@@ -834,12 +837,12 @@ const ActiveStyleSheetVector StyleEngine::ActiveStyleSheetsForInspector() {
 
   ActiveStyleSheetVector active_style_sheets;
 
-  active_style_sheets.AppendVector(
+  active_style_sheets.append_range(
       GetDocumentStyleSheetCollection().ActiveStyleSheets());
   for (TreeScope* tree_scope : active_tree_scopes_) {
     if (StyleSheetCollection* collection =
             style_sheet_collection_map_.at(tree_scope)) {
-      active_style_sheets.AppendVector(collection->ActiveStyleSheets());
+      active_style_sheets.append_range(collection->ActiveStyleSheets());
     }
   }
 
@@ -1218,7 +1221,7 @@ CSSStyleSheet* StyleEngine::ParseSheet(
     TextPosition start_position,
     RenderBlockingBehavior render_blocking_behavior) {
   CSSStyleSheet* style_sheet = nullptr;
-  style_sheet = CSSStyleSheet::CreateInline(element, NullURL(), start_position,
+  style_sheet = CSSStyleSheet::CreateInline(element, NullUrl(), start_position,
                                             GetDocument().Encoding());
   style_sheet->Contents()->SetRenderBlocking(render_blocking_behavior);
   style_sheet->Contents()->ParseString(text);
@@ -1261,17 +1264,18 @@ void StyleEngine::MarkViewportUnitDirty(ViewportUnitFlag flag) {
 
 namespace {
 
-template <typename Func>
-void MarkElementsForRecalc(TreeScope& tree_scope,
-                           const StyleChangeReasonForTracing& reason,
-                           Func predicate) {
+void MarkElementsForRecalc(
+    TreeScope& tree_scope,
+    const StyleChangeReasonForTracing& reason,
+    base::FunctionRef<bool(const ComputedStyle&)> predicate) {
   for (Element* element = ElementTraversal::FirstWithin(tree_scope.RootNode());
        element; element = ElementTraversal::NextIncludingPseudo(*element)) {
     if (ShadowRoot* root = element->GetShadowRoot()) {
       MarkElementsForRecalc(*root, reason, predicate);
     }
     const ComputedStyle* style = element->GetComputedStyle();
-    if (style && predicate(*style)) {
+    if (style && (predicate(*style) ||
+                  element->PseudoElementStylesDependOnFunc(predicate))) {
       element->SetNeedsStyleRecalc(kLocalStyleChange, reason);
     }
   }
@@ -1297,11 +1301,10 @@ void StyleEngine::InvalidateViewportUnitStylesIfNeeded() {
 
   const auto& reason =
       StyleChangeReasonForTracing::Create(style_change_reason::kViewportUnits);
-  MarkElementsForRecalc(
-      GetDocument(), reason, [dirty_flags](const ComputedStyle& style) {
-        return (style.ViewportUnitFlags() & dirty_flags) ||
-               style.HighlightPseudoElementStylesDependOnViewportUnits();
-      });
+  MarkElementsForRecalc(GetDocument(), reason,
+                        [dirty_flags](const ComputedStyle& style) {
+                          return (style.ViewportUnitFlags() & dirty_flags) != 0;
+                        });
 }
 
 void StyleEngine::InvalidateStyleAndLayoutForFontUpdates() {
@@ -2704,13 +2707,13 @@ void StyleEngine::EnsureUAStyleForForcedColors() {
   }
 }
 
-RuleSet* StyleEngine::DefaultViewTransitionStyle(const Element& element) const {
-  auto* transition = ViewTransitionUtils::GetTransition(element);
+RuleSet* StyleEngine::ActiveViewTransitionStyle(const Element& element) const {
+  ViewTransition* transition = ViewTransitionUtils::GetTransition(element);
   if (!transition) {
     return nullptr;
   }
 
-  auto* css_style_sheet = transition->UAStyleSheet();
+  CSSStyleSheet* css_style_sheet = transition->UAStyleSheet();
   return &css_style_sheet->Contents()->EnsureRuleSet(
       CSSDefaultStyleSheets::ScreenEval(), /*mixins=*/{});
 }
@@ -2721,16 +2724,28 @@ void StyleEngine::UpdateViewTransitionOptIn() {
   // TODO(https://crbug.com/1463966): This will likely need to change to a
   // CSSValueList if we want to support multiple tokens as a trigger.
   Vector<String> types;
+  std::optional<Vector<String>> preview_types =
+      view_transition_preview_rule_.value
+          ? std::make_optional(view_transition_preview_rule_.value->GetTypes())
+          : std::nullopt;
   if (view_transition_rule_.value) {
-    types = view_transition_rule_.value->GetTypes();
-    if (const CSSValue* value = view_transition_rule_.value->GetNavigation()) {
-      cross_document_enabled =
-          To<CSSIdentifierValue>(value)->GetValueID() == CSSValueID::kAuto;
+    switch (view_transition_rule_.value->GetNavigation()) {
+      case StyleRuleViewTransition::NavigationType::kAuto:
+        cross_document_enabled = true;
+        types = view_transition_rule_.value->GetTypes();
+        break;
+      case StyleRuleViewTransition::NavigationType::kNone:
+        cross_document_enabled = false;
+        break;
+      case StyleRuleViewTransition::NavigationType::kUnspecified:
+        break;
+      default:
+        NOTREACHED();
     }
   }
 
   GetDocument().GetViewTransitions().OnViewTransitionsStyleUpdated(
-      cross_document_enabled, types);
+      cross_document_enabled, types, preview_types);
 }
 
 bool StyleEngine::HasRulesForId(const AtomicString& id) const {
@@ -2741,12 +2756,24 @@ bool StyleEngine::HasRulesForId(const AtomicString& id) const {
 }
 
 void StyleEngine::InitialStyleChanged() {
+  InvalidateInitialStyle();
   MarkViewportStyleDirty();
   // We need to update the viewport style immediately because media queries
   // evaluated in MediaQueryAffectingValueChanged() below may rely on the
   // initial font size relative lengths which may have changed.
   UpdateViewportStyle();
   MediaQueryAffectingValueChanged(MediaValueChange::kOther);
+  MarkAllElementsForStyleRecalc(
+      StyleChangeReasonForTracing::Create(style_change_reason::kSettings));
+}
+
+void StyleEngine::InvalidateInitialStyle() {
+  if (resolver_) {
+    resolver_->InvalidateInitialStyle();
+  }
+}
+
+void StyleEngine::UAStyleChanged() {
   MarkAllElementsForStyleRecalc(
       StyleChangeReasonForTracing::Create(style_change_reason::kSettings));
 }
@@ -3236,8 +3263,10 @@ bool StyleEngine::EvaluateFunctionalMediaQuery(const MediaQuerySet& query_set) {
 }
 
 void StyleEngine::InvalidateFunctionalMediaDependentStylesIfNeeded() {
-  if (!EnsureMediaQueryEvaluator().DidResultsChange(
-          functional_media_query_results_)) {
+  if (!media_query_evaluator_ || !media_query_evaluator_->DidResultsChange(
+                                     functional_media_query_results_)) {
+    // A null evaluator here means we have not evaluated media queries before,
+    // or the Document/StyleEngine has been detached.
     return;
   }
   functional_media_query_results_.clear();
@@ -3246,6 +3275,32 @@ void StyleEngine::InvalidateFunctionalMediaDependentStylesIfNeeded() {
       StyleChangeReasonForTracing::Create(style_change_reason::kMediaQuery);
   MarkElementsForRecalc(GetDocument(), reason, [](const ComputedStyle& style) {
     return style.AffectedByFunctionalMedia();
+  });
+}
+
+bool StyleEngine::EvaluateFunctionalNavigationQuery(
+    const NavigationTestExpression& navigation_exp) {
+  bool result = navigation_exp.Matches(GetDocument());
+  functional_navigation_query_results_.insert(&navigation_exp, result);
+  return result;
+}
+
+void StyleEngine::InvalidateFunctionalNavigationDependentStylesIfNeeded() {
+  bool has_changes = false;
+  for (auto& [exp, previous_result] : functional_navigation_query_results_) {
+    if (exp->Matches(GetDocument()) != previous_result) {
+      has_changes = true;
+      break;
+    }
+  }
+  if (!has_changes) {
+    return;
+  }
+  functional_navigation_query_results_.clear();
+  const auto& reason = StyleChangeReasonForTracing::Create(
+      style_change_reason::kNavigationQuery);
+  MarkElementsForRecalc(GetDocument(), reason, [](const ComputedStyle& style) {
+    return style.AffectedByFunctionalNavigation();
   });
 }
 
@@ -3270,10 +3325,9 @@ bool StyleEngine::StyleMaybeAffectedByLayout(const Element& element) {
          ComputedStyle::IsNullOrEnsured(element.GetComputedStyle());
 }
 
-bool StyleEngine::UpdateRootFontRelativeUnits(
-    const ComputedStyle* old_root_style,
-    const ComputedStyle* new_root_style) {
-  if (!new_root_style || !UsesRootFontRelativeUnits()) {
+bool StyleEngine::UpdateRootRelativeUnits(const ComputedStyle* old_root_style,
+                                          const ComputedStyle* new_root_style) {
+  if (!new_root_style || !UsesRootRelativeUnits()) {
     return false;
   }
   bool rem_changed = !old_root_style || old_root_style->SpecifiedFontSize() !=
@@ -3289,12 +3343,12 @@ bool StyleEngine::UpdateRootFontRelativeUnits(
       !old_root_style ||
       (UsesLineHeightUnits() &&
        old_root_style->LineHeight() != new_root_style->LineHeight());
-  bool root_font_changed =
+  bool invalidate_root_units =
       rem_changed || root_font_glyphs_changed || root_line_height_changed;
-  if (root_font_changed) {
-    // Resolved root font relative units are stored in the matched properties
-    // cache so we need to make sure to invalidate the cache if the
-    // documentElement font size changes.
+  if (invalidate_root_units) {
+    // Resolved root relative units are stored in the matched properties cache
+    // so we need to make sure to invalidate the cache if the documentElement
+    // font or line-height changes.
     GetStyleResolver().InvalidateMatchedPropertiesCache();
     return true;
   }
@@ -3497,6 +3551,17 @@ void StyleEngine::AddViewTransitionRules(const ActiveStyleSheetVector& sheets) {
             : nullptr;
     for (const CascadeLayered<StyleRuleViewTransition>& rule :
          rule_set->ViewTransitionRules()) {
+      if (rule.value->GetNavigation() ==
+          StyleRuleViewTransition::NavigationType::kPreview) {
+        CHECK(RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled());
+        if (!view_transition_preview_rule_.value ||
+            CascadeLayerMap::CompareLayerOrder(
+                layer_map, view_transition_preview_rule_, rule) <= 0) {
+          view_transition_preview_rule_ = rule;
+        }
+        continue;
+      }
+
       if (!view_transition_rule_.value ||
           CascadeLayerMap::CompareLayerOrder(layer_map, view_transition_rule_,
                                              rule) <= 0) {
@@ -3834,22 +3899,32 @@ void StyleEngine::UpdateStyleAndLayoutTreeForSizeContainer(
   NthIndexCache nth_index_cache(GetDocument());
 
   UpdateViewportSize();
-  RecalcStyleForSizeContainer(container, change);
 
-  if (container.NeedsReattachLayoutTree()) {
-    ReattachContainerSubtree(container);
-  } else if (NeedsLayoutTreeRebuild()) {
-    if (layout_tree_rebuild_root_.GetRootNode()->IsDocumentNode()) {
-      // Avoid traversing from outside the container root. We know none of the
-      // elements outside the subtree should be marked dirty in this pass, but
-      // we may have fallen back to the document root.
-      layout_tree_rebuild_root_.Clear();
-      layout_tree_rebuild_root_.Update(nullptr, &container);
-    } else {
-      DCHECK(FlatTreeTraversal::ContainsIncludingPseudoElement(
-          container, *layout_tree_rebuild_root_.GetRootNode()));
+  // Emit a probe::RecalculateStyle so that the LoAF API correctly attributes
+  // container query style recalculation to styleDuration rather than
+  // layoutDuration. Without this, style recalc triggered by container queries
+  // during layout would be counted as layout time because it runs inside the
+  // probe::UpdateLayout scope. The AnimationFrameTimingMonitor subtracts style
+  // time that occurs during layout to avoid double-counting.
+  {
+    probe::RecalculateStyle recalculate_style_scope(document_);
+    RecalcStyleForSizeContainer(container, change);
+
+    if (container.NeedsReattachLayoutTree()) {
+      ReattachContainerSubtree(container);
+    } else if (NeedsLayoutTreeRebuild()) {
+      if (layout_tree_rebuild_root_.GetRootNode()->IsDocumentNode()) {
+        // Avoid traversing from outside the container root. We know none of
+        // the elements outside the subtree should be marked dirty in this
+        // pass, but we may have fallen back to the document root.
+        layout_tree_rebuild_root_.Clear();
+        layout_tree_rebuild_root_.Update(nullptr, &container);
+      } else {
+        DCHECK(FlatTreeTraversal::ContainsIncludingPseudoElement(
+            container, *layout_tree_rebuild_root_.GetRootNode()));
+      }
+      RebuildLayoutTree(&container);
     }
-    RebuildLayoutTree(&container);
   }
 
   if (container == GetDocument().documentElement()) {
@@ -4172,7 +4247,7 @@ void StyleEngine::ViewportDefiningElementDidChange() {
     // This update is also necessary if the first body element changes because
     // another body element is inserted or removed.
     layout_object->SetStyle(
-        ComputedStyleBuilder(*layout_object->Style()).TakeStyle());
+        ComputedStyleBuilder(layout_object->StyleRef()).TakeStyle());
   }
 }
 
@@ -4337,7 +4412,7 @@ bool StyleEngine::MarkStyleDirtyAllowed() const {
   return !InRebuildLayoutTree();
 }
 
-bool StyleEngine::SupportsDarkColorScheme() {
+bool StyleEngine::SupportsDarkColorScheme() const {
   return (page_color_schemes_ &
           static_cast<ColorSchemeFlags>(ColorSchemeFlag::kDark)) &&
          (!(page_color_schemes_ &
@@ -4586,7 +4661,7 @@ void StyleEngine::UpdateForcedBackgroundColor() {
       CSSValueID::kCanvas, color_scheme,
       GetDocument().GetPage()->GetColorProviderForPainting(
           color_scheme, forced_colors_ != ForcedColors::kNone),
-      GetDocument().IsInWebAppScope());
+      GetDocument().IsInWebAppScope() && GetDocument().IsInitialProfile());
 }
 
 mojom::blink::ColorScheme StyleEngine::AdjustAboutBlankColorScheme(
@@ -4604,7 +4679,7 @@ mojom::blink::ColorScheme StyleEngine::AdjustAboutBlankColorScheme(
   // See https://issues.chromium.org/issues/40190899
 
   const bool likely_user_initiated_aboutblank =
-      GetDocument().IsInMainFrame() && GetDocument().Url().IsAboutBlankURL() &&
+      GetDocument().IsInMainFrame() && GetDocument().Url().IsAboutBlankUrl() &&
       !GetDocument().GetPage()->OpenedByDOM();
   if (preferred_color_scheme_ == mojom::blink::PreferredColorScheme::kDark &&
       likely_user_initiated_aboutblank) {
@@ -4628,6 +4703,8 @@ void StyleEngine::MarkAllElementsForStyleRecalc(
 
   functional_media_query_results_.clear();
   functional_media_query_result_flags_.Clear();
+
+  functional_navigation_query_results_.clear();
 }
 
 void StyleEngine::UpdateViewportStyle() {
@@ -4745,6 +4822,7 @@ void StyleEngine::Trace(Visitor* visitor) const {
   visitor->Trace(vtt_originating_element_);
   visitor->Trace(parent_for_detached_subtree_);
   visitor->Trace(view_transition_rule_);
+  visitor->Trace(view_transition_preview_rule_);
   visitor->Trace(style_image_cache_);
   visitor->Trace(fill_or_clip_path_uri_value_cache_);
   visitor->Trace(style_containment_scope_tree_);
@@ -4753,7 +4831,9 @@ void StyleEngine::Trace(Visitor* visitor) const {
   visitor->Trace(anchored_element_dirty_set_);
   visitor->Trace(user_rule_set_groups_);
   visitor->Trace(functional_media_query_results_);
+  visitor->Trace(functional_navigation_query_results_);
   visitor->Trace(random_base_value_cache_);
+  visitor->Trace(element_keeps_random_caching_key_alive_);
   FontSelectorClient::Trace(visitor);
 }
 
@@ -4815,7 +4895,7 @@ bool StyleEngine::AllowSkipStyleRecalcForScope() const {
     // inside skipped subtrees if we allowed skipping. If we start out with an
     // empty list, any added ones will be a result of an element style recalc,
     // which means the will not be inside a skipped subtree.
-    return !view->IsSubtreeLayout();
+    return !view->HasSubtreeLayoutRoots();
   }
   return true;
 }
@@ -4956,26 +5036,30 @@ void StyleEngine::NavigationsMayHaveChanged() {
   DCHECK(RuntimeEnabledFeatures::RouteMatchingEnabled());
   SetNeedsActiveStyleUpdate(GetDocument());
 
-  // Navigation changes may affect how navigation-param() expressions inside
-  // :link-to() pseudo selectors match. Do a PseudoStateChanged() on each link
-  // in the document, which will mark every element potentially affected by the
-  // navigation for style recalc.
+  // Styles that use functional navigation queries (those within @function or
+  // if()) are invalidated by marking the affected elements for recalc directly.
+  InvalidateFunctionalNavigationDependentStylesIfNeeded();
+
+  // Navigation changes may affect how :active-navigation() selectors match. Do
+  // a PseudoStateChanged() on each link in the document, which will mark every
+  // element potentially affected by the navigation for style recalc.
   //
-  // TODO(crbug.com/436805487): Should come up with something less brutal (spec
-  // changes should be considered, too - this is somewhat unusual).
+  // TODO(crbug.com/436805487): Should come up with something less brutal.
   //
   // A plain lambda won't do because they cannot be invoked recursively. And I
   // want the code to stay here in this function, at least for now, so here we
   // go:
   struct Marker {
     static void MarkAllLinks(Node& root) {
+      // TODO(crbug.com/436805487): If we really have to traverse, there should
+      // be no need to visit subtrees that have no ComputedStyle.
       for (Node& node : NodeTraversal::StartsAt(root)) {
         if (node.IsLink()) {
           // TODO(crbug.com/436805487): This is in order to implement
-          // :link-to(--route with navigation-param()), but it's a rather heavy
-          // hammer. Maybe there are better ways (spec changes should be
-          // considered, too).
-          To<Element>(node).PseudoStateChanged(CSSSelector::kPseudoLinkTo);
+          // :active-navigation(), but it's a rather heavy hammer. Maybe there
+          // are better ways (spec changes should be considered, too).
+          To<Element>(node).PseudoStateChanged(
+              CSSSelector::kPseudoActiveNavigation);
         }
         if (ShadowRoot* shadow_root = node.GetShadowRoot()) {
           MarkAllLinks(*shadow_root);
@@ -4988,17 +5072,37 @@ void StyleEngine::NavigationsMayHaveChanged() {
 }
 
 double StyleEngine::GetCachedRandomBaseValue(
-    const RandomValueSharing& random_value_sharing,
+    const RandomCacheKey& random_cache_key,
     const Element* element) {
-  RandomCachingKey* random_caching_key =
-      RandomCachingKey::Create(random_value_sharing, element);
-  auto it = random_base_value_cache_.find(random_caching_key);
-  if (it != random_base_value_cache_.end()) {
-    return it->value;
+  if (!random_cache_key.IsElementScoped()) {
+    ElementSharedRandomValueCache::AddResult element_shared_cache_result =
+        element_shared_random_base_value_cache_.insert(
+            random_cache_key.RandomNameForCaching(), 0);
+    if (element_shared_cache_result.is_new_entry) {
+      element_shared_cache_result.stored_value->value = base::RandDouble();
+    }
+    return element_shared_cache_result.stored_value->value;
   }
-  double value = base::RandDouble();
-  random_base_value_cache_.insert(random_caching_key, value);
-  return value;
+
+  RandomCachingKey* random_caching_key =
+      RandomCachingKey::Create(random_cache_key, element);
+
+  const RandomCachingKeyLifetimeCache::AddResult&
+      random_caching_key_lifetime_cache_result =
+          element_keeps_random_caching_key_alive_.insert(element, nullptr);
+  if (random_caching_key_lifetime_cache_result.is_new_entry) {
+    random_caching_key_lifetime_cache_result.stored_value->value =
+        MakeGarbageCollected<GCedHeapHashSet<Member<RandomCachingKey>>>();
+  }
+  random_caching_key_lifetime_cache_result.stored_value->value->insert(
+      random_caching_key);
+
+  RandomValueCache::AddResult result =
+      random_base_value_cache_.insert(random_caching_key, 0);
+  if (result.is_new_entry) {
+    result.stored_value->value = base::RandDouble();
+  }
+  return result.stored_value->value;
 }
 
 }  // namespace blink

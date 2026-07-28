@@ -10,6 +10,7 @@
 
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
@@ -40,6 +41,7 @@
 #include "chrome/browser/ash/login/demo_mode/demo_mode_test_helper.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/extensions/chrome_app_icon.h"
 #include "chrome/browser/extensions/install_tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -50,10 +52,7 @@
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -89,6 +88,7 @@
 #include "ui/display/test/test_screen.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
 using crostini::CrostiniTestHelper;
@@ -363,7 +363,7 @@ class WebAppBuilderTest : public AppServiceAppModelBuilderTest {
         .ReadTrustedIconsWithFallbackToManifestIcons(
             app_id, icon_sizes_in_px, web_app::IconPurpose::ANY,
             read_icons_future.GetCallback());
-    web_app::SizeToBitmap icon_bitmaps =
+    web_app::OrderedSizeToBitmap icon_bitmaps =
         std::move(read_icons_future.Take().icons_map);
     for (auto [scale, size_px] : scale_to_size_in_px) {
       output_image_skia.AddRepresentation(
@@ -635,7 +635,7 @@ class WebAppBuilderDemoModeTest : public WebAppBuilderTest {
 // This test adds a web app to the app list for demo mode when online.
 TEST_F(WebAppBuilderDemoModeTest, WebAppListOnline) {
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_ETHERNET);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
 
   const std::string kAppName = "https://test.com";
   CreateWebApp(kAppName);
@@ -646,7 +646,7 @@ TEST_F(WebAppBuilderDemoModeTest, WebAppListOnline) {
 // This test adds a web app to the app list for demo mode when offline.
 TEST_F(WebAppBuilderDemoModeTest, WebAppListOffline) {
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_NONE);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
 
   const std::string kAppName = "https://test.com";
   CreateWebApp(kAppName);
@@ -685,13 +685,7 @@ class CrostiniAppTest : public AppServiceAppModelBuilderTest {
   void TearDown() override {
     ResetBuilder();
     test_helper_.reset();
-    AppListTestBase::TearDown();
-
-    // |profile_| is initialized in AppListTestBase::SetUp but not destroyed in
-    // the ::TearDown method, but we need it to go away before shutting down
-    // DBusThreadManager to ensure all keyed services that might rely on DBus
-    // clients are destroyed.
-    DeleteProfile();
+    AppServiceAppModelBuilderTest::TearDown();
 
     ash::SeneschalClient::Shutdown();
     ash::ConciergeClient::Shutdown();

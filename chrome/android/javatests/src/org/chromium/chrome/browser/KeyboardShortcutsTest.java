@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.anyBoolean;
@@ -13,6 +14,7 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.description;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -22,6 +24,9 @@ import static org.mockito.Mockito.when;
 import android.os.SystemClock;
 import android.util.Pair;
 import android.view.KeyEvent;
+import android.view.KeyboardShortcutGroup;
+import android.view.KeyboardShortcutInfo;
+import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
@@ -37,11 +42,14 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.ui.KeyboardUtils;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
@@ -55,7 +63,10 @@ import org.chromium.chrome.browser.tabmodel.TabRemover;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
+import org.chromium.url.JUnitTestGURLs;
 
 import java.util.List;
 import java.util.Set;
@@ -65,8 +76,7 @@ import java.util.Set;
 @Batch(Batch.UNIT_TESTS)
 @Features.EnableFeatures({
     ChromeFeatureList.TASK_MANAGER_CLANK,
-    ContentFeatureList.ANDROID_DEV_TOOLS_FRONTEND,
-    ContentFeatureList.ANDROID_CARET_BROWSING
+    ContentFeatureList.ANDROID_DEV_TOOLS_FRONTEND
 })
 public class KeyboardShortcutsTest {
 
@@ -90,6 +100,9 @@ public class KeyboardShortcutsTest {
     @Mock private WebContents mWebContents;
     @Mock private Profile mProfile;
 
+    @Mock private HomepageManager mHomepageManager;
+    @Mock private FeedbackPolicyManager mFeedbackPolicyManager;
+
     @Before
     public void setUp() {
         setUpTabModelSelector(List.of(mTab));
@@ -98,6 +111,26 @@ public class KeyboardShortcutsTest {
         when(mTab.getContext()).thenReturn(ApplicationProvider.getApplicationContext());
         mPinnedTabCloseManager = spy(PinnedTabClosureManagerFactory.getInstance());
         PinnedTabClosureManagerFactory.setInstanceForTesting(mPinnedTabCloseManager);
+
+        HomepageManager.setInstanceForTesting(mHomepageManager);
+        FeedbackPolicyManager.setInstanceForTesting(mFeedbackPolicyManager);
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
+    }
+
+    @Test
+    @SmallTest
+    public void testOpenHomePage() {
+        GURL mockGurl = JUnitTestGURLs.EXAMPLE_URL;
+        when(mHomepageManager.getHomepageGurl(anyBoolean())).thenReturn(mockGurl);
+
+        boolean isKeyEventHandled =
+                keyDown(
+                        KeyEvent.KEYCODE_HOME,
+                        KeyEvent.META_ALT_ON,
+                        /* isCurrentTabVisible= */ true);
+
+        assertTrue("Expected key event to be handled for Alt+Home", isKeyEventHandled);
+        verify(mTab).loadUrl(any(LoadUrlParams.class));
     }
 
     /**
@@ -119,6 +152,7 @@ public class KeyboardShortcutsTest {
         }
         when(mTabModel.getTabRemover()).thenReturn(mTabRemover);
         when(mTabModel.isTabMultiSelected(TAB_ID)).thenReturn(true);
+        when(mTabModel.getOrderedMultiSelectedTabs()).thenReturn(List.of(tabs.get(0)));
 
         doNothing().when(mTabRemover).closeTabs(any(TabClosureParams.class), anyBoolean());
     }
@@ -138,6 +172,7 @@ public class KeyboardShortcutsTest {
             for (Tab tab : tabsToClose) {
                 when(mTabModel.isTabMultiSelected(tab.getId())).thenReturn(true);
             }
+            when(mTabModel.getOrderedMultiSelectedTabs()).thenReturn(tabsToClose);
             for (int i = 0; i < keyCodeAndModifier.size(); i++) {
                 clearInvocations(mTabRemover);
                 int keyCode = keyCodeAndModifier.get(i).first;
@@ -218,6 +253,7 @@ public class KeyboardShortcutsTest {
 
     @Test
     @SmallTest
+    @DisabledTest(message = "Flaky - crbug.com/490369117")
     public void testCloseTab_singlePinnedTab_firstAttempt_timeout() {
         // Setup the first closure attempt of a pinned tab.
         setUpTabModelSelector(List.of(mTab));
@@ -294,6 +330,7 @@ public class KeyboardShortcutsTest {
         when(mTab.getIsPinned()).thenReturn(true);
         when(mTabModel.isTabMultiSelected(0)).thenReturn(true);
         when(mTabModel.isTabMultiSelected(1)).thenReturn(true);
+        when(mTabModel.getOrderedMultiSelectedTabs()).thenReturn(List.of(mTab, mTab2));
 
         // trigger Ctrl+W keyboard shortcut once.
         ThreadUtils.runOnUiThreadBlocking(
@@ -528,10 +565,40 @@ public class KeyboardShortcutsTest {
     @Test
     @SmallTest
     public void testFocusSwitch() {
-        keyDown(KeyEvent.KEYCODE_F6, 0, true);
+        assertTrue(dispatchKeyEvent(KeyEvent.KEYCODE_F6, 0));
         verify(mMenuOrKeyboardActionController, times(1))
                 .onMenuOrKeyboardAction(
                         /* id= */ eq(R.id.switch_keyboard_focus_row), /* fromMenu= */ eq(false));
+    }
+
+    @Test
+    @SmallTest
+    public void testTabSearch() {
+        assertTrue(
+                keyDown(KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON, true));
+        verify(mMenuOrKeyboardActionController, times(1))
+                .onMenuOrKeyboardAction(/* id= */ eq(R.id.tab_search), /* fromMenu= */ eq(false));
+    }
+
+    @Test
+    @SmallTest
+    @Features.DisableFeatures({ChromeFeatureList.TAB_SEARCH_FOR_DESKTOP})
+    public void testTabSearchSideUI_disabled() {
+        assertTrue(
+                keyDown(KeyEvent.KEYCODE_A, KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON, true));
+        verify(mMenuOrKeyboardActionController, times(1))
+                .onMenuOrKeyboardAction(/* id= */ eq(R.id.tab_search), /* fromMenu= */ eq(false));
+    }
+
+    @Test
+    @SmallTest
+    @Features.EnableFeatures({ChromeFeatureList.TAB_SEARCH_FOR_DESKTOP})
+    public void testTabSearchSideUI_enabled() {
+        assertTrue(
+                keyDown(KeyEvent.KEYCODE_A, KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON, true));
+        verify(mMenuOrKeyboardActionController, times(1))
+                .onMenuOrKeyboardAction(
+                        /* id= */ eq(R.id.tab_search_side_ui), /* fromMenu= */ eq(false));
     }
 
     @Test
@@ -543,16 +610,107 @@ public class KeyboardShortcutsTest {
                         /* id= */ eq(R.id.open_tab_strip_context_menu), /* fromMenu= */ eq(false));
     }
 
+    /** Test that pressing F10 triggers focus on the app menu button view. */
+    @Test
+    @SmallTest
+    public void testFocusAppMenuButton() {
+        View mockMenuButton = mock(View.class);
+        when(mToolbarManager.getMenuButtonView()).thenReturn(mockMenuButton);
+
+        assertTrue(keyDown(KeyEvent.KEYCODE_F10, 0, true));
+        verify(mToolbarManager, times(1)).getMenuButtonView();
+        verify(mockMenuButton, times(1)).requestFocus();
+    }
+
     /** Test that pressing F7 triggers the caret browsing dialog. */
     @Test
     @SmallTest
     public void testToggleCaretBrowsing() {
         // Ensure we handle F7 key (this was previously ignored)
-        assertTrue(keyDown(KeyEvent.KEYCODE_F7, 0, true));
+        assertTrue(dispatchKeyEvent(KeyEvent.KEYCODE_F7, 0));
 
         // Ensure we trigger the caret browsing dialog
         verify(mMenuOrKeyboardActionController)
                 .onMenuOrKeyboardAction(eq(R.id.toggle_caret_browsing), eq(false));
+    }
+
+    /** Test that pressing F1 triggers the help action. */
+    @Test
+    @SmallTest
+    public void testOpenHelp() {
+        // Ensure we handle F1 key
+        assertTrue(keyDown(KeyEvent.KEYCODE_F1, 0, true));
+
+        // Ensure we trigger the help action
+        verify(mMenuOrKeyboardActionController).onMenuOrKeyboardAction(eq(R.id.help_id), eq(false));
+    }
+
+    @Test
+    @SmallTest
+    public void testFeedbackShortcut_Allowed() {
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
+        assertTrue(
+                keyDown(
+                        KeyEvent.KEYCODE_I,
+                        KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON,
+                        /* isCurrentTabVisible= */ true));
+        verify(mMenuOrKeyboardActionController, times(1))
+                .onMenuOrKeyboardAction(eq(R.id.feedback_form), eq(false));
+    }
+
+    @Test
+    @SmallTest
+    public void testFeedbackShortcut_Disallowed() {
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(false);
+        assertTrue(
+                keyDown(
+                        KeyEvent.KEYCODE_I,
+                        KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON,
+                        /* isCurrentTabVisible= */ true));
+        verify(mMenuOrKeyboardActionController, never())
+                .onMenuOrKeyboardAction(eq(R.id.feedback_form), anyBoolean());
+    }
+
+    @Test
+    @SmallTest
+    public void testFeedbackShortcutInGroup_Allowed() {
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
+        List<KeyboardShortcutGroup> groups =
+                KeyboardShortcuts.createShortcutGroup(ApplicationProvider.getApplicationContext());
+        boolean found = false;
+        for (KeyboardShortcutGroup group : groups) {
+            for (KeyboardShortcutInfo item : group.getItems()) {
+                if (item.getLabel()
+                        .equals(
+                                ApplicationProvider.getApplicationContext()
+                                        .getString(R.string.keyboard_shortcut_send_feedback))) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assertTrue("Feedback shortcut should be in the group when allowed", found);
+    }
+
+    @Test
+    @SmallTest
+    public void testFeedbackShortcutInGroup_Disallowed() {
+        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(false);
+        List<KeyboardShortcutGroup> groups =
+                KeyboardShortcuts.createShortcutGroup(ApplicationProvider.getApplicationContext());
+        boolean found = false;
+        for (KeyboardShortcutGroup group : groups) {
+            for (KeyboardShortcutInfo item : group.getItems()) {
+                if (item.getLabel()
+                        .equals(
+                                ApplicationProvider.getApplicationContext()
+                                        .getString(R.string.keyboard_shortcut_send_feedback))) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assertFalse("Feedback shortcut should NOT be in the group when disallowed", found);
     }
 
     private void testOpenBookmarks(
@@ -596,5 +754,20 @@ public class KeyboardShortcutsTest {
                 mTabModelSelector,
                 mMenuOrKeyboardActionController,
                 mToolbarManager);
+    }
+
+    private Boolean dispatchKeyEvent(int keyCode, int metaState) {
+        return KeyboardShortcuts.dispatchKeyEvent(
+                new KeyEvent(
+                        /* downTime= */ SystemClock.uptimeMillis(),
+                        /* eventTime= */ SystemClock.uptimeMillis(),
+                        KeyEvent.ACTION_DOWN,
+                        keyCode,
+                        /* repeat= */ 0,
+                        metaState),
+                /* uiInitialized= */ true,
+                /* fullscreenManager= */ null,
+                mMenuOrKeyboardActionController,
+                ApplicationProvider.getApplicationContext());
     }
 }

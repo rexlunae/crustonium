@@ -45,17 +45,15 @@ class ReloadButton : public ToolbarButton, public ReloadControl {
   ReloadButton& operator=(const ReloadButton&) = delete;
   ~ReloadButton() override;
 
-  Mode visible_mode() const { return visible_mode_; }
+  Mode GetVisibleMode() const { return visible_mode_; }
 
-  void SetVectorIconsForMode(Mode mode,
-                             const gfx::VectorIcon& icon,
-                             const gfx::VectorIcon& touch_icon);
+  bool GetDoubleClickTimerIsRunning() const;
+
+  [[nodiscard]] base::CallbackListSubscription AddVisibleModeChangedCallback(
+      views::PropertyChangedCallback callback);
 
   // ToolbarButton:
-  void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
-  bool OnMousePressed(const ui::MouseEvent& event) override;
-  void OnMouseReleased(const ui::MouseEvent& event) override;
   bool ShouldShowMenu() override;
   void ShowDropDownMenu(ui::mojom::MenuSourceType source_type) override;
 
@@ -73,10 +71,20 @@ class ReloadButton : public ToolbarButton, public ReloadControl {
 
   // ReloadControl overrides:
   void ChangeMode(Mode mode, bool force) override;
-  bool GetMenuEnabled() const override;
-  void SetMenuEnabled(bool is_menu_enabled) override;
+  bool GetDevToolsStatusForTesting() const override;
+  void SetDevToolsStatus(bool is_dev_tools_connected) override;
 
   void ExecuteCommand(int command_id, int event_flags) override;
+
+  // Overrides the timer interval delays for testing.
+  void set_double_click_timer_delay_for_testing(
+      base::TimeDelta double_click_timer_delay) {
+    double_click_timer_delay_ = double_click_timer_delay;
+  }
+  void set_mode_switch_timer_delay_for_testing(
+      base::TimeDelta mode_switch_timer_delay) {
+    mode_switch_timer_delay_ = mode_switch_timer_delay;
+  }
 
  private:
   friend class ReloadButtonMetricsTest;
@@ -95,9 +103,7 @@ class ReloadButton : public ToolbarButton, public ReloadControl {
   void OnDoubleClickTimer();
   void OnStopToReloadTimer();
   void UpdateAccessibleHasPopup();
-  void OnNextPresentation(Mode mode,
-                          Button::ButtonState state,
-                          const viz::FrameTimingDetails&);
+  void OnNextPresentation(const viz::FrameTimingDetails&);
 
   base::OneShotTimer double_click_timer_;
 
@@ -123,13 +129,16 @@ class ReloadButton : public ToolbarButton, public ReloadControl {
   // The currently-visible mode - this may differ from the intended mode.
   Mode visible_mode_ = Mode::kReload;
 
+  // If true, we will animate the transitions between reload and stop.
+  bool animate_transitions_ = false;
+
   // The delay times for the timers.  These are members so that tests can modify
   // them.
   base::TimeDelta double_click_timer_delay_;
   base::TimeDelta mode_switch_timer_delay_;
 
-  // Indicates if reload menu is enabled.
-  bool is_menu_enabled_ = false;
+  // Indicates if dev tools is connected.
+  bool is_dev_tools_connected_ = false;
 
   // TESTING ONLY
   // True if we should pretend the button is hovered.
@@ -147,7 +156,7 @@ class ReloadButton : public ToolbarButton, public ReloadControl {
 };
 
 BEGIN_VIEW_BUILDER(CHROME_VIEWS_EXPORT, ReloadButton, ToolbarButton)
-VIEW_BUILDER_PROPERTY(bool, MenuEnabled)
+VIEW_BUILDER_PROPERTY(bool, DevToolsStatus)
 END_VIEW_BUILDER
 
 DEFINE_VIEW_BUILDER(CHROME_VIEWS_EXPORT, ReloadButton)

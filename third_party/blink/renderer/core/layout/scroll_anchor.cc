@@ -105,7 +105,7 @@ void ScrollAnchor::SetScroller(ScrollableArea* scroller) {
 // adjust only on the block flow axis.  This could probably be refactored to
 // simply measure the movement of the block-start edge.
 static Corner CornerToAnchor(const ScrollableArea* scroller) {
-  auto writing_mode = ScrollerLayoutBox(scroller)->Style()->GetWritingMode();
+  auto writing_mode = ScrollerLayoutBox(scroller)->StyleRef().GetWritingMode();
   if (IsFlippedBlocksWritingMode(writing_mode)) {
     return Corner::kTopRight;
   }
@@ -342,16 +342,14 @@ static const String ComputeUniqueSelector(LayoutObject* anchor_object) {
 }
 
 static PhysicalRect GetVisibleRect(ScrollableArea* scroller) {
-  auto visible_rect =
-      ScrollerLayoutBox(scroller)->OverflowClipRect(PhysicalOffset());
+  auto visible_rect = ScrollerLayoutBox(scroller)->OverflowClipRect();
 
-  const ComputedStyle* style = ScrollerLayoutBox(scroller)->Style();
+  const ComputedStyle& style = ScrollerLayoutBox(scroller)->StyleRef();
   visible_rect.ContractEdges(
-      MinimumValueForLength(style->ScrollPaddingTop(), visible_rect.Height()),
-      MinimumValueForLength(style->ScrollPaddingRight(), visible_rect.Width()),
-      MinimumValueForLength(style->ScrollPaddingBottom(),
-                            visible_rect.Height()),
-      MinimumValueForLength(style->ScrollPaddingLeft(), visible_rect.Width()));
+      MinimumValueForLength(style.ScrollPaddingTop(), visible_rect.Height()),
+      MinimumValueForLength(style.ScrollPaddingRight(), visible_rect.Width()),
+      MinimumValueForLength(style.ScrollPaddingBottom(), visible_rect.Height()),
+      MinimumValueForLength(style.ScrollPaddingLeft(), visible_rect.Width()));
   return visible_rect;
 }
 
@@ -468,8 +466,7 @@ LayoutObject* ScrollAnchor::PriorityCandidateFromNode(const Node* node) const {
   while (node) {
     if (auto* layout_object = node->GetLayoutObject()) {
       if (!layout_object->IsAnonymous() &&
-          (!layout_object->IsInline() ||
-           layout_object->IsAtomicInlineLevel())) {
+          !layout_object->IsNonAtomicInline()) {
         return layout_object;
       }
     }
@@ -713,13 +710,15 @@ gfx::Vector2d ScrollAnchor::ComputeAdjustment() const {
 void ScrollAnchor::Adjust() {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
                "ScrollAnchor::Adjust");
+  if (!queued_) {
+    return;
+  }
+  queued_ = false;
+
   if (suppress_adjustment_count_ > 0) {
     return;
   }
 
-  if (!queued_)
-    return;
-  queued_ = false;
   DCHECK(scroller_);
   if (!anchor_object_)
     return;
@@ -813,7 +812,7 @@ bool ScrollAnchor::RestoreAnchor(const SerializedAnchor& serialized_anchor) {
     // roughly the same.
     ScrollOffset current_offset = scroller_->GetScrollOffset();
     gfx::RectF bounding_box = anchor_object->AbsoluteBoundingBoxRectF();
-    WritingMode writing_mode = anchor_object->Style()->GetWritingMode();
+    WritingMode writing_mode = anchor_object->StyleRef().GetWritingMode();
     gfx::PointF location_point =
         IsFlippedBlocksWritingMode(writing_mode)   ? bounding_box.top_right()
         : writing_mode == WritingMode::kSidewaysLr ? bounding_box.bottom_left()

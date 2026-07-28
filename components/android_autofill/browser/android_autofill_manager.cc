@@ -17,10 +17,12 @@
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/suggestions/suggestion_util.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace autofill {
 
@@ -68,8 +70,8 @@ void AndroidAutofillManager::OnTextFieldValueChangedImpl(
     return;
   }
 
-  // We cannot use `field` is_autofilled state because it has already been
-  // cleared by blink. Check `provider` cache.
+  // We cannot use `field.is_autofilled_according_to_renderer()` because it
+  // has already been cleared by blink. Check `provider` cache.
   bool cached_is_autofilled = provider->GetCachedIsAutofilled(*field);
 
   provider->OnTextFieldValueChanged(this, form, *field, timestamp);
@@ -154,7 +156,6 @@ void AndroidAutofillManager::OnHidePopupImpl() {
 }
 
 void AndroidAutofillManager::OnFormProcessed(
-    const FormData& form,
     const FormStructure& form_structure) {
   DenseSet<FormType> form_types =
       form_structure.GetFormTypes(GetAcUnrecognizedBehavior(client()));
@@ -182,9 +183,11 @@ void AndroidAutofillManager::Reset() {
   StartNewLoggingSession();
 }
 
-void AndroidAutofillManager::OnFieldTypesDetermined(AutofillManager& manager,
-                                                    FormGlobalId form,
-                                                    FieldTypeSource source) {
+void AndroidAutofillManager::OnFieldTypesDetermined(
+    AutofillManager& manager,
+    FormGlobalId form,
+    FieldTypeSource source,
+    bool small_forms_were_parsed) {
   CHECK_EQ(&manager, this);
   switch (source) {
     case FieldTypeSource::kAutofillAiModel:
@@ -223,11 +226,7 @@ AndroidAutofillManager::GetCreditCardAccessManager() const {
 FieldTypeGroup AndroidAutofillManager::ComputeFieldTypeGroupForField(
     const FormGlobalId& form_id,
     const FieldGlobalId& field_id) {
-  const FormStructure* form = FindCachedFormById(form_id);
-  if (!form) {
-    return FieldTypeGroup::kNoGroup;
-  }
-  const AutofillField* field = form->GetFieldById(field_id);
+  auto [form, field] = FindFormAndField(form_id, field_id);
   if (!field) {
     return FieldTypeGroup::kNoGroup;
   }
@@ -245,19 +244,39 @@ void AndroidAutofillManager::FillOrPreviewForm(
   std::erase_if(fields, [&](const FormFieldData& field) {
     // The renderer doesn't fill such fields, and therefore they can be removed
     // from here to reduce IPC traffic and avoid accidental filling.
-    return !field.is_autofilled() || field.value().empty();
+    return !field.is_autofilled_according_to_renderer() ||
+           field.value().empty();
   });
+
+  absl::flat_hash_map<FieldGlobalId, FieldType> field_type_map;
+  field_type_map.reserve(fields.size());
+  for (const FormFieldData& field : fields) {
+    // The security policy is slightly weaker on WebView because it has no
+    // visibility on the types filled into the fields.
+    field_type_map.emplace(field.global_id(), UNKNOWN_TYPE);
+  }
 
   driver().ApplyFormAction(mojom::FormActionType::kFill, action_persistence,
                            fields, FillId::Create(),
                            /*supports_refill=*/false, triggered_origin,
-                           /*field_type_map=*/{},
+                           field_type_map,
                            /*section_for_clear_form_on_ios=*/Section());
   // We do not call OnAutofillProfileOrCreditCardFormFilled() because WebView
   // doesn't have AutofillProfile or CreditCard.
   if (auto* logger = GetEventFormLogger(field_type_group)) {
     logger->OnDidFillSuggestion();
   }
+}
+
+void AndroidAutofillManager::FillOrPreviewField(
+    mojom::ActionPersistence action_persistence,
+    mojom::FieldActionType action_type,
+    const FormGlobalId& form_id,
+    const FieldGlobalId& field_id,
+    const std::u16string& value,
+    FillingProduct filling_product,
+    std::optional<FieldType> field_type_used) {
+  driver().ApplyFieldAction(action_type, action_persistence, field_id, value);
 }
 
 void AndroidAutofillManager::StartNewLoggingSession() {

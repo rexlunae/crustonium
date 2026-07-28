@@ -5,20 +5,30 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_TIMING_LARGEST_CONTENTFUL_PAINT_CALCULATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_TIMING_LARGEST_CONTENTFUL_PAINT_CALCULATOR_H_
 
+#include <type_traits>
+
+#include "base/feature_list.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/paint/timing/effective_visual_size_result.h"
 #include "third_party/blink/renderer/core/paint/timing/lcp_objects.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_callbacks.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_record.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
+namespace gfx {
+class Rect;
+class RectF;
+class Size;
+}  // namespace gfx
+
 namespace blink {
+class PaintTimingDetector;
 
 // Kill switch for Soft Nav/LCP trace events.
 BASE_DECLARE_FEATURE(kSoftNavigationTraceEvents);
-
-class ImageRecord;
-class PaintTimingRecord;
-class TextRecord;
 
 // `LargestContentfulPaintCalculator` is responsible for tracking the largest
 // image and the largest text paints and notifying its `Delegate` whenever a new
@@ -56,6 +66,54 @@ class CORE_EXPORT LargestContentfulPaintCalculator final
     virtual bool IsHardNavigation() const = 0;
   };
 
+  // Helper class for tracking a single pair of image and text LCP candidates.
+  // Used to pick a per-frame largest text and image candidate to feed into the
+  // rest of the LCP algorithm.
+  class LcpCandidates : public GarbageCollected<LcpCandidates> {
+   public:
+    LcpCandidates();
+
+    // Updates the image or text candidate with the given record if it's larger
+    // than the current candidate of the same type.
+    void MaybeUpdateCandidate(ImageRecord*);
+    void MaybeUpdateCandidate(TextRecord*);
+
+    template <typename T>
+      requires std::is_same_v<T, ImageRecord>
+    T* Candidate() const {
+      return image_candidate_.Get();
+    }
+
+    template <typename T>
+      requires std::is_same_v<T, TextRecord>
+    T* Candidate() const {
+      return text_candidate_.Get();
+    }
+
+    void Trace(Visitor* visitor) const;
+
+   private:
+    Member<ImageRecord> image_candidate_;
+    Member<TextRecord> text_candidate_;
+  };
+
+  // Computes the effective size of an image, downsizing the size of images with
+  // low intrinsic size. `EffectiveVisualSizeResult` encapsulates extra details
+  // about the computation, such as whether the minimum entropy was met and
+  // whether the viewport was covered, which are used by downstream algorithms
+  // to filter out invalid candidates.
+  //
+  // See also:
+  // https://www.w3.org/TR/largest-contentful-paint/#sec-effective-visual-size
+  static EffectiveVisualSizeResult ComputeEffectiveVisualSize(
+      const LayoutObject&,
+      const MediaTiming&,
+      const gfx::Rect& image_border,
+      const gfx::RectF& mapped_visual_rect,
+      const gfx::Size& intrinsic_size,
+      uint64_t viewport_area,
+      const PaintTimingDetector&);
+
   LargestContentfulPaintCalculator(WindowPerformance*, Delegate*);
 
   LargestContentfulPaintCalculator(const LargestContentfulPaintCalculator&) =
@@ -67,28 +125,38 @@ class CORE_EXPORT LargestContentfulPaintCalculator final
     return latest_lcp_details_;
   }
 
-  void MaybeRecordRemovedCandidateUseCounter(const ImageRecord&);
-  void MaybeRecordRemovedCandidateUseCounter(const TextRecord&);
+  // Updates the metrics and web-exposed LCP candidates based on the
+  // `image_records` and `text_records` that were presented in the frame.
+  // Invokes `Delegate` methods if a new candidate is found.
+  void OnFramePresented(const HeapVector<Member<ImageRecord>>& image_records,
+                        const HeapVector<Member<TextRecord>>& text_records);
+
+  // Updates the metrics and web-exposed LCP candidates based on a single pair
+  // of image and text candidates, which represent the largest image and text
+  // elements presented in the frame. Invokes `Delegate` methods if a new
+  // candidate is found.
+  void OnFramePresented(LcpCandidates*);
 
   // Flushes the pending largest text and largest image candidates to metrics
   // and performance timeline and invokes the relevant `Delegate` callbacks, if
   // needed.
   void MaybeFlushCandidates();
 
-  // Updates the largest text candidate if the given `TextRecord` is larger.
-  // Candidates are not emitted to the performance timeline until
-  // `UpdateWebExposedLargestContentfulText()` is called, and metrics are not
-  // updated until `NotifyMetricsIfLargestTextPaintChanged()` is called.
-  void MaybeUpdateLargestText(TextRecord*);
+  // Returns true iff the `ImageRecord` is an eligible LCP candidate, which is
+  // true as long as the the image is not covering the viewport and the minimum
+  // entropy requirement has been met. `ImageRecord` is required to have a
+  // non-zero size. Note that this differs from `ShouldTrackForPaintTiming()`
+  // which also takes into account the size of the current LCP candidate.
+  bool IsEligibleForLcp(const ImageRecord&) const;
 
-  // Updates the largest painted image candidate if the given `ImageRecord` is
-  // larger. Candidates are not emitted to the performance timeline until
-  // `UpdateWebExposedLargestContentfulImage()` is called, and metrics are not
-  // updated until `NotifyMetricsIfLargestImagePaintChanged()` is called.
-  void MaybeUpdateLargestPaintedImage(ImageRecord*);
+  // Returns true iff the `TextRecord` is an eligible LCP candidate, which is
+  // true as long as the candidate has non-zero size.
+  bool IsEligibleForLcp(const TextRecord&) const;
 
-  // Returns true iff an image of `size` should be tracked for computing LCP.
-  bool IsImageNeededForLcp(uint64_t size) const;
+  // Returns true iff the given `ImageRecord` should be tracked for paint
+  // timing. This takes into account whether the record is an eligible candidate
+  // and if it's potentially larger than
+  bool ShouldTrackForPaintTiming(const ImageRecord&) const;
 
   // Called when an image is painted for the first time, regardless of whether
   // or not it's sufficiently loaded enough to be considered for paint timing.
@@ -111,9 +179,9 @@ class CORE_EXPORT LargestContentfulPaintCalculator final
   }
   TextRecord* LargestTextForTest() const { return largest_text_; }
 
- private:
-  friend class LargestContentfulPaintCalculatorTest;
+  void SetDelegateForTest(Delegate* delegate) { delegate_ = delegate; }
 
+ private:
   bool UpdateMetricsIfLargestImagePaintChanged();
   bool UpdateMetricsIfLargestTextPaintChanged();
 
@@ -142,12 +210,23 @@ class CORE_EXPORT LargestContentfulPaintCalculator final
 
   void UpdateLatestLcpDetailsTypeIfNeeded();
 
+  // Processes a list of LCP candidates, updating the `LcpCandidates` with the
+  // largest candidate. Also handles recording use counters for the largest
+  // removed element (see `MaybeRecordRemovedCandidateUseCounter()`).
+  template <IsDerivedFromPaintTimingRecord T>
+  void ProcessLcpCandidates(const HeapVector<Member<T>>&, LcpCandidates*);
+
+  // Records the kLcpCandidateRemovedWhilePaintTimePending UseCounter for the
+  // given record if it's larger than the current largest painted record of the
+  // same type (image or text). Such records would have been LCP candidates in
+  // the frame they were presented in.
+  void MaybeRecordRemovedCandidateUseCounter(const PaintTimingRecord&);
+
   ImageRecord* LargestPaintedOrPendingImage() const;
 
   Member<WindowPerformance> window_performance_;
 
   uint64_t largest_reported_size_ = 0u;
-  double largest_image_bpp_ = 0.0;
   unsigned web_exposed_candidate_count_ = 0;
   unsigned ukm_largest_image_candidate_count_ = 0;
   unsigned ukm_largest_text_candidate_count_ = 0;

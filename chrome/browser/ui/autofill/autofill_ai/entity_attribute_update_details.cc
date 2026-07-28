@@ -8,9 +8,12 @@
 #include <ostream>
 #include <ranges>
 
+#include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_utils.h"
+#include "components/autofill/core/common/autofill_features.h"
 
 namespace autofill {
 
@@ -75,6 +78,21 @@ EntityAttributeUpdateDetails::GetUpdatedAttributesDetails(
           return EntityAttributeUpdateType::kNewEntityAttributeAdded;
         }
 
+        // Since masked attributes for Wallet passes are only partially
+        // available in existing entities, raw string comparison wouldn't work.
+        // We compare their suffixes instead.
+        if (old_entity_attribute->masked()) {
+          std::u16string old_value =
+              old_entity_attribute->GetCompleteInfo(app_locale);
+          std::u16string new_value =
+              new_entity_attribute.GetCompleteInfo(app_locale);
+          size_t suffix_length = std::min(old_value.size(), new_value.size());
+          return old_value.substr(old_value.size() - suffix_length) ==
+                         new_value.substr(new_value.size() - suffix_length)
+                     ? EntityAttributeUpdateType::kNewEntityAttributeUnchanged
+                     : EntityAttributeUpdateType::kNewEntityAttributeUpdated;
+        }
+
         return std::ranges::all_of(
                    new_entity_attribute.type().field_subtypes(),
                    [&](FieldType type) {
@@ -111,6 +129,10 @@ EntityAttributeUpdateDetails::GetUpdatedAttributesDetails(
       details.emplace_back(attribute.type().GetNameForI18n(), attribute_value,
                            old_attribute_value, update_type);
     }
+  }
+
+  if (base::FeatureList::IsEnabled(features::kAutofillAiNewUpdatePrompt)) {
+    return details;
   }
 
   // Move new entity values that were either added or updated to the top.

@@ -7,20 +7,27 @@
 #include <memory>
 #include <utility>
 
+#include "base/check_deref.h"
+#include "base/check_is_test.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/enterprise/profile_management/profile_management_features.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_statistics.h"
 #include "chrome/browser/profiles/profile_statistics_common.h"
 #include "chrome/browser/profiles/profile_statistics_factory.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/signin/managed_user_profile_notice_handler.h"
@@ -30,7 +37,9 @@
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/signin_resources.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "components/prefs/pref_service.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -38,9 +47,11 @@
 #include "components/signin/public/identity_manager/tribool.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/base/features.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "extensions/browser/extension_registry.h"
+#include "net/base/url_util.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
@@ -48,26 +59,71 @@
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/webui/webui_util.h"
 
+namespace {
+
+constexpr char kTypeQueryParam[] = "type";
+
+ManagedUserProfileNoticeUI::ScreenType GetScreenTypeFromURL(const GURL& url) {
+  std::string type_str;
+  int type_int = 0;
+  if (net::GetValueForKeyInQuery(url, kTypeQueryParam, &type_str) &&
+      base::StringToInt(type_str, &type_int)) {
+    bool is_type_in_enum_bounds =
+        type_int >= 0 &&
+        type_int <=
+            static_cast<int>(ManagedUserProfileNoticeUI::ScreenType::kMaxValue);
+    if (is_type_in_enum_bounds) {
+      return static_cast<ManagedUserProfileNoticeUI::ScreenType>(type_int);
+    }
+  }
+  // Default to profile picker type as the UI for this type is more generic.
+  return ManagedUserProfileNoticeUI::ScreenType::kProfilePicker;
+}
+
+}  // namespace
+
 ManagedUserProfileNoticeUI::ManagedUserProfileNoticeUI(content::WebUI* web_ui)
     : content::WebUIController(web_ui) {
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui),
-      chrome::kChromeUIManagedUserProfileNoticeHost);
+      profile, chrome::kChromeUIManagedUserProfileNoticeHost);
+  // Explicitly add ThemeSource for serving the dynamic WebUI color stylesheet.
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   static constexpr webui::ResourcePath kResources[] = {
       {"icons.html.js", IDR_SIGNIN_ICONS_HTML_JS},
+      {"managed_user_profile_notice_refresh.html",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_REFRESH_HTML},
       {"managed_user_profile_notice_app.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_APP_JS},
+      {"managed_user_profile_notice_app_refresh.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_APP_REFRESH_JS},
       {"managed_user_profile_notice_app.css.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_APP_CSS_JS},
+      {"managed_user_profile_notice_app_refresh.css.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_APP_REFRESH_CSS_JS},
       {"managed_user_profile_notice_app.html.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_APP_HTML_JS},
+      {"managed_user_profile_notice_app_refresh.html.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_APP_REFRESH_HTML_JS},
       {"managed_user_profile_notice_disclosure.css.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_DISCLOSURE_CSS_JS},
+      {"signals_disclaimer.css.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_SIGNALS_DISCLAIMER_CSS_JS},
+      {"managed_user_profile_notice_disclosure_refresh.css.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_DISCLOSURE_REFRESH_CSS_JS},
       {"managed_user_profile_notice_disclosure.html.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_DISCLOSURE_HTML_JS},
+      {"signals_disclaimer.html.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_SIGNALS_DISCLAIMER_HTML_JS},
+      {"managed_user_profile_notice_disclosure_refresh.html.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_DISCLOSURE_REFRESH_HTML_JS},
       {"managed_user_profile_notice_disclosure.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_DISCLOSURE_JS},
+      {"signals_disclaimer.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_SIGNALS_DISCLAIMER_JS},
+      {"managed_user_profile_notice_disclosure_refresh.js",
+       IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_DISCLOSURE_REFRESH_JS},
       {"managed_user_profile_notice_state.css.js",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_MANAGED_USER_PROFILE_NOTICE_STATE_CSS_JS},
       {"managed_user_profile_notice_value_prop.css.js",
@@ -102,6 +158,14 @@ ManagedUserProfileNoticeUI::ManagedUserProfileNoticeUI(content::WebUI* web_ui)
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_IMAGES_ENROLLMENT_FAILURE_DARK_SVG},
       {"images/enrollment_timeout_dark.svg",
        IDR_SIGNIN_MANAGED_USER_PROFILE_NOTICE_IMAGES_ENROLLMENT_TIMEOUT_DARK_SVG},
+      {"animations/avatar_sign_in_celebration.json",
+       IDR_SIGNIN_ANIMATIONS_AVATAR_SIGN_IN_CELEBRATION_JSON},
+      {"animations/avatar_sign_in_celebration_dark.json",
+       IDR_SIGNIN_ANIMATIONS_AVATAR_SIGN_IN_CELEBRATION_DARK_JSON},
+      {"images/profile_picker_light_background.svg",
+       IDR_SIGNIN_IMAGES_PROFILE_PICKER_LIGHT_BACKGROUND_SVG},
+      {"images/profile_picker_dark_background.svg",
+       IDR_SIGNIN_IMAGES_PROFILE_PICKER_DARK_BACKGROUND_SVG},
       {"signin_shared.css.js", IDR_SIGNIN_SIGNIN_SHARED_CSS_JS},
       {"signin_vars.css.js", IDR_SIGNIN_SIGNIN_VARS_CSS_JS},
       {"tangible_sync_style_shared.css.js",
@@ -159,6 +223,11 @@ ManagedUserProfileNoticeUI::ManagedUserProfileNoticeUI(content::WebUI* web_ui)
   source->AddLocalizedString("deviceInformationDetails",
                              IDS_ENTERPRISE_WELCOME_DEVICE_INFORMATION_DETAILS);
 
+  source->AddLocalizedString("avatarAccessibilityLabel",
+                             IDS_ACCNAME_YOUR_AVATAR);
+  source->AddLocalizedString("enterpriseIconAccessibilityLabel",
+                             IDS_ACCNAME_ENTERPRISE_ORGANIZATION_ICON);
+
   source->AddLocalizedString("processingSubtitle",
                              IDS_ENTERPRISE_OIDC_WELCOME_PROCESSING_SUBTITLE);
   source->AddLocalizedString(
@@ -202,22 +271,135 @@ ManagedUserProfileNoticeUI::ManagedUserProfileNoticeUI(content::WebUI* web_ui)
   source->AddBoolean("usePrimaryAndTonalButtonsForPromos",
                      base::FeatureList::IsEnabled(
                          switches::kUsePrimaryAndTonalButtonsForPromos));
+
+  // Signals disclaimer screen:
+  source->AddLocalizedString("signalsDisclaimerTitle",
+                             IDS_ENTERPRISE_DEVICE_SIGNALS_DISCLAIMER_TITLE);
+  source->AddLocalizedString("signalsDisclaimerSubtitle",
+                             IDS_ENTERPRISE_DEVICE_SIGNALS_DISCLAIMER_SUBTITLE);
+  source->AddLocalizedString(
+      "signalsDisclaimerProfileInformationDetails",
+      IDS_ENTERPRISE_DEVICE_SIGNALS_DISCLAIMER_PROFILE_INFORMATION_DETAILS);
+  source->AddLocalizedString(
+      "signalsDisclaimerDeviceInformationDetails",
+      IDS_ENTERPRISE_DEVICE_SIGNALS_DISCLAIMER_DEVICE_INFORMATION_DETAILS);
+  source->AddLocalizedString(
+      "signalsDisclaimerContinueLabel",
+      IDS_ENTERPRISE_DEVICE_SIGNALS_DISCLAIMER_CONTINUE_BUTTON_LABEL);
+  source->AddLocalizedString(
+      "signalsDisclaimerCancelLabel",
+      IDS_ENTERPRISE_DEVICE_SIGNALS_DISCLAIMER_CANCEL_BUTTON_LABEL);
+  source->AddLocalizedString("learnMore", IDS_LEARN_MORE);
+
+  if (base::FeatureList::IsEnabled(
+          switches::kDisableFirstRunAnimationsForTesting)) {
+    CHECK_IS_TEST();
+    source->AddBoolean("disableAnimations", true);
+  } else {
+    source->AddBoolean("disableAnimations", false);
+  }
+
+  bool is_in_search_engine_choice_region =
+      CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                      GetForProfile(profile))
+          .IsInSearchEngineChoiceScreenRegion();
+
+  bool is_first_run_desktop_refresh_enabled =
+      switches::IsFirstRunDesktopRefreshEnabled(
+          is_in_search_engine_choice_region);
+  // TODO(crbug.com/526570381): Unify WebUI data source initialization.
+  // Currently, there are multiple ways data is initialized: default values
+  // in the constructor, the `kFirstRun` workaround below, and the `Initialize`
+  // call triggered after navigation commits.
+  //
+  // The workaround below is necessary because the WebUI page reads from
+  // `loadTimeData` synchronously on page load, which races with the
+  // asynchronous `Initialize` call that updates the data source.
+  //
+  // To clean this up, we should pass initialization parameters synchronously
+  // before navigation for each screen type.
+  if (is_first_run_desktop_refresh_enabled) {
+    const ScreenType screen_type =
+        GetScreenTypeFromURL(web_ui->GetWebContents()->GetVisibleURL());
+
+    source->AddInteger("screenType", static_cast<int>(screen_type));
+
+    if (screen_type == ScreenType::kFirstRun) {
+      const signin::IdentityManager& identity_manager =
+          CHECK_DEREF(IdentityManagerFactory::GetForProfile(profile));
+      CoreAccountInfo account_info =
+          identity_manager.GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+      AccountInfo extended_info =
+          identity_manager.FindExtendedAccountInfo(account_info);
+      const std::string given_name =
+          !extended_info.IsEmpty()
+              ? std::string(
+                    extended_info.GetGivenName().value_or(extended_info.email))
+              : account_info.email;
+
+      if (!given_name.empty()) {
+        source->AddString("profileDisclosureTitle",
+                          l10n_util::GetStringFUTF16(
+                              IDS_FRE_SIGN_IN_CELEBRATION_WELCOME_TITLE,
+                              base::UTF8ToUTF16(given_name)));
+        source->AddString(
+            "profileDisclosureSubtitle",
+            l10n_util::GetStringFUTF16(
+                IDS_ENTERPRISE_WELCOME_PROFILE_DISCLOSURE_KNOWN_DOMAIN_SUBTITLE,
+                base::UTF8ToUTF16(
+                    enterprise_util::GetDomainFromEmail(account_info.email))));
+      }
+    }
+  }
+
+  bool is_first_run_desktop_revamp_enabled =
+      switches::IsFirstRunDesktopRevampEnabled(
+          is_in_search_engine_choice_region);
+
+  source->AddBoolean("isFirstRunDesktopRevampEnabled",
+                     is_first_run_desktop_revamp_enabled);
+
+  if (is_first_run_desktop_revamp_enabled) {
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::WorkerSrc,
+        "worker-src blob: chrome://resources 'self';");
+  }
+}
+
+// static
+GURL ManagedUserProfileNoticeUI::GetURLForType(
+    ManagedUserProfileNoticeUI::ScreenType type) {
+  return net::AppendQueryParameter(
+      GURL(chrome::kChromeUIManagedUserProfileNoticeRefreshURL),
+      kTypeQueryParam, base::ToString(static_cast<int>(type)));
+}
+
+// static
+ManagedUserProfileNoticeUI::ScreenType
+ManagedUserProfileNoticeUI::GetScreenTypeFromURLForTesting(const GURL& url) {
+  return GetScreenTypeFromURL(url);
 }
 
 ManagedUserProfileNoticeUI::~ManagedUserProfileNoticeUI() = default;
 
 void ManagedUserProfileNoticeUI::Initialize(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ManagedUserProfileNoticeUI::ScreenType type,
     std::unique_ptr<signin::EnterpriseProfileCreationDialogParams>
         create_param) {
+  if (type == ScreenType::kDeviceSignalsDisclaimer) {
+    InitializeForDeviceSignalsDisclaimer(browser, std::move(create_param));
+    return;
+  }
+
   auto* profile = Profile::FromWebUI(web_ui());
   bool is_school_account =
-      create_param->account_info.capabilities.can_use_edu_features() ==
-      signin::Tribool::kTrue;
+      create_param->account_info.GetAccountCapabilities()
+          .can_use_edu_features() == signin::Tribool::kTrue;
   base::DictValue update_data;
   std::string domain =
       enterprise_util::GetDomainFromEmail(create_param->account_info.email);
+  update_data.Set("screenType", static_cast<int>(type));
   if (type ==
       ManagedUserProfileNoticeUI::ScreenType::kEnterpriseAccountCreation) {
     update_data.Set("isModalDialog", true);
@@ -270,6 +452,7 @@ void ManagedUserProfileNoticeUI::Initialize(
 
     update_data.Set("showLinkDataCheckbox", false);
   }
+
   if (create_param->account_info.IsManaged() == signin::Tribool::kTrue) {
     update_data.Set(
         "profileDisclosureSubtitle",
@@ -282,8 +465,7 @@ void ManagedUserProfileNoticeUI::Initialize(
     update_data.Set(
         "valuePropSubtitle",
         l10n_util::GetStringUTF16(
-            base::FeatureList::IsEnabled(
-                syncer::kReplaceSyncPromosWithSignInPromos)
+            syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
                 ? IDS_ENTERPRISE_VALUE_PROPOSITION_CONSUMER_SUBTITLE_WITH_BOOKMARKS
                 : IDS_ENTERPRISE_VALUE_PROPOSITION_CONSUMER_SUBTITLE));
     update_data.Set(
@@ -382,6 +564,31 @@ void ManagedUserProfileNoticeUI::Initialize(
 
   auto handler = std::make_unique<ManagedUserProfileNoticeHandler>(
       browser, type, std::move(create_param));
+  handler_ = handler.get();
+
+  web_ui()->AddMessageHandler(std::move(handler));
+}
+
+void ManagedUserProfileNoticeUI::InitializeForDeviceSignalsDisclaimer(
+    BrowserWindowInterface* browser,
+    std::unique_ptr<signin::EnterpriseProfileCreationDialogParams>
+        create_param) {
+  base::DictValue update_data =
+      base::DictValue()
+          .Set("screenType",
+               static_cast<int>(ManagedUserProfileNoticeUI::ScreenType::
+                                    kDeviceSignalsDisclaimer))
+          .Set("isModalDialog",
+               create_param->is_device_signals_disclaimer_modal)
+          .Set("initialState",
+               ManagedUserProfileNoticeHandler::State::kSignalsDisclaimer);
+  auto* profile = Profile::FromWebUI(web_ui());
+  content::WebUIDataSource::Update(
+      profile, chrome::kChromeUIManagedUserProfileNoticeHost,
+      std::move(update_data));
+
+  auto handler = std::make_unique<ManagedUserProfileNoticeHandler>(
+      browser, ScreenType::kDeviceSignalsDisclaimer, std::move(create_param));
   handler_ = handler.get();
 
   web_ui()->AddMessageHandler(std::move(handler));

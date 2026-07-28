@@ -51,6 +51,7 @@ class ConstraintSpace;
 class CustomLayoutChild;
 class EarlyBreak;
 class Element;
+class GapGeometry;
 class LayoutResult;
 class MeasureCache;
 class PhysicalBoxFragment;
@@ -96,6 +97,11 @@ struct LayoutBoxRareData final : public GarbageCollected<LayoutBoxRareData> {
   // object for this box that web developers can query style, and perform
   // layout upon. Only created if IsCustomItem() is true.
   Member<CustomLayoutChild> layout_child_;
+
+  // Used by BoxPaintInvalidator. Stores one entry for each fragment, holding
+  // the previous gap geometry for that fragment, or nullptr for fragments
+  // that had no gap geometry.
+  Member<GCedHeapVector<Member<const GapGeometry>>> previous_gap_geometries_;
 };
 
 // LayoutBox implements the full CSS box model.
@@ -196,6 +202,10 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   explicit LayoutBox(ContainerNode*);
   void Trace(Visitor*) const override;
 
+  // Just use `LayoutObject::IsInline` instead.
+  bool IsAtomicInline() const = delete;
+  bool IsNonAtomicInline() const = delete;
+
   PaintLayerType LayerTypeRequired() const override;
 
   bool BackgroundIsKnownToBeOpaqueInRect(
@@ -267,47 +277,35 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     return PhysicalRect(PhysicalOffset(), StitchedSize());
   }
 
-  // Client rect and padding box rect are the same concept.
-  DISABLE_CFI_PERF PhysicalRect PhysicalPaddingBoxRect() const {
+  enum ContractionEdge {
+    kContractToPaddingEdge,
+    kContractToContentEdge,
+  };
+  PhysicalRect PhysicalContractedBoxRect(ContractionEdge) const;
+
+  // Get the padding box rectangle (same as "client rect").
+  PhysicalRect PhysicalPaddingBoxRect() const {
     NOT_DESTROYED();
-    return PhysicalRect(ClientLeft(), ClientTop(), ClientWidth(),
-                        ClientHeight());
+    return PhysicalContractedBoxRect(kContractToPaddingEdge);
+  }
+  // Get the content box rectangle.
+  PhysicalRect PhysicalContentBoxRect() const {
+    NOT_DESTROYED();
+    return PhysicalContractedBoxRect(kContractToContentEdge);
   }
 
-  // The content area of the box (excludes padding - and intrinsic padding for
-  // table cells, etc... - and scrollbars and border).
-  DISABLE_CFI_PERF PhysicalRect PhysicalContentBoxRect() const {
+  LayoutUnit ContentLogicalWidth() const {
     NOT_DESTROYED();
-    return PhysicalRect(ContentLeft(), ContentTop(), ContentWidth(),
-                        ContentHeight());
+    const PhysicalSize size = PhysicalContentBoxRect().size;
+    return IsHorizontalWritingMode() ? size.width : size.height;
   }
-  PhysicalOffset PhysicalContentBoxOffset() const {
-    NOT_DESTROYED();
-    return PhysicalOffset(ContentLeft(), ContentTop());
-  }
-  PhysicalSize PhysicalContentBoxSize() const {
-    NOT_DESTROYED();
-    return PhysicalSize(ContentWidth(), ContentHeight());
-  }
+
   // The content box converted to absolute coords (taking transforms into
   // account).
   gfx::QuadF AbsoluteContentQuad(MapCoordinatesFlags = 0) const;
 
   // The enclosing rectangle of the background with given opacity requirement.
   PhysicalRect PhysicalBackgroundRect(BackgroundRectType) const;
-
-  // This returns the content area of the box (excluding padding and border).
-  // The only difference with contentBoxRect is that ComputedCSSContentBoxRect
-  // does include the intrinsic padding in the content box as this is what some
-  // callers expect (like getComputedStyle).
-  PhysicalRect ComputedCSSContentBoxRect() const {
-    NOT_DESTROYED();
-    return PhysicalRect(
-        BorderLeft() + ComputedCSSPaddingLeft(),
-        BorderTop() + ComputedCSSPaddingTop(),
-        ClientWidth() - ComputedCSSPaddingLeft() - ComputedCSSPaddingRight(),
-        ClientHeight() - ComputedCSSPaddingTop() - ComputedCSSPaddingBottom());
-  }
 
   void AddOutlineRects(OutlineRectCollector&,
                        OutlineInfo*,
@@ -364,59 +362,12 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   void AddContentsVisualOverflow(const PhysicalRect& r);
   void UpdateHasSubpixelVisualEffectOutsets(const PhysicalBoxStrut&);
 
-  PhysicalBoxStrut ComputeVisualEffectOverflowOutsets();
-
   void ClearVisualOverflow();
 
   bool CanUseFragmentsForVisualOverflow() const;
   void CopyVisualOverflowFromFragments();
 
   virtual void UpdateAfterLayout();
-
-  DISABLE_CFI_PERF LayoutUnit ContentLeft() const {
-    NOT_DESTROYED();
-    return ClientLeft() + PaddingLeft();
-  }
-  DISABLE_CFI_PERF LayoutUnit ContentTop() const {
-    NOT_DESTROYED();
-    return ClientTop() + PaddingTop();
-  }
-  DISABLE_CFI_PERF LayoutUnit ContentWidth() const {
-    NOT_DESTROYED();
-    // We're dealing with LayoutUnit and saturated arithmetic here, so we need
-    // to guard against negative results. The value returned from clientWidth()
-    // may in itself be a victim of saturated arithmetic; e.g. if both border
-    // sides were sufficiently wide (close to LayoutUnit::max()).  Here we
-    // subtract two padding values from that result, which is another source of
-    // saturated arithmetic.
-    return (ClientWidth() - PaddingLeft() - PaddingRight())
-        .ClampNegativeToZero();
-  }
-  DISABLE_CFI_PERF LayoutUnit ContentHeight() const {
-    NOT_DESTROYED();
-    // We're dealing with LayoutUnit and saturated arithmetic here, so we need
-    // to guard against negative results. The value returned from clientHeight()
-    // may in itself be a victim of saturated arithmetic; e.g. if both border
-    // sides were sufficiently wide (close to LayoutUnit::max()).  Here we
-    // subtract two padding values from that result, which is another source of
-    // saturated arithmetic.
-    return (ClientHeight() - PaddingTop() - PaddingBottom())
-        .ClampNegativeToZero();
-  }
-  PhysicalSize ContentSize() const {
-    NOT_DESTROYED();
-    return PhysicalSize(ContentWidth(), ContentHeight());
-  }
-  LayoutUnit ContentLogicalWidth() const {
-    NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode() ? ContentWidth()
-                                                : ContentHeight();
-  }
-  LayoutUnit ContentLogicalHeight() const {
-    NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode() ? ContentHeight()
-                                                : ContentWidth();
-  }
 
   // CSS intrinsic sizing getters.
   // https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override
@@ -431,44 +382,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
 
   bool UsesOverlayScrollbars() const;
 
-  // Physical client rect (a.k.a. PhysicalPaddingBoxRect(), defined by
-  // ClientLeft, ClientTop, ClientWidth and ClientHeight) represents the
-  // interior of an object excluding borders and scrollbars.
-  // Clamps the left scrollbar size so it is not wider than the content box.
-  DISABLE_CFI_PERF LayoutUnit ClientLeft() const {
-    NOT_DESTROYED();
-    if (CanSkipComputeScrollbars())
-      return BorderLeft();
-    else
-      return BorderLeft() + ComputeScrollbarsInternal(kClampToContentBox).left;
-  }
-  DISABLE_CFI_PERF LayoutUnit ClientTop() const {
-    NOT_DESTROYED();
-    if (CanSkipComputeScrollbars())
-      return BorderTop();
-    else
-      return BorderTop() + ComputeScrollbarsInternal(kClampToContentBox).top;
-  }
-
-  // Size without borders and scrollbars.
-  LayoutUnit ClientWidth() const;
-  LayoutUnit ClientHeight() const;
-  // Similar to ClientWidth() and ClientHeight(), but based on the specified
-  // border-box size.
-  LayoutUnit ClientWidthFrom(LayoutUnit width) const;
-  LayoutUnit ClientHeightFrom(LayoutUnit height) const;
-  DISABLE_CFI_PERF LayoutUnit ClientLogicalWidth() const {
-    NOT_DESTROYED();
-    return IsHorizontalWritingMode() ? ClientWidth() : ClientHeight();
-  }
-  DISABLE_CFI_PERF LayoutUnit ClientLogicalHeight() const {
-    NOT_DESTROYED();
-    return IsHorizontalWritingMode() ? ClientHeight() : ClientWidth();
-  }
-
-  LayoutUnit ClientWidthWithTableSpecialBehavior() const;
-  LayoutUnit ClientHeightWithTableSpecialBehavior() const;
-
   // scrollWidth/scrollHeight will be the same as clientWidth/clientHeight
   // unless the object has overflow:hidden/scroll/auto specified and also has
   // overflow. These methods are virtual so that objects like textareas can
@@ -481,23 +394,7 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   virtual LayoutUnit ScrollWidth() const;
   virtual LayoutUnit ScrollHeight() const;
 
-  PhysicalBoxStrut MarginBoxOutsets() const;
-  LayoutUnit MarginTop() const override {
-    NOT_DESTROYED();
-    return MarginBoxOutsets().top;
-  }
-  LayoutUnit MarginBottom() const override {
-    NOT_DESTROYED();
-    return MarginBoxOutsets().bottom;
-  }
-  LayoutUnit MarginLeft() const override {
-    NOT_DESTROYED();
-    return MarginBoxOutsets().left;
-  }
-  LayoutUnit MarginRight() const override {
-    NOT_DESTROYED();
-    return MarginBoxOutsets().right;
-  }
+  PhysicalBoxStrut MarginOutsets() const override;
 
   // Get the scroll marker group associated with this box, if any.
   LayoutBlock* GetScrollMarkerGroup();
@@ -738,17 +635,19 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   // not the box is inside an ancestry that allows spanners.
   bool ShouldPreventColumnSpannerDescendants() const;
 
-  // Mark (any) new column spanner descendants for layout. Descendants with
-  // `column-span:all` may have become valid spanners, because this box no
-  // longer prevents them from becoming that (e.g. if a box used to establish a
-  // transform, but not anymore (transforms disqualify descendants from becoming
-  // spanners).
-  void MarkNewColumnSpannersForLayoutIfNeeded();
+  // Mark (any) column spanner candidate descendants for layout. Descendants
+  // with `column-span:all` may have become valid spanners, because this box no
+  // longer prevents them from becoming a spanner (e.g. if a box used to
+  // establish a transform, but not anymore (transforms disqualify descendants
+  // from becoming spanners). Similarly, descendants with `column-span:all` that
+  // were previously valid spanners, may now have become invalid, because this
+  // box now e.g. sets a transform.
+  void MarkColumnSpannerCandidatesForLayoutIfNeeded();
 
   bool MapToVisualRectInAncestorSpaceInternal(
       const LayoutBoxModelObject* ancestor,
       TransformState&,
-      VisualRectFlags = kDefaultVisualRectFlags) const override;
+      VisualRectFlags) const override;
 
   LayoutUnit ContainingBlockLogicalHeightForRelPositioned() const;
 
@@ -810,11 +709,13 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
 
   bool HasScrollableOverflowX() const {
     NOT_DESTROYED();
-    return ScrollsOverflowX() && ScrollWidth() != ClientWidth();
+    return ScrollsOverflowX() &&
+           ScrollWidth() != PhysicalPaddingBoxRect().Width();
   }
   bool HasScrollableOverflowY() const {
     NOT_DESTROYED();
-    return ScrollsOverflowY() && ScrollHeight() != ClientHeight();
+    return ScrollsOverflowY() &&
+           ScrollHeight() != PhysicalPaddingBoxRect().Height();
   }
   bool ScrollsOverflowX() const {
     NOT_DESTROYED();
@@ -835,16 +736,21 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
                               CaretShape caret_shape) const override;
 
   // Returns the intersection of all overflow clips which apply.
-  virtual PhysicalRect OverflowClipRect(
-      const PhysicalOffset& location,
-      OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize) const;
-  virtual PhysicalRect OverflowClipRectForScrollNode(
-      const PhysicalOffset& location) const;
-  PhysicalRect ClipRect(const PhysicalOffset& location) const;
+  PhysicalRect OverflowClipRect() const {
+    NOT_DESTROYED();
+    return OverflowClipRect(kIgnoreOverlayScrollbarSize);
+  }
+  virtual PhysicalRect OverflowClipRect(OverlayScrollbarClipBehavior) const;
+  virtual PhysicalRect OverflowClipRectForScrollNode() const;
+  PhysicalRect CSSClipRect() const;
+
+  // The outsets from this box's border-box that the element's content should be
+  // clipped to, including overflow-clip-margin.
+  PhysicalBoxStrut BorderOutsetsForClipping() const;
 
   // Returns the combination of overflow clip, contain: paint clip and CSS clip
   // for this object.
-  PhysicalRect ClippingRect(const PhysicalOffset& location) const;
+  PhysicalRect ClippingRect() const;
 
   void ImageChanged(WrappedImagePtr, CanDeferInvalidation) override;
   ResourcePriority ComputeResourcePriority() const override;
@@ -896,9 +802,7 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     return Parent() && Parent()->IsMathML();
   }
 
-  PhysicalOffset OffsetPoint(const Element* parent) const;
-  LayoutUnit OffsetLeft(const Element*) const final;
-  LayoutUnit OffsetTop(const Element*) const final;
+  PhysicalOffset OffsetPoint(const Element* parent) const final;
 
   // Create a new WritingModeConverter to handle offsets and rectangles inside
   // this container. This ignores TextDirection.
@@ -1006,10 +910,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   void AddCustomLayoutChildIfNeeded();
   void ClearCustomLayoutChild();
 
-  bool HitTestClippedOutByBorder(
-      const HitTestLocation&,
-      const PhysicalOffset& border_box_location) const;
-
   bool HitTestOverflowControl(HitTestResult&,
                               const HitTestLocation&,
                               const PhysicalOffset&) const;
@@ -1044,6 +944,9 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
       if (auto* rare_data = GetLayoutBox().rare_data_.Get())
         rare_data->has_previous_content_box_rect_ = false;
     }
+
+    void SavePreviousGapGeometries();
+    void ClearPreviousGapGeometries();
 
     // Called from LayoutShiftTracker when we attach this LayoutBox to a node
     // for which we saved these values when the node was detached from its
@@ -1099,6 +1002,12 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
                ? overflow_->previous_overflow_data
                      ->previous_self_visual_overflow_rect
                : PhysicalRect(PhysicalOffset(), PreviousSize());
+  }
+
+  const GCedHeapVector<Member<const GapGeometry>>* PreviousGapGeometries()
+      const {
+    NOT_DESTROYED();
+    return rare_data_ ? rare_data_->previous_gap_geometries_.Get() : nullptr;
   }
 
   // Returns the cached intrinsic logical widths when no children depend on the
@@ -1216,7 +1125,7 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
   // https://drafts.csswg.org/css-anchor-position-1/#ref-for-valdef-anchor-implicit
   const LayoutObject* AcceptableImplicitAnchor() const;
 
-  const HeapVector<NonOverflowingScrollRange>* NonOverflowingScrollRanges()
+  const GCedHeapVector<NonOverflowingScrollRange>* NonOverflowingScrollRanges()
       const;
 
   const BoxStrut& OutOfFlowInsetsForGetComputedStyle() const;
@@ -1282,9 +1191,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
       ShouldIncludeScrollbarGutter = kIncludeScrollbarGutter) const;
 
-  LayoutUnit ContainingBlockLogicalHeightForPositioned(
-      const LayoutBoxModelObject* containing_block) const;
-
   PhysicalOffset OffsetFromContainerInternal(
       const LayoutObject*,
       MapCoordinatesFlags mode) const override;
@@ -1313,10 +1219,6 @@ class CORE_EXPORT LayoutBox : public LayoutBoxModelObject {
     CheckIsVisualOverflowComputed();
     return overflow_ && overflow_->visual_overflow;
   }
-
-  // The outsets from this box's border-box that the element's content should be
-  // clipped to, including overflow-clip-margin.
-  PhysicalBoxStrut BorderOutsetsForClipping() const;
 
   void SetVisualOverflow(const PhysicalRect& self,
                          const PhysicalRect& contents);

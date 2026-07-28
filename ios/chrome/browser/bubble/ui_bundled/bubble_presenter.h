@@ -7,16 +7,19 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/feature_list.h"
 #import "base/memory/raw_ptr.h"
 
 @protocol BubblePresenterDelegate;
 @class BubbleViewControllerPresenter;
 @class FeedMetricsRecorder;
+@protocol FullscreenCommands;
 class FullscreenController;
+@protocol GeminiCommands;
 class HostContentSettingsMap;
 @class LayoutGuideCenter;
+@class LayoutState;
 class OverlayPresenter;
-@protocol BWGCommands;
 @protocol PageActionMenuEntryPointCommands;
 @protocol PopupMenuCommands;
 @protocol TabStripCommands;
@@ -44,6 +47,7 @@ class DeviceSwitcherResultDispatcher;
                      webStateList:(raw_ptr<WebStateList>)webStateList
              fullscreenController:
                  (raw_ptr<FullscreenController>)fullscreenController
+                      layoutState:(LayoutState*)layoutState
     overlayPresenterForWebContent:
         (raw_ptr<OverlayPresenter>)webContentOverlayPresenter
                     infobarBanner:(raw_ptr<OverlayPresenter>)bannerPresenter
@@ -58,6 +62,12 @@ class DeviceSwitcherResultDispatcher;
 // Command handler for dispatching page action menu entry point commands.
 @property(nonatomic, weak) id<PageActionMenuEntryPointCommands>
     pageActionMenuEntryPointHandler;
+
+// Command handler for dispatching Fullscreen commands.
+@property(nonatomic, weak) id<FullscreenCommands> fullscreenHandler;
+
+// Command handler for dispatching Gemini commands.
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
 
 // The view controller that presents the bubbles.
 @property(nonatomic, weak) UIViewController* rootViewController;
@@ -158,17 +168,18 @@ class DeviceSwitcherResultDispatcher;
 // Optionally present a bubble associated with the page action menu icon in the
 // Omnibox. The eligibility is based off if the BWG Promo was shown and
 // dismissed.
-- (void)presentPageActionMenuBubble;
+- (void)presentPageActionMenuBubbleForFeature:(const base::Feature&)feature;
 
 // Optionally presents a bubble associated with the reader mode options.
 - (void)presentReaderModeOptionsBubble;
 
 // Optionally presents a bubble associated with the Gemini image remix feature
 // (Page Action Menu entry point).
-- (void)presentGeminiImageRemixBubbleWithBWGHandler:(id<BWGCommands>)BWGHandler
-                    pageActionMenuEntryPointHandler:
-                        (id<PageActionMenuEntryPointCommands>)
-                            pageActionMenuEntryPointHandler;
+- (void)presentGeminiImageRemixBubbleWithGeminiHandler:
+            (id<GeminiCommands>)geminiHandler
+                       pageActionMenuEntryPointHandler:
+                           (id<PageActionMenuEntryPointCommands>)
+                               pageActionMenuEntryPointHandler;
 
 // Delegate method to be invoked when the user has performed a swipe on the
 // toolbar to switch tabs. Remove `toolbarSwipeGestureIPH` if visible.

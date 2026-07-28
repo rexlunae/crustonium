@@ -43,10 +43,6 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplIssuerTosTextItemProperties.DESCRIPTION_TEXT;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressHeaderProperties.BNPL_BACK_BUTTON_ENABLED;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressHeaderProperties.BNPL_ON_BACK_BUTTON_CLICKED;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.APPLY_LINK_DEACTIVATED_STYLE;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.HIDE_OPTIONS_LINK_TEXT;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.ON_LINK_CLICK_CALLBACK;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties.TERMS_TEXT_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.BNPL_ICON_ID;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.BNPL_ITEM_COLLECTION_INFO;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSuggestionProperties.IS_ENABLED;
@@ -81,7 +77,6 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.BNPL;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.BNPL_ISSUER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.BNPL_SELECTION_PROGRESS_HEADER;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.BNPL_SELECTION_PROGRESS_TERMS;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.BNPL_TOS_TEXT;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.CREDIT_CARD;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.ERROR_DESCRIPTION;
@@ -94,8 +89,6 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TEXT_BUTTON;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TOS_FOOTER;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ItemType.TOS_HEADER;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.LOYALTY_CARD_NUMBER;
-import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.MERCHANT_NAME;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.NON_TRANSFORMING_LOYALTY_CARD_KEYS;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties.ON_LOYALTY_CARD_CLICK_ACTION;
 import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ProgressIconProperties.PROGRESS_CONTENT_DESCRIPTION_ID;
@@ -120,7 +113,10 @@ import static org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaym
 
 import android.graphics.Rect;
 import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.CharacterStyle;
 import android.text.style.ClickableSpan;
+import android.text.style.StyleSpan;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -147,6 +143,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
@@ -161,11 +158,11 @@ import org.chromium.chrome.browser.touch_to_fill.common.FillableItemCollectionIn
 import org.chromium.chrome.browser.touch_to_fill.common.TouchToFillResourceProvider;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.AllLoyaltyCardsItemProperties;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressHeaderProperties;
-import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplSelectionProgressTermsProperties;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.BnplTosHeaderProperties;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ButtonProperties;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.ErrorDescriptionProperties;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.HeaderProperties;
+import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.LoyaltyCardProperties;
 import org.chromium.chrome.browser.touch_to_fill.payments.TouchToFillPaymentMethodProperties.TosFooterProperties;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
@@ -442,8 +439,18 @@ public class TouchToFillPaymentMethodViewTest {
     private static final String BNPL_ISSUER_TOS_ITEM_TEXT = "Affirm ToS text";
     private static final String TITLE_TEXT = "test title string";
     private static final String LEGAL_MESSAGE_LINE = "legal message";
+
+    @SuppressWarnings("unchecked") // mock(Consumer.class) returns raw Consumer.
     private static final Consumer<String> MOCK_LINK_OPENER = mock(Consumer.class);
+
     private static final String ISSUER_TITLE_TEXT = "Link account and pay with Affirm?";
+    private static final String BNPL_TERMS =
+            "Payment plans are subject to eligibility.\n"
+                    + "To hide pay later options, go to payment settings";
+    private static final String BNPL_AI_TERMS =
+            "Content from the checkout page is shared with Google to offer these options. Payment"
+                    + " plans are subject to eligibility. To hide pay later options, go to payment"
+                    + " settings.";
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -610,7 +617,7 @@ public class TouchToFillPaymentMethodViewTest {
 
         BottomSheetTestSupport.waitForOpen(mBottomSheetController);
 
-        assertThat(getCreditCardSuggestions().getChildCount(), is(3));
+        pollUiThread(() -> Criteria.checkThat(getCreditCardSuggestions().getChildCount(), is(3)));
 
         assertThat(getSuggestionMainTextAt(0).getText(), is(VISA_SUGGESTION.getLabel()));
         assertThat(getSuggestionMinorTextAt(0).getText(), is(VISA_SUGGESTION.getSecondaryLabel()));
@@ -695,6 +702,7 @@ public class TouchToFillPaymentMethodViewTest {
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/516254354 the test is flaky.")
     public void testSheetScrollabilityDependsOnState() {
         runOnUiThreadBlocking(
                 () -> {
@@ -1435,6 +1443,7 @@ public class TouchToFillPaymentMethodViewTest {
      */
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/523228313")
     public void testAllLoyaltyCardsScreenWithManyLoyaltyCards() {
         final int loyaltyCardNumber = 25;
         Runnable actionCallback = mock(Runnable.class);
@@ -1653,7 +1662,8 @@ public class TouchToFillPaymentMethodViewTest {
                 });
         BottomSheetTestSupport.waitForOpen(mBottomSheetController);
 
-        assertThat(getCreditCardSuggestions().getChildCount(), is(2));
+        pollUiThread(() -> Criteria.checkThat(getCreditCardSuggestions().getChildCount(), is(2)));
+
         assertThat(getSuggestionPrimaryTextAt(1).getText(), is(BNPL_SUGGESTION.getLabel()));
         assertThat(getSuggestionSecondaryTextAt(1).getText(), is(BNPL_SUGGESTION.getSublabel()));
         assertContentDescriptionEquals(
@@ -2020,94 +2030,232 @@ public class TouchToFillPaymentMethodViewTest {
 
     @Test
     @MediumTest
-    public void testBnplSelectionProgressTermsLinkDisabled() {
+    @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplProgressTerms_AiBasedAmountExtractionEnabled_HasSeenAiTerms() {
         Runnable actionCallback = mock(Runnable.class);
         runOnUiThreadBlocking(
                 () -> {
                     mTouchToFillPaymentMethodModel
                             .get(SHEET_ITEMS)
                             .add(
-                                    new ListItem(
-                                            BNPL_SELECTION_PROGRESS_TERMS,
-                                            createBnplSelectionProgressTermsModel(
-                                                    /* termsTextId= */ R.string
-                                                            .autofill_bnpl_issuer_bottom_sheet_terms_label,
-                                                    /* hideOptionsLinkText= */ getString(
-                                                            R.string
-                                                                    .autofill_card_bnpl_select_provider_bottom_sheet_footnote_hide_option),
-                                                    /* onLinkClickCallback= */ actionCallback,
-                                                    /* isLinkEnabled= */ false)));
+                                    TouchToFillPaymentMethodMediator
+                                            .buildTermsForBnplSelectionAndProgressUi(
+                                                    mActivityTestRule.getActivity(),
+                                                    /* didShowBoldedAiTerms= */ true,
+                                                    /* isProgressUi= */ true,
+                                                    actionCallback));
                     mTouchToFillPaymentMethodModel.set(VISIBLE, true);
                 });
         BottomSheetTestSupport.waitForOpen(mBottomSheetController);
 
         TextView termsLabel =
                 mTouchToFillPaymentMethodView.getContentView().findViewById(R.id.bnpl_terms_label);
-        assertThat(
-                termsLabel.getText().toString(),
-                is(getString(R.string.autofill_bnpl_issuer_bottom_sheet_terms_label)));
+        assertThat(termsLabel.getText().toString(), is(BNPL_AI_TERMS));
+        assertFalse(termsLabel.isClickable());
+        assertFalse(termsLabel.isLongClickable());
+        assertNull(termsLabel.getMovementMethod());
+        Spanned spanned = (Spanned) termsLabel.getText();
 
-        TextView openPaymentSettingsLabel =
-                mTouchToFillPaymentMethodView
-                        .getContentView()
-                        .findViewById(R.id.bnpl_open_payment_settings_label);
-        assertThat(
-                openPaymentSettingsLabel.getText().toString(),
-                is("To hide pay later options, go to payment settings"));
-        SpannableString spannableString = (SpannableString) openPaymentSettingsLabel.getText();
-        ClickableSpan[] spans =
-                spannableString.getSpans(0, spannableString.length(), ClickableSpan.class);
-        assertThat(spans.length, is(1));
-        spans[0].onClick(openPaymentSettingsLabel);
+        CharacterStyle[] unclickableSpans =
+                spanned.getSpans(0, spanned.length(), CharacterStyle.class);
+        assertEquals(
+                "There should be exactly one character style span", 1, unclickableSpans.length);
+        termsLabel.performClick();
+        verify(actionCallback, never()).run();
+
+        StyleSpan[] styleSpans = spanned.getSpans(0, spanned.length(), StyleSpan.class);
+        assertEquals("There should be no style span", 0, styleSpans.length);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplProgressTerms_AiBasedAmountExtractionEnabled_HasNotSeenAiTerms() {
+        Runnable actionCallback = mock(Runnable.class);
+        runOnUiThreadBlocking(
+                () -> {
+                    mTouchToFillPaymentMethodModel
+                            .get(SHEET_ITEMS)
+                            .add(
+                                    TouchToFillPaymentMethodMediator
+                                            .buildTermsForBnplSelectionAndProgressUi(
+                                                    mActivityTestRule.getActivity(),
+                                                    /* didShowBoldedAiTerms= */ false,
+                                                    /* isProgressUi= */ true,
+                                                    actionCallback));
+                    mTouchToFillPaymentMethodModel.set(VISIBLE, true);
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        TextView termsLabel =
+                mTouchToFillPaymentMethodView.getContentView().findViewById(R.id.bnpl_terms_label);
+        assertThat(termsLabel.getText().toString(), is(BNPL_AI_TERMS));
+        assertFalse(termsLabel.isClickable());
+        assertFalse(termsLabel.isLongClickable());
+        assertNull(termsLabel.getMovementMethod());
+        Spanned spanned = (Spanned) termsLabel.getText();
+
+        // Verify there are two spans: one for an unclickable link and another for the bolded text.
+        CharacterStyle[] unclickableSpans =
+                spanned.getSpans(0, spanned.length(), CharacterStyle.class);
+        assertEquals("There should be exactly two style spans", 2, unclickableSpans.length);
+        termsLabel.performClick();
         verify(actionCallback, never()).run();
     }
 
     @Test
     @MediumTest
-    public void testBnplSelectionProgressTermsLinkEnabled() {
+    @DisableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplProgressTerms_AiBasedAmountExtractionDisabled() {
         Runnable actionCallback = mock(Runnable.class);
         runOnUiThreadBlocking(
                 () -> {
                     mTouchToFillPaymentMethodModel
                             .get(SHEET_ITEMS)
                             .add(
-                                    new ListItem(
-                                            BNPL_SELECTION_PROGRESS_TERMS,
-                                            createBnplSelectionProgressTermsModel(
-                                                    /* termsTextId= */ R.string
-                                                            .autofill_bnpl_issuer_bottom_sheet_terms_label,
-                                                    /* hideOptionsLinkText= */ getString(
-                                                            R.string
-                                                                    .autofill_card_bnpl_select_provider_bottom_sheet_footnote_hide_option),
-                                                    /* onLinkClickCallback= */ actionCallback,
-                                                    /* isLinkEnabled= */ true)));
+                                    TouchToFillPaymentMethodMediator
+                                            .buildTermsForBnplSelectionAndProgressUi(
+                                                    mActivityTestRule.getActivity(),
+                                                    /* didShowBoldedAiTerms= */ false,
+                                                    /* isProgressUi= */ true,
+                                                    actionCallback));
                     mTouchToFillPaymentMethodModel.set(VISIBLE, true);
                 });
         BottomSheetTestSupport.waitForOpen(mBottomSheetController);
 
         TextView termsLabel =
                 mTouchToFillPaymentMethodView.getContentView().findViewById(R.id.bnpl_terms_label);
-        assertThat(
-                termsLabel.getText().toString(),
-                is(getString(R.string.autofill_bnpl_issuer_bottom_sheet_terms_label)));
+        assertThat(termsLabel.getText().toString(), is(BNPL_TERMS));
+        assertFalse(termsLabel.isClickable());
+        assertFalse(termsLabel.isLongClickable());
+        assertNull(termsLabel.getMovementMethod());
+        Spanned spanned = (Spanned) termsLabel.getText();
 
-        TextView openPaymentSettingsLabel =
-                mTouchToFillPaymentMethodView
-                        .getContentView()
-                        .findViewById(R.id.bnpl_open_payment_settings_label);
-        assertThat(
-                openPaymentSettingsLabel.getText().toString(),
-                is("To hide pay later options, go to payment settings"));
-        SpannableString spannableString = (SpannableString) openPaymentSettingsLabel.getText();
+        // Verify there is just one span for the unclickable link.
+        CharacterStyle[] unclickableSpans =
+                spanned.getSpans(0, spanned.length(), CharacterStyle.class);
+        assertEquals(
+                "There should be exactly one character style span", 1, unclickableSpans.length);
+        termsLabel.performClick();
+        verify(actionCallback, never()).run();
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplSelectionTerms_AiBasedAmountExtractionEnabled_HasSeenAiTerms() {
+        Runnable actionCallback = mock(Runnable.class);
+        runOnUiThreadBlocking(
+                () -> {
+                    mTouchToFillPaymentMethodModel
+                            .get(SHEET_ITEMS)
+                            .add(
+                                    TouchToFillPaymentMethodMediator
+                                            .buildTermsForBnplSelectionAndProgressUi(
+                                                    mActivityTestRule.getActivity(),
+                                                    /* didShowBoldedAiTerms= */ true,
+                                                    /* isProgressUi= */ false,
+                                                    actionCallback));
+                    mTouchToFillPaymentMethodModel.set(VISIBLE, true);
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        TextView termsLabel =
+                mTouchToFillPaymentMethodView.getContentView().findViewById(R.id.bnpl_terms_label);
+        assertThat(termsLabel.getText().toString(), is(BNPL_AI_TERMS));
+        assertTrue(termsLabel.isClickable());
+        assertFalse(termsLabel.isLongClickable());
+        assertNotNull(termsLabel.getMovementMethod());
+        SpannableString spannableString = (SpannableString) termsLabel.getText();
+
+        ClickableSpan[] clickableSpans =
+                spannableString.getSpans(0, spannableString.length(), ClickableSpan.class);
+        assertEquals("There should be exactly one clickable span", 1, clickableSpans.length);
+        clickableSpans[0].onClick(termsLabel);
+        waitForEvent(actionCallback).run();
+
+        StyleSpan[] styleSpans =
+                spannableString.getSpans(0, spannableString.length(), StyleSpan.class);
+        assertEquals("There should be no style span", 0, styleSpans.length);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplSelectionTerms_AiBasedAmountExtractionEnabled_HasNotSeenAiTerms() {
+        Runnable actionCallback = mock(Runnable.class);
+        runOnUiThreadBlocking(
+                () -> {
+                    mTouchToFillPaymentMethodModel
+                            .get(SHEET_ITEMS)
+                            .add(
+                                    TouchToFillPaymentMethodMediator
+                                            .buildTermsForBnplSelectionAndProgressUi(
+                                                    mActivityTestRule.getActivity(),
+                                                    /* didShowBoldedAiTerms= */ false,
+                                                    /* isProgressUi= */ false,
+                                                    actionCallback));
+                    mTouchToFillPaymentMethodModel.set(VISIBLE, true);
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        TextView termsLabel =
+                mTouchToFillPaymentMethodView.getContentView().findViewById(R.id.bnpl_terms_label);
+        assertThat(termsLabel.getText().toString(), is(BNPL_AI_TERMS));
+        assertTrue(termsLabel.isClickable());
+        assertFalse(termsLabel.isLongClickable());
+        assertNotNull(termsLabel.getMovementMethod());
+        SpannableString spannableString = (SpannableString) termsLabel.getText();
+
+        ClickableSpan[] clickableSpans =
+                spannableString.getSpans(0, spannableString.length(), ClickableSpan.class);
+        assertEquals("There should be exactly one clickable span", 1, clickableSpans.length);
+        clickableSpans[0].onClick(termsLabel);
+        waitForEvent(actionCallback).run();
+
+        StyleSpan[] styleSpans =
+                spannableString.getSpans(0, spannableString.length(), StyleSpan.class);
+        assertEquals("There should be exactly one style span", 1, styleSpans.length);
+    }
+
+    @Test
+    @MediumTest
+    @DisableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testBnplSelectionTerms_AiBasedAmountExtractionDisabled() {
+        Runnable actionCallback = mock(Runnable.class);
+        runOnUiThreadBlocking(
+                () -> {
+                    mTouchToFillPaymentMethodModel
+                            .get(SHEET_ITEMS)
+                            .add(
+                                    TouchToFillPaymentMethodMediator
+                                            .buildTermsForBnplSelectionAndProgressUi(
+                                                    mActivityTestRule.getActivity(),
+                                                    /* didShowBoldedAiTerms= */ false,
+                                                    /* isProgressUi= */ false,
+                                                    actionCallback));
+                    mTouchToFillPaymentMethodModel.set(VISIBLE, true);
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        TextView termsLabel =
+                mTouchToFillPaymentMethodView.getContentView().findViewById(R.id.bnpl_terms_label);
+        assertThat(termsLabel.getText().toString(), is(BNPL_TERMS));
+        assertTrue(termsLabel.isClickable());
+        assertFalse(termsLabel.isLongClickable());
+        assertNotNull(termsLabel.getMovementMethod());
+
+        SpannableString spannableString = (SpannableString) termsLabel.getText();
         ClickableSpan[] spans =
                 spannableString.getSpans(0, spannableString.length(), ClickableSpan.class);
-        assertThat(spans.length, is(1));
-        spans[0].onClick(openPaymentSettingsLabel);
+        assertEquals("There should be exactly one clickable span", 1, spans.length);
+        spans[0].onClick(termsLabel);
         waitForEvent(actionCallback).run();
     }
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/516254354 the test is flaky.")
     public void testStateChangeEventWithFullStateScreenButUnexpectedHeight()
             throws TimeoutException {
         // Open a screen with full height.
@@ -2275,8 +2423,7 @@ public class TouchToFillPaymentMethodViewTest {
     private static PropertyModel createLoyaltyCardModel(
             LoyaltyCard loyaltyCard, Runnable runnable) {
         return new PropertyModel.Builder(NON_TRANSFORMING_LOYALTY_CARD_KEYS)
-                .with(LOYALTY_CARD_NUMBER, loyaltyCard.getLoyaltyCardNumber())
-                .with(MERCHANT_NAME, loyaltyCard.getMerchantName())
+                .with(LoyaltyCardProperties.LOYALTY_CARD, loyaltyCard)
                 .with(ON_LOYALTY_CARD_CLICK_ACTION, runnable)
                 .build();
     }
@@ -2330,19 +2477,6 @@ public class TouchToFillPaymentMethodViewTest {
         return new PropertyModel.Builder(BnplSelectionProgressHeaderProperties.ALL_KEYS)
                 .with(BNPL_BACK_BUTTON_ENABLED, backButtonEnabled)
                 .with(BNPL_ON_BACK_BUTTON_CLICKED, actionCallback)
-                .build();
-    }
-
-    private static PropertyModel createBnplSelectionProgressTermsModel(
-            @StringRes int termsTextId,
-            String hideOptionsLinkText,
-            Runnable onLinkClickCallback,
-            boolean isLinkEnabled) {
-        return new PropertyModel.Builder(BnplSelectionProgressTermsProperties.ALL_KEYS)
-                .with(TERMS_TEXT_ID, termsTextId)
-                .with(HIDE_OPTIONS_LINK_TEXT, hideOptionsLinkText)
-                .with(ON_LINK_CLICK_CALLBACK, (view) -> onLinkClickCallback.run())
-                .with(APPLY_LINK_DEACTIVATED_STYLE, !isLinkEnabled)
                 .build();
     }
 

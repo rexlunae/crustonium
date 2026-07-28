@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/updater/external_constants.h"
@@ -163,6 +164,8 @@ class IntegrationTestCommands
   virtual void DeleteFile(const base::FilePath& path) const = 0;
   virtual void PrintLog() const = 0;
   virtual base::FilePath GetDifferentUserPath() const = 0;
+  virtual base::FilePath GetNonExistentPath() const = 0;
+
 #if BUILDFLAG(IS_WIN)
   virtual void ExpectInterfacesRegistered() const = 0;
   virtual void ExpectMarshalInterfaceSucceeds() const = 0;
@@ -223,6 +226,10 @@ class IntegrationTestCommands
       bool elevate,
       const base::FilePath& path,
       std::optional<std::string> want_brand) const = 0;
+  virtual void ExpectCRURegistrationChecksForUpdate(
+      const std::string& app_id,
+      const base::FilePath& xc_path,
+      const std::string& expected_version) const = 0;
 #endif  // BUILDFLAG(IS_MAC)
   virtual void ExpectLegacyUpdaterMigrated() const = 0;
   virtual void RunRecoveryComponent(const std::string& app_id,

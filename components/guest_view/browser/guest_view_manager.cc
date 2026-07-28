@@ -21,6 +21,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_observer.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_features.h"
@@ -151,15 +152,6 @@ void GuestViewManager::AttachGuest(content::ChildProcessId embedder_process_id,
   guest_view->SetAttachParams(attach_params);
 }
 
-void GuestViewManager::AttachGuest(int embedder_process_id,
-                                   int element_instance_id,
-                                   int guest_instance_id,
-                                   const base::DictValue& attach_params) {
-  GuestViewManager::AttachGuest(content::ChildProcessId(embedder_process_id),
-                                element_instance_id, guest_instance_id,
-                                attach_params);
-}
-
 bool GuestViewManager::IsOwnedByExtension(const GuestViewBase* guest) {
   return delegate_->IsOwnedByExtension(guest);
 }
@@ -265,8 +257,9 @@ SiteInstance* GuestViewManager::GetGuestSiteInstance(
   for (auto [id, guest] : guests_by_instance_id_) {
     content::RenderFrameHost* guest_main_frame = guest->GetGuestMainFrame();
     if (guest_main_frame &&
-        guest_main_frame->GetSiteInstance()->GetStoragePartitionConfig() ==
-            storage_partition_config) {
+        guest_main_frame->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetStoragePartitionConfig() == storage_partition_config) {
       return guest_main_frame->GetSiteInstance();
     }
   }

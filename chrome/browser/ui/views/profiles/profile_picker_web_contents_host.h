@@ -54,6 +54,9 @@ class ProfilePickerWebContentsHost {
   // Returns whether dark colors should be used (based on native theme).
   virtual bool ShouldUseDarkColors() const = 0;
 
+  // Returns whether effects (animations/audio) are enabled.
+  virtual bool AreEffectsEnabled() const = 0;
+
   // Returns the picker WebContents.
   virtual content::WebContents* GetPickerContents() const = 0;
 
@@ -72,9 +75,23 @@ class ProfilePickerWebContentsHost {
       const std::variant<ForceSigninUIError, SigninUIError>& error,
       bool success) = 0;
 
-  // Changes the visibility of the host's native toolbar, which shows a back
-  // button.
-  virtual void SetNativeToolbarVisible(bool visible) = 0;
+  // Changes the visibility of the sign-in buttons (i.e. buttons associated with
+  // the sign-in Gaia page) in the native toolbar.
+  virtual void SetNativeToolbarSigninButtonsVisible(bool visible) = 0;
+
+  // Changes the visibility of the "Don't sign in" button in the native toolbar.
+  // Safe to call even if the button was not instantiated (no-op in that case).
+  virtual void SetNativeToolbarDontSignInButtonVisible(bool visible) = 0;
+
+  // Changes the visibility of the "Start browsing" button in the native
+  // toolbar. Safe to call even if the button was not instantiated (no-op in
+  // that case).
+  virtual void SetNativeToolbarStartBrowsingButtonVisible(bool visible) = 0;
+
+  // Changes the visibility of the effects control button in the native
+  // toolbar. Safe to call even if the button was not instantiated (no-op in
+  // that case).
+  virtual void SetNativeToolbarEffectsControlButtonVisible(bool visible) = 0;
 
   // Returns the background colors that other `content::WebContents` that are
   // rendered by this host should use to match the toolbar.

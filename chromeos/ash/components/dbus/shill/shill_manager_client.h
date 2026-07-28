@@ -6,8 +6,10 @@
 #define CHROMEOS_ASH_COMPONENTS_DBUS_SHILL_SHILL_MANAGER_CLIENT_H_
 
 #include <string>
+#include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
 #include "base/scoped_observation_traits.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -35,6 +37,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
  public:
   typedef ShillClientHelper::ErrorCallback ErrorCallback;
   typedef ShillClientHelper::StringCallback StringCallback;
+
+  // A callback that handles the byte array result of TestHostsConnectivity.
+  using TestHostsConnectivityCallback =
+      base::OnceCallback<void(const std::vector<uint8_t>&)>;
 
   struct NetworkThrottlingStatus {
     // Enable or disable network bandwidth throttling.
@@ -223,6 +229,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
         FakeShillSimulatedResult operation_result,
         const std::string& result_code) = 0;
 
+    virtual void SetConfigureServiceHook(
+        base::RepeatingCallback<void(const base::DictValue&)>
+            configure_service_hook) = 0;
+
     // Clears profile list.
     virtual void ClearProfiles() = 0;
 
@@ -254,6 +264,15 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
     // "ConnectToBestServices" if `ScanAndConnectToBestServices` was called
     // previously.
     virtual void TriggerScanCompleted(const std::string& device_path) = 0;
+
+    // Sets the canned response for TestHostsConnectivity. The `response`
+    // bytes are returned via callback when the method is called.
+    virtual void SetTestHostsConnectivityResponse(
+        const std::vector<uint8_t>& response) = 0;
+
+    // Makes TestHostsConnectivity succeed, fail, or timeout.
+    virtual void SetSimulateTestHostsConnectivityResult(
+        FakeShillSimulatedResult result) = 0;
 
    protected:
     virtual ~TestInterface() = default;
@@ -415,6 +434,17 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
       const int shill_id,
       base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) = 0;
+
+  // Tests connectivity to multiple `hosts`. The `options` map contains
+  // optional configuration (timeout, max_errors, proxy). The `callback`
+  // receives a serialized protobuf byte array on success. `timeout_ms`
+  // overrides the default D-Bus call timeout when provided.
+  virtual void TestHostsConnectivity(
+      const std::vector<std::string>& hosts,
+      const base::flat_map<std::string, std::string>& options,
+      TestHostsConnectivityCallback callback,
+      ErrorCallback error_callback,
+      std::optional<int> timeout_ms = std::nullopt) = 0;
 
   // Returns an interface for testing (stub only), or returns null.
   virtual TestInterface* GetTestInterface() = 0;

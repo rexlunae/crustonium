@@ -161,7 +161,7 @@ TEST_P(SupervisedUserPrefStoreTest, ConfigureSettings) {
               false);
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Permissions requests default to allowed, to match server-side behavior.
   EXPECT_THAT(fixture.changed_prefs()->FindBoolByDottedPath(
                   prefs::kSupervisedUserExtensionsMayRequestPermissions),
@@ -186,7 +186,7 @@ TEST_P(SupervisedUserPrefStoreTest, ConfigureSettings) {
   ASSERT_TRUE(manual_hosts);
   EXPECT_TRUE(*manual_hosts == hosts);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // The custodian can allow sites and apps to request permissions.
   // Currently tested indirectly by enabling geolocation requests.
   fixture.changed_prefs()->clear();
@@ -291,6 +291,13 @@ TEST_P(SupervisedUserPrefStoreTest, CreatePrefStoreAfterInitialization) {
 #if BUILDFLAG(IS_ANDROID)
 TEST_P(SupervisedUserPrefStoreTest,
        ContentFiltersServiceEnablesBrowserFilters) {
+  // TODO(crbug.com/519472830): Replace with equivalent test for the url service
+  // With this flag enabled, the prefs no longer exist: their equivalents are
+  // set via the url filtering service.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      supervised_user::kSupervisedUserUseUrlFilteringService);
+
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -405,4 +412,3 @@ TEST_F(SupervisedUserPrefStoreTestBase, SearchAndIncognitoPrefsAreMerged) {
 #endif  // BUILDFLAG(IS_ANDROID)
 
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(SupervisedUserPrefStoreTest);
-

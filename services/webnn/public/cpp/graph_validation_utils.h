@@ -10,13 +10,15 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/containers/enum_set.h"
 #include "base/containers/span.h"
 #include "base/types/expected.h"
 #include "services/webnn/public/cpp/context_properties.h"
 #include "services/webnn/public/cpp/operand_descriptor.h"
 
 namespace webnn {
+
+// Used by concat/split to validate operand count limit.
+inline constexpr uint32_t kMaxValidTensorCount = 8192;
 
 // Represents the `MLConv2dFilterOperandLayout` that specifies the layout format
 // of the filter tensor. O is output channels, I is input channels / groups, H
@@ -354,7 +356,7 @@ struct COMPONENT_EXPORT(WEBNN_PUBLIC_CPP) Pool2dAttributes {
   // The layout format of the input.
   InputOperandLayout layout = InputOperandLayout::kNchw;
   // The rounding function used to compute the output shape.
-  RoundingType rounding_type = RoundingType::kFloor;
+  RoundingType output_shape_rounding = RoundingType::kFloor;
   // The element height and width of the output tensor.
   std::optional<Size2d<uint32_t>> output_sizes;
   // The operator label defined by the user.

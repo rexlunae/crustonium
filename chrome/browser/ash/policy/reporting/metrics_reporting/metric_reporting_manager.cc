@@ -13,8 +13,8 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -53,7 +53,6 @@
 #include "chrome/browser/ash/policy/status_collector/managed_session_service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/reporting/metric_default_utils.h"
 #include "chrome/browser/chromeos/reporting/metric_reporting_prefs.h"
 #include "chrome/browser/chromeos/reporting/network/network_bandwidth_sampler.h"
@@ -104,7 +103,6 @@ constexpr char kWebsiteTelemetry[] = "website_telemetry";
 
 // static
 BASE_FEATURE(kEnableFatalCrashEventsObserver,
-             "EnableFatalCrashEventsObserver",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kEnableChromeFatalCrashEventsObserver,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -141,9 +139,10 @@ bool MetricReportingManager::Delegate::IsAppServiceAvailableForProfile(
 
 // static
 std::unique_ptr<MetricReportingManager> MetricReportingManager::Create(
+    ::network::NetworkQualityTracker* network_quality_tracker,
     policy::ManagedSessionService* managed_session_service) {
-  auto manager = base::WrapUnique(
-      new MetricReportingManager(std::make_unique<Delegate>()));
+  auto manager = base::WrapUnique(new MetricReportingManager(
+      network_quality_tracker, std::make_unique<Delegate>()));
   manager->DelayedInit(managed_session_service);
   return manager;
 }
@@ -189,16 +188,12 @@ void MetricReportingManager::OnLogin(Profile* profile) {
   website_event_report_queue_ = delegate_->CreateMetricReportQueue(
       EventType::kUser, Destination::EVENT_METRIC, Priority::SLOW_BATCH,
       std::move(website_event_rate_limiter), source_info);
-  if (base::FeatureList::IsEnabled(
-          chromeos::features::kKioskHeartbeatsViaERP)) {
-    kiosk_heartbeat_telemetry_report_queue_ =
-        delegate_->CreatePeriodicUploadReportQueue(
-            EventType::kUser, Destination::KIOSK_HEARTBEAT_EVENTS,
-            Priority::IMMEDIATE, &reporting_settings_,
-            ::ash::kHeartbeatFrequency,
-            metrics::GetDefaultKioskHeartbeatUploadFrequency(),
-            /*rate_unit_to_ms=*/1, source_info);
-  }
+  kiosk_heartbeat_telemetry_report_queue_ =
+      delegate_->CreatePeriodicUploadReportQueue(
+          EventType::kUser, Destination::KIOSK_HEARTBEAT_EVENTS,
+          Priority::IMMEDIATE, &reporting_settings_, ::ash::kHeartbeatFrequency,
+          metrics::GetDefaultKioskHeartbeatUploadFrequency(),
+          /*rate_unit_to_ms=*/1, source_info);
   user_peripheral_events_and_telemetry_report_queue_ =
       delegate_->CreateMetricReportQueue(
           EventType::kUser, Destination::PERIPHERAL_EVENTS, Priority::SECURITY,
@@ -240,8 +235,10 @@ MetricReportingManager::GetTelemetryCollectors(MetricEventType event_type) {
 }
 
 MetricReportingManager::MetricReportingManager(
+    ::network::NetworkQualityTracker* network_quality_tracker,
     std::unique_ptr<Delegate> delegate)
-    : delegate_(std::move(delegate)) {}
+    : network_quality_tracker_(CHECK_DEREF(network_quality_tracker)),
+      delegate_(std::move(delegate)) {}
 
 void MetricReportingManager::Shutdown() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -567,7 +564,7 @@ void MetricReportingManager::InitNetworkCollectors(Profile* profile) {
 
   // Network bandwidth telemetry.
   auto network_bandwidth_sampler = std::make_unique<NetworkBandwidthSampler>(
-      g_browser_process->network_quality_tracker(), profile->GetWeakPtr());
+      &network_quality_tracker_.get(), profile->GetWeakPtr());
   network_bandwidth_collector_ = delegate_->CreatePeriodicCollector(
       network_bandwidth_sampler.get(), user_telemetry_report_queue_.get(),
       &reporting_settings_,

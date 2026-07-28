@@ -47,7 +47,7 @@
 #include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/base/window_state_type.h"
 #include "chromeos/ui/frame/caption_buttons/snap_controller.h"
-#include "chromeos/ui/frame/interior_resize_handler_targeter.h"
+#include "chromeos/ui/frame/immersive/immersive_fullscreen_controller.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "ui/aura/client/aura_constants.h"
@@ -315,6 +315,20 @@ void SetAutoHideShelf(aura::Window* window, bool autohide) {
     Shelf::ForWindow(root_window)->UpdateVisibilityState();
 }
 
+void UpdateUiForImmersiveFullscreen(
+    chromeos::ImmersiveFullscreenController* controller,
+    bool entering) {
+  aura::Window* window = controller->widget()->GetNativeWindow();
+  WindowState* window_state = WindowState::Get(window);
+
+  // Auto hide the shelf in immersive fullscreen instead of hiding it.
+  window_state->SetHideShelfWhenFullscreen(!entering);
+
+  for (aura::Window* root_window : Shell::GetAllRootWindows()) {
+    Shelf::ForWindow(root_window)->UpdateVisibilityState();
+  }
+}
+
 bool MoveWindowToDisplay(aura::Window* window, int64_t display_id) {
   DCHECK(window);
 
@@ -387,27 +401,15 @@ void CloseWidgetForWindow(aura::Window* window) {
   widget->Close();
 }
 
-void InstallResizeHandleWindowTargeterForWindow(
-    aura::Window* window,
-    chromeos::ResizeBorderInsets border_insets) {
-  window->SetProperty(chromeos::kResizeBorderInsets, border_insets);
-  window->SetEventTargeter(
-      std::make_unique<chromeos::InteriorResizeHandleTargeter>(
-          border_insets, base::BindRepeating([](const aura::Window* window) {
-            const WindowState* window_state = WindowState::Get(window);
-            return window_state ? window_state->GetStateType()
-                                : chromeos::WindowStateType::kDefault;
-          })));
-}
-
 bool IsDraggingTabs(const aura::Window* window) {
   return window->GetProperty(ash::kIsDraggingTabsKey);
 }
 
 const WindowState* GetTabDraggingSourceWindowState(
     const aura::Window* drag_window) {
-  return WindowState::Get(
-      drag_window->GetProperty(ash::kTabDraggingSourceWindowKey));
+  base::WeakPtr<aura::Window>* weak_ptr =
+      drag_window->GetProperty(ash::kTabDraggingSourceWindowKey);
+  return weak_ptr ? WindowState::Get(weak_ptr->get()) : nullptr;
 }
 
 bool ShouldExcludeForCycleList(const aura::Window* window) {

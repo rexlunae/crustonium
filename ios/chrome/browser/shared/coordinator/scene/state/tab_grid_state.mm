@@ -7,7 +7,7 @@
 #import "base/ios/crb_protocol_observers.h"
 
 @interface TabGridStateObserverList
-    : CRBProtocolObservers <TabGridStateObserver>
+    : CRBProtocolObservers <TabGridStateObserving>
 @end
 @implementation TabGridStateObserverList
 @end
@@ -20,9 +20,17 @@
   self = [super init];
   if (self) {
     _observers = [TabGridStateObserverList
-        observersWithProtocol:@protocol(TabGridStateObserver)];
+        observersWithProtocol:@protocol(TabGridStateObserving)];
   }
   return self;
+}
+
+- (void)setMode:(TabGridMode)mode {
+  if (_mode == mode) {
+    return;
+  }
+  _mode = mode;
+  [_observers tabGridStateModeDidChange:self];
 }
 
 - (void)setTabGridVisible:(BOOL)tabGridVisible {
@@ -45,11 +53,30 @@
   [_observers willChangePageTo:_currentPage];
 }
 
-- (void)addObserver:(id<TabGridStateObserver>)observer {
+- (void)setOriginPage:(TabGridPage)originPage {
+  if (_originPage == originPage) {
+    return;
+  }
+  _originPage = originPage;
+}
+
+- (void)setVisibleTabGroup:(const TabGroup*)visibleTabGroup {
+  if (_visibleTabGroup == visibleTabGroup) {
+    return;
+  }
+  _visibleTabGroup = visibleTabGroup;
+  if (visibleTabGroup) {
+    [_observers willShowTabGroup:visibleTabGroup];
+  } else {
+    [_observers willHideTabGroup];
+  }
+}
+
+- (void)addObserver:(id<TabGridStateObserving>)observer {
   [_observers addObserver:observer];
 }
 
-- (void)removeObserver:(id<TabGridStateObserver>)observer {
+- (void)removeObserver:(id<TabGridStateObserving>)observer {
   [_observers removeObserver:observer];
 }
 

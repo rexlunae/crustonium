@@ -5,19 +5,14 @@
 #include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.h"
 
 #include <algorithm>
-#include <string>
 #include <vector>
 
-#include "base/command_line.h"
 #include "base/containers/adapters.h"
 #include "base/i18n/rtl.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/frame/caption_button_placeholder_container.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
-#include "ui/gfx/font.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
@@ -92,9 +87,8 @@ gfx::Size OpaqueBrowserFrameViewLayout::GetMinimumSize(
     const views::View* host) const {
   // Ensure that we can fit the main browser view.
   gfx::Size min_size = delegate_->GetBrowserViewMinimumSize();
-  if (delegate_->GetBorderlessModeEnabled()) {
-    // In borderless mode the window doesn't have the window controls or tab
-    // strip.
+  if (delegate_->GetUnframedModeEnabled()) {
+    // In unframed mode the window has no window controls or tab strip.
     return min_size;
   }
 
@@ -181,7 +175,7 @@ gfx::Rect OpaqueBrowserFrameViewLayout::CalculateClientAreaBounds(
     int height) const {
   auto border_thickness = FrameBorderInsets(false);
   int top_height =
-      (is_window_controls_overlay_enabled_ || is_borderless_mode_enabled_ ||
+      (is_window_controls_overlay_enabled_ || is_unframed_mode_enabled_ ||
        delegate_->WebAppButtonHeight() > 0)
           ? border_thickness.top()
           : NonClientTopHeight(false);
@@ -237,9 +231,9 @@ void OpaqueBrowserFrameViewLayout::SetWindowControlsOverlayEnabled(
   }
 }
 
-void OpaqueBrowserFrameViewLayout::SetBorderlessModeEnabled(bool enabled,
-                                                            views::View* host) {
-  is_borderless_mode_enabled_ = enabled;
+void OpaqueBrowserFrameViewLayout::SetUnframedModeEnabled(bool enabled,
+                                                          views::View* host) {
+  is_unframed_mode_enabled_ = enabled;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

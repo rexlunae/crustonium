@@ -29,6 +29,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -75,6 +76,7 @@
 #include "skia/ext/legacy_display_globals.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 #include "third_party/blink/public/common/navigation/navigation_params.h"
 #include "third_party/blink/public/common/origin_trials/scoped_test_origin_trial_policy.h"
@@ -737,9 +739,7 @@ class UpdateTitleLocalFrameHost : public LocalFrameHostInterceptor {
       blink::AssociatedInterfaceProvider* provider)
       : LocalFrameHostInterceptor(provider) {}
 
-  MOCK_METHOD2(UpdateTitle,
-               void(const std::optional<::std::u16string>& title,
-                    base::i18n::TextDirection title_direction));
+  MOCK_METHOD(void, UpdateTitle, (const std::optional<std::u16string>&));
 };
 }  // namespace
 
@@ -768,10 +768,8 @@ TEST_F(RenderViewImplUpdateTitleTest, OnNavigationLoadDataWithBaseURL) {
   commit_params->data_url_as_string =
       "data:text/html,<html><head><title>Data page</title></head></html>";
 
-  const std::optional<::std::u16string>& title =
-      std::make_optional(u"Data page");
-  EXPECT_CALL(*title_mock_frame_host(), UpdateTitle(title, testing::_))
-      .Times(1);
+  auto title = std::make_optional(std::u16string(u"Data page"));
+  EXPECT_CALL(*title_mock_frame_host(), UpdateTitle(title));
   FrameLoadWaiter waiter(frame());
   frame()->Navigate(std::move(common_params), std::move(commit_params));
   waiter.Wait();
@@ -963,7 +961,7 @@ TEST_F(RenderViewImplTest, BeginNavigationForWebUI) {
       gfx::Rect(0, 0, 100, 100), blink::kWebNavigationPolicyNewForegroundTab,
       network::mojom::WebSandboxFlags::kNone,
       blink::AllocateSessionStorageNamespaceId(), consumed_user_gesture,
-      std::nullopt, std::nullopt, /*base_url=*/blink::WebURL());
+      std::nullopt, /*base_url=*/blink::WebURL());
   auto popup_navigation_info = std::make_unique<blink::WebNavigationInfo>();
   popup_navigation_info->url_request = std::move(popup_request);
   popup_navigation_info->frame_type =
@@ -1049,7 +1047,7 @@ TEST_F(RenderViewImplTest, OriginReplicationForUnload) {
   blink::WebSecurityOrigin origin =
       web_frame->FirstChild()->GetSecurityOrigin();
   EXPECT_EQ(origin.ToString(),
-            WebString::FromUTF8(replication_state->origin.Serialize()));
+            WebString::FromUtf8(replication_state->origin.Serialize()));
 
   // Now, unload the second frame using a unique origin and verify that it is
   // replicated correctly.
@@ -1518,6 +1516,46 @@ TEST_F(RenderViewImplTextInputStateChanged,
             actual_active_element_selection_bounds);
 }
 
+// Ensure `EditContext::DeleteSurroundingText` clamps `before`/`after` such that
+// the synced selection stays within the text bounds even if a deletion range
+// is provided that would otherwise exceed the bounds of the text.
+TEST_F(RenderViewImplTextInputStateChanged,
+       DeleteSurroundingTextUnderflowDoesNotCorruptSyncedSelection) {
+  LoadHTML(
+      "<html>"
+      "<head>"
+      "</head>"
+      "<body>"
+      "</body>"
+      "</html>");
+  GetWidgetInputHandler()->SetFocus(blink::mojom::FocusState::kFocused);
+
+  // Attach an EditContext and collapse the selection near the very start,
+  // leaving only a single character before the caret.
+  ExecuteJavaScriptForTests(
+      "const editContext = new EditContext({text: 'hello world'});"
+      "document.body.editContext = editContext;"
+      "document.body.focus();"
+      "editContext.updateSelection(1, 1);");
+  // Wait for the EditContext setup to sync its initial state, then drop it so
+  // the post-deletion assertions observe only the deletion's sync.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return !updated_states().empty(); }));
+  ClearState();
+
+  // Request the deletion of far more characters before the caret than
+  // actually exist. This must not crash when syncing the selection to the
+  // browser, and the synced selection must stay within the text bounds.
+  GetFrameWidgetInputHandler()->DeleteSurroundingText(50, 0);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return !updated_states().empty(); }));
+
+  const ui::mojom::TextInputState* state = updated_states().back().get();
+  ASSERT_TRUE(state->value.has_value());
+  EXPECT_LE(state->selection.start(), state->value->length());
+  EXPECT_LE(state->selection.end(), state->value->length());
+}
+
 TEST_F(RenderViewImplTextInputStateChanged, ActiveElementGetLayoutBounds) {
   // Load an HTML page consisting of one input fields.
   LoadHTML(R"HTML(
@@ -1914,14 +1952,15 @@ TEST_F(RenderViewImplTest, ImeComposition) {
             base::WideToUTF16(ime_message.ime_string),
             std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(),
             ime_message.selection_start, ime_message.selection_end,
-            blink::mojom::ImeState::kNone, base::DoNothing());
+            blink::mojom::ImeState::kNone,
+            /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
         break;
 
       case IME_COMMITTEXT:
         GetWidgetInputHandler()->ImeCommitText(
             base::WideToUTF16(ime_message.ime_string),
             std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
-            base::DoNothing());
+            /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
         break;
 
       case IME_FINISHCOMPOSINGTEXT:
@@ -1932,7 +1971,7 @@ TEST_F(RenderViewImplTest, ImeComposition) {
         GetWidgetInputHandler()->ImeSetComposition(
             std::u16string(), std::vector<ui::ImeTextSpan>(),
             gfx::Range::InvalidRange(), 0, 0, blink::mojom::ImeState::kNone,
-            base::DoNothing());
+            /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
         break;
     }
 
@@ -2193,7 +2232,8 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
   const std::u16string ascii_composition = u"aiueo";
   widget_input_handler->ImeSetComposition(
       ascii_composition, empty_ime_text_span, gfx::Range::InvalidRange(), 0, 0,
-      blink::mojom::ImeState::kNone, base::DoNothing());
+      blink::mojom::ImeState::kNone,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
   bounds = LastCompositionBounds();
   ASSERT_EQ(ascii_composition.size(), bounds.size());
 
@@ -2201,33 +2241,35 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
     EXPECT_LT(0, r.width());
   widget_input_handler->ImeCommitText(
       empty_string, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(),
-      0, base::DoNothing());
+      0, /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
 
   // Non surrogate pair unicode character.
   const std::u16string unicode_composition = u"あいうえお";
   widget_input_handler->ImeSetComposition(
       unicode_composition, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
-      0, blink::mojom::ImeState::kNone, base::DoNothing());
+      0, blink::mojom::ImeState::kNone,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
   bounds = LastCompositionBounds();
   ASSERT_EQ(unicode_composition.size(), bounds.size());
   for (const gfx::Rect& r : bounds)
     EXPECT_LT(0, r.width());
-  widget_input_handler->ImeCommitText(empty_string, empty_ime_text_span,
-                                      gfx::Range::InvalidRange(), 0,
-                                      base::DoNothing());
+  widget_input_handler->ImeCommitText(
+      empty_string, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
 
   // Surrogate pair character.
   const std::u16string surrogate_pair_char = u"𠮟";
   widget_input_handler->ImeSetComposition(
       surrogate_pair_char, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
-      0, blink::mojom::ImeState::kNone, base::DoNothing());
+      0, blink::mojom::ImeState::kNone,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
   bounds = LastCompositionBounds();
   ASSERT_EQ(surrogate_pair_char.size(), bounds.size());
   EXPECT_LT(0, bounds[0].width());
   EXPECT_EQ(0, bounds[1].width());
-  widget_input_handler->ImeCommitText(empty_string, empty_ime_text_span,
-                                      gfx::Range::InvalidRange(), 0,
-                                      base::DoNothing());
+  widget_input_handler->ImeCommitText(
+      empty_string, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
 
   // Mixed string.
   const std::u16string surrogate_pair_mixed_composition =
@@ -2240,7 +2282,7 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
   widget_input_handler->ImeSetComposition(
       surrogate_pair_mixed_composition, empty_ime_text_span,
       gfx::Range::InvalidRange(), 0, 0, blink::mojom::ImeState::kNone,
-      base::DoNothing());
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
   bounds = LastCompositionBounds();
   ASSERT_EQ(utf16_length, bounds.size());
   for (size_t i = 0; i < utf16_length; ++i) {
@@ -2250,9 +2292,9 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
       EXPECT_LT(0, bounds[i].width());
     }
   }
-  widget_input_handler->ImeCommitText(empty_string, empty_ime_text_span,
-                                      gfx::Range::InvalidRange(), 0,
-                                      base::DoNothing());
+  widget_input_handler->ImeCommitText(
+      empty_string, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
 }
 #endif
 
@@ -2372,6 +2414,50 @@ TEST_F(RenderViewImplTest, OnDeleteSurroundingText) {
   EXPECT_EQ(0, info.selection_end);
 }
 
+// This test verifies that when a JavaScript event listener modifies the
+// selection during DeleteSurroundingText (e.g., via setSelectionRange),
+// the new selection is preserved rather than being overridden.
+TEST_F(RenderViewImplTest,
+       DeleteSurroundingTextRespectsEventListenerSelection) {
+  LoadHTML(
+      "<html>"
+      "<head>"
+      "</head>"
+      "<body>"
+      "<input id=\"test1\" value=\"0123456789\"></input>"
+      "</body>"
+      "<script>"
+      "document.getElementById('test1').addEventListener('input', "
+      "  event => {"
+      "    if (event.inputType === 'deleteContentBackward') {"
+      "      event.target.setSelectionRange(0, 0);"
+      "    }"
+      "  });"
+      "</script>"
+      "</html>");
+  ExecuteJavaScriptForTests("document.getElementById('test1').focus();");
+
+  auto* frame_widget_input_handler = GetFrameWidgetInputHandler();
+  blink::WebInputMethodController* controller =
+      frame()->GetWebFrame()->GetInputMethodController();
+
+  frame_widget_input_handler->SetEditableSelectionOffsets(3, 4);
+  // With '3' selected, '12' and '45' should be deleted.
+  frame_widget_input_handler->DeleteSurroundingText(2, 2);
+
+  // Wait for the deletion to complete and the event listener to update the
+  // selection.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    blink::WebTextInputInfo info = controller->TextInputInfo();
+    return info.value != "0123456789";
+  }));
+
+  blink::WebTextInputInfo info = controller->TextInputInfo();
+  EXPECT_EQ("036789", info.value);
+  EXPECT_EQ(0, info.selection_start);
+  EXPECT_EQ(0, info.selection_end);
+}
+
 #if BUILDFLAG(IS_ANDROID)
 // Failing on Android M: http://crbug.com/873580
 #define MAYBE_OnDeleteSurroundingTextInCodePoints \
@@ -2395,7 +2481,7 @@ TEST_F(RenderViewImplTest, MAYBE_OnDeleteSurroundingTextInCodePoints) {
       frame()->GetWebFrame()->GetInputMethodController();
   blink::WebTextInputInfo info = controller->TextInputInfo();
   // "a" + "def" + trophy + space + "gh".
-  EXPECT_EQ(WebString::FromUTF8("adef\xF0\x9F\x8F\x86 gh"), info.value);
+  EXPECT_EQ(WebString::FromUtf8("adef\xF0\x9F\x8F\x86 gh"), info.value);
   EXPECT_EQ(1, info.selection_start);
   EXPECT_EQ(1, info.selection_end);
 
@@ -2974,7 +3060,7 @@ TEST_F(RenderViewImplModalDialogTest, ModalDialogs) {
   EXPECT_CALL(*alert_mock_frame_host(),
               RunModalAlertDialog(alert_message, false, testing::_))
       .WillOnce(base::test::RunOnceCallback<2>());
-  frame()->GetWebFrame()->Alert(WebString::FromUTF16(alert_message));
+  frame()->GetWebFrame()->Alert(WebString::FromUtf16(alert_message));
 }
 
 TEST_F(RenderViewImplBlinkSettingsTest, Default) {
@@ -3112,7 +3198,8 @@ TEST_F(RenderViewImplScaleFactorTest,
   const std::u16string ascii_composition = u"aiueo";
   widget_input_handler->ImeSetComposition(
       ascii_composition, empty_ime_text_span, gfx::Range::InvalidRange(), 0, 0,
-      blink::mojom::ImeState::kNone, base::DoNothing());
+      blink::mojom::ImeState::kNone,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), base::DoNothing());
   bounds_at_1x = LastCompositionBounds();
   ASSERT_EQ(ascii_composition.size(), bounds_at_1x.size());
 

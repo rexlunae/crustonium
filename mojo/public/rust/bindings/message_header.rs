@@ -5,43 +5,38 @@
 //! This module defines the header used by Mojom messages, and provides utility
 //! functions for manipulating it. For a reference implementation, see the C++
 //! version at //mojo/public/cpp/bindings/lib/message_internal.h
-//!
-//! Note that the rust bindings do not support Mojom's versioning feature. This
-//! means we only track the most recent incarnation of the header, with all
-//! possible fields. Messages containing older headers will fail to parse.
 
 chromium::import! {
-    "//mojo/public/rust/mojom_parser";
+    "//mojo/public/rust/mojom_value_parser";
     "//mojo/public/rust/bindings:helper_functions_cxx";
 }
 
 use helper_functions_cxx::ffi as cxx_helpers;
 
-/// The header format used by the most recent version of Mojom.
+/// The header format used by Mojom.
 ///
-/// This value appears at the beginning of every Mojom method. It is encoded
-/// just like any other struct, with one difference: it uses the version number
-/// field in its header (bytes 4-7 in its encoding).
+/// A header value appears at the beginning of every Mojom message. It is
+/// encoded as a regular mojom struct; however, it uses versioning, which is
+/// not yet supported by the mojom value parser. Therefore, this type must be
+/// serialized and deserialized using its own methods, rather than relying on
+/// the methods in the mojom_value_parser API.
 ///
-/// The version number is used by the C++ bindings to determine which fields
-/// are present in the struct. Since the Rust bindings do not currently
-/// support versioning, our serializer always sets this value to 0.
-///
-/// However, mojom headers set this value to 3 instead. This means we can't use
-/// our normal serialization code. As a result, you should not use the derived
-/// MojomParse implementation directly. Instead, call
-/// `(de)serialize_with_version`.
+/// This type can represent a mojom header of version 1, 2, or 3. The versions
+/// only differ in non-`pub` fields, so users of this type can typically ignore
+/// this distinction.
 ///
 /// The `pub` fields may be read and written by the user, so it is the user's
 /// responsibility to ensure that the header is valid when sent. The main
-/// validition conditions are:
+/// validity conditions are:
 /// - The `interface_id` and `name` fields exist for the message pipe it's being
 ///   sent on.
 /// - The payload of the message is of the type indicated by the `name` field.
 /// - The flags are correct.
 /// - If this is a response, then the request_id matches the one in the request.
-#[derive(mojom_parser::MojomParse)]
-pub struct MessageHeaderV3 {
+#[derive(Debug, Clone, Copy)]
+pub struct MessageHeader {
+    /// The version of the header.
+    version: u32,
     /// The ordinal of the mojom `interface` this message corresponds to. Used
     /// for sending multiple interfaces via the same pipe.
     pub interface_id: u32,
@@ -51,7 +46,7 @@ pub struct MessageHeaderV3 {
     pub flags: MessageHeaderFlags,
     /// A randomly-generated, hopefully-unique value for a message. Used in
     /// tracing, forming the lower part of the 64-bit trace id, which is
-    /// used to match trace  events for sending and receiving a message
+    /// used to match trace events for sending and receiving a message
     /// (`name` forms the upper part).
     trace_nonce: u32,
     /// Contains an ID that's used to match responses with their corresponding
@@ -59,27 +54,78 @@ pub struct MessageHeaderV3 {
     pub request_id: u64,
     /// A mojom pointer (i.e. a byte offset) to the message's payload.
     payload_ptr: u64,
-    /// Used for associated interfaces. Rust doesn't support these yet.
+    /// A mojom pointer to the interface ID array at the end of the message (or
+    /// 0 if it's absent). This field should only be set for messages that
+    /// were received over the wire, or which have been fully serialized and
+    /// are ready to be sent.
+    /// Note that this field's value is measured from the pointer's location
+    /// inside the _header_. Parsing code generally wants the distance from the
+    /// beginning of the payload instead, which can be obtained using the
+    /// `interface_ids_offset` method.
     interface_ids_ptr: u64,
     /// Tracks when the header was created.
     creation_timeticks_us: i64,
 }
 
-impl MessageHeaderV3 {
-    pub fn new(interface_id: u32, name: u32, flags: MessageHeaderFlags, request_id: u64) -> Self {
-        MessageHeaderV3 {
+impl MessageHeader {
+    /// Create a new message header with the given fields.
+    ///
+    /// Note that `interface_ids_offset` should be the offset from the start of
+    /// the payload to the interface ID array (or 0, if there isn't an interface
+    /// ID array). The constructor will compute the appropriate value for the
+    /// `interface_ids_ptr` header field from that information.
+    pub fn new(
+        interface_id: u32,
+        name: u32,
+        flags: MessageHeaderFlags,
+        request_id: u64,
+        interface_ids_offset: u64,
+    ) -> Self {
+        Self::new_with_version(3, interface_id, name, flags, request_id, interface_ids_offset)
+    }
+
+    /// Create a new message at a specific version with the given fields. Fields
+    /// which are not present at that version will be ignored.
+    ///
+    /// Note that `interface_ids_offset` should be the offset from the start of
+    /// the payload to the interface ID array (or 0, if there isn't an interface
+    /// ID array). The constructor will compute the appropriate value for the
+    /// `interface_ids_ptr` from that information.
+    pub fn new_with_version(
+        version: u32,
+        interface_id: u32,
+        name: u32,
+        flags: MessageHeaderFlags,
+        request_id: u64,
+        interface_ids_offset: u64,
+    ) -> Self {
+        // The header contains two pointers, which are next to each other. This
+        // is the number of bytes from the end of the interface ID pointer to
+        // the end of the header.
+        let payload_ptr = match version {
+            1 => 0, // Not present in this version
+            2 => 16,
+            3 => 24,
+            _ => panic!("Mojom headers must have version 1, 2 or 3"),
+        };
+        let interface_ids_distance = match version {
+            1 => 0, // Not present in this version
+            2 => 8 + interface_ids_offset,
+            3 => 16 + interface_ids_offset,
+            _ => panic!("Mojom headers must have version 1, 2 or 3"),
+        };
+        let interface_ids_ptr = if interface_ids_offset == 0 { 0 } else { interface_ids_distance };
+        MessageHeader {
             interface_id,
             name,
             flags,
             // The C++ equivalent uses static_cast<uint32_t> on the result here
             trace_nonce: cxx_helpers::GetNextGlobalTraceId() as u32,
             request_id,
-            // The payload always immediately follows the header, so it's 24
-            // bytes from the start of `payload_ptr`
-            payload_ptr: 24,
-            // This pointer is unused in Rust for now
-            interface_ids_ptr: 0,
+            payload_ptr,
+            interface_ids_ptr,
             creation_timeticks_us: cxx_helpers::CurrentTimeTicksInMicroseconds(),
+            version,
         }
     }
 
@@ -88,42 +134,101 @@ impl MessageHeaderV3 {
         self.creation_timeticks_us
     }
 
-    /// Serialize the header as a mojom value, but replace the version number
-    /// in the encoding with 3, because the serializer doesn't handle versioning
-    /// FOR_RELEASE: We can add another version that takes an output buffer if
-    /// we want to, instead of allocating here
-    pub fn serialize_with_version(self) -> Vec<u8> {
-        let mut serialized = mojom_parser::serialize(self);
-        Self::adjust_version_number(&mut serialized);
-        return serialized;
+    /// Return the offset from the beginning of the _payload_ to the beginning
+    /// of the interface IDs array, or 0 if the array is absent. Note that this
+    /// is not the same as the `interface_ids_ptr` header field, which is
+    /// measured from a point inside the header rather than relative to the
+    /// payload.
+    pub fn interface_ids_offset(&self) -> u64 {
+        if self.interface_ids_ptr == 0 {
+            return 0;
+        }
+        // Use saturating subtraction to prevent underflow if we got a bad message.
+        // If it happens, we'll probably fail shortly when we try to actually parse the
+        // message.
+        match self.version {
+            1 => 0, // Not present in this version
+            2 => self.interface_ids_ptr.saturating_sub(8),
+            3 => self.interface_ids_ptr.saturating_sub(16),
+            _ => panic!("Mojom headers must have version 1, 2 or 3"),
+        }
     }
 
-    /// Deserialize the header from a mojom value, but replace the version
-    /// number in the encoding with 3, because the deserializer doesn't
-    /// handle versioning
-    ///
-    /// This function must have mutable access to the buffer so it can
-    /// overwrite the version value before deserializing
-    pub fn deserialize_with_version(data: &mut [u8]) -> mojom_parser::ParsingResult<(&[u8], Self)> {
-        Self::adjust_version_number(data);
-        return mojom_parser::deserialize(data);
+    /// Serialize the header as a mojom value
+    pub fn serialize(self) -> Vec<u8> {
+        let v1 = mojom_value_parser::MessageHeaderV1 {
+            interface_id: self.interface_id,
+            name: self.name,
+            flags: self.flags.bits(),
+            trace_nonce: self.trace_nonce,
+            request_id: self.request_id,
+        };
+        let v2 = mojom_value_parser::MessageHeaderV2 {
+            payload_ptr: self.payload_ptr,
+            interface_ids_ptr: self.interface_ids_ptr,
+        };
+        let v3 = mojom_value_parser::MessageHeaderV3 {
+            creation_timeticks_us: self.creation_timeticks_us,
+        };
+
+        let header = match self.version {
+            1 => mojom_value_parser::MessageHeader::V1(v1),
+            2 => mojom_value_parser::MessageHeader::V2(v1, v2),
+            3 => mojom_value_parser::MessageHeader::V3(v1, v2, v3),
+            _ => panic!("Header version must be 1, 2, or 3"),
+        };
+
+        header.serialize()
     }
 
-    /// Replace the version number of a serialized header with 3.
-    /// This is necessary because the serializer doesn't handle versioning yet,
-    /// so by default the encoded version numbers will be 0.
-    fn adjust_version_number(serialized: &mut [u8]) {
-        // The serialized value begins with 4 bytes containing the size, then
-        // 4 bytes containing the version number. The version never goes above
-        // 3, so it's sufficient to just replace byte number 5 (at index 4).
-        serialized[4] = 3;
+    /// Deserialize the header from a mojom value.
+    pub fn deserialize(data: &[u8]) -> mojom_value_parser::ParsingResult<(&[u8], Self)> {
+        let (remaining, header) = mojom_value_parser::MessageHeader::deserialize(data)?;
+
+        let result = match header {
+            mojom_value_parser::MessageHeader::V1(v1) => MessageHeader {
+                interface_id: v1.interface_id,
+                name: v1.name,
+                flags: MessageHeaderFlags::from_bits_truncate(v1.flags),
+                trace_nonce: v1.trace_nonce,
+                request_id: v1.request_id,
+                payload_ptr: 0,
+                interface_ids_ptr: 0,
+                creation_timeticks_us: 0,
+                version: 1,
+            },
+            mojom_value_parser::MessageHeader::V2(v1, v2) => MessageHeader {
+                interface_id: v1.interface_id,
+                name: v1.name,
+                flags: MessageHeaderFlags::from_bits_truncate(v1.flags),
+                trace_nonce: v1.trace_nonce,
+                request_id: v1.request_id,
+                payload_ptr: v2.payload_ptr,
+                interface_ids_ptr: v2.interface_ids_ptr,
+                creation_timeticks_us: 0,
+                version: 2,
+            },
+            mojom_value_parser::MessageHeader::V3(v1, v2, v3) => MessageHeader {
+                interface_id: v1.interface_id,
+                name: v1.name,
+                flags: MessageHeaderFlags::from_bits_truncate(v1.flags),
+                trace_nonce: v1.trace_nonce,
+                request_id: v1.request_id,
+                payload_ptr: v2.payload_ptr,
+                interface_ids_ptr: v2.interface_ids_ptr,
+                creation_timeticks_us: v3.creation_timeticks_us,
+                version: 3,
+            },
+        };
+
+        Ok((remaining, result))
     }
 }
 
 bitflags::bitflags! {
     /// Flags that can be set for a Mojom message.
     /// Only the first two flags are supported in Rust at the moment.
-    #[derive(Clone, Copy, Default)]
+    #[derive(Clone, Copy, Default, Debug)]
     #[repr(transparent)]
     pub struct MessageHeaderFlags: u32 {
         const EXPECTS_RESPONSE = 1 << 0;
@@ -136,12 +241,13 @@ bitflags::bitflags! {
 
 // This section is an implementation detail: we have to manually implement
 // (de)serialization for the flag type, since the output of `bitflags!` has
-// special semantics.
+// special semantics: it's a struct, but we want to treat it like an int. Also,
+// not all flag combinations are valid.
 const _: () = {
     chromium::import! {
-            "//mojo/public/rust/mojom_parser:mojom_parser_core";
+            "//mojo/public/rust/mojom_value_parser:mojom_value_parser_core";
     }
-    use mojom_parser_core::{MojomType, MojomValue};
+    use mojom_value_parser_core::{MojomType, MojomValue};
 
     impl MessageHeaderFlags {
         /// Check if a given combination of flags is valid.
@@ -152,16 +258,16 @@ const _: () = {
         }
     }
 
-    impl From<MessageHeaderFlags> for MojomValue {
-        fn from(value: MessageHeaderFlags) -> MojomValue {
-            MojomValue::UInt32(value.bits())
+    impl<Context> mojom_value_parser::MojomParse<Context> for MessageHeaderFlags {
+        fn mojom_type() -> MojomType {
+            MojomType::UInt32
         }
-    }
 
-    impl TryFrom<MojomValue> for MessageHeaderFlags {
-        type Error = anyhow::Error;
+        fn into_mojom_value(self, _context: &Context) -> MojomValue {
+            MojomValue::UInt32(self.bits())
+        }
 
-        fn try_from(value: MojomValue) -> anyhow::Result<Self> {
+        fn try_from_mojom_value(value: MojomValue, _context: &Context) -> anyhow::Result<Self> {
             let bits: u32 = if let MojomValue::UInt32(bits) = value {
                 bits
             } else {
@@ -178,12 +284,6 @@ const _: () = {
                 }
                 Some(flags) => Ok(flags),
             }
-        }
-    }
-
-    impl mojom_parser::MojomParse for MessageHeaderFlags {
-        fn mojom_type() -> MojomType {
-            MojomType::UInt32
         }
     }
 };

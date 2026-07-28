@@ -64,10 +64,15 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-shared.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/display/display_switches.h"
 #include "ui/gfx/geometry/size_conversions.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 #if defined(USE_AURA)
 #include "content/browser/renderer_host/delegated_frame_host.h"
@@ -642,6 +647,21 @@ IN_PROC_BROWSER_TEST_F(BFCachedRenderWidgetHostViewBrowserTest,
   ASSERT_TRUE(
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
   RenderFrameHostWrapper rfh1(shell()->web_contents()->GetPrimaryMainFrame());
+
+#if BUILDFLAG(IS_OZONE)
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    // Process any pending platform resize/configure events to stabilize the
+    // SurfaceId.
+    viz::SurfaceId stable_id;
+    viz::SurfaceId new_stable_id =
+        GetCurrentSurfaceIdOnDelegatedFrameHost(rfh1->GetView());
+    while (new_stable_id != stable_id) {
+      stable_id = new_stable_id;
+      GiveItSomeTime();
+      new_stable_id = GetCurrentSurfaceIdOnDelegatedFrameHost(rfh1->GetView());
+    }
+  }
+#endif
 
   const auto id_before_cached =
       GetCurrentSurfaceIdOnDelegatedFrameHost(rfh1->GetView());
@@ -1605,7 +1625,7 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
     // On Mac, DelegatedFrameHost only behaves the same as on other platforms
     // when it has no parent UI layer.
     ASSERT_FALSE(
-        GetBrowserCompositor()->DelegatedFrameHostGetLayer()->parent());
+        GetBrowserCompositor()->GetDelegatedFrameHostLayer()->parent());
 #endif
   }
 
@@ -1613,15 +1633,24 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
   // becomes visible. The default parameters request a tab switch measurement.
   void CreateVisibleTimeRequest(bool show_reason_tab_switching = true,
                                 bool show_reason_bfcache_restore = false) {
+    auto& request_trigger =
+        GetRenderWidgetHostView()->host()->GetVisibleTimeRequestTrigger();
+    if (show_reason_tab_switching) {
+      request_trigger.UpdateRequest(blink::VisibleTimeEvent{
+          .event_start_time = base::TimeTicks::Now(),
+          .reason = blink::VisibleTimeEvent::TabSwitchReason{
+              .destination_is_loaded = true,
+              .had_saved_frame_at_start =
+                  GetRenderWidgetHostView()->HasSavedCompositorFrame(),
+          }});
+    }
     if (show_reason_bfcache_restore) {
       GetRenderWidgetHostView()->OnOldViewDidNavigatePreCommit();
       GetRenderWidgetHostView()->DidEnterBackForwardCache();
+      request_trigger.UpdateRequest(blink::VisibleTimeEvent{
+          .event_start_time = base::TimeTicks::Now(),
+          .reason = blink::VisibleTimeEvent::BFCacheRestoreReason{}});
     }
-    GetRenderWidgetHostView()
-        ->host()
-        ->GetVisibleTimeRequestTrigger()
-        .UpdateRequest(base::TimeTicks::Now(), /*destination_is_loaded=*/true,
-                       show_reason_tab_switching, show_reason_bfcache_restore);
   }
 
   void ExpectPresentationFeedback(TabSwitchResult expected_result) {
@@ -1677,7 +1706,7 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
 
    private:
     raw_ptr<BrowserCompositorMac> browser_compositor_;
-    ui::Layer layer_{ui::LAYER_SOLID_COLOR};
+    ui::LayerSolidColor layer_;
     std::unique_ptr<ui::RecyclableCompositorMac> recyclable_compositor_;
   };
 

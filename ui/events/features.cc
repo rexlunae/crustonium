@@ -21,4 +21,10 @@ const base::FeatureParam<bool>
 
 BASE_FEATURE(kLegacyKeyRepeatSynthesis, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kFixDoubleClickNotWorking, base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kAndroidTouchpadDetection, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
+
 }  // namespace ui

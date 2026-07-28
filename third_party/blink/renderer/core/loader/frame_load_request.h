@@ -32,7 +32,6 @@
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/policy_container.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-blink.h"
@@ -175,21 +174,19 @@ struct CORE_EXPORT FrameLoadRequest {
 
   void SetNoOpener() { window_features_.noopener = true; }
   void SetExplicitOpener() { window_features_.explicit_opener = true; }
+
+  const std::optional<base::UnguessableToken>& GetScriptToolInvocationId()
+      const {
+    return script_tool_invocation_id_;
+  }
+  void SetScriptToolInvocationId(const base::UnguessableToken& id) {
+    script_tool_invocation_id_ = id;
+  }
   void SetNoReferrer() {
     should_send_referrer_ = kNeverSendReferrer;
     resource_request_.SetReferrerString(Referrer::NoReferrer());
     resource_request_.SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever);
     resource_request_.ClearHTTPOrigin();
-  }
-
-  // Impressions are set when a FrameLoadRequest is created for a click on an
-  // anchor tag that has conversion measurement attributes.
-  void SetImpression(const std::optional<Impression>& impression) {
-    impression_ = impression;
-  }
-
-  const std::optional<blink::Impression>& Impression() const {
-    return impression_;
   }
 
   bool CanDisplay(const KURL&) const;
@@ -213,6 +210,17 @@ struct CORE_EXPORT FrameLoadRequest {
     return force_history_push_;
   }
 
+  mojo::PendingReceiver<mojom::blink::NavigationResumeDeferredCommitListener>
+  TakeResumeDeferredCommitListener() {
+    return std::move(resume_deferred_commit_listener_);
+  }
+
+  void SetResumeDeferredCommitListener(
+      mojo::PendingReceiver<
+          mojom::blink::NavigationResumeDeferredCommitListener> listener) {
+    resume_deferred_commit_listener_ = std::move(listener);
+  }
+
   // This function is meant to be used in HTML/SVG attributes where dangling
   // markup injection occurs. See https://github.com/whatwg/html/pull/9309.
   const AtomicString& CleanNavigationTarget(const AtomicString& target) const;
@@ -224,8 +232,11 @@ struct CORE_EXPORT FrameLoadRequest {
   ClientNavigationReason client_navigation_reason_ =
       ClientNavigationReason::kNone;
   NavigationPolicy navigation_policy_ = kNavigationPolicyCurrentTab;
+  std::optional<base::UnguessableToken> script_tool_invocation_id_;
   mojom::blink::TriggeringEventInfo triggering_event_info_ =
       mojom::blink::TriggeringEventInfo::kNotFromEvent;
+  // The element that triggered the navigation. This may be cross-origin to the
+  // navigation's destination, and should be checked before use.
   Element* source_element_ = nullptr;
   ShouldSendReferrer should_send_referrer_;
   const DOMWrapperWorld* world_ = nullptr;
@@ -238,7 +249,6 @@ struct CORE_EXPORT FrameLoadRequest {
   WebWindowFeatures window_features_;
   std::optional<WebPictureInPictureWindowOptions>
       picture_in_picture_window_options_;
-  std::optional<blink::Impression> impression_;
   std::optional<LocalFrameToken> initiator_frame_token_;
   mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
       initiator_navigation_state_keep_alive_handle_;
@@ -257,6 +267,12 @@ struct CORE_EXPORT FrameLoadRequest {
   // Only container-initiated navigations (e.g. iframe change src) report a
   // resource timing entry to the parent.
   bool is_container_initiated_ = false;
+
+  // This listener is non-null when deferPageSwap() was called.
+  // It is triggered when the conditions passed to deferPageSwap() are met.
+  // See NavigationAPICommitDeferringCondition.
+  mojo::PendingReceiver<mojom::blink::NavigationResumeDeferredCommitListener>
+      resume_deferred_commit_listener_;
 
   // Resolves a Blob URL into a BlobURLToken if the URL is a blob URL, and
   // otherwise has no effect. It is called after the FrameType has been set.

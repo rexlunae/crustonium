@@ -15,6 +15,8 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/html_style_element.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -36,7 +38,7 @@ using testing::MatchesRegex;
 class LayoutObjectTest : public RenderingTest {
  public:
   LayoutObjectTest()
-      : RenderingTest(MakeGarbageCollected<EmptyLocalFrameClient>()) {}
+      : RenderingTest(MakeGarbageCollected<SingleChildLocalFrameClient>()) {}
 
  protected:
   template <bool should_have_wrapper>
@@ -985,7 +987,7 @@ TEST_F(LayoutObjectTest, DisplayContentsWrapperInTableCell) {
 TEST_F(LayoutObjectTest, DumpLayoutObject) {
   // Test dumping for debugging, in particular that newlines and non-ASCII
   // characters are escaped as expected.
-  SetBodyInnerHTML(String::FromUTF8(R"HTML(
+  SetBodyInnerHTML(String::FromUtf8(R"HTML(
     <div id='block' style='background:
 lime'>
       testing Среќен роденден
@@ -1023,14 +1025,14 @@ TEST_F(LayoutObjectTest, DumpDestroyedLayoutObject) {
   StringBuilder builder;
   layout_object->DumpLayoutObject(builder, false, 0);
   String result = builder.ToString();
-  EXPECT_FALSE(result.StartsWith("[DESTROYED] "));
+  EXPECT_FALSE(result.starts_with("[DESTROYED] "));
 
   element->remove();
   UpdateAllLifecyclePhasesForTest();
   builder.Clear();
   layout_object->DumpLayoutObject(builder, false, 0);
   result = builder.ToString();
-  EXPECT_TRUE(result.StartsWith("[DESTROYED] "));
+  EXPECT_TRUE(result.starts_with("[DESTROYED] "));
 }
 #endif  // DCHECK_IS_ON()
 
@@ -1819,6 +1821,25 @@ TEST_F(LayoutObjectTest, ContainingScrollContainer) {
                            ->ContainingScrollContainer());
 }
 
+TEST_F(LayoutObjectTest, ContainingScrollContainerSingleAxis) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroller"
+         style="overflow: scroll clip; width: 100px; height: 100px">
+      <div id="child"></div>
+    </div>
+  )HTML");
+
+  const LayoutObject* scroller = GetLayoutObjectByElementId("scroller");
+  const LayoutObject* child = GetLayoutObjectByElementId("child");
+  ASSERT_TRUE(scroller);
+  ASSERT_TRUE(child);
+
+  EXPECT_EQ(scroller,
+            child->ContainingScrollContainer(PhysicalAxis::kHorizontal));
+  EXPECT_EQ(&GetLayoutView(),
+            child->ContainingScrollContainer(PhysicalAxis::kVertical));
+}
+
 TEST_F(LayoutObjectTest, ScrollOffsetMapping) {
   SetBodyInnerHTML(R"HTML(
     <div id="scroller" style="overflow:scroll; width:300px; height:300px;">
@@ -2032,6 +2053,116 @@ TEST_F(LayoutObjectTest, GeneratingNode) {
   ASSERT_TRUE(cell2);
   EXPECT_TRUE(cell2->IsAnonymous());
   EXPECT_EQ(GetElementById("table2"), cell2->GeneratingNode());
+}
+
+// crbug.com/495648335 - Anonymous blocks inside non-block-container parents
+// should not truncate text with ellipsis, since their parent layout doesn't
+// support text truncation.
+TEST_F(LayoutObjectTest, NoEllipsisForAnonymousBlockWithNonBlockParent) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="outer"
+         style="width:100px; overflow:hidden; text-overflow:ellipsis;
+                white-space:nowrap;">
+      <div id="flex" style="display:flex;">
+        <span id="text">This is long text that overflows the container</span>
+      </div>
+    </div>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+
+  const LayoutObject* text_layout = GetLayoutObjectByElementId("text");
+  ASSERT_TRUE(text_layout);
+
+  // ContainingBlockForTextOverflow() returns nullptr because the parent is a
+  // flex container (non-block-container).
+  EXPECT_EQ(nullptr, text_layout->ContainingBlockForTextOverflow());
+
+  // Since ContainingBlockForTextOverflow() is nullptr, no block will have
+  // ShouldTruncateOverflowingText() set to true. Verify this on the anonymous
+  // block flow inside the flex container.
+  const LayoutObject* flex_layout = GetLayoutObjectByElementId("flex");
+  ASSERT_TRUE(flex_layout);
+  EXPECT_FALSE(flex_layout->BehavesLikeBlockContainer());
+
+  const LayoutObject* child = flex_layout->SlowFirstChild();
+  while (child && !child->IsAnonymousBlockFlow()) {
+    child = child->NextSibling();
+  }
+  if (child) {
+    const auto* anon_block = DynamicTo<LayoutBlockFlow>(child);
+    if (anon_block) {
+      EXPECT_FALSE(anon_block->ShouldTruncateOverflowingText());
+    }
+  }
+}
+
+TEST_F(LayoutObjectTest, InCanvasSubtree) {
+  SetBodyInnerHTML(R"HTML(
+    <canvas id="canvas" htmlsubtree>
+      <div id="canvas-child-div">Div</div>
+      <span id="canvas-child-span">Span</span>
+      <iframe></iframe>
+    </canvas>
+    <div id="non-canvas-child-div">Div</div>
+  )HTML");
+  SetChildFrameHTML(R"HTML(
+    <div id="div">Div</div>
+    <span id="span">Span</span>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* canvas = GetLayoutObjectByElementId("canvas");
+  EXPECT_TRUE(canvas->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(canvas->IsInCanvasSubtree());
+  EXPECT_FALSE(canvas->Parent()->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(canvas->Parent()->IsInCanvasSubtree());
+  EXPECT_FALSE(canvas->View()->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(canvas->View()->IsInCanvasSubtree());
+
+  auto* canvas_child_div = GetLayoutObjectByElementId("canvas-child-div");
+  EXPECT_TRUE(canvas_child_div->Parent()->IsAnonymous());
+  EXPECT_TRUE(canvas_child_div->Parent()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_div->Parent()->IsInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_div->IsInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_div->SlowFirstChild()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_div->SlowFirstChild()->IsInCanvasSubtree());
+
+  auto* canvas_child_span = GetLayoutObjectByElementId("canvas-child-span");
+  EXPECT_TRUE(canvas_child_span->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_span->IsInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_span->SlowFirstChild()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(canvas_child_span->SlowFirstChild()->IsInCanvasSubtree());
+
+  auto* non_canvas_child_div =
+      GetLayoutObjectByElementId("non-canvas-child-div");
+  EXPECT_FALSE(non_canvas_child_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(non_canvas_child_div->IsInCanvasSubtree());
+  EXPECT_FALSE(
+      non_canvas_child_div->SlowFirstChild()->IsCanvasOrInCanvasSubtree());
+  EXPECT_FALSE(non_canvas_child_div->SlowFirstChild()->IsInCanvasSubtree());
+
+  auto* subframe_div =
+      ChildDocument().getElementById(AtomicString("div"))->GetLayoutObject();
+  EXPECT_TRUE(subframe_div->Parent()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->Parent()->IsInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->View()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->View()->IsInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->IsInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->SlowFirstChild()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_div->SlowFirstChild()->IsInCanvasSubtree());
+
+  auto* subframe_span =
+      ChildDocument().getElementById(AtomicString("span"))->GetLayoutObject();
+  EXPECT_TRUE(subframe_span->Parent()->IsAnonymous());
+  EXPECT_TRUE(subframe_span->Parent()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_span->Parent()->IsInCanvasSubtree());
+  EXPECT_TRUE(subframe_span->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_span->IsInCanvasSubtree());
+  EXPECT_TRUE(subframe_span->SlowFirstChild()->IsCanvasOrInCanvasSubtree());
+  EXPECT_TRUE(subframe_span->SlowFirstChild()->IsInCanvasSubtree());
 }
 
 }  // namespace blink

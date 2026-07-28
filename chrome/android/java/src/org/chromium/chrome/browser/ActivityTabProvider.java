@@ -85,7 +85,7 @@ public class ActivityTabProvider implements Destroyable, Supplier<@Nullable Tab>
                 new LayoutStateObserver() {
                     @Override
                     public void onStartedShowing(@LayoutType int layout) {
-                        // The {@link SimpleAnimationLayout} is a special case, the intent is not to
+                        // The {@link NewTabAnimationLayout} is a special case, the intent is not to
                         // switch tabs, but to merely run an animation. In this case, do nothing.
                         // If the animation layout does result in a new tab {@link
                         // TabModelObserver#didSelectTab} will trigger the event instead. If the
@@ -99,15 +99,11 @@ public class ActivityTabProvider implements Destroyable, Supplier<@Nullable Tab>
                     }
 
                     @Override
-                    @SuppressWarnings("NullAway") // https://github.com/uber/NullAway/issues/1209
                     public void onStartedHiding(@LayoutType int layout) {
                         if (mTabModelSelector == null) return;
 
-                        if (LayoutType.TAB_SWITCHER == layout) {
-                            // TODO(https://github.com/uber/NullAway/issues/1209): Remove
-                            // assumeNonNull().
-                            Tab tab = assumeNonNull(mTabModelSelector.getCurrentTab());
-                            mObservableSupplier.set(tab);
+                        if (LayoutType.HUB == layout) {
+                            mObservableSupplier.set(mTabModelSelector.getCurrentTab());
                         }
                     }
                 };
@@ -120,7 +116,7 @@ public class ActivityTabProvider implements Destroyable, Supplier<@Nullable Tab>
     }
 
     @Override
-    public Tab get() {
+    public @Nullable Tab get() {
         return mObservableSupplier.get();
     }
 
@@ -153,9 +149,20 @@ public class ActivityTabProvider implements Destroyable, Supplier<@Nullable Tab>
                             triggerActivityTabChangeEvent(null);
                         }
                     }
+
+                    @Override
+                    public void tabRemoved(Tab tab) {
+                        // If the last tab was removed (e.g. reparented), make sure a signal is sent
+                        // to the observers.
+                        if (selector.getCurrentModel().getCount() == 0) {
+                            triggerActivityTabChangeEvent(null);
+                        }
+                    }
                 };
 
-        mTabModelSelector.getCurrentTabModelSupplier().addObserver(mCurrentTabModelObserver);
+        mTabModelSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
     }
 
     /**

@@ -42,41 +42,40 @@ suite('SpellCheck', function() {
     CrSettingsPrefs.deferInitialization = true;
   });
 
-  setup(function() {
+  setup(async function() {
     const settingsPrefs = document.createElement('settings-prefs');
     const settingsPrivate = new FakeSettingsPrivate(getFakeLanguagePrefs());
     settingsPrefs.initialize(settingsPrivate);
     document.body.appendChild(settingsPrefs);
-    return CrSettingsPrefs.initialized.then(function() {
-      // Set up test browser proxy.
-      browserProxy = new TestLanguagesBrowserProxy();
-      LanguagesBrowserProxyImpl.setInstance(browserProxy);
+    await CrSettingsPrefs.initialized;
 
-      // Set up fake languageSettingsPrivate API.
-      const languageSettingsPrivate =
-          browserProxy.getLanguageSettingsPrivate() as unknown as
-          FakeLanguageSettingsPrivate;
-      languageSettingsPrivate.setSettingsPrefs(settingsPrefs);
+    // Set up test browser proxy.
+    browserProxy = new TestLanguagesBrowserProxy();
+    LanguagesBrowserProxyImpl.setInstance(browserProxy);
 
-      const settingsLanguages = document.createElement('settings-languages');
-      settingsLanguages.prefs = settingsPrefs.prefs;
-      fakeDataBind(settingsPrefs, settingsLanguages, 'prefs');
-      document.body.appendChild(settingsLanguages);
-      languageHelper = settingsLanguages;
+    // Set up fake languageSettingsPrivate API.
+    const languageSettingsPrivate = browserProxy.getLanguageSettingsPrivate() as
+        unknown as FakeLanguageSettingsPrivate;
+    languageSettingsPrivate.setSettingsPrefs(settingsPrefs);
 
-      spellcheckPage = document.createElement('settings-spell-check-page');
+    const settingsLanguages = document.createElement('settings-languages');
+    settingsLanguages.prefs = settingsPrefs.prefs!;
+    fakeDataBind(settingsPrefs, settingsLanguages, 'prefs');
+    document.body.appendChild(settingsLanguages);
+    languageHelper = settingsLanguages;
 
-      // Prefs would normally be data-bound to settings-spell-check-page.
-      spellcheckPage.prefs = settingsPrefs.prefs;
-      fakeDataBind(settingsPrefs, spellcheckPage, 'prefs');
+    spellcheckPage = document.createElement('settings-spell-check-page');
 
-      spellcheckPage.languages = settingsLanguages.languages;
-      fakeDataBind(settingsLanguages, spellcheckPage, 'languages');
+    // Prefs would normally be data-bound to settings-spell-check-page.
+    spellcheckPage.prefs = settingsPrefs.prefs!;
+    fakeDataBind(settingsPrefs, spellcheckPage, 'prefs');
 
-      document.body.appendChild(spellcheckPage);
-      flush();
-      return languageHelper.whenReady();
-    });
+    spellcheckPage.languages = settingsLanguages.languages;
+    fakeDataBind(settingsLanguages, spellcheckPage, 'languages');
+
+    document.body.appendChild(spellcheckPage);
+    flush();
+    return languageHelper.whenReady();
   });
 
   teardown(function() {
@@ -113,7 +112,9 @@ suite('SpellCheck', function() {
       await spellcheckLanguageToggle.updateComplete;
       assertFalse(spellcheckLanguageToggle.checked);
       assertEquals(
-          0, spellcheckPage.getPref('spellcheck.dictionaries').value.length);
+          0,
+          spellcheckPage.getPref<string[]>('spellcheck.dictionaries')
+              .value.length);
 
       // Force-enable a language via policy.
       spellcheckPage.setPrefValue('spellcheck.forced_dictionaries', ['nb']);
@@ -243,7 +244,8 @@ suite('SpellCheck', function() {
       assertTrue(!!toggle);
 
       assertFalse(toggle.disabled);
-      assertTrue(spellcheckPage.getPref('browser.enable_spellchecking').value);
+      assertTrue(spellcheckPage.getPref<boolean>('browser.enable_spellchecking')
+                     .value);
       assertEquals(toggle.subLabel, undefined);
 
       // Empty out supported languages
@@ -251,7 +253,9 @@ suite('SpellCheck', function() {
         languageHelper.disableLanguage(lang.language.code);
       }
       assertTrue(toggle.disabled);
-      assertFalse(spellcheckPage.getPref('browser.enable_spellchecking').value);
+      assertFalse(
+          spellcheckPage.getPref<boolean>('browser.enable_spellchecking')
+              .value);
       assertEquals(toggle.subLabel, 'no languages!');
     });
 
@@ -312,14 +316,14 @@ suite('SpellCheck', function() {
   suite('OfficialBuild', function() {
     test('enabling and disabling the spelling service', async () => {
       const previousValue =
-          spellcheckPage.prefs.spellcheck.use_spelling_service.value;
+          spellcheckPage.getPref('spellcheck.use_spelling_service').value;
       spellcheckPage.shadowRoot!
           .querySelector<HTMLElement>('#spellingServiceEnable')!.click();
       flush();
       await microtasksFinished();
       assertNotEquals(
           previousValue,
-          spellcheckPage.prefs.spellcheck.use_spelling_service.value);
+          spellcheckPage.getPref('spellcheck.use_spelling_service').value);
     });
   });
   // </if>

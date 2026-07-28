@@ -27,6 +27,7 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -45,6 +46,7 @@
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/animation/animation_test_api.h"
 #include "ui/views/animation/widget_fade_animator.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/widget/widget_utils.h"
 
@@ -58,6 +60,11 @@
 #if BUILDFLAG(IS_OZONE)
 #include "ui/ozone/public/ozone_platform.h"
 #endif
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace {
 
@@ -105,7 +112,8 @@ const base::FilePath::CharType kCameraPage[] =
 
 class AnimationWaiter {
  public:
-  explicit AnimationWaiter(std::vector<gfx::Animation*> animations)
+  explicit AnimationWaiter(
+      const std::vector<raw_ptr<gfx::Animation>>& animations)
       : animations_(animations) {}
 
   AnimationWaiter() = delete;
@@ -114,7 +122,7 @@ class AnimationWaiter {
   AnimationWaiter& operator=(const AnimationWaiter&) = delete;
 
   void WaitForAnimationInterval(base::TimeDelta animation_interval) {
-    for (auto* animation : animations_) {
+    for (gfx::Animation* animation : animations_) {
       auto animation_api = std::make_unique<gfx::AnimationTestApi>(animation);
       animation_api->SetStartTime(waiter_creation_time_);
       animation_api->Step(waiter_creation_time_ + animation_interval);
@@ -123,7 +131,7 @@ class AnimationWaiter {
 
  private:
   const base::TimeTicks waiter_creation_time_ = base::TimeTicks::Now();
-  std::vector<gfx::Animation*> animations_;
+  std::vector<raw_ptr<gfx::Animation>> animations_;
 };
 
 class ModalWidgetDelegate : public views::WidgetDelegate {
@@ -136,7 +144,7 @@ class ModalWidgetDelegate : public views::WidgetDelegate {
   ui::mojom::ModalType modal_type_;
 };
 
-class ChipAnimationObserver : PermissionChipView::Observer {
+class ChipAnimationObserver : PermissionChipInterface::Observer {
  public:
   enum class QuitOnEvent {
     kExpand,
@@ -145,7 +153,7 @@ class ChipAnimationObserver : PermissionChipView::Observer {
     kVisibilityFalse,
   };
 
-  explicit ChipAnimationObserver(PermissionChipView* chip) {
+  explicit ChipAnimationObserver(PermissionChipInterface* chip) {
     observation_.Observe(chip);
   }
 
@@ -175,7 +183,8 @@ class ChipAnimationObserver : PermissionChipView::Observer {
     }
   }
 
-  base::ScopedObservation<PermissionChipView, PermissionChipView::Observer>
+  base::ScopedObservation<PermissionChipInterface,
+                          PermissionChipInterface::Observer>
       observation_{this};
   base::RunLoop loop_;
   QuitOnEvent quit_on_event = QuitOnEvent::kExpand;
@@ -230,6 +239,42 @@ bool PlatformSupportsScreenCoordinates() {
 #endif  // BUILDFLAG(IS_OZONE)
 }
 
+#if BUILDFLAG(IS_MAC)
+// Tracks and waits for actual window visibility on Mac.
+class PictureInPictureWidgetVisibilityTracker : public views::WidgetObserver {
+ public:
+  explicit PictureInPictureWidgetVisibilityTracker(views::Widget* widget) {
+    observation_.Observe(widget);
+    is_visible_on_screen_ = widget->IsVisibleOnScreen();
+  }
+
+  void WaitForVisibilityState(bool visible) {
+    if (is_visible_on_screen_ == visible) {
+      return;
+    }
+    expected_visiblity_ = visible;
+    wait_loop_ = std::make_unique<base::RunLoop>();
+    wait_loop_->Run();
+  }
+
+  // views::WidgetObserver:
+  void OnWidgetVisibilityOnScreenChanged(views::Widget* widget,
+                                         bool visible) override {
+    is_visible_on_screen_ = visible;
+    if (wait_loop_ && visible == expected_visiblity_) {
+      wait_loop_->Quit();
+    }
+  }
+
+ private:
+  bool is_visible_on_screen_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
+      this};
+  std::unique_ptr<base::RunLoop> wait_loop_;
+  bool expected_visiblity_;
+};
+#endif  // BUILDFLAG(IS_MAC)
+
 class PictureInPictureBrowserFrameViewTest : public WebRtcTestBase,
                                              public AnimationTimingTest {
  public:
@@ -249,8 +294,7 @@ class PictureInPictureBrowserFrameViewTest : public WebRtcTestBase,
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/{blink::features::kDocumentPictureInPictureAPI,
-                              media::kPictureInPictureOcclusionTracking,
-                              media::kPictureInPictureShowWindowAnimation},
+                              media::kPictureInPictureOcclusionTracking},
         /*disabled_features=*/{});
     InProcessBrowserTest::SetUp();
   }
@@ -335,9 +379,10 @@ class PictureInPictureBrowserFrameViewTest : public WebRtcTestBase,
         views::GetRootWindow(pip_frame_view_->GetWidget()));
   }
 
-  void WaitForTopBarAnimations(std::vector<gfx::Animation*> animations) {
+  void WaitForTopBarAnimations(
+      const std::vector<raw_ptr<gfx::Animation>>& animations) {
     base::TimeTicks now = base::TimeTicks::Now();
-    for (auto* animation : animations) {
+    for (auto& animation : animations) {
       gfx::AnimationTestApi animation_api(animation);
       animation_api.SetStartTime(now);
       animation_api.Step(now + kAnimationDuration);
@@ -446,7 +491,7 @@ IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
   // the pip window) should deactivate the title.
   gfx::Point outside = gfx::Point();
   views::View::ConvertPointToScreen(
-      static_cast<BrowserView*>(browser()->window()), &outside);
+      BrowserView::GetBrowserViewForBrowser(browser()), &outside);
   ASSERT_FALSE(IsPointInPIPFrameView(outside));
   ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(outside));
   WaitForTopBarAnimations(
@@ -462,6 +507,35 @@ IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
   ASSERT_TRUE(
       IsButtonVisible(pip_frame_view()->GetBackToTabButtonForTesting()));
   ASSERT_TRUE(IsButtonVisible(pip_frame_view()->GetCloseButtonForTesting()));
+}
+
+// Verifies that PipTopBarAnimationController::Delegate is wired up correctly:
+// activating/deactivating the top bar via UpdateTopBarView() should drive
+// ApplyTopBarForegroundColor() through to the window title, changing its
+// enabled color between the active and inactive steady states.
+IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
+                       TopBarForegroundColorChangesWithActivation) {
+  ASSERT_NO_FATAL_FAILURE(SetUpDocumentPIP());
+
+  pip_frame_view()->UpdateTopBarView(/*render_active=*/false);
+  WaitForTopBarAnimations(
+      pip_frame_view()->GetRenderInactiveAnimationsForTesting());
+  const SkColor inactive_color =
+      pip_frame_view()->GetWindowTitleForTesting()->GetEnabledColor();
+
+  pip_frame_view()->UpdateTopBarView(/*render_active=*/true);
+  WaitForTopBarAnimations(
+      pip_frame_view()->GetRenderActiveAnimationsForTesting());
+  const SkColor active_color =
+      pip_frame_view()->GetWindowTitleForTesting()->GetEnabledColor();
+
+  EXPECT_NE(inactive_color, active_color);
+
+  pip_frame_view()->UpdateTopBarView(/*render_active=*/false);
+  WaitForTopBarAnimations(
+      pip_frame_view()->GetRenderInactiveAnimationsForTesting());
+  EXPECT_EQ(inactive_color,
+            pip_frame_view()->GetWindowTitleForTesting()->GetEnabledColor());
 }
 
 IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
@@ -1079,9 +1153,8 @@ IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
   // The window title for the document picture-in-picture window should use the
   // title from the opener page.
   EXPECT_EQ(u"Document Picture-in-Picture",
-            pip_frame_view()
-                ->GetBrowserView()
-                ->browser()
+            WindowMetadataController::From(
+                pip_frame_view()->GetBrowserView()->browser())
                 ->GetWindowTitleForCurrentTab(
                     /*include_app_name=*/false));
 }
@@ -1106,6 +1179,25 @@ IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
             window_title->GetTextDirectionForTesting());
 }
 
+#if BUILDFLAG(IS_MAC)
+// When a Chrome window goes into fullscreen while a document picture-in-picture
+// window is open, the document picture-in-picture window should show up on top
+// of the fullscreen Chrome window.
+IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
+                       WindowDisplaysOnFullscreenSpaces) {
+  ASSERT_NO_FATAL_FAILURE(SetUpDocumentPIP());
+
+  browser()
+      ->GetFeatures()
+      .exclusive_access_manager()
+      ->fullscreen_controller()
+      ->ToggleBrowserFullscreenMode(/*user_initiated=*/true);
+
+  PictureInPictureWidgetVisibilityTracker(pip_frame_view()->GetWidget())
+      .WaitForVisibilityState(true);
+}
+#endif  // BUILDFLAG(IS_MAC)
+
 #if BUILDFLAG(IS_LINUX)
 
 class FakeLinuxUiGetter : public ui::LinuxUiGetter {
@@ -1127,7 +1219,8 @@ class FakeLinuxUiGetter : public ui::LinuxUiGetter {
       return ui::NativeTheme::GetInstanceForNativeUi();
     }
 
-    ui::WindowFrameProvider* GetWindowFrameProvider(bool solid_frame,
+    ui::WindowFrameProvider* GetWindowFrameProvider(ui::FrameType type,
+                                                    bool solid_frame,
                                                     bool tiled,
                                                     bool maximized) override {
       // The test relies on this returning null.
@@ -1146,7 +1239,8 @@ class PictureInPictureBrowserFrameViewLinuxNoClientNativeDecorationsTest
     // default. This has to wait until `SetUpOnMainThread()` so browser startup
     // doesn't overwrite it with the real getter.
     linux_ui_getter_ = std::make_unique<FakeLinuxUiGetter>();
-    ThemeServiceFactory::GetForProfile(browser()->profile())->UseSystemTheme();
+    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
+        ->UseSystemTheme();
     PictureInPictureBrowserFrameViewTest::SetUpOnMainThread();
   }
 
@@ -1252,7 +1346,7 @@ IN_PROC_BROWSER_TEST_P(PictureInPictureBrowserFrameViewTest,
   gfx::Point outside = gfx::Point();
   if (PlatformSupportsScreenCoordinates()) {
     views::View::ConvertPointToScreen(
-        static_cast<BrowserView*>(browser()->window()), &outside);
+        BrowserView::GetBrowserViewForBrowser(browser()), &outside);
     // This check only makes sense in platforms that support global screen
     // coordinates.
     ASSERT_FALSE(IsPointInPIPFrameView(outside));
@@ -1554,6 +1648,19 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+IN_PROC_BROWSER_TEST_F(PictureInPictureBrowserFrameViewTest,
+                       GetNonDecoratedClientAreaBoundsInScreen) {
+  ASSERT_NO_FATAL_FAILURE(SetUpDocumentPIP());
+  auto* pip_widget = pip_frame_view()->GetWidget();
+
+  gfx::Rect bounds =
+      pip_frame_view()->GetNonDecoratedClientAreaBoundsInScreen();
+  EXPECT_FALSE(bounds.IsEmpty());
+
+  // The bounds should be contained within the widget bounds in screen.
+  EXPECT_TRUE(pip_widget->GetWindowBoundsInScreen().Contains(bounds));
+}
+
 class PiPIndicatorsBrowsertest : public PictureInPictureBrowserFrameViewTest {
  public:
   PiPIndicatorsBrowsertest() = default;
@@ -1583,10 +1690,8 @@ IN_PROC_BROWSER_TEST_F(PiPIndicatorsBrowsertest, TestMediaBlockedIndicators) {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view);
   ASSERT_TRUE(browser_view->GetLocationBarView());
-  PermissionDashboardController* permission_dashboard_controller =
-      browser_view->GetLocationBarView()->permission_dashboard_controller();
   PermissionDashboardView* permission_dashboard_view =
-      permission_dashboard_controller->permission_dashboard_view();
+      browser_view->GetLocationBarView()->permission_dashboard_view();
 
   ASSERT_TRUE(permission_dashboard_view);
 

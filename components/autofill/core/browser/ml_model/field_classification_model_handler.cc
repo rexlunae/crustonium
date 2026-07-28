@@ -4,34 +4,59 @@
 
 #include "components/autofill/core/browser/ml_model/field_classification_model_handler.h"
 
+#include <stddef.h>
+
 #include <algorithm>
-#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "base/barrier_callback.h"
+#include "base/callback_list.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/extend.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/hash/hash.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/types/optional_ref.h"
 #include "base/types/zip.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
-#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
 #include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/ml_model/field_classification_model_encoder.h"
 #include "components/autofill/core/browser/ml_model/field_classification_model_executor.h"
 #include "components/autofill/core/browser/ml_model/logging/autofill_ml_internals.mojom.h"
+#include "components/autofill/core/browser/ml_model/logging/ml_log_router.h"
 #include "components/autofill/core/browser/ml_model/model_predictions.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/inference/model_handler.h"
 #include "components/optimization_guide/proto/autofill_field_classification_model_metadata.pb.h"
+#include "components/optimization_guide/proto/common_types.pb.h"
+#include "components/optimization_guide/proto/models.pb.h"
+#include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 
 namespace autofill {
 
@@ -143,7 +168,9 @@ void FieldClassificationModelHandler::ApplySmallFormRules(
     candidates.AddFieldCandidate(
         predicted_types[i],
         // Arbitrary value to satisfy the API - not used.
-        MatchAttribute::kLabel, 1.0f);
+        MatchInfo{.matched_attribute = MatchInfo::MatchAttribute::kName},
+        {/*is_name_or_high_quality_label_match=*/true,
+         /*parser_type=*/HeuristicParser::kName});
     field_candidates_map.try_emplace(form.fields()[i].global_id(),
                                      std::move(candidates));
   }
@@ -192,49 +219,33 @@ FieldClassificationModelHandler::CreateMlPredictionLog(
   prediction_log->form_signature =
       base::NumberToString(*CalculateFormSignature(form));
   prediction_log->form_url = form.url();
-
-  std::vector<std::string> model_types;
-  for (int field_type_as_int : state_->metadata.output_type()) {
-    FieldType field_type =
-        ToSafeFieldType(FieldType(field_type_as_int), NO_SERVER_DATA);
-    std::string field_type_name = (field_type != NO_SERVER_DATA)
-                                      ? FieldTypeToString(field_type)
-                                      : "[INVALID]";
-    model_types.emplace_back(std::move(field_type_name));
-  }
-  prediction_log->model_output_types.assign(model_types.begin(),
-                                            model_types.end());
-
-  std::vector<autofill_ml_internals::mojom::MlFieldPredictionLogPtr>
-      field_predictions;
-  for (const auto& field : form.fields()) {
-    autofill_ml_internals::mojom::MlFieldPredictionLogPtr field_prediction =
-        autofill_ml_internals::mojom::MlFieldPredictionLog::New();
-    field_prediction->label = base::UTF16ToUTF8(field.label());
-    field_prediction->placeholder = base::UTF16ToUTF8(field.placeholder());
-    field_prediction->autocomplete = field.autocomplete_attribute();
-    field_prediction->name = base::UTF16ToUTF8(field.name_attribute());
-    field_prediction->id = base::UTF16ToUTF8(field.id_attribute());
-    field_prediction->form_control_type =
-        FormControlTypeToString(field.form_control_type());
-
-    std::vector<autofill_ml_internals::mojom::SelectOptionPtr> select_options;
-    for (const auto& option : field.options()) {
-      autofill_ml_internals::mojom::SelectOptionPtr logged_option =
-          autofill_ml_internals::mojom::SelectOption::New();
-      logged_option->value = base::UTF16ToUTF8(option.value);
-      logged_option->text = base::UTF16ToUTF8(option.text);
-    }
-    field_prediction->select_options.assign(
-        std::make_move_iterator(select_options.begin()),
-        std::make_move_iterator(select_options.end()));
-
-    field_predictions.emplace_back(std::move(field_prediction));
-  }
-  prediction_log->field_predictions.assign(
-      std::make_move_iterator(field_predictions.begin()),
-      std::make_move_iterator(field_predictions.end()));
-
+  prediction_log->model_output_types =
+      base::ToVector(state_->metadata.output_type(), [](int field_type_as_int) {
+        return ToSafeFieldType(field_type_as_int)
+            .transform([](FieldType ft) { return FieldTypeToString(ft); })
+            .value_or("[INVALID]");
+      });
+  prediction_log->field_predictions =
+      base::ToVector(form.fields(), [](const auto& field) {
+        autofill_ml_internals::mojom::MlFieldPredictionLogPtr field_prediction =
+            autofill_ml_internals::mojom::MlFieldPredictionLog::New();
+        field_prediction->label = base::UTF16ToUTF8(field.label());
+        field_prediction->placeholder = base::UTF16ToUTF8(field.placeholder());
+        field_prediction->autocomplete = field.autocomplete_attribute();
+        field_prediction->name = base::UTF16ToUTF8(field.name_attribute());
+        field_prediction->id = base::UTF16ToUTF8(field.id_attribute());
+        field_prediction->form_control_type =
+            FormControlTypeToString(field.form_control_type());
+        field_prediction->select_options =
+            base::ToVector(field.options(), [](const SelectOption& option) {
+              autofill_ml_internals::mojom::SelectOptionPtr logged_option =
+                  autofill_ml_internals::mojom::SelectOption::New();
+              logged_option->value = base::UTF16ToUTF8(option.value);
+              logged_option->text = base::UTF16ToUTF8(option.text);
+              return logged_option;
+            });
+        return field_prediction;
+      });
   prediction_log->start_time = base::Time::Now();
   return prediction_log;
 }
@@ -398,18 +409,27 @@ void FieldClassificationModelHandler::OnModelUpdated(
   // The model was loaded or updated.
   state_.reset();
   ModelState state;
-  if (!model_info->GetModelMetadata() ||
-      !state.metadata.ParseFromString(
-          model_info->GetModelMetadata()->value())) {
+  if (!model_info->model_metadata ||
+      !state.metadata.ParseFromString(model_info->model_metadata->value())) {
     // The model should always come with metadata - but since this comes from
     // the server-side and might change in the future, it might fail.
     return;
   }
   state.encoder = FieldClassificationModelEncoder(
       state.metadata.input_token(), state.metadata.encoding_parameters());
+  // Protobuf's `RepeatedPtrField::Clear()` only resets the size to 0
+  // and does not free the underlying memory. See:
+  // https://source.chromium.org/chromium/chromium/src/+/main:third_party/protobuf/src/google/protobuf/repeated_ptr_field.h;l=715-728;drc=84e9f8cb8ba9621be941c81af04d33df743f7de4
+  // Since `metadata` is kept in memory indefinitely, we forcefully free the
+  // memory by swapping it with an empty array.
+  state.metadata.clear_input_token();
+  google::protobuf::RepeatedPtrField<std::string> empty_tokens;
+  state.metadata.mutable_input_token()->Swap(&empty_tokens);
+
   supported_types_.clear();
   for (int type : state.metadata.output_type()) {
-    supported_types_.insert(ToSafeFieldType(FieldType(type), NO_SERVER_DATA));
+    supported_types_.insert(
+        ToSafeFieldType(FieldType(type)).value_or(NO_SERVER_DATA));
   }
   state_.emplace(std::move(state));
 
@@ -472,9 +492,9 @@ std::pair<FieldType, float> FieldClassificationModelHandler::GetMostLikelyType(
            .has_confidence_threshold_per_field() ||
       model_output[max_index] >= state_->metadata.postprocessing_parameters()
                                      .confidence_threshold_per_field()) {
-    return {
-        ToSafeFieldType(state_->metadata.output_type(max_index), UNKNOWN_TYPE),
-        model_output[max_index]};
+    return {ToSafeFieldType(state_->metadata.output_type(max_index))
+                .value_or(UNKNOWN_TYPE),
+            model_output[max_index]};
   }
   return {NO_SERVER_DATA, 0.0};
 }
@@ -515,8 +535,7 @@ FieldClassificationModelHandler::CalculateModelInputHash(
   flattened_data.reserve(flattened_data_size);
   for (const std::vector<FieldClassificationModelEncoder::TokenId>&
            field_tokens : input) {
-    flattened_data.insert(flattened_data.end(), field_tokens.begin(),
-                          field_tokens.end());
+    base::Extend(flattened_data, field_tokens);
   }
 
   return ModelInputHash(base::FastHash(base::as_byte_span(flattened_data)));
@@ -524,24 +543,22 @@ FieldClassificationModelHandler::CalculateModelInputHash(
 
 std::string FieldClassificationModelHandler::TokenIdToString(
     FieldClassificationModelEncoder::TokenId token_id) const {
-  const int token = static_cast<int>(token_id.value());
-  if (token == 0) {
+  if (token_id.value() == 0) {
     // Padding token, always encoded as 0.
     return "";
-  } else if (token == 1) {
+  }
+  if (token_id.value() == 1) {
     // Unknown, out-of-vocabulary token, always encoded as 1.
     return "[UNK]";
-  } else if (token == state_->metadata.input_token_size() + 2) {
-    // Special "classification" token used by the model, encoded as
-    // `vocabulary_size` (where the vocab size includes the two special tokens,
-    // hence the +2).
-    return "[CLS]";
-  } else if (token < 2 || token >= state_->metadata.input_token_size() + 2) {
-    return "[INVALID]";
-  } else {
-    // Indexing starts at 2 because of the special tokens.
-    return state_->metadata.input_token(token_id.value() - 2);
   }
+  if (token_id == state_->encoder.GetClsToken()) {
+    return "[CLS]";
+  }
+  std::string token = state_->encoder.FindTokenById(token_id);
+  if (!token.empty()) {
+    return token;
+  }
+  return "[INVALID]";
 }
 
 }  // namespace autofill

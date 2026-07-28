@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file_path.h"
 #include "base/location.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -47,16 +48,6 @@ enum SyncEnums_ErrorType : int;
 }  // namespace sync_pb
 
 namespace fake_server {
-
-// This function only compares one part of the markers, the time-independent
-// hashes of the data served in the update. Apart from this, the progress
-// markers for fake wallet data also include information about fetch time. This
-// is in-line with the server behavior and -- as it keeps changing -- allows
-// integration tests to wait for a GetUpdates call to finish, even if they don't
-// contain data updates.
-bool AreFullUpdateTypeDataProgressMarkersEquivalent(
-    const sync_pb::DataTypeProgressMarker& marker1,
-    const sync_pb::DataTypeProgressMarker& marker2);
 
 // A fake version of the Sync server used for testing. This class is not thread
 // safe.
@@ -99,6 +90,9 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
   net::HttpStatusCode HandleCommand(const std::string& request,
                                     std::string* response);
 
+  // Handles a /chrome-sync/event request.
+  void HandleEvent(const sync_pb::EventRequest& request);
+
   // Helpers for fetching the last Commit or GetUpdates messages, respectively.
   // Returns true if the specified message existed, and false if no message has
   // been received.
@@ -137,42 +131,6 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
   // operations.
   void InjectEntity(std::unique_ptr<syncer::LoopbackServerEntity> entity);
 
-  // Sets the Wallet card and address data to be served in following GetUpdates
-  // requests (any further GetUpdates response will be empty, indicating no
-  // change, if the client already has received `wallet_entities`).
-  //
-  // The returned value represents the timestamp of the write, such that any
-  // progress marker greater or equal to this timestamp must have processed the
-  // changes. See GetProgressMarkerTimestamp() below.
-  base::Time SetWalletData(
-      const std::vector<sync_pb::SyncEntity>& wallet_entities);
-
-  // Sets the Autofill offer data to be served in following GetUpdates
-  // requests (any further GetUpdates response will be empty, indicating no
-  // change, if the client already has received `offer_entities`).
-  //
-  // The returned value represents the timestamp of the write, such that any
-  // progress marker greater or equal to this timestamp must have processed the
-  // changes. See GetProgressMarkerTimestamp() below.
-  base::Time SetOfferData(
-      const std::vector<sync_pb::SyncEntity>& offer_entities);
-
-  // Sets the Google Wallet valuable data to be served in following GetUpdates
-  // requests (any further GetUpdates response will be empty, indicating no
-  // change, if the client already has received `valuable_entities`).
-  //
-  // The returned value represents the timestamp of the write, such that any
-  // progress marker greater or equal to this timestamp must have processed the
-  // changes. See GetProgressMarkerTimestamp() below.
-  base::Time SetValuableData(
-      const std::vector<sync_pb::SyncEntity>& valuable_entities);
-
-  // Allows the caller to know the timestamp corresponding to
-  // `progress_marker` as annotated by the FakeServer during the GetUpdates
-  // request that returned the progress marker.
-  static base::Time GetProgressMarkerTimestamp(
-      const sync_pb::DataTypeProgressMarker& progress_marker);
-
   // Modifies the entity on the server with the given `id`. The entity's
   // EntitySpecifics are replaced with `updated_specifics` and its version is
   // updated. If the given `id` does not exist or the DataType of
@@ -202,6 +160,9 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
 
   // Undoes previous calls to SetHttpError().
   void ClearHttpError();
+
+  // Returns the current HTTP error status code, or std::nullopt if none.
+  std::optional<net::HttpStatusCode> GetHttpError() const;
 
   // Sets the provided `client_command` in all subsequent successful requests.
   void SetClientCommand(const sync_pb::ClientCommand& client_command);
@@ -244,6 +205,13 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
   // future GetUpdates requests will be treated normally again.
   void SetRejectOldProgressMarkerForType(syncer::DataType data_type);
 
+  using UpdateMode = syncer::LoopbackServer::UpdateMode;
+
+  // Configures the update mode for `data_type`. When set to
+  // `UpdateMode::kFull`, the server will respond with a full update and a GC
+  // directive whenever there are new or updated entities for `data_type`.
+  void SetUpdateMode(syncer::DataType data_type, UpdateMode update_mode);
+
   // If called, all subsequent GetUpdatesResponses won't contain
   // encryption_keys.
   void DisallowSendingEncryptionKeys();
@@ -269,6 +237,13 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
   void SetBagOfChips(const sync_pb::ChipBag& bag_of_chips);
 
   void TriggerMigrationDoneError(syncer::DataTypeSet types);
+
+  void EnableGcDirectiveForMigration();
+
+  int GetMigrationVersion(syncer::DataType type) const;
+
+  static int GetProgressMarkerMigrationVersion(
+      const sync_pb::DataTypeProgressMarker& progress_marker);
 
   // Add the user to the collaboration for the shared data types. No-op if the
   // user is already in this collaboration.
@@ -330,6 +305,13 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
   // Notifies observers about an ongoing commit.
   void OnWillCommit();
 
+  // Writes some of the member variables to disk, for state to carry over after
+  // PRE_ states.
+  void LoadFakeStateFromDisk();
+  void WriteFakeStateToDisk() const;
+
+  const base::FilePath fake_state_file_path_;
+
   // List used to implement LogForTestFailure().
   std::vector<std::unique_ptr<testing::ScopedTrace>> gtest_scoped_traces_;
 
@@ -382,18 +364,6 @@ class FakeServer : public syncer::LoopbackServer::ObserverForTests {
   base::ThreadChecker thread_checker_;
 
   std::unique_ptr<syncer::LoopbackServer> loopback_server_;
-
-  // The LoopbackServer does not know how to handle Wallet data properly, so
-  // the FakeServer handles those itself.
-  std::vector<sync_pb::SyncEntity> wallet_entities_;
-
-  // The LoopbackServer does not know how to handle offer data properly, so
-  // the FakeServer handles those itself.
-  std::vector<sync_pb::SyncEntity> offer_entities_;
-
-  // The LoopbackServer does not know how to handle valuable data properly, so
-  // the FakeServer handles those itself.
-  std::vector<sync_pb::SyncEntity> valuable_entities_;
 
   // Collaborations the user is a member of, used for all shared types.
   std::set<syncer::CollaborationId> collaborations_;

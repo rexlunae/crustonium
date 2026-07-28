@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <optional>
-#include <set>
 #include <utility>
 
 #include "base/base64url.h"
@@ -18,6 +17,7 @@
 #include "base/values.h"
 #include "components/webcrypto/algorithms/util.h"
 #include "components/webcrypto/status.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 // JSON Web Key Format (JWK) is defined by:
 // http://tools.ietf.org/html/draft-ietf-jose-json-web-key
@@ -50,7 +50,11 @@ namespace {
 const blink::WebCryptoKeyUsageMask kJwkEncUsage =
     blink::kWebCryptoKeyUsageEncrypt | blink::kWebCryptoKeyUsageDecrypt |
     blink::kWebCryptoKeyUsageWrapKey | blink::kWebCryptoKeyUsageUnwrapKey |
-    blink::kWebCryptoKeyUsageDeriveKey | blink::kWebCryptoKeyUsageDeriveBits;
+    blink::kWebCryptoKeyUsageDeriveKey | blink::kWebCryptoKeyUsageDeriveBits |
+    blink::kWebCryptoKeyUsageEncapsulateKey |
+    blink::kWebCryptoKeyUsageEncapsulateBits |
+    blink::kWebCryptoKeyUsageDecapsulateKey |
+    blink::kWebCryptoKeyUsageDecapsulateBits;
 const blink::WebCryptoKeyUsageMask kJwkSigUsage =
     blink::kWebCryptoKeyUsageSign | blink::kWebCryptoKeyUsageVerify;
 
@@ -84,7 +88,11 @@ const JwkToWebCryptoUsageMapping kJwkWebCryptoUsageMap[] = {
     {"deriveKey", blink::kWebCryptoKeyUsageDeriveKey},
     {"deriveBits", blink::kWebCryptoKeyUsageDeriveBits},
     {"wrapKey", blink::kWebCryptoKeyUsageWrapKey},
-    {"unwrapKey", blink::kWebCryptoKeyUsageUnwrapKey}};
+    {"unwrapKey", blink::kWebCryptoKeyUsageUnwrapKey},
+    {"encapsulateKey", blink::kWebCryptoKeyUsageEncapsulateKey},
+    {"encapsulateBits", blink::kWebCryptoKeyUsageEncapsulateBits},
+    {"decapsulateKey", blink::kWebCryptoKeyUsageDecapsulateKey},
+    {"decapsulateBits", blink::kWebCryptoKeyUsageDecapsulateBits}};
 
 bool JwkKeyOpToWebCryptoUsage(std::string_view key_op,
                               blink::WebCryptoKeyUsage* usage) {
@@ -112,7 +120,7 @@ base::ListValue CreateJwkKeyOpsFromWebCryptoUsages(
 Status GetWebCryptoUsagesFromJwkKeyOps(const base::ListValue& key_ops,
                                        blink::WebCryptoKeyUsageMask* usages) {
   // This set keeps track of all unrecognized key_ops values.
-  std::set<std::string> unrecognized_usages;
+  absl::flat_hash_set<std::string> unrecognized_usages;
 
   *usages = 0;
   for (size_t i = 0; i < key_ops.size(); ++i) {

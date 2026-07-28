@@ -65,7 +65,7 @@ class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
                              content::BrowserContext* browser_context) override;
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
 
-#if BUILDFLAG(ENABLE_PLATFORM_APPS)
+#if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<AppViewGuestDelegate> CreateAppViewGuestDelegate()
       const override;
 #endif
@@ -92,13 +92,13 @@ class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
   scoped_refptr<ContentRulesRegistry> CreateContentRulesRegistry(
       content::BrowserContext* browser_context,
       RulesCacheDelegate* cache_delegate) const override;
-  std::unique_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
+  std::unique_ptr<UsbDevicePermissionsPrompt> CreateUsbDevicePermissionsPrompt(
       content::WebContents* web_contents) const override;
 #if BUILDFLAG(IS_CHROMEOS)
   bool ShouldAllowDetachingUsb(int vid, int pid) const override;
-#endif  // BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<VirtualKeyboardDelegate> CreateVirtualKeyboardDelegate(
       content::BrowserContext* browser_context) const override;
+#endif  // BUILDFLAG(IS_CHROMEOS)
   ManagementAPIDelegate* CreateManagementAPIDelegate() const override;
   std::unique_ptr<SupervisedUserExtensionsDelegate>
   CreateSupervisedUserExtensionsDelegate(
@@ -128,6 +128,8 @@ class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
 
   std::vector<KeyedServiceBaseFactory*> GetFactoryDependencies() override;
 
+  WebstorePrivateAPIDelegate* GetWebstorePrivateAPIDelegate() override;
+
   std::unique_ptr<NativeMessagePortDispatcher>
   CreateNativeMessagePortDispatcher(std::unique_ptr<NativeMessageHost> host,
                                     base::WeakPtr<NativeMessagePort> port,
@@ -137,6 +139,7 @@ class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
  private:
   std::unique_ptr<ChromeMetricsPrivateDelegate> metrics_private_delegate_;
   std::unique_ptr<MessagingDelegate> messaging_delegate_;
+  std::unique_ptr<WebstorePrivateAPIDelegate> webstore_private_api_delegate_;
 
 #if !BUILDFLAG(IS_ANDROID)
   // Desktop Android does not support these APIs.

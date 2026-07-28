@@ -105,7 +105,7 @@ DEVICE_PERF_OUTPUT_DIR = ('/data/data/' + PACKAGE_INFO['chrome'].package +
 
 SCREENSHOTS_DIR = os.path.join(DIR_SOURCE_ROOT, 'out_screenshots')
 
-ANDROID_SDK_BUILD_TOOLS_VERSION = '36.1.0'
+ANDROID_SDK_BUILD_TOOLS_VERSION = '37.0.0'
 ANDROID_SDK_ROOT = os.path.join(DIR_SOURCE_ROOT, 'third_party', 'android_sdk',
                                 'public')
 ANDROID_SDK_TOOLS = os.path.join(ANDROID_SDK_ROOT, 'build-tools',
@@ -150,6 +150,7 @@ PYTHON_UNIT_TEST_SUITES = {
             'java_cpp_enum_tests',
             'java_cpp_strings_tests',
             'java_google_api_keys_tests',
+            'util.java_cpp_utils_test',
         ]
     },
 }

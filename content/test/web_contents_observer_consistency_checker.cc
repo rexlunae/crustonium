@@ -22,6 +22,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -39,10 +40,10 @@ const char kWebContentsObserverConsistencyCheckerKey[] =
 using LifecycleStateImpl = RenderFrameHostImpl::LifecycleStateImpl;
 
 GlobalRoutingID GetRoutingPair(RenderFrameHost* host) {
-  if (!host)
-    return GlobalRoutingID(0, 0);
-  return GlobalRoutingID(host->GetProcess()->GetDeprecatedID(),
-                         host->GetRoutingID());
+  if (!host) {
+    return GlobalRoutingID();
+  }
+  return GlobalRoutingID(host->GetProcess()->GetID(), host->GetRoutingID());
 }
 
 }  // namespace
@@ -414,10 +415,14 @@ void WebContentsObserverConsistencyChecker::AssertMainFrameExists() {
 
 std::string WebContentsObserverConsistencyChecker::Format(
     RenderFrameHost* render_frame_host) {
-  return base::StringPrintf(
-      "(%d, %d -> %s)", render_frame_host->GetProcess()->GetDeprecatedID(),
-      render_frame_host->GetRoutingID(),
-      render_frame_host->GetSiteInstance()->GetSiteURL().spec().c_str());
+  return base::StringPrintf("(%d, %d -> %s)",
+                            render_frame_host->GetProcess()->GetDeprecatedID(),
+                            render_frame_host->GetRoutingID(),
+                            render_frame_host->GetSiteInstance()
+                                ->GetSecurityPrincipal()
+                                .GetDeprecatedSiteURL()
+                                .spec()
+                                .c_str());
 }
 
 bool WebContentsObserverConsistencyChecker::NavigationIsOngoing(

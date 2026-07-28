@@ -10,7 +10,10 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/flat_map.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -282,6 +285,7 @@ static void JNI_GamepadList_SetGamepadData(JNIEnv* env,
 
   // Copy buttons state to the Gamepad buttons[].
   for (unsigned int j = 0; j < pad.buttons_length; j++) {
+    pad.buttons[j].used = true;
     pad.buttons[j].pressed =
         buttons[j] > GamepadButton::kDefaultButtonPressedThreshold;
     pad.buttons[j].touched = buttons[j] > 0.0f;

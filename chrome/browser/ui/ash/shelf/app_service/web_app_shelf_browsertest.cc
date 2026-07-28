@@ -15,8 +15,8 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -54,10 +54,10 @@ class WebAppShelfBrowserTest : public InProcessBrowserTest {
         WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromOmnibox));
     Browser* app_browser = browser_created_observer.Wait();
     ash::ShelfModel::Get()->PinExistingItemWithID(app_id);
-    app_browser->window()->Close();
+    app_browser->GetWindow()->Close();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppShelfBrowserTest, SwitchingBetweenApps) {
@@ -169,9 +169,9 @@ IN_PROC_BROWSER_TEST_F(WebAppShelfBrowserTest, SwitchingBetweenApps) {
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_ACTIVE);
 
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   EXPECT_EQ(button_a->state(), ash::ShelfAppButton::STATE_NORMAL);
   EXPECT_EQ(button_b->state(), ash::ShelfAppButton::STATE_NORMAL);
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_ACTIVE);
-  EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_RUNNING);
+  EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_NORMAL);
 }

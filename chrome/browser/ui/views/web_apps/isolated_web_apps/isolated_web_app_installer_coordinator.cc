@@ -68,7 +68,7 @@ IsolatedWebAppInstallerCoordinator::IsolatedWebAppInstallerCoordinator(
     : profile_(profile),
       on_closed_callback_(std::move(on_closed_callback)),
       model_(std::make_unique<IsolatedWebAppInstallerModel>(
-          IwaSourceBundleDevMode(bundle_path))),
+          IwaSourceBundleProdMode(bundle_path))),
       controller_(std::make_unique<IsolatedWebAppInstallerViewController>(
           profile,
           WebAppProvider::GetForWebApps(profile),
@@ -83,7 +83,7 @@ void IsolatedWebAppInstallerCoordinator::Start(
   base::OnceClosure on_complete_callback =
       base::BindOnce(&IsolatedWebAppInstallerCoordinator::OnDialogClosed,
                      base::Unretained(this), std::move(callback));
-  if (!IsIwaUnmanagedInstallEnabled(profile_)) {
+  if (!IsIwaUnmanagedInstallFeatureEnabled(profile_)) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, std::move(on_complete_callback));
     return;

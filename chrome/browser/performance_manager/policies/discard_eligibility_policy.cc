@@ -6,21 +6,22 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
+#include "chrome/common/buildflags.h"
 #include "components/performance_manager/graph/page_node_impl.h"
 #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
 #include "components/performance_manager/public/graph/node_data_describer_registry.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/url_matcher/url_matcher.h"
 #include "components/url_matcher/url_util.h"
 #include "content/public/browser/web_contents.h"
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
-#include "components/tabs/public/tab_interface.h"
-#endif
-
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#include "chrome/browser/flags/android/chrome_feature_list.h"
+#else
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -73,7 +74,7 @@ DiscardEligibilityPolicy::DiscardEligibilityPolicy() = default;
 DiscardEligibilityPolicy::~DiscardEligibilityPolicy() = default;
 
 void DiscardEligibilityPolicy::SetNoDiscardPatternsForProfile(
-    const std::string& browser_context_id,
+    const base::UnguessableToken& browser_context_id,
     const std::vector<std::string>& patterns) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::unique_ptr<url_matcher::URLMatcher>& entry =
@@ -86,7 +87,7 @@ void DiscardEligibilityPolicy::SetNoDiscardPatternsForProfile(
 }
 
 void DiscardEligibilityPolicy::ClearNoDiscardPatternsForProfile(
-    const std::string& browser_context_id) {
+    const base::UnguessableToken& browser_context_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   profiles_no_discard_patterns_.erase(browser_context_id);
   if (opt_out_policy_changed_callback_) {
@@ -106,7 +107,7 @@ void DiscardEligibilityPolicy::RemovesDiscardAttemptMarkerForTesting(
 }
 
 void DiscardEligibilityPolicy::SetOptOutPolicyChangedCallback(
-    base::RepeatingCallback<void(std::string_view)> callback) {
+    base::RepeatingCallback<void(const base::UnguessableToken&)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   opt_out_policy_changed_callback_ = std::move(callback);
 }
@@ -151,6 +152,9 @@ bool DiscardEligibilityPolicy::WillDiscardBePerceptible(
 
 bool DiscardEligibilityPolicy::IsDiscardAllowed(
     const PageNode* page_node) const {
+  if (page_node->GetType() != PageType::kTab) {
+    return false;
+  }
   const GURL& main_frame_url = page_node->GetMainFrameUrl();
   if (IsPageOptedOutOfDiscarding(page_node->GetBrowserContextID(),
                                  main_frame_url)) {
@@ -169,10 +173,37 @@ bool DiscardEligibilityPolicy::IsDiscardAllowed(
   return true;
 }
 
+CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
+    const PageNode* page_node,
+    DiscardReason discard_reason,
+    bool ignore_recent_visibility,
+    std::vector<CannotDiscardReason>* cannot_discard_reasons) const {
+  if (ignore_recent_visibility) {
+    return CanDiscardWithCustomRecentVisibilityWindow(
+        page_node, discard_reason, base::TimeDelta(), cannot_discard_reasons);
+  }
+
+  base::TimeDelta minimum_time_in_background =
+      internal::kNonVisiblePagesUrgentProtectionTime;
+#if BUILDFLAG(IS_ANDROID)
+  if (base::android::device_info::is_desktop() ||
+      base::FeatureList::IsEnabled(
+          chrome::android::kProtectRecentlyVisibleTab)) {
+    minimum_time_in_background = base::Seconds(
+        chrome::android::kProtectRecentlyVisibleTabDuration.Get());
+  }
+#endif
+
+  return CanDiscardWithCustomRecentVisibilityWindow(page_node, discard_reason,
+                                                    minimum_time_in_background,
+                                                    cannot_discard_reasons);
+}
+
 // NOTE: This is used by ProcessRankPolicyAndroid. If you add a new condition to
 // this, you need to add an observer callback to ProcessRankPolicyAndroid as
 // well.
-CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
+CanDiscardResult
+DiscardEligibilityPolicy::CanDiscardWithCustomRecentVisibilityWindow(
     const PageNode* page_node,
     DiscardReason discard_reason,
     base::TimeDelta minimum_time_in_background,
@@ -202,8 +233,6 @@ CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
 
   // Don't discard tabs that don't have a main frame (restored tab which is not
   // loaded yet, discarded tab, crashed tab).
-  // TODO(crbug.com/463291982): Add test to verify crashed page cannot be
-  // discarded.
   if (!page_node->GetMainFrameNode()) {
     add_reason(CannotDiscardReason::kNoMainFrame);
     return CanDiscardResult::kDisallowed;
@@ -271,8 +300,8 @@ CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
   }
 
   // Do not discard PDFs as they might contain entry that is not saved and they
-  // don't remember their scrolling positions. See crbug.com/547286 and
-  // crbug.com/65244.
+  // don't remember their scrolling positions. See crbug.com/40441737 and
+  // crbug.com/40487491.
   if (page_node->GetContentsMimeType() == "application/pdf") {
     add_reason_and_update_result(CannotDiscardReason::kPdf,
                                  CanDiscardResult::kProtected);
@@ -299,7 +328,6 @@ CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_GLIC)
   {
     content::WebContents* web_contents = page_node->GetWebContents().get();
     // Do not discard pages that are pin-shared with Glic.
@@ -309,15 +337,15 @@ CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
       if (tab_interface) {
         auto* glic_service = glic::GlicKeyedServiceFactory::GetGlicKeyedService(
             web_contents->GetBrowserContext());
-        if (glic_service && glic_service->sharing_manager().IsTabPinned(
-                                tab_interface->GetHandle())) {
+        if (glic_service &&
+            glic_service->instance_coordinator().IsTabPinnedToAnyInstance(
+                tab_interface->GetHandle())) {
           add_reason_and_update_result(CannotDiscardReason::kGlicShared,
                                        CanDiscardResult::kProtected);
         }
       }
     }
   }
-#endif
 
   // Only discard http(s) pages and internal pages to make sure that we don't
   // discard extensions or other PageNode that don't correspond to a tab.
@@ -437,7 +465,7 @@ CanDiscardResult DiscardEligibilityPolicy::CanDiscard(
 }
 
 bool DiscardEligibilityPolicy::IsPageOptedOutOfDiscarding(
-    const std::string& browser_context_id,
+    const base::UnguessableToken& browser_context_id,
     const GURL& url) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = profiles_no_discard_patterns_.find(browser_context_id);
@@ -461,7 +489,8 @@ void DiscardEligibilityPolicy::OnMainFrameDocumentChanged(
 base::DictValue DiscardEligibilityPolicy::DescribePageNodeData(
     const PageNode* node) const {
   auto can_discard = [this, node](DiscardReason discard_reason) {
-    switch (this->CanDiscard(node, discard_reason, base::TimeDelta())) {
+    switch (this->CanDiscard(node, discard_reason,
+                             /*ignore_recent_visibility=*/true)) {
       case CanDiscardResult::kEligible:
         return "eligible";
       case CanDiscardResult::kProtected:

@@ -11,13 +11,12 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_generator.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/tab_id_generator.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -25,23 +24,22 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "url/gurl.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#endif
+
 namespace base {
 class TimeTicks;
 }
 
-namespace history {
-class HistoryService;
-class QueryResults;
-}  // namespace history
-
-namespace tabs {
-class TabInterface;
-}
-
 class Profile;
 
-class ActionChipsHandler : public action_chips::mojom::ActionChipsHandler,
-                           public TabStripModelObserver {
+class ActionChipsHandler : public action_chips::mojom::ActionChipsHandler
+#if !BUILDFLAG(IS_ANDROID)
+    ,
+                           public TabStripModelObserver
+#endif
+{
  public:
   ActionChipsHandler(
       mojo::PendingReceiver<action_chips::mojom::ActionChipsHandler> receiver,
@@ -54,37 +52,37 @@ class ActionChipsHandler : public action_chips::mojom::ActionChipsHandler,
   ~ActionChipsHandler() override;
 
   void StartActionChipsRetrieval() override;
+  void ActivateMetricsFunnel(const std::string& funnel_name) override;
+  void SetActionChipsVisibility(bool is_visible) override;
 
+#if !BUILDFLAG(IS_ANDROID)
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
+#endif
 
  private:
   void SendActionChipsToUi(
       base::TimeTicks start_time,
       std::vector<action_chips::mojom::ActionChipPtr> chips);
-  void OnGetHistoryData(const tabs::TabInterface* tab,
-                        base::TimeTicks start_time,
-                        history::QueryResults results);
 
   // Returns true if chips retrieval should not occur in the current call.
   // This method was introduced to address the issue of jittering experience
   // when the user switches among multiple NTPs without a change in the most
   // recent tab.
   bool ShouldThrottleRetrieval(const GURL& current_url);
+  void OnVisibilityChanged();
 
   mojo::Receiver<action_chips::mojom::ActionChipsHandler> receiver_;
   mojo::Remote<action_chips::mojom::Page> page_;
   raw_ptr<Profile> profile_;
   raw_ptr<content::WebUI> web_ui_;
   std::unique_ptr<ActionChipsGenerator> action_chips_generator_;
-  raw_ptr<history::HistoryService> history_service_;
-
-  // Task tracker for history requests.
-  base::CancelableTaskTracker cancelable_task_tracker_;
+  PrefChangeRegistrar pref_change_registrar_;
 
   std::optional<GURL> last_processed_url_;
+  bool has_recorded_any_shown_ = false;
 
   base::WeakPtrFactory<ActionChipsHandler> weak_factory_{this};
 };

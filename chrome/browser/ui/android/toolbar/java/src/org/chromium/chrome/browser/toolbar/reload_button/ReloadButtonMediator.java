@@ -110,10 +110,10 @@ class ReloadButtonMediator implements ThemeColorProvider.TintObserver {
                         setReloading(isLoading);
                     }
                 };
-        mNtpLoadingSupplier.addObserver(mNtpLoadingObserver);
+        mNtpLoadingSupplier.addSyncObserverAndPostIfNonNull(mNtpLoadingObserver);
 
         mEnabledObserver = (isEnabled) -> mModel.set(ReloadButtonProperties.IS_ENABLED, isEnabled);
-        mEnabledSupplier.addObserver(mEnabledObserver);
+        mEnabledSupplier.addSyncObserverAndPostIfNonNull(mEnabledObserver);
 
         mTabObserver =
                 new TabSupplierObserver(tabSupplier, /* shouldTrigger= */ true) {
@@ -225,6 +225,11 @@ class ReloadButtonMediator implements ThemeColorProvider.TintObserver {
      */
     public void setVisibility(boolean isVisible) {
         mModel.set(ReloadButtonProperties.IS_VISIBLE, isVisible);
+    }
+
+    /** Returns whether there is enough space for the button to be shown. */
+    boolean hasSpaceToShow() {
+        return mModel.get(ReloadButtonProperties.HAS_SPACE_TO_SHOW);
     }
 
     /**

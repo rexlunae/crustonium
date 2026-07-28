@@ -13,6 +13,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
@@ -44,8 +45,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
@@ -64,6 +63,7 @@
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "skia/ext/image_operations.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/icu/source/common/unicode/localebuilder.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_scale_factor.h"
@@ -381,6 +381,7 @@ bool ignore_compare_app_info_install_time = false;
 
 // Reason for installation enumeration; Used for UMA counter for reason for
 // install.
+// LINT.IfChange(InstallationCounterReasonEnum)
 enum class InstallationCounterReasonEnum {
   USER = 0,     // Application installed by user.
   DEFAULT = 1,  // Application part of the default set.
@@ -389,12 +390,15 @@ enum class InstallationCounterReasonEnum {
   UNKNOWN = 4,
   kMaxValue = UNKNOWN,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/arc/enums.xml:InstallationCounterReasonEnum)
 
 // Reasons for uninstalls. Only one, USER, for now.
+// LINT.IfChange(UninstallCounterReasonEnum)
 enum class UninstallCounterReasonEnum {
   USER = 0,  // Uninstall triggered by user.
   kMaxValue = USER
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/arc/enums.xml:UninstallCounterReasonEnum)
 
 // Remove deprecated package prefs. Otherwise deprecated fields will stay on
 // disks.
@@ -603,10 +607,8 @@ ArcAppListPrefs::ArcAppListPrefs(
     net_host->SetArcAppMetadataProvider(this);
   }
 
-  if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
-    install_priority_handler_ =
-        std::make_unique<arc::ArcPackageInstallPriorityHandler>(profile);
-  }
+  install_priority_handler_ =
+      std::make_unique<arc::ArcPackageInstallPriorityHandler>(profile);
 }
 
 ArcAppListPrefs::~ArcAppListPrefs() {
@@ -1060,7 +1062,7 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetAppFromPrefs(
   std::string icon_resource_id =
       maybe_icon_resource_id ? *maybe_icon_resource_id : std::string();
 
-  std::optional<std::string> version_name = std::nullopt;
+  std::optional<std::string> version_name;
   if (maybe_version_name && *maybe_version_name != std::string())
     version_name = *maybe_version_name;
 
@@ -1212,7 +1214,7 @@ void ArcAppListPrefs::SetLastLaunchTimeForTesting(const std::string& app_id,
 }
 
 void ArcAppListPrefs::DisableAllApps() {
-  std::unordered_set<std::string> old_ready_apps;
+  absl::flat_hash_set<std::string> old_ready_apps;
   old_ready_apps.swap(ready_apps_);
   for (auto& app_id : old_ready_apps)
     NotifyAppStatesChanged(app_id);
@@ -1501,7 +1503,7 @@ void ArcAppListPrefs::SetResizeLockState(const std::string& app_id,
   app_dict.Set(kResizeLockState, static_cast<int32_t>(state));
 
   // If the app is not "ready", we shouldn't fire the AppStatesChanged
-  // callbacks. Otherwise, it would cause a crash (See crbug.com/1276603). When
+  // callbacks. Otherwise, it would cause a crash (See crbug.com/40808991). When
   // the app is changed to "ready", ArcAppListPrefs sends the notifications
   // afterwards so it's fine not to fire it here.
   if (app_info->ready)
@@ -1561,10 +1563,7 @@ void ArcAppListPrefs::Shutdown() {
   if (policy_bridge)
     policy_bridge->RemoveObserver(this);
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->Shutdown();
-  }
+  install_priority_handler_->Shutdown();
 
   arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
   if (arc_session_manager) {
@@ -1675,10 +1674,7 @@ void ArcAppListPrefs::OnConnectionClosed() {
   package_list_initial_refreshed_ = false;
   app_list_refreshed_callback_.Reset();
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->Clear();
-  }
+  install_priority_handler_->Clear();
 
   for (auto& observer : observer_list_)
     observer.OnAppConnectionClosed();
@@ -1747,7 +1743,7 @@ void ArcAppListPrefs::AddAppAndShortcut(
   }
 
   std::string updated_name = name;
-  // Add "(beta)" string to Play Store. See crbug.com/644576 for details.
+  // Add "(beta)" string to Play Store. See crbug.com/40483829 for details.
   if (app_id == arc::kPlayStoreAppId)
     updated_name = l10n_util::GetStringUTF8(IDS_ARC_PLAYSTORE_ICON_TITLE_BETA);
 
@@ -2230,7 +2226,7 @@ void ArcAppListPrefs::OnPackageAppListRefreshed(
     return;
   }
 
-  std::unordered_set<std::string> apps_to_remove =
+  absl::flat_hash_set<std::string> apps_to_remove =
       GetAppsAndShortcutsForPackage(package_name,
                                     true, /* include_only_launchable_apps */
                                     false /* include_shortcuts */);
@@ -2307,18 +2303,18 @@ void ArcAppListPrefs::OnUninstallShortcut(const std::string& package_name,
     RemoveApp(shortcut_id);
 }
 
-std::unordered_set<std::string> ArcAppListPrefs::GetAppsForPackage(
+absl::flat_hash_set<std::string> ArcAppListPrefs::GetAppsForPackage(
     const std::string& package_name) const {
   return GetAppsAndShortcutsForPackage(package_name,
                                        false, /* include_only_launchable_apps */
                                        false /* include_shortcuts */);
 }
 
-std::unordered_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
+absl::flat_hash_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
     const std::string& package_name,
     bool include_only_launchable_apps,
     bool include_shortcuts) const {
-  std::unordered_set<std::string> app_set;
+  absl::flat_hash_set<std::string> app_set;
   const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!crx_file::id_util::IdIsValid(app.first))
@@ -2357,7 +2353,7 @@ std::unordered_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
 
 void ArcAppListPrefs::HandlePackageRemoved(const std::string& package_name) {
   DCHECK(IsArcAndroidEnabledForProfile(profile_));
-  const std::unordered_set<std::string> apps_to_remove =
+  const absl::flat_hash_set<std::string> apps_to_remove =
       GetAppsAndShortcutsForPackage(package_name,
                                     false /* include_only_launchable_apps */,
                                     true /* include_shortcuts */);
@@ -2487,10 +2483,7 @@ void ArcAppListPrefs::OnPackageAdded(
   packages_to_be_added_.erase(package_info->package_name);
   UpdateArcPackagesIsUpToDatePref();
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->ClearPackage(package_info->package_name);
-  }
+  install_priority_handler_->ClearPackage(package_info->package_name);
 
   for (auto& observer : observer_list_)
     observer.OnPackageInstalled(*package_info);

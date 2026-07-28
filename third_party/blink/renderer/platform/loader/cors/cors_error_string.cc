@@ -6,6 +6,7 @@
 
 #include <initializer_list>
 
+#include "base/compiler_specific.h"
 #include "base/numerics/safe_conversions.h"
 #include "services/network/public/mojom/cors.mojom-blink.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
@@ -65,8 +66,9 @@ String EncodeHint(StringView hint) {
   StringBuilder builder;
   if (!hint.IsNull()) {
     for (unsigned i = 0; i < hint.length(); ++i) {
-      UChar c = hint[i];
-      if (IsASCIIPrintable(c)) {
+      // SAFETY: index checked in loop body.
+      UChar c = UNSAFE_BUFFERS(hint[i]);
+      if (IsAsciiPrintable(c)) {
         builder.Append(static_cast<char>(c));
       } else {
         // Print "\uXXXX" for control or non-ASCII characters.
@@ -101,7 +103,7 @@ String GetErrorStringForIssueSummary(const network::CorsErrorStatus& status,
     case CorsError::kInvalidResponse:
       builder.Append("The response is invalid.");
       break;
-    case CorsError::kInsecurePrivateNetwork:
+    case CorsError::kInsecureLocalNetwork:
       Append(builder, {"The request client is not a secure context and the "
                        "resource is in more-private address space `",
                        ShortAddressSpace(status.resource_address_space), "`."});
@@ -203,7 +205,7 @@ String GetErrorStringForIssueSummary(const network::CorsErrorStatus& status,
                        "' contains a username and password, which is "
                        "disallowed for cross-origin requests."});
       break;
-    case CorsError::kInvalidPrivateNetworkAccess:
+    case CorsError::kInvalidLocalNetworkAccess:
       Append(builder, {"Request had a target IP address space of `",
                        ShortAddressSpace(status.inconsistent_address_space),
                        "` yet the resource is in address space `",
@@ -233,8 +235,8 @@ String GetErrorStringForConsoleMessage(const network::CorsErrorStatus& status,
   const char* resource_kind_raw =
       Resource::ResourceTypeToString(resource_type, initiator_name);
   String resource_kind(resource_kind_raw);
-  if (resource_kind.length() >= 2 && IsASCIILower(resource_kind[1])) {
-    resource_kind = resource_kind.LowerASCII();
+  if (resource_kind.length() >= 2 && IsAsciiLower(resource_kind[1])) {
+    resource_kind = resource_kind.ToAsciiLower();
   }
 
   Append(builder, {"Access to ", resource_kind, " at '",
@@ -258,7 +260,7 @@ String GetErrorStringForConsoleMessage(const network::CorsErrorStatus& status,
     case CorsError::kInvalidResponse:
       builder.Append("The response is invalid.");
       break;
-    case CorsError::kInsecurePrivateNetwork:
+    case CorsError::kInsecureLocalNetwork:
       Append(builder, {"The request client is not a secure context and the "
                        "resource is in more-private address space `",
                        ShortAddressSpace(status.resource_address_space), "`."});
@@ -360,7 +362,7 @@ String GetErrorStringForConsoleMessage(const network::CorsErrorStatus& status,
                        "' contains a username and password, which is "
                        "disallowed for cross-origin requests."});
       break;
-    case CorsError::kInvalidPrivateNetworkAccess:
+    case CorsError::kInvalidLocalNetworkAccess:
       Append(builder, {"Request had a target IP address space of `",
                        ShortAddressSpace(status.inconsistent_address_space),
                        "` yet the resource is in address space `",

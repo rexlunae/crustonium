@@ -2,60 +2,85 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {html, nothing} from '//resources/lit/v3_0/lit.rollup.js';
+import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {GlifAnimationState} from './context_menu_entrypoint.js';
+import {GlifAnimationState} from './common.js';
 import type {ContextualEntrypointButtonElement} from './contextual_entrypoint_button.js';
 
 export function getHtml(this: ContextualEntrypointButtonElement) {
   // clang-format off
-  const entrypointButton = html`
-    ${this.showContextMenuDescription ? html`
-    <cr-button id="entrypoint"
-        class="ai-mode-button"
-        @click="${this.onEntrypointClick_}"
-        ?disabled="${this.inputsDisabled}"
-        title="${this.i18n('addContextTitle')}"
-        noink>
-      <cr-icon id="entrypointIcon" icon="cr:add" slot="prefix-icon"></cr-icon>
-      <span id="description"
-        @animationend="${(e: AnimationEvent) => {
-          this.onAnimationEnd_(e, 'slide-in');
-        }}">
-          ${this.i18n('addContext')}
-      </span>
-    </cr-button>` : html`
-    <cr-icon-button id="entrypoint"
-        class="ai-mode-button"
-        part="context-menu-entrypoint-icon"
-        iron-icon="cr:add"
-        @click="${this.onEntrypointClick_}"
-        ?disabled="${this.inputsDisabled}"
-        title="${this.i18n('addContextTitle')}"
-        noink>
-    </cr-icon-button>`}`;
   return html`<!--_html_template_start_-->
-    ${this.glifAnimationState !== GlifAnimationState.INELIGIBLE ? html`
-    <div id="glowWrapper" class="glow-container">
-      ${entrypointButton}
+  <div id="${this.getWrapperId_()}" class="${this.getWrapperCssClass_()}"
+      @pointerenter="${this.onEntrypointPointerenter_}">
+    ${(this.showContextMenuDescription || this.showSuggestionLabel)
+        && !this.windowWidthBelowThreshold_ ? html`
+      <cr-button id="entrypoint"
+          class="ai-mode-button"
+          part="entrypoint-button"
+          @click="${this.onEntrypointClick_}"
+          title="${this.i18n('addContextTitle')}"
+          ?disabled="${this.uploadButtonDisabled}" noink
+          aria-label="${this.i18n('addContextTitle')}">
+        <cr-icon id="entrypointIcon" icon="cr:add" slot="prefix-icon"
+            @animationend="${this.onIconAnimationend_}"></cr-icon>
+        <span id="description"
+            @animationend="${this.onDescriptionAnimationend_}">
+          ${this.showSuggestionLabel ?
+             this.i18n('searchBoxHintMultimodal') : this.i18n('addContext')}
+        </span>
+        ${this.smartTabSharingActive ? html`
+          <cr-icon class="sts-active-coin" icon="composebox:shareTabs"
+              title="${this.i18n('stsMegaplusShareRelevantOpenTabs')}"></cr-icon>
+        ` : this.tabFaviconChipsToCoinsEnabled_ &&
+          this.getTabs_().length > 0 ? html`
+          <composebox-favicon-group .tabs="${this.getTabs_()}"
+              .submittedTabIds="${this.getSubmittedTabIds_()}"
+              title="${this.i18n('sharingTabsWithGoogle')}">
+          </composebox-favicon-group>
+        ` : ''}
+      </cr-button>
+    ` : this.smartTabSharingActive ||
+        (this.tabFaviconChipsToCoinsEnabled_ &&
+         this.getTabs_().length > 0) ? html`
+      <cr-button id="entrypoint"
+          class="ai-mode-button pill-button"
+          part="entrypoint-button"
+          @click="${this.onEntrypointClick_}"
+          title="${this.i18n('addContextTitle')}"
+          ?disabled="${this.uploadButtonDisabled}" noink
+          aria-label="${this.i18n('addContextTitle')}">
+        <cr-icon id="entrypointIcon" icon="cr:add" slot="prefix-icon"
+            @animationend="${this.onIconAnimationend_}"></cr-icon>
+        ${this.smartTabSharingActive ? html`
+          <cr-icon class="sts-active-coin" icon="composebox:shareTabs"
+              title="${this.i18n('stsMegaplusShareRelevantOpenTabs')}"></cr-icon>
+        ` : html`
+          <composebox-favicon-group .tabs="${this.getTabs_()}"
+              .submittedTabIds="${this.getSubmittedTabIds_()}"
+              title="${this.i18n('sharingTabsWithGoogle')}">
+          </composebox-favicon-group>
+        `}
+      </cr-button>
+    ` : html`
+      <cr-icon-button id="entrypoint"
+          class="ai-mode-button"
+          part="context-menu-entrypoint-icon entrypoint-button"
+          iron-icon="cr:add"
+          @click="${this.onEntrypointClick_}"
+          title="${this.i18n('addContextTitle')}"
+          ?disabled="${this.uploadButtonDisabled}" noink
+          aria-label="${this.i18n('addContextTitle')}"
+          @animationend="${this.onIconAnimationend_}">
+      </cr-icon-button>
+    `}
+    ${!this.energyEffectAnimationEnabled && !this.disableFallbackGlifAnimation && this.glifAnimationState !== GlifAnimationState.INELIGIBLE ? html`
       <div class="aim-gradient-outer-blur aim-c"></div>
       <div class="aim-gradient-solid aim-c"></div>
       <div class="aim-background aim-c"
-        @animationend="${this.showContextMenuDescription
-          ? nothing
-          : (e: AnimationEvent) => {
-              this.onAnimationEnd_(e, 'background-fade');
-            }
-        }"></div>
-    </div>
-    ` : entrypointButton}
-  <cr-composebox-contextual-action-menu id="menu"
-      .fileNum="${this.fileNum}"
-      .disabledTabIds="${this.disabledTabIds}"
-      .tabSuggestions="${this.tabSuggestions}"
-      .inputState="${this.inputState}"
-      @close="${this.onMenuClose_}">
-  </cr-composebox-contextual-action-menu>
+          @animationend="${this.onAimBackgroundAnimationend_}">
+      </div>
+    ` : ''}
+  </div>
 <!--_html_template_end_-->`;
-  // clang-format off
+  // clang-format on
 }

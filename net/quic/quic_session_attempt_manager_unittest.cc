@@ -81,12 +81,14 @@ class SessionRequester {
                        proxy_chain_, session_usage_, socket_tag_,
                        network_anonymization_key_, secure_dns_policy_,
                        require_dns_https_alpn_,
-                       disable_cert_verification_network_fetches_));
+                       disable_cert_verification_network_fetches_,
+                       handles::kInvalidNetworkHandle));
     request_ = manager_->CreateRequest(key);
     int rv = request_->RequestSession(
         endpoint_, cert_verify_flags_, dns_resolution_start_time_,
-        dns_resolution_end_time_, /*use_dns_aliases=*/true, dns_aliases_,
-        session_creation_initiator_, connection_management_config_, net_log_,
+        dns_resolution_end_time_, /*dns_resolution_details=*/std::nullopt,
+        /*use_dns_aliases=*/true, dns_aliases_, session_creation_initiator_,
+        connection_management_config_, net_log_,
         base::BindOnce(&SessionRequester::OnComplete, base::Unretained(this)));
     if (rv != ERR_IO_PENDING) {
       OnComplete(rv);

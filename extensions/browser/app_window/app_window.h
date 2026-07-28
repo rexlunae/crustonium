@@ -485,7 +485,7 @@ class AppWindow : public content::WebContentsDelegate,
   void SaveWindowPosition();
 
   // Helper method to adjust the cached bounds so that we can make sure it can
-  // be visible on the screen. See http://crbug.com/145752.
+  // be visible on the screen. See http://crbug.com/40273646.
   void AdjustBoundsToBeVisibleOnScreen(const gfx::Rect& cached_bounds,
                                        const gfx::Rect& cached_screen_bounds,
                                        const gfx::Rect& current_screen_bounds,
@@ -601,6 +601,7 @@ class AppWindow : public content::WebContentsDelegate,
   base::OnceClosure on_update_draggable_regions_callback_for_testing_;
 
   base::WeakPtrFactory<AppWindow> image_loader_ptr_factory_{this};
+  base::WeakPtrFactory<AppWindow> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

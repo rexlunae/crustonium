@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/logging.h"
@@ -22,7 +23,7 @@
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/external_constants_override.h"
-#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/util/util.h"
 #include "components/crx_file/crx_verifier.h"
 #include "url/gurl.h"
@@ -33,14 +34,7 @@ namespace {
 
 std::vector<std::string> StringVectorFromGURLVector(
     const std::vector<GURL>& gurls) {
-  std::vector<std::string> ret;
-  ret.reserve(gurls.size());
-
-  std::ranges::transform(gurls, std::back_inserter(ret), [](const GURL& gurl) {
-    return gurl.possibly_invalid_spec();
-  });
-
-  return ret;
+  return base::ToVector(gurls, &GURL::possibly_invalid_spec);
 }
 
 }  // namespace

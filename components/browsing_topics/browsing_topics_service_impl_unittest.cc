@@ -8,6 +8,7 @@
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/metrics_hashes.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
@@ -24,6 +25,7 @@
 #include "components/history/core/browser/history_database_params.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/test_history_database.h"
+#include "components/metrics/dwa/dwa_recorder.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/scoped_privacy_sandbox_attestations.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
@@ -39,6 +41,7 @@
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
 #include "content/test/test_render_view_host.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/mojom/browsing_topics/browsing_topics.mojom.h"
@@ -53,7 +56,6 @@ namespace {
 constexpr base::TimeDelta kOneTestDay = base::Seconds(1);
 constexpr base::TimeDelta kEpoch = 7 * kOneTestDay;
 constexpr base::TimeDelta kMaxEpochIntroductionDelay = 2 * kOneTestDay;
-constexpr base::TimeDelta kDatabaseFetchDelay = base::Milliseconds(1);
 constexpr base::TimeDelta kCalculatorDelay = base::Milliseconds(1);
 constexpr base::TimeDelta kFirstTimeoutRetryDelay = base::Milliseconds(10);
 
@@ -185,6 +187,7 @@ class BrowsingTopicsServiceImplTest
     scoped_feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/
         {{network::features::kBrowsingTopics, {}},
+         {metrics::dwa::kDwaFeature, {}},
          {blink::features::kBrowsingTopicsParameters,
           {{"time_period_per_epoch",
             base::StrCat({base::NumberToString(kEpoch.InSeconds()), "s"})},
@@ -213,7 +216,7 @@ class BrowsingTopicsServiceImplTest
     cookie_settings_ = base::MakeRefCounted<content_settings::CookieSettings>(
         host_content_settings_map_.get(), &prefs_, false,
         content_settings::CookieSettings::NoFedCmSharingPermissionsCallback(),
-        /*tpcd_metadata_manager=*/nullptr, "chrome-extension");
+        "chrome-extension");
 
     auto privacy_sandbox_delegate = std::make_unique<
         privacy_sandbox_test_util::MockPrivacySandboxSettingsDelegate>();
@@ -800,13 +803,6 @@ TEST_F(BrowsingTopicsServiceImplTest,
 
   EXPECT_TRUE(browsing_topics_service_->GetTopTopicsForDisplay().empty());
 
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future1;
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/false, future1.GetCallback());
-  EXPECT_TRUE(future1.IsReady());
-  EXPECT_EQ(future1.Take()->get_override_status_message(),
-            "State loading hasn't finished. Please retry shortly.");
-
   // Finish file loading.
   task_environment()->RunUntilIdle();
 
@@ -821,13 +817,6 @@ TEST_F(BrowsingTopicsServiceImplTest,
   }
 
   EXPECT_FALSE(browsing_topics_service_->GetTopTopicsForDisplay().empty());
-
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future2;
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/false, future2.GetCallback());
-  task_environment()->FastForwardBy(kDatabaseFetchDelay);
-  EXPECT_TRUE(future2.IsReady());
-  EXPECT_FALSE(future2.Take()->is_override_status_message());
 }
 
 TEST_F(BrowsingTopicsServiceImplTest,
@@ -1404,6 +1393,11 @@ TEST_F(BrowsingTopicsServiceImplTest,
 TEST_F(BrowsingTopicsServiceImplTest, HandleTopicsWebApi_OneEpoch) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
+  metrics::dwa::DwaRecorder::Get()->EnableRecording();
+  metrics::dwa::DwaRecorder::Get()->Purge();
+  ASSERT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
+              testing::IsEmpty());
+
   base::queue<EpochTopics> mock_calculator_results;
   mock_calculator_results.emplace(
       CreateTestEpochTopics({{Topic(1), {GetHashedDomain("bar.com")}},
@@ -1428,27 +1422,45 @@ TEST_F(BrowsingTopicsServiceImplTest, HandleTopicsWebApi_OneEpoch) {
         /*get_topics=*/true,
         /*observe=*/true, result));
     EXPECT_TRUE(result.empty());
+
+    histogram_tester_.ExpectBucketCount(
+        "BrowsingTopics.Result.Status",
+        browsing_topics::ApiAccessResult::kSuccess, 1);
+    histogram_tester_.ExpectBucketCount("BrowsingTopics.Result.RealTopicCount",
+                                        0, 1);
+    histogram_tester_.ExpectBucketCount(
+        "BrowsingTopics.Result.FilteredTopicCount", 0, 1);
+    histogram_tester_.ExpectBucketCount("BrowsingTopics.Result.FakeTopicCount",
+                                        1, 0);
+
+    std::vector<ApiResultUkmMetrics> ukm_entries =
+        ReadApiResultUkmMetrics(ukm_recorder);
+    EXPECT_EQ(1u, ukm_entries.size());
+
+    // This is an empty event with no metrics.
+    EXPECT_FALSE(ukm_entries[0].failure_reason);
+    EXPECT_FALSE(ukm_entries[0].topic0.IsValid());
+    EXPECT_FALSE(ukm_entries[0].topic1.IsValid());
+    EXPECT_FALSE(ukm_entries[0].topic2.IsValid());
+
+    const auto& dwa_entries =
+        metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting();
+    EXPECT_EQ(dwa_entries.size(), 1u);
+    EXPECT_THAT(dwa_entries[0]->event_hash,
+                base::HashMetricName("BrowsingTopics.Result"));
+    EXPECT_THAT(
+        dwa_entries[0]->content_hash,
+        base::HashMetricName(
+            net::registry_controlled_domains::GetDomainAndRegistry(
+                GURL("https://www.bar.com"),
+                net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)));
+    EXPECT_EQ(dwa_entries[0]->metrics.size(), 1u);
+    EXPECT_EQ(
+        dwa_entries[0]->metrics.at(base::HashMetricName("RealTopicCount")), 0);
+
+    // Purge the recorder so we have a clean slate for the second call.
+    metrics::dwa::DwaRecorder::Get()->Purge();
   }
-
-  histogram_tester_.ExpectBucketCount(
-      "BrowsingTopics.Result.Status",
-      browsing_topics::ApiAccessResult::kSuccess, 1);
-  histogram_tester_.ExpectBucketCount("BrowsingTopics.Result.RealTopicCount", 0,
-                                      1);
-  histogram_tester_.ExpectBucketCount(
-      "BrowsingTopics.Result.FilteredTopicCount", 0, 1);
-  histogram_tester_.ExpectBucketCount("BrowsingTopics.Result.FakeTopicCount", 1,
-                                      0);
-
-  std::vector<ApiResultUkmMetrics> metrics_entries =
-      ReadApiResultUkmMetrics(ukm_recorder);
-  EXPECT_EQ(1u, metrics_entries.size());
-
-  // This is an empty event with no metrics.
-  EXPECT_FALSE(metrics_entries[0].failure_reason);
-  EXPECT_FALSE(metrics_entries[0].topic0.IsValid());
-  EXPECT_FALSE(metrics_entries[0].topic1.IsValid());
-  EXPECT_FALSE(metrics_entries[0].topic2.IsValid());
 
   // Advance to the time after the epoch switch time.
   task_environment()->AdvanceClock(kMaxEpochIntroductionDelay);
@@ -1467,6 +1479,21 @@ TEST_F(BrowsingTopicsServiceImplTest, HandleTopicsWebApi_OneEpoch) {
     EXPECT_EQ(result[0]->taxonomy_version, "1");
     EXPECT_EQ(result[0]->model_version, "5000000000");
     EXPECT_EQ(result[0]->version, "chrome.1:1:5000000000");
+
+    const auto& dwa_entries =
+        metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting();
+    EXPECT_EQ(dwa_entries.size(), 1u);
+    EXPECT_THAT(dwa_entries[0]->event_hash,
+                base::HashMetricName("BrowsingTopics.Result"));
+    EXPECT_THAT(
+        dwa_entries[0]->content_hash,
+        base::HashMetricName(
+            net::registry_controlled_domains::GetDomainAndRegistry(
+                GURL("https://www.bar.com"),
+                net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)));
+    EXPECT_EQ(dwa_entries[0]->metrics.size(), 1u);
+    EXPECT_EQ(
+        dwa_entries[0]->metrics.at(base::HashMetricName("RealTopicCount")), 1);
   }
 }
 
@@ -2456,214 +2483,6 @@ TEST_F(BrowsingTopicsServiceImplTest, GetTopTopicsForDisplay) {
   EXPECT_EQ(result[12].topic_id(), Topic(10));
 }
 
-TEST_F(BrowsingTopicsServiceImplTest,
-       GetBrowsingTopicsStateForWebUi_CalculationInProgress) {
-  base::Time start_time = base::Time::Now();
-
-  base::queue<EpochTopics> mock_calculator_results;
-  mock_calculator_results.emplace(CreateTestEpochTopics({{Topic(1), {}},
-                                                         {Topic(2), {}},
-                                                         {Topic(3), {}},
-                                                         {Topic(4), {}},
-                                                         {Topic(5), {}}},
-                                                        start_time));
-
-  InitializeBrowsingTopicsService(std::move(mock_calculator_results));
-
-  task_environment()->RunUntilIdle();
-
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future1;
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future2;
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/false, future1.GetCallback());
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/true, future2.GetCallback());
-
-  EXPECT_FALSE(future1.IsReady());
-  EXPECT_FALSE(future2.IsReady());
-
-  task_environment()->FastForwardBy(kCalculatorDelay);
-
-  // The callbacks are invoked after the calculation has finished.
-  EXPECT_TRUE(future1.IsReady());
-  EXPECT_TRUE(future2.IsReady());
-
-  mojom::WebUIGetBrowsingTopicsStateResultPtr result1 = future1.Take();
-  mojom::WebUIGetBrowsingTopicsStateResultPtr result2 = future2.Take();
-  EXPECT_EQ(result1, result2);
-
-  mojom::WebUIBrowsingTopicsStatePtr& webui_state1 =
-      result1->get_browsing_topics_state();
-
-  EXPECT_EQ(webui_state1->epochs.size(), 1u);
-  EXPECT_EQ(webui_state1->next_scheduled_calculation_time,
-            start_time + kCalculatorDelay + kEpoch);
-}
-
-TEST_F(BrowsingTopicsServiceImplTest,
-       GetBrowsingTopicsStateForWebUi_CalculationNow) {
-  base::Time start_time = base::Time::Now();
-
-  base::queue<EpochTopics> mock_calculator_results;
-  mock_calculator_results.emplace(CreateTestEpochTopics({{Topic(1), {}},
-                                                         {Topic(2), {}},
-                                                         {Topic(3), {}},
-                                                         {Topic(4), {}},
-                                                         {Topic(5), {}}},
-                                                        start_time));
-
-  mock_calculator_results.emplace(
-      CreateTestEpochTopics({{Topic(1), {}},
-                             {Topic(2), {}},
-                             {Topic(3), {}},
-                             {Topic(4), {}},
-                             {Topic(5), {}}},
-                            start_time + kCalculatorDelay + kOneTestDay));
-
-  InitializeBrowsingTopicsService(std::move(mock_calculator_results));
-
-  task_environment()->FastForwardBy(kCalculatorDelay);
-
-  EXPECT_EQ(browsing_topics_state().epochs().size(), 1u);
-  EXPECT_EQ(browsing_topics_state().next_scheduled_calculation_time(),
-            start_time + kCalculatorDelay + kEpoch);
-
-  // Advance by some time smaller than the periodic update interval.
-  task_environment()->FastForwardBy(kOneTestDay);
-
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future;
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/true, future.GetCallback());
-
-  EXPECT_FALSE(future.IsReady());
-  task_environment()->FastForwardBy(kCalculatorDelay);
-  EXPECT_TRUE(future.IsReady());
-
-  mojom::WebUIGetBrowsingTopicsStateResultPtr result = future.Take();
-  mojom::WebUIBrowsingTopicsStatePtr& webui_state =
-      result->get_browsing_topics_state();
-
-  EXPECT_EQ(webui_state->epochs.size(), 2u);
-
-  // The `next_scheduled_calculation_time` is reset to an epoch after.
-  EXPECT_EQ(webui_state->next_scheduled_calculation_time,
-            start_time + 2 * kCalculatorDelay + kOneTestDay + kEpoch);
-}
-
-TEST_F(BrowsingTopicsServiceImplTest, GetBrowsingTopicsStateForWebUi) {
-  base::Time start_time = base::Time::Now();
-
-  // Add a database entry for HashedDomain(456) so that we can check if the
-  // unhashed domain is displayed if available.
-  topics_site_data_manager()->OnBrowsingTopicsApiUsed(
-      HashedHost(123), HashedDomain(456), "456.com", base::Time::Now());
-
-  base::queue<EpochTopics> mock_calculator_results;
-  mock_calculator_results.emplace(
-      CreateTestEpochTopics({{Topic(1), {HashedDomain(123), HashedDomain(456)}},
-                             {Topic(2), {}},
-                             {Topic(0), {}},  // blocked
-                             {Topic(4), {}},
-                             {Topic(5), {}}},
-                            start_time));
-
-  // Failed calculation.
-  mock_calculator_results.emplace(
-      EpochTopics(start_time + kEpoch,
-                  CalculatorResultStatus::kFailureAnnotationExecutionError));
-
-  mock_calculator_results.emplace(
-      CreateTestEpochTopics({{Topic(6), {}},
-                             {Topic(7), {}},
-                             {Topic(8), {}},
-                             {Topic(9), {}},
-                             {Topic(10), {}}},
-                            start_time + 2 * kEpoch,
-                            /*padded_top_topics_start_index=*/2));
-
-  InitializeBrowsingTopicsService(std::move(mock_calculator_results));
-
-  // Finish file loading and three calculations.
-  task_environment()->FastForwardBy(3 * kCalculatorDelay + 2 * kEpoch);
-
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future;
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/false, future.GetCallback());
-  task_environment()->FastForwardBy(kDatabaseFetchDelay);
-  EXPECT_TRUE(future.IsReady());
-
-  mojom::WebUIGetBrowsingTopicsStateResultPtr result = future.Take();
-  mojom::WebUIBrowsingTopicsStatePtr& webui_state =
-      result->get_browsing_topics_state();
-
-  EXPECT_EQ(webui_state->epochs.size(), 3u);
-  EXPECT_EQ(webui_state->next_scheduled_calculation_time,
-            start_time + 3 * kCalculatorDelay + 3 * kEpoch);
-
-  const mojom::WebUIEpochPtr& epoch0 = webui_state->epochs[0];
-  const mojom::WebUIEpochPtr& epoch1 = webui_state->epochs[1];
-  const mojom::WebUIEpochPtr& epoch2 = webui_state->epochs[2];
-
-  EXPECT_EQ(epoch0->calculation_time, start_time + 2 * kEpoch);
-  EXPECT_EQ(epoch0->model_version, "5000000000");
-  EXPECT_EQ(epoch0->taxonomy_version, "1");
-  EXPECT_EQ(epoch0->topics.size(), 5u);
-  EXPECT_EQ(epoch0->topics[0]->topic_id, 6);
-  EXPECT_EQ(epoch0->topics[0]->topic_name, u"Entertainment Industry");
-  EXPECT_TRUE(epoch0->topics[0]->is_real_topic);
-  EXPECT_TRUE(epoch0->topics[0]->observed_by_domains.empty());
-  EXPECT_EQ(epoch0->topics[1]->topic_id, 7);
-  EXPECT_EQ(epoch0->topics[1]->topic_name, u"Humor");
-  EXPECT_TRUE(epoch0->topics[1]->is_real_topic);
-  EXPECT_TRUE(epoch0->topics[1]->observed_by_domains.empty());
-  EXPECT_EQ(epoch0->topics[2]->topic_id, 8);
-  EXPECT_EQ(epoch0->topics[2]->topic_name, u"Live Comedy");
-  EXPECT_FALSE(epoch0->topics[2]->is_real_topic);
-  EXPECT_TRUE(epoch0->topics[2]->observed_by_domains.empty());
-  EXPECT_EQ(epoch0->topics[3]->topic_id, 9);
-  EXPECT_EQ(epoch0->topics[3]->topic_name, u"Live Sporting Events");
-  EXPECT_FALSE(epoch0->topics[3]->is_real_topic);
-  EXPECT_TRUE(epoch0->topics[3]->observed_by_domains.empty());
-  EXPECT_EQ(epoch0->topics[4]->topic_id, 10);
-  EXPECT_EQ(epoch0->topics[4]->topic_name, u"Magic");
-  EXPECT_FALSE(epoch0->topics[4]->is_real_topic);
-  EXPECT_TRUE(epoch0->topics[4]->observed_by_domains.empty());
-
-  EXPECT_EQ(epoch1->calculation_time, start_time + kEpoch);
-  EXPECT_EQ(epoch1->model_version, "0");
-  EXPECT_EQ(epoch1->taxonomy_version, "0");
-  EXPECT_EQ(epoch1->topics.size(), 0u);
-
-  EXPECT_EQ(epoch2->calculation_time, start_time);
-  EXPECT_EQ(epoch2->model_version, "5000000000");
-  EXPECT_EQ(epoch2->taxonomy_version, "1");
-  EXPECT_EQ(epoch2->topics.size(), 5u);
-  EXPECT_EQ(epoch2->topics[0]->topic_id, 1);
-  EXPECT_EQ(epoch2->topics[0]->topic_name, u"Arts & Entertainment");
-  EXPECT_TRUE(epoch2->topics[0]->is_real_topic);
-  EXPECT_EQ(epoch2->topics[0]->observed_by_domains.size(), 2u);
-  // The unhashed domain for 123 is unavailable, so "123" is used.
-  EXPECT_EQ(epoch2->topics[0]->observed_by_domains[0], "123");
-  // "456.com" is stored in the call to OnBrowsingTopicsApiUsed above.
-  EXPECT_EQ(epoch2->topics[0]->observed_by_domains[1], "456.com");
-  EXPECT_EQ(epoch2->topics[1]->topic_id, 2);
-  EXPECT_EQ(epoch2->topics[1]->topic_name, u"Acting & Theater");
-  EXPECT_TRUE(epoch2->topics[1]->is_real_topic);
-  EXPECT_TRUE(epoch2->topics[1]->observed_by_domains.empty());
-  EXPECT_EQ(epoch2->topics[2]->topic_id, 0);
-  EXPECT_EQ(epoch2->topics[2]->topic_name, u"Unknown");
-  EXPECT_TRUE(epoch2->topics[2]->is_real_topic);
-  EXPECT_TRUE(epoch2->topics[2]->observed_by_domains.empty());
-  EXPECT_EQ(epoch2->topics[3]->topic_id, 4);
-  EXPECT_EQ(epoch2->topics[3]->topic_name, u"Concerts & Music Festivals");
-  EXPECT_TRUE(epoch2->topics[3]->is_real_topic);
-  EXPECT_TRUE(epoch2->topics[3]->observed_by_domains.empty());
-  EXPECT_EQ(epoch2->topics[4]->topic_id, 5);
-  EXPECT_EQ(epoch2->topics[4]->topic_name, u"Dance");
-  EXPECT_TRUE(epoch2->topics[4]->is_real_topic);
-  EXPECT_TRUE(epoch2->topics[4]->observed_by_domains.empty());
-}
-
 TEST_F(BrowsingTopicsServiceImplTest, ClearTopic) {
   base::Time start_time = base::Time::Now();
 
@@ -2959,13 +2778,6 @@ TEST_F(BrowsingTopicsServiceImplTest, MethodsFailGracefullyAfterShutdown) {
       /*get_topics=*/true,
       /*observe=*/true, result));
   EXPECT_TRUE(result.empty());
-
-  base::test::TestFuture<mojom::WebUIGetBrowsingTopicsStateResultPtr> future1;
-  browsing_topics_service_->GetBrowsingTopicsStateForWebUi(
-      /*calculate_now=*/false, future1.GetCallback());
-  EXPECT_TRUE(future1.IsReady());
-  EXPECT_EQ(future1.Take()->get_override_status_message(),
-            "BrowsingTopicsService is shutting down.");
 
   EXPECT_TRUE(browsing_topics_service_->GetTopTopicsForDisplay().empty());
 

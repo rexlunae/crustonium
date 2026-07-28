@@ -92,7 +92,8 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
       // Using `cc::ElementId::InternalValue` because  `cc::ElementId` has a
       // non-trivial constructor and is not allowed in a union.
       cc::ElementId::InternalValue scrollable_area_element_id;
-      // Initial motion that triggered the scroll.
+      // Initial motion that triggered the scroll. See deltas in ScrollUpdate
+      // for how to interpret these.
       float delta_x_hint;
       float delta_y_hint;
       // number of pointers down.
@@ -120,14 +121,25 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
     } scroll_begin;
 
     struct {
+      // These values run positive in the up and left direction of scrolling.
+      // Notably, this is the reverse as used in Blink, CC, and WebAPIs.
       float delta_x;
       float delta_y;
+      // The raw, unconstrained scroll deltas before any axis locking (railing)
+      // or snapping constraints are applied by the browser. Used when
+      // scroll-axis-lock: none is active to allow diagonal scrolling.
+      float delta_x_unconstrained;
+      float delta_y_unconstrained;
       InertialPhaseState inertial_phase;
       // Default initialized to kScrollByPrecisePixel.
       ui::ScrollGranularity delta_units;
     } scroll_update;
 
     struct {
+      // The scroll delta that is compensated for latency i.e. the scroll delta
+      // that was not sent to the renderer as scroll updates.
+      float delta_x_compensated;
+      float delta_y_compensated;
       // The original delta units the ScrollBegin and ScrollUpdates
       // were sent as.
       ui::ScrollGranularity delta_units;

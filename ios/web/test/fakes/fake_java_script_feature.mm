@@ -47,44 +47,68 @@ const char kGetErrorCount[] = "javaScriptFeatureTest.getErrorCount";
 // Timeout for response of kGetErrorCount.
 const int kGetErrorCountTimeout = 1;
 
-FakeJavaScriptFeature::FakeJavaScriptFeature(ContentWorld content_world)
+FakeJavaScriptFeature::FakeJavaScriptFeature(ContentWorld content_world,
+                                             OriginFilter origin_filter)
     : JavaScriptFeature(
           content_world,
           {FeatureScript::CreateWithFilename(
                kJavaScriptFeatureInjectOnceTestScript,
-               FeatureScript::InjectionTime::kDocumentEnd,
+               FeatureScript::InjectionTime::kDocumentStart,
                FeatureScript::TargetFrames::kAllFrames,
-               FeatureScript::ReinjectionBehavior::kInjectOncePerWindow),
+               FeatureScript::ReinjectionBehavior::kInjectOncePerWindow,
+               FeatureScript::PlaceholderReplacementsCallback(),
+               origin_filter),
            FeatureScript::CreateWithFilename(
                kJavaScriptFeatureReinjectTestScript,
-               FeatureScript::InjectionTime::kDocumentEnd,
+               FeatureScript::InjectionTime::kDocumentStart,
                FeatureScript::TargetFrames::kAllFrames,
                FeatureScript::ReinjectionBehavior::
-                   kReinjectOnDocumentRecreation)},
-          {}),
+                   kReinjectOnDocumentRecreation,
+               FeatureScript::PlaceholderReplacementsCallback(),
+               origin_filter)},
+          {},
+          origin_filter),
       weak_factory_(this) {}
+
+FakeJavaScriptFeature::FakeJavaScriptFeature(ContentWorld content_world)
+    : FakeJavaScriptFeature(content_world, OriginFilter::kPublic) {}
 FakeJavaScriptFeature::~FakeJavaScriptFeature() = default;
 
-void FakeJavaScriptFeature::ReplaceDivContents(WebFrame* web_frame) {
-  CallJavaScriptFunction(web_frame, kScriptReplaceDivContents, {});
+bool FakeJavaScriptFeature::ReplaceDivContents(WebFrame* web_frame) {
+  return CallJavaScriptFunction(web_frame, kScriptReplaceDivContents, {});
 }
 
-void FakeJavaScriptFeature::ReplyWithPostMessage(
+bool FakeJavaScriptFeature::ReplyWithPostMessage(
     WebFrame* web_frame,
     const base::ListValue& parameters) {
   if (reply_to_messages_) {
-    CallJavaScriptFunction(web_frame, kScriptReplyWithPostMessageAndPostReply,
-                           parameters);
+    return CallJavaScriptFunction(
+        web_frame, kScriptReplyWithPostMessageAndPostReply, parameters);
   } else {
-    CallJavaScriptFunction(web_frame, kScriptReplyWithPostMessage, parameters);
+    return CallJavaScriptFunction(web_frame, kScriptReplyWithPostMessage,
+                                  parameters);
   }
 }
 
-void FakeJavaScriptFeature::GetErrorCount(
+bool FakeJavaScriptFeature::GetErrorCount(
     WebFrame* web_frame,
     base::OnceCallback<void(const base::Value*)> callback) {
-  CallJavaScriptFunction(web_frame, kGetErrorCount, {}, std::move(callback),
-                         base::Seconds(kGetErrorCountTimeout));
+  return CallJavaScriptFunction(web_frame, kGetErrorCount, {},
+                                std::move(callback),
+                                base::Seconds(kGetErrorCountTimeout));
+}
+
+bool FakeJavaScriptFeature::CallAsyncSum(
+    WebFrame* web_frame,
+    int a,
+    int b,
+    ExecuteJavaScriptCallbackWithError callback) {
+  base::DictValue parameters;
+  parameters.Set("a", a);
+  parameters.Set("b", b);
+  return CallAsyncJavaScriptFunction(web_frame,
+                                     "javaScriptFeatureTest.asyncSum",
+                                     parameters, std::move(callback));
 }
 
 std::optional<std::string> FakeJavaScriptFeature::GetScriptMessageHandlerName()
@@ -108,7 +132,7 @@ void FakeJavaScriptFeature::ScriptMessageReceived(
     WebState* web_state,
     const ScriptMessage& message) {
   last_received_web_state_ = web_state;
-  last_received_message_ = std::make_unique<const ScriptMessage>(message);
+  SetLastReceivedMessage(message);
   received_message_count_++;
 }
 
@@ -117,7 +141,7 @@ void FakeJavaScriptFeature::ScriptMessageReceivedWithReply(
     const ScriptMessage& message,
     ScriptMessageReplyCallback callback) {
   last_received_web_state_ = web_state;
-  last_received_message_ = std::make_unique<const ScriptMessage>(message);
+  SetLastReceivedMessage(message);
   received_message_count_++;
 
   if (response_to_next_message_) {
@@ -127,6 +151,14 @@ void FakeJavaScriptFeature::ScriptMessageReceivedWithReply(
   } else {
     std::move(callback).Run(nullptr, @"Error");
   }
+}
+
+void FakeJavaScriptFeature::SetLastReceivedMessage(
+    const ScriptMessage& message) {
+  last_received_message_ = std::make_unique<const ScriptMessage>(
+      std::make_unique<base::Value>(message.legacy_body()->Clone()),
+      message.is_user_interacting(), message.is_main_frame(),
+      message.request_url(), message.security_origin());
 }
 
 }  // namespace web

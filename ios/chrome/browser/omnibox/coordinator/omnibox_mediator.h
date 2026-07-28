@@ -28,9 +28,9 @@ class Tracker;
 }
 
 /// A mediator object that updates the omnibox according to the model changes.
-@interface OmniboxMediator : NSObject <OmniboxMutator,
-                                       OmniboxTextControllerDelegate,
-                                       OmniboxLensDelegate>
+@interface OmniboxMediator : NSObject <OmniboxLensDelegate,
+                                       OmniboxMutator,
+                                       OmniboxTextControllerDelegate>
 
 /// Delegate for events in this class.
 @property(nonatomic, weak) id<OmniboxMediatorDelegate> delegate;
@@ -72,6 +72,9 @@ class Tracker;
 
 /// Sets the image used in image search.
 - (void)setThumbnailImage:(UIImage*)image;
+
+/// Disconnects the mediator.
+- (void)disconnect;
 
 @end
 

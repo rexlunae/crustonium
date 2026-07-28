@@ -62,7 +62,7 @@
 #endif
 
 #if BUILDFLAG(ENABLE_RLZ)
-#include "components/rlz/rlz_tracker.h"  // nogncheck crbug.com/1125897
+#include "components/rlz/rlz_tracker.h"  // nogncheck crbug.com/40147906
 #endif
 
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
@@ -110,6 +110,7 @@ void CheckAccessedOnCorrectThread() {
 
 void RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kRestartLastSessionOnShutdown, false);
+  registry->RegisterBooleanPref(prefs::kRestartInBackgroundOnShutdown, false);
 }
 
 void OnShutdownStarting(ShutdownType type) {
@@ -134,9 +135,11 @@ void OnShutdownStarting(ShutdownType type) {
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
   // Wait for all the child processes to dump their profiling data without
   // blocking the main thread.
-  base::RunLoop nested_run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-  content::AskAllChildrenToDumpProfilingData(nested_run_loop.QuitClosure());
-  nested_run_loop.Run();
+  if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
+    base::RunLoop nested_run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    content::AskAllChildrenToDumpProfilingData(nested_run_loop.QuitClosure());
+    nested_run_loop.Run();
+  }
 #endif
 
   // Call FastShutdown on all of the RenderProcessHosts.  This will be
@@ -168,7 +171,7 @@ ShutdownType GetShutdownType() {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-bool ShutdownPreThreadsStop() {
+RestartMode ShutdownPreThreadsStop() {
 #if BUILDFLAG(IS_CHROMEOS)
   ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserShutdownStarted",
                                                      false);
@@ -184,14 +187,14 @@ bool ShutdownPreThreadsStop() {
     metrics->LogCleanShutdown();
   }
 
-  bool restart_last_session = RecordShutdownInfoPrefs();
+  RestartMode restart_mode = RecordShutdownInfoPrefs();
   g_browser_process->local_state()->CommitPendingWrite();
 
 #if BUILDFLAG(ENABLE_RLZ)
   rlz::RLZTracker::CleanupRlz();
 #endif
 
-  return restart_last_session;
+  return restart_mode;
 }
 
 void RecordShutdownMetrics() {
@@ -231,18 +234,26 @@ void RecordShutdownMetrics() {
   }
 }
 
-bool RecordShutdownInfoPrefs() {
+RestartMode RecordShutdownInfoPrefs() {
   CheckAccessedOnCorrectThread();
   PrefService* prefs = g_browser_process->local_state();
 
   // Check local state for the restart flag so we can restart the session later.
-  bool restart_last_session = false;
-  if (prefs->HasPrefPath(prefs::kRestartLastSessionOnShutdown)) {
-    restart_last_session =
-        prefs->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+  RestartMode restart_mode = RestartMode::kNoRestart;
+  if (prefs->GetBoolean(prefs::kRestartLastSessionOnShutdown)) {
+    restart_mode = RestartMode::kRestartLastSession;
     prefs->ClearPref(prefs::kRestartLastSessionOnShutdown);
   }
-  return restart_last_session;
+
+  if (prefs->GetBoolean(prefs::kRestartInBackgroundOnShutdown)) {
+    // kRestartInBackgroundOnShutdown is only supported if we are already
+    // restarting the last session.
+    if (restart_mode == RestartMode::kRestartLastSession) {
+      restart_mode = RestartMode::kRestartInBackground;
+    }
+    prefs->ClearPref(prefs::kRestartInBackgroundOnShutdown);
+  }
+  return restart_mode;
 }
 
 void ShutdownPostThreadsStop(RestartMode restart_mode) {
@@ -250,7 +261,7 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
   // At this point, no BrowserProcess instance should exist.
   CHECK(!g_browser_process);
 
-  // crbug.com/95079 - This needs to happen after the browser process object
+  // crbug.com/40622231 - This needs to happen after the browser process object
   // goes away.
   NukeDeletedProfilesFromDisk();
 
@@ -293,8 +304,11 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
 
       case RestartMode::kRestartThisSession:
         // Copy URLs and other arguments to the new command line.
-        for (const auto& arg : old_cl.GetArgs()) {
-          new_cl.AppendArgNative(arg);
+        if (const auto& old_args = old_cl.GetArgs(); !old_args.empty()) {
+          new_cl.AppendArgNative(FILE_PATH_LITERAL("--"));
+          for (const auto& arg : old_args) {
+            new_cl.AppendArgNative(arg);
+          }
         }
         break;
     }

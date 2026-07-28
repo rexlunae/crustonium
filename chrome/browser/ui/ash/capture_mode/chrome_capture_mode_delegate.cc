@@ -15,6 +15,7 @@
 #include "ash/capture_mode/capture_mode_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/capture_mode/capture_mode_api.h"
 #include "ash/public/cpp/capture_mode/capture_mode_delegate.h"
@@ -28,6 +29,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/time_formatting.h"
+#include "base/json/json_reader.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
@@ -35,6 +37,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/values.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
@@ -59,7 +62,6 @@
 #include "chrome/browser/ui/ash/capture_mode/search_results_view.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/experiences/screenshot_area/screenshot_area.h"
@@ -200,7 +202,7 @@ ScreenshotArea ConvertToScreenshotArea(const aura::Window* window,
 }
 
 bool IsScreenCaptureDisabledByPolicy(PrefService& local_state) {
-  return local_state.GetBoolean(prefs::kDisableScreenshots);
+  return local_state.GetBoolean(ash::chrome_prefs::kDisableScreenshots);
 }
 
 void CaptureFileFinalized(
@@ -278,15 +280,13 @@ scoped_refptr<network::SharedURLLoaderFactory> GetSharedURLLoaderFactory() {
 // successfully parsed (even if the text was empty), and false otherwise. See
 // `google3/google/internal/lens/frontend/api/v1/service.proto` for more details
 // about the expected response.
-bool ParseQueryFormulationMetadataResponse(
-    const data_decoder::DataDecoder::ValueOrError& response,
-    std::string& extracted_text) {
-  if (!response.has_value() || !response->is_list() ||
-      response->GetList().empty()) {
+bool ParseQueryFormulationMetadataResponse(const base::ListValue& response,
+                                           std::string& extracted_text) {
+  if (response.empty()) {
     return false;
   }
 
-  const base::ListValue* metadata_response = response->GetList()[0].GetIfList();
+  const base::ListValue* metadata_response = response[0].GetIfList();
   if (!metadata_response ||
       metadata_response->size() < kQFMetadataResponseMinSize) {
     return false;
@@ -454,7 +454,7 @@ base::FilePath ChromeCaptureModeDelegate::GetUserDefaultDownloadsFolder()
   // location, which the browser handles by prompting the user to select
   // another one when accessed, but Capture Mode doesn't have this capability.
   // We also decided that this browser setting should not affect where the OS
-  // saves the captured files. https://crbug.com/1192406.
+  // saves the captured files. https://crbug.com/40757227.
   return download_prefs->GetDefaultDownloadDirectoryForProfile();
 }
 
@@ -485,10 +485,9 @@ void ChromeCaptureModeDelegate::OpenScreenshotInImageEditor(
 
 bool ChromeCaptureModeDelegate::Uses24HourFormat() const {
   Profile* profile = ProfileManager::GetActiveUserProfile();
-  // TODO(afakhry): Consider moving |prefs::kUse24HourClock| to ash/public so
-  // we can do this entirely in ash.
+  // TODO(afakhry): Consider moving this entirely in ash.
   if (profile) {
-    return profile->GetPrefs()->GetBoolean(prefs::kUse24HourClock);
+    return profile->GetPrefs()->GetBoolean(ash::prefs::kUse24HourClock);
   }
   return base::GetHourClockType() == base::k24HourClock;
 }
@@ -652,18 +651,23 @@ void ChromeCaptureModeDelegate::GetDriveFsFreeSpaceBytes(
 }
 
 bool ChromeCaptureModeDelegate::IsCameraDisabledByPolicy() const {
-  return policy::SystemFeaturesDisableListPolicyHandler::
-      IsSystemFeatureDisabled(policy::SystemFeature::kCamera,
-                              &local_state_.get());
+  if (policy::SystemFeaturesDisableListPolicyHandler::IsSystemFeatureDisabled(
+          policy::SystemFeature::kCamera, &local_state_.get())) {
+    return true;
+  }
+
+  auto* profile = ProfileManager::GetActiveUserProfile();
+  return profile && !profile->GetPrefs()->GetBoolean(
+                        ash::chrome_prefs::kVideoCaptureAllowed);
 }
 
 bool ChromeCaptureModeDelegate::IsAudioCaptureDisabledByPolicy() const {
   return !ProfileManager::GetActiveUserProfile()->GetPrefs()->GetBoolean(
-      prefs::kAudioCaptureAllowed);
+      ash::chrome_prefs::kAudioCaptureAllowed);
 }
 
 void ChromeCaptureModeDelegate::RegisterVideoConferenceManagerClient(
-    crosapi::mojom::VideoConferenceManagerClient* client,
+    ash::VideoConferenceManagerClient* client,
     const base::UnguessableToken& client_id) {
   video_conference_manager_ash_->RegisterCppClient(client, client_id);
 }
@@ -674,13 +678,13 @@ void ChromeCaptureModeDelegate::UnregisterVideoConferenceManagerClient(
 }
 
 void ChromeCaptureModeDelegate::UpdateVideoConferenceManager(
-    crosapi::mojom::VideoConferenceMediaUsageStatusPtr status) {
+    ash::VideoConferenceMediaUsageStatus status) {
   video_conference_manager_ash_->NotifyMediaUsageUpdate(std::move(status),
                                                         base::DoNothing());
 }
 
 void ChromeCaptureModeDelegate::NotifyDeviceUsedWhileDisabled(
-    crosapi::mojom::VideoConferenceMediaDevice device) {
+    ash::VideoConferenceMediaDevice device) {
   video_conference_manager_ash_->NotifyDeviceUsedWhileDisabled(
       device, l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_DISPLAY_SOURCE),
       base::DoNothing());
@@ -1255,17 +1259,14 @@ void ChromeCaptureModeDelegate::OnDispatchCompleteForCopyText(
   json_data =
       json_data.substr(std::min(json_data.find('\n'), json_data.size()));
 
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      json_data, base::BindOnce(&ChromeCaptureModeDelegate::OnJsonParsed,
-                                weak_ptr_factory_.GetWeakPtr()));
-}
+  std::optional<base::ListValue> result =
+      base::JSONReader::ReadList(json_data, base::JSON_PARSE_RFC);
 
-void ChromeCaptureModeDelegate::OnJsonParsed(
-    data_decoder::DataDecoder::ValueOrError result) {
   std::string extracted_text;
   // Attempty to parse the JSON further to get the extracted text. If
   // unsuccessful, return early and let the user know an error has occurred.
-  if (!ParseQueryFormulationMetadataResponse(result, extracted_text)) {
+  if (!result ||
+      !ParseQueryFormulationMetadataResponse(*result, extracted_text)) {
     VLOG(1) << "Text detection failure: Issues parsing QFMetadata.";
     if (on_error_callback_) {
       std::move(on_error_callback_)

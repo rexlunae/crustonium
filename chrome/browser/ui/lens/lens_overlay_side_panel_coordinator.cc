@@ -8,6 +8,7 @@
 
 #include "base/feature_list.h"
 #include "base/task/single_thread_task_runner.h"
+#include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/companion/text_finder/text_finder_manager.h"
 #include "chrome/browser/companion/text_finder/text_highlighter_manager.h"
@@ -24,13 +25,13 @@
 #include "chrome/browser/ui/lens/lens_search_feature_flag_utils.h"
 #include "chrome/browser/ui/lens/lens_searchbox_controller.h"
 #include "chrome/browser/ui/lens/page_content_type_conversions.h"
+#include "chrome/browser/ui/side_panel/side_panel_content_proxy.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/side_panel/side_panel_util.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_content_proxy.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "components/google/core/common/google_util.h"
@@ -48,6 +49,7 @@
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "net/base/net_errors.h"
@@ -58,6 +60,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/vector_icons.h"
@@ -180,9 +183,8 @@ void LensOverlaySidePanelCoordinator::RegisterEntryAndShow() {
   initialization_data_ = std::make_unique<SidePanelInitializationData>();
 }
 
-SidePanelEntry::PanelType LensOverlaySidePanelCoordinator::GetPanelType()
-    const {
-  return SidePanelEntry::PanelType::kContent;
+SidePanelType LensOverlaySidePanelCoordinator::GetPanelType() const {
+  return SidePanelType::kContent;
 }
 
 void LensOverlaySidePanelCoordinator::RecordAndShowSidePanelErrorPage() {
@@ -231,7 +233,8 @@ LensOverlaySidePanelCoordinator::GetSidePanelWebContents() {
 }
 
 bool LensOverlaySidePanelCoordinator::MaybeHandleTextDirectives(
-    const GURL& nav_url) {
+    content::NavigationHandle* navigation_handle) {
+  const GURL& nav_url = navigation_handle->GetURL();
   if (ShouldHandleTextDirectives(nav_url)) {
     const GURL& page_url = lens_search_controller_->GetTabInterface()
                                ->GetContents()
@@ -249,9 +252,15 @@ bool LensOverlaySidePanelCoordinator::MaybeHandleTextDirectives(
           page_url_text_query != nav_url_text_query) {
         lens::RecordHandleTextDirectiveResult(
             lens::LensOverlayTextDirectiveResult::kOpenedInNewTab);
+        // Preserve security-relevant initiator information from the original
+        // navigation.
+        content::OpenURLParams params =
+            content::OpenURLParams::FromNavigationHandle(navigation_handle);
+        params.frame_tree_node_id = content::FrameTreeNodeId();
+        params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
         lens_search_controller_->GetTabInterface()
             ->GetBrowserWindowInterface()
-            ->OpenGURL(nav_url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+            ->OpenURL(params, /*navigation_handle_callback=*/{});
         return true;
       }
     }
@@ -266,11 +275,18 @@ bool LensOverlaySidePanelCoordinator::MaybeHandleTextDirectives(
                               ->GetPrimaryPage();
     companion::TextFinderManager* text_finder_manager =
         companion::TextFinderManager::GetOrCreateForPage(page);
+    // Preserve security-relevant initiator information from the original
+    // navigation.
+    content::OpenURLParams params =
+        content::OpenURLParams::FromNavigationHandle(navigation_handle);
+    params.frame_tree_node_id = content::FrameTreeNodeId();
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+
     text_finder_manager->CreateTextFinders(
         text_fragments,
         base::BindOnce(
             &LensOverlaySidePanelCoordinator::OnTextFinderLookupComplete,
-            weak_ptr_factory_.GetWeakPtr(), nav_url));
+            weak_ptr_factory_.GetWeakPtr(), std::move(params)));
     return true;
   }
   return false;
@@ -785,9 +801,9 @@ LensOverlaySidePanelCoordinator::SidePanelInitializationData::
     ~SidePanelInitializationData() = default;
 
 void LensOverlaySidePanelCoordinator::DeregisterEntryAndCleanup() {
-  auto* registry = lens_search_controller_->GetTabInterface()
-                       ->GetTabFeatures()
-                       ->side_panel_registry();
+  auto* tab_interface = lens_search_controller_->GetTabInterface();
+  auto* registry = SidePanelRegistry::From(tab_interface);
+
   CHECK(registry);
 
   // Remove the side panel entry observer if it is present.
@@ -835,21 +851,17 @@ void LensOverlaySidePanelCoordinator::DidOpenRequestedURL(
     return;
   }
 
-  // This navigation is created from this component, so we consider it to be
-  // browser initiated. In particular, we do not plumb all the parameters from
-  // the original navigation. For instance we do not populate the
-  // `initiator_frame_token`. This means some security properties like sandbox
-  // flags are lost along the way.
-  //
-  // This is not problematic because we trust the original navigation was
-  // initiated from the expected origin.
-  //
-  // Specifically, we need the navigation to be considered browser-initiated, as
-  // renderer-initiated navigation history entries may be skipped if the
-  // document does not receive any user interaction (like in our case). See
-  // https://issuetracker.google.com/285038653
-  content::OpenURLParams params(url, referrer, disposition, transition,
-                                /*is_renderer_initiated=*/false);
+  // This navigation is created from this component to open a link in a new tab.
+  // We use the `renderer_initiated` value from the source navigation and plumb
+  // the `initiator_origin`, `initiator_frame_token`, and `initiator_process_id`
+  // to preserve security properties (like sandbox flags).
+  content::OpenURLParams params(lens::MaybeStripParamsForShopping(url),
+                                referrer, disposition, transition,
+                                renderer_initiated);
+  params.initiator_origin = source_render_frame_host->GetLastCommittedOrigin();
+  params.initiator_frame_token = source_render_frame_host->GetFrameToken();
+  params.initiator_process_id =
+      source_render_frame_host->GetProcess()->GetID().GetUnsafeValue();
 
   // We can't open a new tab while the observer is running because it might
   // destroy this WebContents. Post as task instead.
@@ -903,7 +915,7 @@ void LensOverlaySidePanelCoordinator::DidStartNavigation(
     // If the contextual search box is enabled, cross-origin navigations could
     // be a citation that should be rendered as text highlights in the current
     // tab.
-    if (MaybeHandleTextDirectives(nav_url)) {
+    if (MaybeHandleTextDirectives(navigation_handle)) {
       return;
     }
 
@@ -913,9 +925,15 @@ void LensOverlaySidePanelCoordinator::DidStartNavigation(
       return;
     }
 
+    // Preserve security-relevant initiator information from the original
+    // navigation.
+    content::OpenURLParams params =
+        content::OpenURLParams::FromNavigationHandle(navigation_handle);
+    params.frame_tree_node_id = content::FrameTreeNodeId();
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
     lens_search_controller_->GetTabInterface()
         ->GetBrowserWindowInterface()
-        ->OpenGURL(nav_url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+        ->OpenURL(params, /*navigation_handle_callback=*/{});
     return;
   }
 
@@ -924,9 +942,16 @@ void LensOverlaySidePanelCoordinator::DidStartNavigation(
                             ->GetBrowserWindowInterface()
                             ->GetProfile();
   if (ShouldOpenSearchURLInNewTab(nav_url, lens::IsAimM3Enabled(profile))) {
+    // Preserve security-relevant initiator information from the original
+    // navigation.
+    content::OpenURLParams params =
+        content::OpenURLParams::FromNavigationHandle(navigation_handle);
+    params.url = lens::MaybeStripParamsForShopping(params.url);
+    params.frame_tree_node_id = content::FrameTreeNodeId();
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
     lens_search_controller_->GetTabInterface()
         ->GetBrowserWindowInterface()
-        ->OpenGURL(nav_url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+        ->OpenURL(params, /*navigation_handle_callback=*/{});
     return;
   }
 
@@ -1052,8 +1077,9 @@ bool LensOverlaySidePanelCoordinator::ShouldHandlePDFViewportChange(
 }
 
 void LensOverlaySidePanelCoordinator::OnTextFinderLookupComplete(
-    const GURL& nav_url,
+    const content::OpenURLParams& params,
     const std::vector<std::pair<std::string, bool>>& lookup_results) {
+  const GURL& nav_url = params.url;
   const GURL& page_url = lens_search_controller_->GetTabInterface()
                              ->GetContents()
                              ->GetLastCommittedURL();
@@ -1071,7 +1097,7 @@ void LensOverlaySidePanelCoordinator::OnTextFinderLookupComplete(
         lens::LensOverlayTextDirectiveResult::kOpenedInNewTab);
     lens_search_controller_->GetTabInterface()
         ->GetBrowserWindowInterface()
-        ->OpenGURL(nav_url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+        ->OpenURL(params, /*navigation_handle_callback=*/{});
     return;
   }
 
@@ -1092,7 +1118,7 @@ void LensOverlaySidePanelCoordinator::OnTextFinderLookupComplete(
           lens::LensOverlayTextDirectiveResult::kOpenedInNewTab);
       lens_search_controller_->GetTabInterface()
           ->GetBrowserWindowInterface()
-          ->OpenGURL(nav_url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+          ->OpenURL(params, /*navigation_handle_callback=*/{});
       return;
     }
     text_directives.push_back(pair.first);
@@ -1126,9 +1152,9 @@ void LensOverlaySidePanelCoordinator::OpenURLInBrowser(
 }
 
 void LensOverlaySidePanelCoordinator::RegisterEntry() {
-  auto* registry = lens_search_controller_->GetTabInterface()
-                       ->GetTabFeatures()
-                       ->side_panel_registry();
+  auto* tab_interface = lens_search_controller_->GetTabInterface();
+  auto* registry = SidePanelRegistry::From(tab_interface);
+
   CHECK(registry);
 
   // If the entry is already registered, don't register it again.
@@ -1202,7 +1228,8 @@ int LensOverlaySidePanelCoordinator::GetPreferredDefaultWidth() {
 
 base::RepeatingCallback<std::unique_ptr<ui::MenuModel>()>
 LensOverlaySidePanelCoordinator::GetMoreInfoCallback() {
-  if (lens::IsLensOverlayContextualSearchboxEnabled()) {
+  if (lens::IsLensOverlayContextualSearchboxEnabled(
+          lens_search_controller_->GetProfile())) {
     return base::BindRepeating(
         &LensOverlaySidePanelCoordinator::GetMoreInfoMenuModel,
         base::Unretained(this));
@@ -1227,7 +1254,9 @@ LensOverlaySidePanelCoordinator::GetMoreInfoMenuModel() {
   menu_model->AddItemWithIcon(
       COMMAND_LEARN_MORE,
       l10n_util::GetStringUTF16(IDS_LENS_OVERLAY_LEARN_MORE),
-      ui::ImageModel::FromVectorIcon(vector_icons::kInfoOutlineIcon,
+      ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                         ? vector_icons::kInfoIcon
+                                         : vector_icons::kInfoOutlineOldIcon,
                                      ui::kColorMenuIcon,
                                      ui::SimpleMenuModel::kDefaultIconSize));
 
@@ -1235,7 +1264,9 @@ LensOverlaySidePanelCoordinator::GetMoreInfoMenuModel() {
     menu_model->AddItemWithIcon(
         COMMAND_SEND_FEEDBACK,
         l10n_util::GetStringUTF16(IDS_LENS_SEND_FEEDBACK),
-        ui::ImageModel::FromVectorIcon(vector_icons::kFeedbackIcon,
+        ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kFeedbackIcon
+                                           : vector_icons::kFeedbackOldIcon,
                                        ui::kColorMenuIcon,
                                        ui::SimpleMenuModel::kDefaultIconSize));
   }

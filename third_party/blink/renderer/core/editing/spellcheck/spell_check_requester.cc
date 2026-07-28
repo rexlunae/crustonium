@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
+#include "third_party/blink/renderer/core/editing/spellcheck/spell_check_requester_helper.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/spell_checker.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
@@ -59,15 +60,14 @@ std::vector<WebSpellingMarker> MapToWebSpellingMarkers(
     const blink::DocumentMarkerVector& spelling_markers) {
   std::vector<WebSpellingMarker> web_spelling_markers;
   for (const auto& marker : spelling_markers) {
-    if (marker->GetType() != DocumentMarker::kSpelling &&
-        marker->GetType() != DocumentMarker::kGrammar) {
-      continue;
+    if (marker->GetType() == DocumentMarker::kSpelling ||
+        marker->GetType() == DocumentMarker::kGrammar ||
+        // TODO(crbug.com/479924245): improve cast logic for SuggestionMarker
+        (IsA<SuggestionMarker>(marker.Get()) &&
+         (To<SuggestionMarker>(marker.Get())->IsGrammarError() ||
+          To<SuggestionMarker>(marker.Get())->IsMisspelling()))) {
+      web_spelling_markers.emplace_back(*marker);
     }
-    web_spelling_markers.emplace_back(
-        marker->StartOffset(), marker->EndOffset(),
-        marker->GetType() == DocumentMarker::kGrammar
-            ? WebSpellingMarker::SpellingMarkerType::kGrammar
-            : WebSpellingMarker::SpellingMarkerType::kSpelling);
   }
   return web_spelling_markers;
 }
@@ -103,7 +103,6 @@ class WebTextCheckingCompletionImpl : public WebTextCheckingCompletion {
 SpellCheckRequest::SpellCheckRequest(
     Range* checking_range,
     const String& text,
-    const blink::DocumentMarkerVector& spelling_markers,
     int request_number,
     bool should_force_refresh)
     : requester_(nullptr),
@@ -111,11 +110,16 @@ SpellCheckRequest::SpellCheckRequest(
       root_editable_element_(
           blink::RootEditableElement(*checking_range_->startContainer())),
       text_(text),
-      spelling_markers_(spelling_markers),
       request_number_(request_number),
       should_force_refresh_(should_force_refresh) {
   DCHECK(checking_range_);
   DCHECK(checking_range_->IsConnected());
+
+  if (ShouldSendSpellingMarkersInfo()) {
+    spelling_markers_ = GetSpellingMarkersFromRange(
+        checking_range_->startContainer()->GetDocument(),
+        root_editable_element_, EphemeralRange(checking_range_));
+  }
 }
 
 SpellCheckRequest::~SpellCheckRequest() = default;
@@ -135,7 +139,6 @@ void SpellCheckRequest::Dispose() {
 // static
 SpellCheckRequest* SpellCheckRequest::Create(
     const EphemeralRange& checking_range,
-    const blink::DocumentMarkerVector& spelling_markers,
     int request_number,
     bool should_force_refresh) {
   if (checking_range.IsNull())
@@ -154,8 +157,7 @@ SpellCheckRequest* SpellCheckRequest::Create(
   Range* checking_range_object = CreateRange(checking_range);
 
   SpellCheckRequest* request = MakeGarbageCollected<SpellCheckRequest>(
-      checking_range_object, text, spelling_markers, request_number,
-      should_force_refresh);
+      checking_range_object, text, request_number, should_force_refresh);
   if (request->RootEditableElement())
     return request;
 
@@ -212,17 +214,16 @@ void SpellCheckRequester::TimerFiredToProcessQueuedRequest() {
 }
 
 bool SpellCheckRequester::RequestCheckingFor(const EphemeralRange& range) {
-  return RequestCheckingFor(range, /*spelling_markers=*/{}, /*request_num=*/0,
+  return RequestCheckingFor(range, /*request_num=*/0,
                             /*should_force_refresh=*/false);
 }
 
 bool SpellCheckRequester::RequestCheckingFor(
     const EphemeralRange& range,
-    const blink::DocumentMarkerVector& spelling_markers,
     int request_num,
     bool should_force_refresh) {
-  SpellCheckRequest* request = SpellCheckRequest::Create(
-      range, spelling_markers, request_num, should_force_refresh);
+  SpellCheckRequest* request =
+      SpellCheckRequest::Create(range, request_num, should_force_refresh);
   if (!request)
     return false;
 

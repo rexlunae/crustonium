@@ -31,8 +31,8 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/qr_scanner_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
@@ -92,7 +92,6 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
         /*enabled_features=*/
         {
             data_sharing::features::kDataSharingFeature,
-            kTabGroupInTabIconContextMenu,
         },
         /*disable_features=*/{});
 
@@ -152,10 +151,10 @@ class AdaptiveToolbarMediatorTest : public PlatformTest {
         startDispatchingToTarget:mock_qr_scanner_commands_handler_
                      forProtocol:@protocol(QRScannerCommands)];
 
-    mock_gemini_handler_ = OCMStrictProtocolMock(@protocol(BWGCommands));
+    mock_gemini_handler_ = OCMStrictProtocolMock(@protocol(GeminiCommands));
     [test_browser_->GetCommandDispatcher()
         startDispatchingToTarget:mock_gemini_handler_
-                     forProtocol:@protocol(BWGCommands)];
+                     forProtocol:@protocol(GeminiCommands)];
 
     [[UIPasteboard generalPasteboard] setItems:@[]];
 
@@ -483,14 +482,11 @@ TEST_F(AdaptiveToolbarMediatorTest, MenuElements) {
   UIMenu* new_tab_menu =
       [mediator_ menuForButtonOfType:AdaptiveToolbarButtonTypeNewTab];
 
-  ASSERT_EQ(5U, new_tab_menu.children.count);
+  ASSERT_EQ(4U, new_tab_menu.children.count);
   for (UIMenuElement* element in new_tab_menu.children) {
-    if ([element isKindOfClass:[UIAction class]]) {
-      UIAction* action = (UIAction*)element;
-      EXPECT_EQ(0U, action.attributes);
-    } else {
-      ASSERT_TRUE([element isKindOfClass:[UIMenuElement class]]);
-    }
+    ASSERT_TRUE([element isKindOfClass:[UIAction class]]);
+    UIAction* action = (UIAction*)element;
+    EXPECT_EQ(0U, action.attributes);
   }
 
   UIMenu* tab_grid_menu =

@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/webui/file_manager/file_manager_ui.h"
 #include "base/command_line.h"
@@ -62,8 +63,6 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/disks/disk.h"
 #include "chromeos/ash/components/drivefs/drivefs_host.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
@@ -119,7 +118,7 @@ bool DoFilesSwaWindowsExist(Profile* profile) {
 }
 
 // Checks if the Recovery Tool is running. This is a temporary solution.
-// TODO(mtomasz): Replace with crbug.com/341902 solution.
+// TODO(mtomasz): Replace with crbug.com/41088567 solution.
 bool IsRecoveryToolRunning(Profile* profile) {
   extensions::ExtensionPrefs* extension_prefs =
       extensions::ExtensionPrefs::Get(profile);
@@ -593,8 +592,9 @@ fmp::MountError MountErrorToMountCompletedStatus(ash::MountError error) {
   }
 }
 
-EventRouter::EventRouter(Profile* profile)
-    : pref_change_registrar_(std::make_unique<PrefChangeRegistrar>()),
+EventRouter::EventRouter(PrefService* local_state, Profile* profile)
+    : LocalUserFilesPolicyObserver(local_state),
+      pref_change_registrar_(std::make_unique<PrefChangeRegistrar>()),
       profile_(profile),
       notification_manager_(
           std::make_unique<SystemNotificationManager>(profile)),
@@ -646,7 +646,7 @@ void EventRouter::Shutdown() {
   extensions::ExtensionRegistry::Get(profile_)->RemoveObserver(this);
 
   drivefs_event_router_->Reset();
-  DriveIntegrationService::Observer::Reset();
+  drive_observation_.Reset();
 
   if (VolumeManager* const manager = VolumeManager::Get(profile_)) {
     manager->RemoveObserver(this);
@@ -711,7 +711,10 @@ void EventRouter::ObserveEvents() {
 
   if (DriveIntegrationService* const service =
           DriveIntegrationServiceFactory::FindForProfile(profile_)) {
-    DriveIntegrationService::Observer::Observe(service);
+    if (service != drive_observation_.GetSource()) {
+      drive_observation_.Reset();
+      drive_observation_.Observe(service);
+    }
     drivefs_event_router_->Observe(service);
   }
 
@@ -727,20 +730,19 @@ void EventRouter::ObserveEvents() {
     pref_change_registrar_->Add(drive::prefs::kDisableDriveOverCellular, cb);
     pref_change_registrar_->Add(drive::prefs::kDisableDrive, cb);
     pref_change_registrar_->Add(ash::prefs::kFilesAppTrashEnabled, cb);
-    pref_change_registrar_->Add(prefs::kSearchSuggestEnabled, cb);
-    pref_change_registrar_->Add(prefs::kUse24HourClock, cb);
+    pref_change_registrar_->Add(ash::prefs::kUse24HourClock, cb);
     pref_change_registrar_->Add(arc::prefs::kArcEnabled, cb);
     pref_change_registrar_->Add(arc::prefs::kArcHasAccessToRemovableMedia, cb);
     pref_change_registrar_->Add(ash::prefs::kFilesAppFolderShortcuts, cb);
-    pref_change_registrar_->Add(prefs::kOfficeFileMovedToOneDrive, cb);
-    pref_change_registrar_->Add(prefs::kOfficeFileMovedToGoogleDrive, cb);
+    pref_change_registrar_->Add(ash::prefs::kOfficeFileMovedToOneDrive, cb);
+    pref_change_registrar_->Add(ash::prefs::kOfficeFileMovedToGoogleDrive, cb);
   }
 
   {
     const base::RepeatingClosure cb = base::BindRepeating(
         &EventRouter::BroadcastOnAppsUpdatedEvent, weak_factory_.GetWeakPtr());
-    pref_change_registrar_->Add(prefs::kDefaultTasksByMimeType, cb);
-    pref_change_registrar_->Add(prefs::kDefaultTasksBySuffix, cb);
+    pref_change_registrar_->Add(ash::prefs::kDefaultTasksByMimeType, cb);
+    pref_change_registrar_->Add(ash::prefs::kDefaultTasksBySuffix, cb);
   }
 
   ash::system::TimezoneSettings::GetInstance()->AddObserver(this);
@@ -1050,6 +1052,10 @@ void EventRouter::OnFileSystemMountFailed() {
 void EventRouter::OnDriveConnectionStatusChanged(
     drive::util::ConnectionStatus status) {
   NotifyDriveConnectionStatusChanged();
+}
+
+void EventRouter::OnDriveIntegrationServiceDestroyed() {
+  drive_observation_.Reset();
 }
 
 // Send crostini share, unshare event.
@@ -1527,7 +1533,7 @@ void EventRouter::BroadcastOnAppsUpdatedEvent() {
 }
 
 void EventRouter::OnMountableGuestsChanged() {
-  auto guests = util::CreateMountableGuestList(profile_);
+  auto guests = util::CreateMountableGuestList(local_state_.get(), profile_);
   BroadcastEvent(
       profile_,
       extensions::events::FILE_MANAGER_PRIVATE_ON_IO_TASK_PROGRESS_STATUS,
@@ -1558,7 +1564,7 @@ void EventRouter::OnAppRegistryCacheWillBeDestroyed(
 }
 
 void EventRouter::OnConnectionChanged(
-    const network::mojom::ConnectionType type) {
+    const net::NetworkChangeNotifier::ConnectionType type) {
   fmp::DeviceConnectionState result =
       content::GetNetworkConnectionTracker()->IsOffline()
           ? fmp::DeviceConnectionState::kOffline

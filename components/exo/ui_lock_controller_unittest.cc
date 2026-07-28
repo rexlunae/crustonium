@@ -8,6 +8,7 @@
 #include "ash/shell.h"
 #include "ash/wm/window_state.h"
 #include "base/feature_list.h"
+#include "base/memory/weak_ptr.h"
 #include "base/test/power_monitor_test.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
@@ -24,7 +25,9 @@
 #include "components/exo/surface.h"
 #include "components/exo/test/exo_test_base.h"
 #include "components/exo/test/exo_test_helper.h"
+#include "components/exo/test/mock_security_delegate.h"
 #include "components/exo/test/shell_surface_builder.h"
+#include "components/exo/test/test_security_delegate.h"
 #include "components/exo/wm_helper.h"
 #include "components/fullscreen_control/fullscreen_control_popup.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -49,6 +52,11 @@ aura::Window* GetTopLevelWindow(
   return top_level_widget->GetNativeWindow();
 }
 
+class PermissiveSecurityDelegate : public test::TestSecurityDelegate {
+ public:
+  bool CanSelfActivate(aura::Window* window) const override { return true; }
+};
+
 ash::WindowState* GetTopLevelWindowState(
     const std::unique_ptr<ShellSurface>& shell_surface) {
   return ash::WindowState::Get(GetTopLevelWindow(shell_surface));
@@ -72,6 +80,13 @@ class MockPointerDelegate : public PointerDelegate {
                void(base::TimeTicks, const gfx::Vector2dF&, bool));
   MOCK_METHOD1(OnFingerScrollStop, void(base::TimeTicks));
   MOCK_METHOD0(OnPointerFrame, void());
+
+  base::WeakPtr<PointerDelegate> GetWeakPtr() override {
+    return weak_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<MockPointerDelegate> weak_factory_{this};
 };
 
 class MockPointerConstraintDelegate : public PointerConstraintDelegate {
@@ -161,6 +176,7 @@ class UILockControllerTest : public test::ExoTestBase {
   std::unique_ptr<ShellSurface> BuildSurface(gfx::Point origin, int w, int h) {
     test::ShellSurfaceBuilder builder({w, h});
     builder.SetOrigin(origin);
+    builder.SetSecurityDelegate(&permissive_delegate_);
     return builder.BuildShellSurface();
   }
 
@@ -195,6 +211,7 @@ class UILockControllerTest : public test::ExoTestBase {
   std::unique_ptr<Seat> seat_;
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<ash::AuthEventsRecorder> auth_events_recorder_;
+  PermissiveSecurityDelegate permissive_delegate_;
 };
 
 TEST_F(UILockControllerTest, HoldingEscapeExitsFullscreen) {

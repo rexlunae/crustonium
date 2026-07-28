@@ -10,7 +10,8 @@ import pathlib
 import sys
 import tempfile
 
-from rustc_wrapper import (ConvertPathsToAbsolute, LoadRustEnvAndFlags)
+from rustc_wrapper import (PrepareRustEnvForExecution, LoadRustEnvAndFlags,
+                           HandleReturnCode)
 
 
 def main():
@@ -23,7 +24,7 @@ def main():
   args = parser.parse_args()
 
   (rustenv, rustflags) = LoadRustEnvAndFlags(args.rustc_env_and_flags)
-  ConvertPathsToAbsolute(rustenv)
+  PrepareRustEnvForExecution(rustenv)
 
   rustflags = [*args.args, "--", *rustflags]
 
@@ -38,7 +39,8 @@ def main():
   r = subprocess.run([args.cpp_api_from_rust_exe_path, *rustflags],
                      env=rustenv,
                      check=False)
-  return r.returncode
+  HandleReturnCode(r)
+  return 0
 
 
 if __name__ == '__main__':

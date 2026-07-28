@@ -13,9 +13,11 @@
 #include <utility>
 
 #include "base/containers/to_vector.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/optional_ref.h"
@@ -44,9 +46,12 @@
 #include "components/autofill/core/browser/data_model/payments/iban.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_wallet_utils.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/management_utils.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/metrics/autofill_ai_metrics.h"
 #include "components/autofill/core/browser/metrics/address_save_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/mandatory_reauth_metrics.h"
+#include "components/autofill/core/browser/network/autofill_ai/wallet_pass_access_manager.h"
 #include "components/autofill/core/browser/payments/credit_card_access_manager.h"
 #include "components/autofill/core/browser/payments/mandatory_reauth_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
@@ -60,12 +65,14 @@
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/autofill/core/common/autofill_regexes.h"
 #include "components/autofill/core/common/dense_set.h"
+#include "components/consent_auditor/consent_auditor.h"
 #include "components/device_reauth/device_authenticator.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/strings/grit/components_branded_strings.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/wallet/core/browser/walletable_permission_utils.h"
+#include "components/wallet/core/common/wallet_features.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_registry.h"
@@ -93,9 +100,22 @@ using autofill::autofill_metrics::LogMandatoryReauthSettingsPageEditCardEvent;
 using autofill::autofill_metrics::MandatoryReauthAuthenticationFlowEvent;
 using autofill::autofill_metrics::MandatoryReauthOptInOrOutSource;
 
-static const char kSettingsOrigin[] = "Chrome settings";
-static const char kErrorCardDataUnavailable[] = "Credit card data unavailable";
-static const char kErrorDataUnavailable[] = "Autofill data unavailable.";
+static const char kErrorPaymentMethodUnavailable[] =
+    "Credit card data unavailable";
+static const char kErrorAutofillClientUnavailable[] =
+    "Autofill client unavailable.";
+static const char kErrorAddressDataManagerUnavailable[] =
+    "Autofill address data manager unavailable.";
+static const char kErrorAddressDataManagerLoadingUnfinished[] =
+    "Autofill address data manager loading unfinished.";
+static const char kErrorAutofillManagerUnavailable[] =
+    "Autofill manager unavailable.";
+static const char kErrorPaymentsDataManagerUnavailable[] =
+    "Autofill payments data manager unavailable.";
+static const char kErrorPaymentsDataManagerLoadingUnfinished[] =
+    "Autofill payments data manager loading unfinished.";
+static const char kErrorAddressProfileUnavailable[] =
+    "Autofill address profile unavailable.";
 static const char kErrorAutofillAiUnavailable[] =
     "Autofill AI data unavailable.";
 static const char kErrorAutofillAiInvalidData[] =
@@ -192,6 +212,14 @@ autofill::AutofillProfile CreateNewAutofillProfile(
   return autofill::AutofillProfile(record_type, address_country_code);
 }
 
+// Returns true if the `entity_type` supports wallet storage.
+bool IsEligibleForWalletStorage(autofill::AutofillClient* client,
+                                autofill::EntityType entity_type) {
+  return client &&
+         autofill::MayPerformAutofillAiAction(
+             *client, autofill::AutofillAiAction::kImportToWallet, entity_type);
+}
+
 }  // namespace
 
 namespace extensions {
@@ -221,8 +249,13 @@ AutofillPrivateExtensionFunction::payments_data_manager() {
 
 ExtensionFunction::ResponseAction AutofillPrivateGetAccountInfoFunction::Run() {
   AddressDataManager* adm = address_data_manager();
-  if (!adm || !adm->has_initial_load_finished()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!adm) {
+    return RespondNow(Error(base::StrCat(
+        {"Get account info - ", kErrorAddressDataManagerUnavailable})));
+  }
+
+  if (!adm->has_initial_load_finished()) {
+    return RespondNow(NoArguments());
   }
 
   std::optional<api::autofill_private::AccountInfo> account_info =
@@ -245,8 +278,14 @@ ExtensionFunction::ResponseAction AutofillPrivateSaveAddressFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   AddressDataManager* adm = address_data_manager();
-  if (!adm || !adm->has_initial_load_finished()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!adm) {
+    return RespondNow(Error(base::StrCat(
+        {"Save address - ", kErrorAddressDataManagerUnavailable})));
+  }
+
+  if (!adm->has_initial_load_finished()) {
+    return RespondNow(Error(base::StrCat(
+        {"Save address - ", kErrorAddressDataManagerLoadingUnfinished})));
   }
 
   // If a profile guid is specified, get a copy of the profile identified by it.
@@ -258,7 +297,8 @@ ExtensionFunction::ResponseAction AutofillPrivateSaveAddressFunction::Run() {
   if (use_existing_profile) {
     existing_profile = adm->GetProfileByGUID(guid);
     if (!existing_profile) {
-      return RespondNow(Error(kErrorDataUnavailable));
+      return RespondNow(Error(
+          base::StrCat({"Save address - ", kErrorAddressProfileUnavailable})));
     }
   }
   std::optional<std::string_view> country_code;
@@ -313,8 +353,13 @@ ExtensionFunction::ResponseAction AutofillPrivateRemoveAddressFunction::Run() {
       api::autofill_private::RemoveAddress::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(parameters);
   AddressDataManager* adm = address_data_manager();
-  if (!adm || !adm->has_initial_load_finished()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!adm) {
+    return RespondNow(Error(base::StrCat(
+        {"Remove address - ", kErrorAddressDataManagerUnavailable})));
+  }
+  if (!adm->has_initial_load_finished()) {
+    return RespondNow(Error(base::StrCat(
+        {"Remove address - ", kErrorAddressDataManagerLoadingUnfinished})));
   }
   adm->RemoveProfile(parameters->guid);
   return RespondNow(NoArguments());
@@ -332,7 +377,8 @@ ExtensionFunction::ResponseAction AutofillPrivateGetCountryListFunction::Run() {
   if (parameters->for_account_storage) {
     AddressDataManager* adm = address_data_manager();
     if (!adm) {
-      return RespondNow(Error(kErrorDataUnavailable));
+      return RespondNow(Error(base::StrCat(
+          {"Get country list - ", kErrorAddressDataManagerUnavailable})));
     }
 
     // Return an empty list if data is not loaded.
@@ -390,10 +436,14 @@ AutofillPrivateGetAddressComponentsFunction::Run() {
 
 ExtensionFunction::ResponseAction AutofillPrivateGetAddressListFunction::Run() {
   AddressDataManager* adm = address_data_manager();
-  if (!adm || !adm->has_initial_load_finished()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!adm) {
+    return RespondNow(Error(base::StrCat(
+        {"Get address list - ", kErrorAddressDataManagerUnavailable})));
   }
-
+  if (!adm->has_initial_load_finished()) {
+    return RespondNow(ArgumentList(
+        api::autofill_private::GetAddressList::Results::Create({})));
+  }
   autofill_util::AddressEntryList address_list =
       autofill_util::GenerateAddressList(*adm);
   return RespondNow(ArgumentList(
@@ -409,8 +459,14 @@ ExtensionFunction::ResponseAction AutofillPrivateSaveCreditCardFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Save credit card - ", kErrorPaymentsDataManagerUnavailable})));
+  }
+
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(Error(base::StrCat(
+        {"Save credit card - ", kErrorPaymentsDataManagerLoadingUnfinished})));
   }
 
   // If a card guid is specified, get a copy of the card identified by it.
@@ -422,14 +478,18 @@ ExtensionFunction::ResponseAction AutofillPrivateSaveCreditCardFunction::Run() {
   if (use_existing_card) {
     existing_card = paydm->GetCreditCardByGUID(guid);
     if (!existing_card) {
-      return RespondNow(Error(kErrorDataUnavailable));
+      return RespondNow(Error(base::StrCat(
+          {"Save credit card - ", kErrorPaymentMethodUnavailable})));
     }
   }
-  autofill::CreditCard credit_card =
-      existing_card ? *existing_card
-                    : autofill::CreditCard(
-                          base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                          kSettingsOrigin);
+  autofill::CreditCard credit_card;
+  if (existing_card) {
+    credit_card = *existing_card;
+  } else {
+    credit_card = autofill::CreditCard(
+        base::Uuid::GenerateRandomV4().AsLowercaseString());
+    credit_card.set_is_user_confirmed(true);
+  }
 
   if (card->name) {
     credit_card.SetRawInfo(autofill::CREDIT_CARD_NAME_FULL,
@@ -539,10 +599,15 @@ AutofillPrivateRemovePaymentsEntityFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Remove payments entity - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(
+        Error(base::StrCat({"Remove payments entity - ",
+                            kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   if (paydm->GetIbanByGUID(parameters->guid)) {
     base::RecordAction(base::UserMetricsAction("AutofillIbanDeleted"));
   } else if (const autofill::CreditCard* credit_card =
@@ -568,10 +633,14 @@ AutofillPrivateRemovePaymentsEntityFunction::Run() {
 ExtensionFunction::ResponseAction
 AutofillPrivateGetCreditCardListFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Get credit card list - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(ArgumentList(
+        api::autofill_private::GetCreditCardList::Results::Create({})));
+  }
   autofill_util::CreditCardEntryList credit_card_list =
       autofill_util::GenerateCreditCardList(*paydm);
   return RespondNow(
@@ -585,10 +654,16 @@ AutofillPrivateGetCreditCardListFunction::Run() {
 ExtensionFunction::ResponseAction
 AutofillPrivateLogServerCardLinkClickedFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(
+        Error(base::StrCat({"Log server card link clicked - ",
+                            kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(
+        Error(base::StrCat({"Log server card link clicked - ",
+                            kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   paydm->LogServerCardLinkClicked();
   return RespondNow(NoArguments());
 }
@@ -599,10 +674,16 @@ AutofillPrivateLogServerCardLinkClickedFunction::Run() {
 ExtensionFunction::ResponseAction
 AutofillPrivateLogServerIbanLinkClickedFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(
+        Error(base::StrCat({"Log server iban link clicked - ",
+                            kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(
+        Error(base::StrCat({"Log server iban link clicked - ",
+                            kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   paydm->LogServerIbanLinkClicked();
   return RespondNow(NoArguments());
 }
@@ -616,10 +697,14 @@ ExtensionFunction::ResponseAction AutofillPrivateSaveIbanFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(
+        base::StrCat({"Save iban - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(Error(base::StrCat(
+        {"Save iban - ", kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   api::autofill_private::IbanEntry* iban_entry = &parameters->iban;
   CHECK(iban_entry->value);
   const autofill::Iban* existing_iban = nullptr;
@@ -672,10 +757,14 @@ ExtensionFunction::ResponseAction AutofillPrivateSaveIbanFunction::Run() {
 
 ExtensionFunction::ResponseAction AutofillPrivateGetIbanListFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Get iban list - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(
+        ArgumentList(api::autofill_private::GetIbanList::Results::Create({})));
+  }
   autofill_util::IbanEntryList iban_list =
       autofill_util::GenerateIbanList(*paydm);
   return RespondNow(ArgumentList(
@@ -702,14 +791,19 @@ ExtensionFunction::ResponseAction AutofillPrivateAddVirtualCardFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Add virtual card - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(Error(base::StrCat(
+        {"Add virtual card - ", kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   const autofill::CreditCard* card =
       paydm->GetCreditCardByServerId(parameters->card_id);
   if (!card) {
-    return RespondNow(Error(kErrorDataUnavailable));
+    return RespondNow(Error(
+        base::StrCat({"Add virtual card - ", kErrorPaymentMethodUnavailable})));
   }
 
   auto* virtual_card_enrollment_manager =
@@ -735,20 +829,27 @@ AutofillPrivateRemoveVirtualCardFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(parameters);
 
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Remove virtual card - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(
+        Error(base::StrCat({"Remove virtual card - ",
+                            kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   const autofill::CreditCard* card =
       paydm->GetCreditCardByServerId(parameters->card_id);
   if (!card) {
-    return RespondNow(Error(kErrorDataUnavailable));
+    return RespondNow(Error(base::StrCat(
+        {"Remove virtual card - ", kErrorPaymentMethodUnavailable})));
   }
 
   autofill::BrowserAutofillManager* autofill_manager =
       GetBrowserAutofillManager(GetSenderWebContents());
   if (!autofill_manager) {
-    return RespondNow(Error(kErrorDataUnavailable));
+    return RespondNow(Error(base::StrCat(
+        {"Remove virtual card - ", kErrorAutofillManagerUnavailable})));
   }
 
   autofill::VirtualCardEnrollmentManager* virtual_card_enrollment_manager =
@@ -768,10 +869,15 @@ AutofillPrivateRemoveVirtualCardFunction::Run() {
 ExtensionFunction::ResponseAction
 AutofillPrivateGetPayOverTimeIssuerListFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(
+        Error(base::StrCat({"Get pay over time issuer list - ",
+                            kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(ArgumentList(
+        api::autofill_private::GetPayOverTimeIssuerList::Results::Create({})));
+  }
   autofill_util::PayOverTimeIssuerEntryList pay_over_time_issuer_list =
       autofill_util::GeneratePayOverTimeIssuerList(*paydm);
   return RespondNow(ArgumentList(
@@ -786,10 +892,16 @@ ExtensionFunction::ResponseAction
 AutofillPrivateAuthenticateUserAndFlipMandatoryAuthToggleFunction::Run() {
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(
+        base::StrCat({"Authenticate user and flip mandatory auth toggle - ",
+                      kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(Error(
+        base::StrCat({"Authenticate user and flip mandatory auth toggle - ",
+                      kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   // We will be modifying the pref `kAutofillPaymentMethodsMandatoryReauth`
   // asynchronously. The pref value directly correlates to the mandatory auth
   // toggle.
@@ -815,7 +927,9 @@ AutofillPrivateAuthenticateUserAndFlipMandatoryAuthToggleFunction::Run() {
 
   return RespondNow(NoArguments());
 #else
-  return RespondNow(Error(kErrorDeviceAuthUnavailable));
+  return RespondNow(
+      Error(base::StrCat({"Authenticate user and flip mandatory auth toggle - ",
+                          kErrorDeviceAuthUnavailable})));
 #endif  // BUILDFLAG (IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 }
 
@@ -851,10 +965,14 @@ void AutofillPrivateAuthenticateUserAndFlipMandatoryAuthToggleFunction::
 
 ExtensionFunction::ResponseAction AutofillPrivateGetLocalCardFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Get local card - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(Error(base::StrCat(
+        {"Get local card - ", kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   if (paydm->IsPaymentMethodsMandatoryReauthEnabled()) {
     base::RecordAction(base::UserMetricsAction(
         "PaymentsUserAuthTriggeredToShowEditLocalCardDialog"));
@@ -918,7 +1036,8 @@ void AutofillPrivateGetLocalCardFunction::ReturnCreditCard() {
             *card_from_guid, *paydm,
             /*mask_local_cards=*/false))));
   }
-  return Respond(Error(kErrorCardDataUnavailable));
+  return Respond(Error(
+      base::StrCat({"Get local card - ", kErrorPaymentMethodUnavailable})));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -937,7 +1056,8 @@ AutofillPrivateCheckIfDeviceAuthAvailableFunction::Run() {
         client->GetDeviceAuthenticator().get())));
   }
 #endif  // BUILDFLAG (IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
-  return RespondNow(Error(kErrorDeviceAuthUnavailable));
+  return RespondNow(Error(base::StrCat(
+      {"Check if device auth available - ", kErrorDeviceAuthUnavailable})));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -946,35 +1066,21 @@ AutofillPrivateCheckIfDeviceAuthAvailableFunction::Run() {
 ExtensionFunction::ResponseAction
 AutofillPrivateBulkDeleteAllCvcsFunction::Run() {
   PaymentsDataManager* paydm = payments_data_manager();
-  if (!paydm || !paydm->is_payments_data_loaded()) {
-    return RespondNow(Error(kErrorDataUnavailable));
+  if (!paydm) {
+    return RespondNow(Error(base::StrCat(
+        {"Bulk delete all cvcs - ", kErrorPaymentsDataManagerUnavailable})));
   }
-
+  if (!paydm->is_payments_data_loaded()) {
+    return RespondNow(
+        Error(base::StrCat({"Bulk delete all cvcs - ",
+                            kErrorPaymentsDataManagerLoadingUnfinished})));
+  }
   // Clear local and server CVCs from the webdata database. For server CVCs,
   // this will also clear them from the Chrome sync server and thus other
   // devices.
   paydm->ClearLocalCvcs();
   paydm->ClearServerCvcs();
 
-  return RespondNow(NoArguments());
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// AutofillPrivateSetAutofillSyncToggleEnabledFunction
-
-ExtensionFunction::ResponseAction
-AutofillPrivateSetAutofillSyncToggleEnabledFunction::Run() {
-  AddressDataManager* adm = address_data_manager();
-  if (!adm || !adm->has_initial_load_finished()) {
-    return RespondNow(Error(kErrorDataUnavailable));
-  }
-
-  std::optional<api::autofill_private::SetAutofillSyncToggleEnabled::Params>
-      parameters =
-          api::autofill_private::SetAutofillSyncToggleEnabled::Params::Create(
-              args());
-  EXTENSION_FUNCTION_VALIDATE(parameters);
-  adm->SetAutofillSelectableTypeEnabled(parameters->enabled);
   return RespondNow(NoArguments());
 }
 
@@ -990,12 +1096,27 @@ AutofillPrivateAddOrUpdateEntityInstanceFunction::Run() {
 
   const autofill_private::EntityInstance& private_api_entity_instance =
       parameters->entity_instance;
+  std::optional<EntityTypeName> entity_type_name =
+      autofill::ToSafeEntityTypeName(
+          private_api_entity_instance.type.type_name);
+
+  if (!entity_type_name.has_value()) {
+    return RespondNow(
+        Error(base::StrCat({"Add or update entity instance - ",
+                            kErrorAutofillAiTypeNameOutOfBounds})));
+  }
+
+  const bool is_eligible_for_wallet_storage = IsEligibleForWalletStorage(
+      autofill_client(), EntityType(*entity_type_name));
+
   std::optional<EntityInstance> entity_instance =
       autofill_ai_util::PrivateApiEntityInstanceToEntityInstance(
           private_api_entity_instance,
-          g_browser_process->GetApplicationLocale());
+          g_browser_process->GetApplicationLocale(),
+          is_eligible_for_wallet_storage);
   if (!entity_instance.has_value()) {
-    return RespondNow(Error(kErrorAutofillAiInvalidData));
+    return RespondNow(Error(base::StrCat(
+        {"Add or update entity instance - ", kErrorAutofillAiInvalidData})));
   }
 
   Profile* profile = Profile::FromBrowserContext(browser_context());
@@ -1004,10 +1125,124 @@ AutofillPrivateAddOrUpdateEntityInstanceFunction::Run() {
               : nullptr;
 
   if (!entity_data_manager) {
-    return RespondNow(Error(kErrorAutofillAiUnavailable));
+    return RespondNow(Error(base::StrCat(
+        {"Add or update entity instance - ", kErrorAutofillAiUnavailable})));
   }
+
+  const bool is_new_entity = private_api_entity_instance.guid.empty();
+  if (is_new_entity) {
+    autofill::LogEntityAddedFromSettings(entity_instance->type(),
+                                         entity_instance->record_type());
+  } else {
+    autofill::LogEntityUpdatedFromSettings(entity_instance->type(),
+                                           entity_instance->record_type());
+  }
+
+  // Wallet passes are strictly read-only from the client's perspective in
+  // settings. Therefore, we only ever "Save" them. Any downstream "Update"
+  // attempts are inapplicable.
+  if (GetWalletPassType(entity_instance->type(),
+                        entity_instance->record_type()) ==
+      EntityInstance::WalletPassType::kPrivate) {
+    // If the request is successfully started, the callback will handle the
+    // response.
+    if (TrySavePrivatePassWithWalletAPI(*entity_instance)) {
+      return RespondLater();
+    }
+
+    SavePrivatePassLocallyAndNotifyAsFallback(*entity_data_manager,
+                                              std::move(*entity_instance));
+    return RespondNow(NoArguments());
+  }
+
+  // Handles the following scenarios:
+  // 1. Save/Update entity locally.
+  // 2. Save entity to Wallet via Chrome sync.
   entity_data_manager->AddOrUpdateEntityInstance(entity_instance.value());
+  if (private_api_entity_instance.stored_in_wallet.value_or(false) &&
+      !is_eligible_for_wallet_storage && autofill_client()) {
+    autofill_client()->ShowAutofillAiLocalSaveNotification();
+  }
   return RespondNow(NoArguments());
+}
+
+bool AutofillPrivateAddOrUpdateEntityInstanceFunction::
+    TrySavePrivatePassWithWalletAPI(const EntityInstance& entity_instance) {
+  if (!base::FeatureList::IsEnabled(
+          autofill::features::kAutofillAiWalletPrivatePasses)) {
+    return false;
+  }
+
+  if (!autofill_client()) {
+    return false;
+  }
+
+  if (autofill::WalletPassAccessManager* pass_manager =
+          autofill_client()->GetWalletPassAccessManager()) {
+    // When WalletApiPrivatePassesConsent is disabled,
+    // `SaveWalletEntityInstance()` doesn't require a valid `session_id`.
+    consent_auditor::ConsentAuditor::SessionId session_id;
+    if (base::FeatureList::IsEnabled(
+            wallet::features::kWalletApiPrivatePassesConsent)) {
+      // Sadly, the string IDs are hardcoded here, because the TypeScript code
+      // only has access to the strings themselves, not their IDs.
+      session_id = autofill::RecordWalletPrivatePassConsent(
+          /*accepted_consent_string_id=*/
+          IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_DIALOG_SUBTITLE_NEW,
+          /*accept_button_string_id=*/IDS_SAVE,
+          *autofill_client()->GetConsentAuditor(),
+          *autofill_client()->GetIdentityManager());
+    }
+    pass_manager->SaveWalletEntityInstance(
+        entity_instance, session_id,
+        base::BindOnce(&AutofillPrivateAddOrUpdateEntityInstanceFunction::
+                           OnSavePrivatePassToWalletFinished,
+                       base::RetainedRef(this), entity_instance));
+    return true;
+  }
+
+  return false;
+}
+
+void AutofillPrivateAddOrUpdateEntityInstanceFunction::
+    OnSavePrivatePassToWalletFinished(
+        autofill::EntityInstance original_entity,
+        std::optional<EntityInstance> saved_entity) {
+  content::BrowserContext* context = browser_context();
+  if (!context) {
+    Respond(Error(kErrorAutofillAiUnavailable));
+    return;
+  }
+  Profile* profile = Profile::FromBrowserContext(context);
+  EntityDataManager* entity_data_manager =
+      profile ? AutofillEntityDataManagerFactory::GetForProfile(profile)
+              : nullptr;
+
+  if (!entity_data_manager) {
+    Respond(Error(kErrorAutofillAiUnavailable));
+    return;
+  }
+  if (saved_entity.has_value()) {
+    entity_data_manager->AddOrUpdateEntityInstance(std::move(*saved_entity));
+  } else {
+    SavePrivatePassLocallyAndNotifyAsFallback(*entity_data_manager,
+                                              std::move(original_entity));
+  }
+  Respond(NoArguments());
+}
+
+void AutofillPrivateAddOrUpdateEntityInstanceFunction::
+    SavePrivatePassLocallyAndNotifyAsFallback(
+        EntityDataManager& entity_data_manager,
+        EntityInstance entity) {
+  EntityInstance local_entity =
+      entity.CopyWithNewRecordType(EntityInstance::RecordType::kLocal);
+  entity_data_manager.AddOrUpdateEntityInstance(std::move(local_entity));
+
+  // Notify the user.
+  if (autofill_client()) {
+    autofill_client()->ShowAutofillAiLocalSaveNotification();
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1025,10 +1260,17 @@ AutofillPrivateRemoveEntityInstanceFunction::Run() {
               : nullptr;
 
   if (!entity_data_manager) {
-    return RespondNow(Error(kErrorAutofillAiUnavailable));
+    return RespondNow(Error(base::StrCat(
+        {"Remove entity instance - ", kErrorAutofillAiUnavailable})));
   }
-  entity_data_manager->RemoveEntityInstance(
-      EntityInstance::EntityId(parameters->guid));
+
+  const autofill::EntityInstance::EntityId guid(parameters->guid);
+  if (auto entity = entity_data_manager->GetEntityInstance(guid)) {
+    autofill::LogEntityDeletedFromSettings(entity->type(),
+                                           entity->record_type());
+    entity_data_manager->RemoveEntityInstance(guid);
+  }
+
   return RespondNow(NoArguments());
 }
 
@@ -1043,23 +1285,29 @@ AutofillPrivateLoadEntityInstancesFunction::Run() {
               : nullptr;
 
   if (!entity_data_manager) {
-    return RespondNow(Error(kErrorAutofillAiUnavailable));
+    return RespondNow(Error(base::StrCat(
+        {"Load entity instances - ", kErrorAutofillAiUnavailable})));
   }
   const bool obfuscate_sensitive_types =
       autofill::prefs::IsAutofillAiReauthBeforeFillingEnabled(
-          autofill_client()->GetPrefs()) &&
-      base::FeatureList::IsEnabled(
-          autofill::features::kAutofillAiReauthRequired);
+          autofill_client()->GetPrefs());
   std::vector<autofill_private::EntityInstanceWithLabels> result =
       autofill_ai_util::EntityInstancesToPrivateApiEntityInstancesWithLabels(
-          entity_data_manager->GetEntityInstances(), obfuscate_sensitive_types,
-          g_browser_process->GetApplicationLocale());
+          autofill::GetEntityInstancesForSettings(
+              entity_data_manager->GetEntityInstances()),
+          obfuscate_sensitive_types, g_browser_process->GetApplicationLocale());
   return RespondNow(ArgumentList(
       autofill_private::LoadEntityInstances::Results::Create(result)));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // AutofillPrivateGetEntityInstanceByGuidFunction
+
+AutofillPrivateGetEntityInstanceByGuidFunction::
+    AutofillPrivateGetEntityInstanceByGuidFunction() = default;
+
+AutofillPrivateGetEntityInstanceByGuidFunction::
+    ~AutofillPrivateGetEntityInstanceByGuidFunction() = default;
 
 ExtensionFunction::ResponseAction
 AutofillPrivateGetEntityInstanceByGuidFunction::Run() {
@@ -1073,18 +1321,71 @@ AutofillPrivateGetEntityInstanceByGuidFunction::Run() {
               : nullptr;
 
   if (!entity_data_manager) {
-    return RespondNow(Error(kErrorAutofillAiUnavailable));
+    return RespondNow(Error(base::StrCat(
+        {"Get entity instance by guid - ", kErrorAutofillAiUnavailable})));
   }
   base::optional_ref<const EntityInstance> entity_instance =
       entity_data_manager->GetEntityInstance(
           EntityInstance::EntityId(parameters->guid));
   if (!entity_instance.has_value()) {
-    return RespondNow(Error(kErrorAutofillAiEntityInstanceNotFound));
+    return RespondNow(
+        Error(base::StrCat({"Get entity instance by guid - ",
+                            kErrorAutofillAiEntityInstanceNotFound})));
   }
-  return RespondNow(ArgumentList(
-      api::autofill_private::GetEntityInstanceByGuid::Results::Create(
-          autofill_ai_util::EntityInstanceToPrivateApiEntityInstance(
-              entity_instance.value(), autofill_client()->GetAppLocale()))));
+
+  authenticator_.reset();
+  if (base::FeatureList::IsEnabled(
+          autofill::features::kAutofillAiReauthRequired)) {
+    authenticator_ = autofill_client()->GetDeviceAuthenticator(
+        /*histogram=*/"Autofill.Ai.Reauth.ViewEntity");
+  }
+
+  const bool should_authenticate_to_view =
+      autofill::prefs::IsAutofillAiReauthBeforeFillingEnabled(
+          autofill_client()->GetPrefs()) &&
+      authenticator_ &&
+      authenticator_->CanAuthenticateWithBiometricOrScreenLock() &&
+      std::ranges::any_of(
+          entity_instance->attributes(),
+          [](const autofill::AttributeInstance& attribute_instance) {
+            return attribute_instance.type().is_obfuscated() &&
+                   !attribute_instance.GetCompleteRawInfo().empty();
+          });
+
+  if (!should_authenticate_to_view) {
+    return RespondNow(ArgumentList(
+        api::autofill_private::GetEntityInstanceByGuid::Results::Create(
+            autofill_ai_util::EntityInstanceToPrivateApiEntityInstance(
+                entity_instance.value(), autofill_client()->GetAppLocale(),
+                IsEligibleForWalletStorage(autofill_client(),
+                                           entity_instance.value().type())))));
+  }
+
+  std::u16string message;
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+  message = l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_VIEWING_REAUTH);
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+  authenticator_->AuthenticateWithMessage(
+      message,
+      base::BindOnce(
+          &AutofillPrivateGetEntityInstanceByGuidFunction::OnReauthCompleted,
+          base::RetainedRef(this), entity_instance.value()));
+  return RespondLater();
+}
+
+void AutofillPrivateGetEntityInstanceByGuidFunction::OnReauthCompleted(
+    const autofill::EntityInstance& entity_instance,
+    bool auth_succeeded) {
+  if (auth_succeeded) {
+    Respond(ArgumentList(
+        api::autofill_private::GetEntityInstanceByGuid::Results::Create(
+            autofill_ai_util::EntityInstanceToPrivateApiEntityInstance(
+                entity_instance, autofill_client()->GetAppLocale(),
+                IsEligibleForWalletStorage(autofill_client(),
+                                           entity_instance.type())))));
+    return;
+  }
+  Respond(NoArguments());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1098,10 +1399,9 @@ AutofillPrivateGetWritableEntityTypesFunction::Run() {
   result.reserve(all_types.size());
   for (EntityType entity_type : autofill::GetWritableEntityTypes(
            autofill_client()->GetVariationConfigCountryCode())) {
-    // TODO(crbug.com/454892936): Provide the correct value for
-    // `supports_wallet_storage`.
     result.push_back(autofill_ai_util::EntityTypeToPrivateApiEntityType(
-        entity_type, /*supports_wallet_storage=*/false));
+        entity_type,
+        IsEligibleForWalletStorage(autofill_client(), entity_type)));
   }
 
   return RespondNow(ArgumentList(
@@ -1121,7 +1421,9 @@ AutofillPrivateGetAllAttributeTypesForEntityTypeNameFunction::Run() {
   std::optional<EntityTypeName> entity_type_name =
       autofill::ToSafeEntityTypeName(parameters->entity_type_name);
   if (!entity_type_name.has_value()) {
-    return RespondNow(Error(kErrorAutofillAiTypeNameOutOfBounds));
+    return RespondNow(
+        Error(base::StrCat({"Get all attribute types for entity type name - ",
+                            kErrorAutofillAiTypeNameOutOfBounds})));
   }
 
   EntityType entity_type(entity_type_name.value());
@@ -1146,7 +1448,9 @@ AutofillPrivateGetRequiredAttributeTypesForEntityTypeNameFunction::Run() {
       autofill::ToSafeEntityTypeName(params->entity_type_name);
 
   if (!entity_type_name.has_value()) {
-    return RespondNow(Error(kErrorAutofillAiTypeNameOutOfBounds));
+    return RespondNow(Error(
+        base::StrCat({"Get required attribute types for entity type name - ",
+                      kErrorAutofillAiTypeNameOutOfBounds})));
   }
 
   autofill::EntityType entity_type(entity_type_name.value());
@@ -1231,15 +1535,15 @@ AutofillPrivateAuthenticateUserBeforeViewingEntityDataFunction::
 ExtensionFunction::ResponseAction
 AutofillPrivateAuthenticateUserBeforeViewingEntityDataFunction::Run() {
   if (!autofill::prefs::IsAutofillAiReauthBeforeFillingEnabled(
-          autofill_client()->GetPrefs()) ||
-      !base::FeatureList::IsEnabled(
-          autofill::features::kAutofillAiReauthRequired)) {
+          autofill_client()->GetPrefs())) {
     return RespondNow(WithArguments(true));
   }
 
   autofill::ContentAutofillClient* client = autofill_client();
   if (!client) {
-    return RespondNow(Error(kErrorDataUnavailable));
+    return RespondNow(
+        Error(base::StrCat({"Authenticate user before viewing entity data - ",
+                            kErrorAutofillClientUnavailable})));
   }
 
   authenticator_ = client->GetDeviceAuthenticator();
@@ -1286,7 +1590,9 @@ AutofillPrivateToggleAutofillAiReauthRequirementFunction::Run() {
 
   autofill::ContentAutofillClient* client = autofill_client();
   if (!client) {
-    return RespondNow(Error(kErrorDataUnavailable));
+    return RespondNow(
+        Error(base::StrCat({"Toggle autofill AI reauth requirement - ",
+                            kErrorAutofillClientUnavailable})));
   }
 
   authenticator_ = client->GetDeviceAuthenticator();

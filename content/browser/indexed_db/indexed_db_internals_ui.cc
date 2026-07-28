@@ -115,7 +115,7 @@ IndexedDBInternalsUI::IndexedDBInternalsUI(WebUI* web_ui)
       "trusted-types static-types lit-html-desktop;");
   source->UseStringsJs();
   source->AddResourcePaths(kIndexedDbResources);
-  source->AddResourcePath("", IDR_INDEXED_DB_INDEXEDDB_INTERNALS_HTML);
+  source->SetDefaultResource(IDR_INDEXED_DB_INDEXEDDB_INTERNALS_HTML);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(IndexedDBInternalsUI)
@@ -222,7 +222,7 @@ void IndexedDBInternalsUI::DownloadBucketData(
   }
 
   control->ForceClose(
-      bucket_id, storage::mojom::ForceCloseReason::FORCE_CLOSE_INTERNALS_PAGE,
+      bucket_id,
       base::BindOnce(
           [](base::WeakPtr<IndexedDBInternalsUI> handler,
              storage::BucketId bucket_id,
@@ -250,13 +250,8 @@ void IndexedDBInternalsUI::ForceClose(storage::BucketId bucket_id,
     return;
   }
 
-  control->ForceClose(
-      bucket_id, storage::mojom::ForceCloseReason::FORCE_CLOSE_INTERNALS_PAGE,
-      base::BindOnce(
-          [](ForceCloseCallback callback) {
-            std::move(callback).Run(std::nullopt);
-          },
-          std::move(callback)));
+  control->ForceClose(bucket_id,
+                      base::BindOnce(std::move(callback), std::nullopt));
 }
 
 void IndexedDBInternalsUI::StartMetadataRecording(

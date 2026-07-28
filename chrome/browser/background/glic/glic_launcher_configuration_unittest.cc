@@ -6,7 +6,6 @@
 
 #include "base/test/task_environment.h"
 #include "chrome/browser/glic/glic_pref_names.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
@@ -24,7 +23,7 @@ class MockObserver : public GlicLauncherConfiguration::Observer {
  public:
   // void OnEnabledChanged(bool enabled) override {}
   MOCK_METHOD1(OnEnabledChanged, void(bool));
-  MOCK_METHOD1(OnGlobalHotkeyChanged, void(ui::Accelerator));
+  MOCK_METHOD0(OnGlobalHotkeyChanged, void());
 };
 }  // namespace
 
@@ -50,9 +49,9 @@ TEST_F(GlicLauncherConfigurationTest, IsEnabled) {
   EXPECT_TRUE(GlicLauncherConfiguration::IsEnabled());
 }
 
-TEST_F(GlicLauncherConfigurationTest, GetGlobalHotkey_Default) {
+TEST_F(GlicLauncherConfigurationTest, GetToggleHotkey_Default) {
   const ui::Accelerator accelerator =
-      GlicLauncherConfiguration::GetGlobalHotkey();
+      GlicLauncherConfiguration::GetToggleHotkey();
   EXPECT_EQ(accelerator.key_code(), ui::VKEY_G);
 #if BUILDFLAG(IS_MAC)
   EXPECT_TRUE(accelerator.IsCtrlDown());
@@ -69,11 +68,11 @@ TEST_F(GlicLauncherConfigurationTest, GetGlobalHotkey_Default) {
 #endif
 }
 
-TEST_F(GlicLauncherConfigurationTest, GetGlobalHotkey_Invalid) {
+TEST_F(GlicLauncherConfigurationTest, GetToggleHotkey_Invalid) {
   const ui::Accelerator invalid_hotkey(ui::VKEY_G, ui::EF_NONE);
   local_state()->SetString(prefs::kGlicLauncherHotkey,
                            ui::Command::AcceleratorToString(invalid_hotkey));
-  EXPECT_EQ(GlicLauncherConfiguration::GetGlobalHotkey(), ui::Accelerator());
+  EXPECT_EQ(GlicLauncherConfiguration::GetToggleHotkey(), ui::Accelerator());
 }
 
 TEST_F(GlicLauncherConfigurationTest, Observer) {
@@ -82,7 +81,7 @@ TEST_F(GlicLauncherConfigurationTest, Observer) {
   EXPECT_CALL(observer, OnEnabledChanged(true)).Times(1);
   local_state()->SetBoolean(prefs::kGlicLauncherEnabled, true);
 
-  EXPECT_CALL(observer, OnGlobalHotkeyChanged(testing::_)).Times(1);
+  EXPECT_CALL(observer, OnGlobalHotkeyChanged()).Times(1);
   const ui::Accelerator hotkey(ui::VKEY_K, ui::EF_ALT_DOWN);
   local_state()->SetString(prefs::kGlicLauncherHotkey,
                            ui::Command::AcceleratorToString(hotkey));

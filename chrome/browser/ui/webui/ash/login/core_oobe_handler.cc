@@ -7,7 +7,9 @@
 #include <type_traits>
 #include <utility>
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/shell.h"
+#include "base/check_deref.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
@@ -15,6 +17,7 @@
 #include "chrome/browser/ash/login/fjord_oobe/fjord_oobe_util.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "chrome/grit/branded_strings.h"
@@ -81,7 +84,10 @@ void CoreOobeHandler::GetAdditionalParameters(base::DictValue* dict) {
   dict->Set("isDemoModeEnabled", DemoSetupController::IsDemoModeAllowed());
   if (fjord_util::ShouldShowFjordOobe()) {
     dict->Set("deviceFlowType", "fjord");
-  } else if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
+  } else if (
+      // TODO(crbug.com/489929275): Remove g_browser_process use.
+      policy::EnrollmentRequisitionManager::IsMeetDevice(
+          CHECK_DEREF(g_browser_process->local_state()))) {
     // The value is used to show a different UI for this type of the devices.
     dict->Set("deviceFlowType", "meet");
   }

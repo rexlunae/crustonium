@@ -65,6 +65,7 @@
       "v.test_suite"
     ]
   },
+  "archive_path": "mac-debug-ios-catalyst-debug/libfuzzer-ios-mac-debug",
   "archive_prefix": "libfuzzer-ios",
   "builder_group": "chromium.fuzz",
   "gardener_rotations": [
@@ -77,5 +78,5 @@
   ],
   "upload_bucket": "chromium-browser-libfuzzer",
   "upload_directory": "ios-catalyst-debug",
-  "xcode_build_version": "17a400"
+  "xcode_build_version": "17f42"
 }

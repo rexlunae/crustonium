@@ -7,9 +7,9 @@ import 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js'
 import {DEFAULT_SETTINGS, ReadAloudSettingsChange, ToolbarEvent} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {HighlightMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
-import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
+import {eventToPromise, microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
-import {assertCheckMarksForDropdown, assertHeadersForDropdown, assertTestSettingsAreNotDefaultSettings, mockMetrics, stubAnimationFrame, TEST_RANDOM_VALUE_SETTINGS} from './common.js';
+import {assertCheckMarksForDropdown, assertTestSettingsAreNotDefaultSettings, mockMetrics, stubAnimationFrame, TEST_RANDOM_VALUE_SETTINGS} from './common.js';
 import {FakeReadingMode} from './fake_reading_mode.js';
 import type {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 
@@ -39,31 +39,34 @@ suite('HighlightMenuElement', () => {
     assertCheckMarksForDropdown(highlightMenu);
   });
 
-  test('does not have headers', () => {
-    assertHeadersForDropdown(
-        highlightMenu.$.menu, /*shouldHaveHeaders=*/ false);
-  });
+
 
   test('highlight change is propagated', async () => {
     createHighlightMenu();
     const numberOfOptions = 3;
-    let closeAllMenusCount = 0;
-    document.addEventListener(
-        ToolbarEvent.CLOSE_ALL_MENUS, () => closeAllMenusCount += 1);
 
+    const closeAllMenusPromise1 =
+        eventToPromise(ToolbarEvent.CLOSE_ALL_MENUS, document);
     const highlight1 = chrome.readingMode.noHighlighting;
     highlightMenu.$.menu.dispatchEvent(new CustomEvent(
         ToolbarEvent.HIGHLIGHT_CHANGE, {detail: {data: highlight1}}));
+    await closeAllMenusPromise1;
     assertEquals(highlight1, chrome.readingMode.highlightGranularity);
 
+    const closeAllMenusPromise2 =
+        eventToPromise(ToolbarEvent.CLOSE_ALL_MENUS, document);
     const highlight2 = chrome.readingMode.autoHighlighting;
     highlightMenu.$.menu.dispatchEvent(new CustomEvent(
         ToolbarEvent.HIGHLIGHT_CHANGE, {detail: {data: highlight2}}));
+    await closeAllMenusPromise2;
     assertEquals(highlight2, chrome.readingMode.highlightGranularity);
 
+    const closeAllMenusPromise3 =
+        eventToPromise(ToolbarEvent.CLOSE_ALL_MENUS, document);
     const highlight3 = chrome.readingMode.sentenceHighlighting;
     highlightMenu.$.menu.dispatchEvent(new CustomEvent(
         ToolbarEvent.HIGHLIGHT_CHANGE, {detail: {data: highlight3}}));
+    await closeAllMenusPromise3;
     assertEquals(highlight3, chrome.readingMode.highlightGranularity);
 
     assertEquals(
@@ -71,7 +74,6 @@ suite('HighlightMenuElement', () => {
         await metrics.whenCalled('recordSpeechSettingsChange'));
     assertEquals(
         numberOfOptions, metrics.getCallCount('recordSpeechSettingsChange'));
-    assertEquals(numberOfOptions, closeAllMenusCount);
   });
 
   test('highlight change logs new granularity', async () => {

@@ -74,6 +74,10 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO)
   uint32_t GetVoiceIsolationPreferredEffect() const override;
   void SetVoiceIsolationPreferredEffect(uint32_t effect) override;
 
+  bool GetKrispNoiseCancellationState() override;
+  void SetKrispNoiseCancellationState(
+      bool krisp_noise_cancellation_state) override;
+
   bool GetNoiseCancellationState() override;
   void SetNoiseCancellationState(bool noise_cancellation_state) override;
 
@@ -194,7 +198,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO)
   raw_ptr<PrefService> local_state_;  // not owned
 
   PrefChangeRegistrar pref_change_registrar_;
-  base::ObserverList<AudioPrefObserver>::Unchecked observers_;
+  base::ObserverList<AudioPrefObserver> observers_;
 };
 
 }  // namespace ash

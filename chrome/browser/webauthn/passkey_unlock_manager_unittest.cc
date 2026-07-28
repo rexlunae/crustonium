@@ -101,6 +101,8 @@ class PasskeyUnlockManagerTest : public testing::Test {
             [gpm_pin_status](
                 EnclaveManager::GpmPinAvailabilityCallback callback) {
               std::move(callback).Run(gpm_pin_status);
+              return std::make_unique<
+                  trusted_vault::TrustedVaultConnection::Request>();
             });
     EXPECT_CALL(*enclave_manager_mock, CheckGpmPinAvailability(_));
     return enclave_manager_mock;
@@ -150,7 +152,7 @@ class PasskeyUnlockManagerTest : public testing::Test {
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList feature_list_{device::kPasskeyUnlockManager};
+  base::test::ScopedFeatureList feature_list_;
   std::map<std::string, std::string> feature_params_;
   std::unique_ptr<EnclaveManagerInterface> test_enclave_manager_;
   std::unique_ptr<PasskeyModel> test_passkey_model_;

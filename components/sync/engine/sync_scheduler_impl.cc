@@ -113,10 +113,10 @@ void SyncSchedulerImpl::OnCredentialsUpdated() {
 }
 
 void SyncSchedulerImpl::OnConnectionStatusChange(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (type != network::mojom::ConnectionType::CONNECTION_NONE &&
+  if (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE &&
       HttpResponse::CONNECTION_UNAVAILABLE ==
           cycle_context_->connection_manager()->server_status()) {
     // Optimistically assume that the connection is fixed and try
@@ -240,8 +240,8 @@ bool SyncSchedulerImpl::CanRunJobNow(RespectGlobalBackoff respect_backoff) {
   }
 
   if (!ignore_auth_credentials_ &&
-      cycle_context_->connection_manager()->HasInvalidAccessToken()) {
-    SDVLOG(1) << "Unable to run a job because we have no valid access token.";
+      !cycle_context_->connection_manager()->HasAccessToken()) {
+    SDVLOG(1) << "Unable to run a job because we have no access token.";
     return false;
   }
 
@@ -621,7 +621,7 @@ void SyncSchedulerImpl::TrySyncCycleJobImpl(
     // We must be in an error state. Transitioning out of each of these
     // error states should trigger a sync cycle job.
     DCHECK(IsGlobalThrottle() || IsGlobalBackoff() ||
-           cycle_context_->connection_manager()->HasInvalidAccessToken());
+           !cycle_context_->connection_manager()->HasAccessToken());
   }
 
   RestartWaiting();

@@ -2,16 +2,19 @@
 <!DOCTYPE translationbundle>
 <translationbundle lang="gu">
 <translation id="1000436330784933699">તમે અહીં Lens ખોલી શકો છો.</translation>
+<translation id="1005291068154454184">Chromiumને ડિફૉલ્ટ તરીકે સેટ કરવાની રીતનો પૂર્ણ સ્ક્રીન વીડિયો</translation>
 <translation id="1042296835509784301">Chromiumમાં Password Manager ખોલે છે.</translation>
 <translation id="1047130070405668746">Chromium પસંદ કરો</translation>
 <translation id="1091252999271033193">આનો અર્થ છે કે Chromium દરેક વખતે મોબાઇલ સાઇટની વિનંતી કરશે.</translation>
 <translation id="1115463765356382667">Chromiumનો વધુને વધુ લાભ મેળવવા માટે, આ નીચે સૂચવેલી ક્રિયાઓ પૂર્ણ કરો.</translation>
 <translation id="1185134272377778587">Chromium વિશે</translation>
+<translation id="119044033865561140">જ્યારે તમે તમારા iPad પર હો, ત્યારે Chromiumને ઝટપટ ખોલો</translation>
 <translation id="1211450393895337634">જ્યારે તમે તમારા iPad પર બ્રાઉઝ કરવા તૈયાર હો, ત્યારે Chromiumને વધુ ઝડપથી ખોલો.</translation>
 <translation id="1229234641991056119">Chromiumમાં તમારા Safari પાસવર્ડ, ઇતિહાસ, બુકમાર્ક અને ક્રેડિટ કાર્ડનો ઉપયોગ કરો</translation>
 <translation id="1257458525759135959">છબીઓ સાચવવા માટે, સેટિંગ પર ટૅપ કરો જેથી Chromium તમારા ફોટા ઉમેરી શકે</translation>
 <translation id="1260702988262336471">Chromium મેનૂ ખોલો</translation>
 <translation id="12739128458173458">આ ટૅબને અન્ય ડિવાઇસ પર મોકલવા માટે, બન્ને ડિવાઇસ પર Chromiumમાં સાઇન ઇન કરો.</translation>
+<translation id="1279797561821266129">તમારા ડૉકમાંથી Chromium વધુ ઝડપથી ઍક્સેસ કરો</translation>
 <translation id="1361748954329991663">Chromium જૂનું થઈ ગયું છે. જો <ph name="BEGIN_LINK" />ઍપ સ્ટોર<ph name="END_LINK" />માં કોઈ અપડેટ ઉપલબ્ધ ન હોય, તો એવું બની શકે છે કે તમારું ડિવાઇસ હવેથી Chromiumના નવા વર્ઝનને સપોર્ટ ન કરતું હોય.</translation>
 <translation id="1383876407941801731">શોધો</translation>
 <translation id="1423007117030725713">નવા Chromium ટૅબમાં શોધ શરૂ કરો.</translation>
@@ -68,9 +71,6 @@
 <translation id="2313870531055795960">URLsને Chromiumમાં સંગ્રહિત અસુરક્ષિત સાઇટની સૂચિ સાથે ચેક કરે છે. જો કોઈ સાઇટ તમારો પાસવર્ડ ચોરી કરવાનો પ્રયાસ કરે અથવા તમે કોઈ નુકસાનકારક ફાઇલ ડાઉનલોડ કરો, ત્યારે Chromium પેજ કન્ટેન્ટના બિટની સાથોસાથ URLs પણ Safe Browsingને મોકલી શકે છે.</translation>
 <translation id="2314220608288760290">Chromium ઑટોમૅટિક રીતે YouTube છૂપા મોડની લિંકને છૂપા મોડમાં ખોલે છે.</translation>
 <translation id="231828342043114302">તમારી રુચિઓના આધારે મનગમતું બનાવેલું કન્ટેન્ટ મેળવવા માટે, Chromiumમાં સાઇન ઇન કરો.</translation>
-<translation id="2326738825692478496">Chromiumનો તમારો અમુક ડેટા હજી સુધી તમારા Google એકાઉન્ટમાં સાચવવામાં આવ્યો નથી.
-
-સાઇન આઉટ કરતા પહેલાં થોડી મિનિટ રાહ જોવાનો પ્રયાસ કરી જુઓ. જો તમે હમણાં જ સાઇન આઉટ કરશો, તો આ ડેટા ડિલીટ કરવામાં આવશે.</translation>
 <translation id="2334943301233020675">નીચેની પાસકી Password Manager પર આયાત કરવામાં આવી ન હતી, કારણ કે તે જરૂરી શરતો સાથે મેળ ખાતી નથી.</translation>
 <translation id="2337722506862731008">Chromium શેર કરો</translation>
 <translation id="2340423701577464731">Chromiumમાં વાંચન સૂચિની આઇટમ ઉમેરો</translation>
@@ -78,6 +78,7 @@
 <translation id="2386292341327187942">શોધ વિજેટ બૉક્સમાં, Chromium દાખલ કરો</translation>
 <translation id="2389827884654658221">તમારા iPadની હોમ સ્ક્રીનમાંથી Chromium વધુ ઝડપથી ઍક્સેસ કરો.</translation>
 <translation id="2426113998523353159">તમારી સંસ્થા માટે જરૂરી છે કે Chromiumનો ઉપયોગ કરવા માટે તમે સાઇન ઇન કરો.</translation>
+<translation id="244367646885670394">આ પાસવર્ડ સાચવવા અને તમારા બધા ડિવાઇસ પર Chromiumનો ડેટા મેળવવા માટે, આ તમે જ હોવાની ચકાસણી કરો</translation>
 <translation id="2450140762465183767">હવે તમે જ્યારે પણ મેસેજ, દસ્તાવેજો અને અન્ય ઍપમાં લિંક પર ટૅપ કરો, ત્યારે Chromiumનો ઉપયોગ કરી શકશો.</translation>
 <translation id="2459183986985456602">Chromiumમાં મારું નવીનતમ ટૅબ ખોલો.</translation>
 <translation id="2476409803017965813">તમે Chromiumના સેટિંગમાં જઈને કોઈપણ સમયે તમારી પસંદગીઓને અપડેટ કરી શકો છો.</translation>
@@ -87,6 +88,7 @@
 <translation id="2517624234762908348">તમારો Chromium ડેટા સિંક કરો</translation>
 <translation id="2575968074225731646">તમારા iPhoneના ડૉકમાંથી Chromium વધુ ઝડપથી ઍક્સેસ કરો.</translation>
 <translation id="2592940277904433508">Chromiumનો ઉપયોગ કરવાનું ચાલુ રાખો</translation>
+<translation id="2601766165676560303">iPhone અને iPad માટે Chromium થીમ</translation>
 <translation id="2607609479243848905">જો તમે તમારો પાસફ્રેઝ ભૂલી ગયા હો અથવા આ સેટિંગ બદલવા માગતા હો, તો <ph name="BEGIN_LINK" />તમારા એકાઉન્ટમાંનો Chromiumનો ડેટા ડિલીટ કરો<ph name="END_LINK" />.</translation>
 <translation id="2640367368802736659">Chromium વિશે ટિપ: Google Lens વડે તમે જે જુઓ છો, તે શોધો</translation>
 <translation id="2650312721222849884">તમે જ્યાંથી Chromiumનો ઉપયોગ કરો ત્યાંથી તમારા ટૅબ જોવા માટે, સિંક કરવાનું ચાલુ કરો</translation>
@@ -107,6 +109,7 @@
 <translation id="3054480780637153380">iOSમાં Chromium સેટિંગ ખોલો, પછી "ડિફૉલ્ટ બ્રાઉઝર ઍપ" પર ટૅપ કરો અને Chromium પસંદ કરો.</translation>
 <translation id="3115956258722352278">Chromiumને તમારું ડિફૉલ્ટ બ્રાઉઝર બનાવીએ?</translation>
 <translation id="3180939591219927904">“જ્યારે તમે Chromium બંધ કરો, ત્યારે છૂપા ટૅબ લૉક કરો” ચાલુ કરો</translation>
+<translation id="327628223428512207">આ પાસવર્ડ સાચવવા અને તમારા બધા ડિવાઇસ પર Chromiumનો ડેટા મેળવવા માટે પાસફ્રેઝ દાખલ કરો</translation>
 <translation id="328933489847748230">{count,plural, =1{હવે 1 Chromium વિન્ડો બતાવી રહી છે}one{હવે {count} Chromium વિન્ડો બતાવી રહી છે}other{હવે {count} Chromium વિન્ડો બતાવી રહી છે}}</translation>
 <translation id="3344973607274501920">Chromium તમારા પાસવર્ડ ચેક કરી શક્યું નથી. તમારું ઇન્ટરનેટ કનેક્શન ચેક કરવાનો પ્રયાસ કરો.</translation>
 <translation id="3366305173356742781">તમારા એકાઉન્ટમાંનો Chromium ડેટા</translation>
@@ -132,8 +135,8 @@
 <translation id="3728124580182886854">મનગમતું બનાવવા અને અન્ય હેતુઓ માટે, Chromium અને Googleની અન્ય સેવાઓ લિંક કરો</translation>
 <translation id="377649297473651452">Chromium પર ઑટોમૅટિક રીતે ભરવાની સુવિધાનો મોટો કરેલો વ્યૂ</translation>
 <translation id="3780779443901618967">સાઇટ પરથી માનક સંરક્ષણ કરતા વધુ ડેટા વિશ્લેષિત કરીને, Googleને પણ પહેલાંથી જાણ ન હોય તેવી ખતરનાક સાઇટ માટે તમને ચેતવણી આપે છે. તમે Chromium ચેતવણીઓને છોડી દેવાનું પસંદ કરી શકો છો.</translation>
-<translation id="3793136096560888222">Gemini in Chromium વડે છબીમાં ફેરફાર કરો</translation>
 <translation id="3805899903892079518">Chromiumને તમારા ફોટા અથવા વીડિયોનો ઍક્સેસ નથી. iOS સેટિંગ &gt; પ્રાઇવસી &gt; ફોટામાં ઍક્સેસને ચાલુ કરો.</translation>
+<translation id="3809591243528646631">બાળકની સલામતી સંબંધિત સુવિધાઓ મેળવવા માટે, તમે બાળક માટે સેટઅપ કરેલા Google એકાઉન્ટનો ઉપયોગ કરી શકો છો અથવા એકાઉન્ટ વિના Chromiumનો ઉપયોગ કરી શકો છો. <ph name="BEGIN_LINK" />વધુ જાણો<ph name="END_LINK" /></translation>
 <translation id="3816686541346279443">Chromium તમારો પાસવર્ડ સાચવવાનું ઑફર કરશે.</translation>
 <translation id="3827545470516145620">તમે આ ડિવાઇસ માટે સ્ટૅન્ડર્ડ સુરક્ષા સંરક્ષણ મેળવી રહ્યા છો</translation>
 <translation id="3833326979834193417">Chromium દરરોજ ઑટોમૅટિક રીતે સલામતી માટે તપાસ ચલાવે છે, જેથી તમને ડેટા ઉલ્લંઘનની ઘટનાઓ, અસલામત વેબસાઇટ અને બીજા ઘણા જોખમોથી સલામત રાખી શકાય. તમે સેટિંગમાં જઈને સલામતી માટે તપાસની સુવિધા વિશે વધુ જાણી શકો છો.</translation>
@@ -169,6 +172,7 @@
 આ સેટિંગ બદલવા માટે, <ph name="BEGIN_LINK" />તમારા એકાઉન્ટમાંનો Chromium ડેટા ડિલીટ કરો<ph name="END_LINK" />.</translation>
 <translation id="4578500311756617174">Chromium વિશે ટિપ: ડિફૉલ્ટ તરીકે Chromiumનો ઉપયોગ કરો</translation>
 <translation id="458786853569524949">હવે તમે જ્યારે પણ ઇમેઇલ, દસ્તાવેજો અને અન્ય ઍપમાં લિંક પર ટૅપ કરો, ત્યારે Chromiumનો ઉપયોગ કરી શકો છો.</translation>
+<translation id="4625730353066900738">તમે શરૂ કરી શકો તે માટે Chromiumની મદદરૂપ મૂળભૂત બાબતો વિશે જાણો</translation>
 <translation id="4633738821577273991">આ Chromium પ્રોફાઇલ માટે પણ Safe Browsingમાં વધારેલી સુરક્ષા મેળવો</translation>
 <translation id="4654936625574199632">ઍપને બહેતર બનાવવામાં સહાય કરવા માટે, Chromium વપરાશ અને ક્રૅશ થવા સંબંધિત ડેટા Googleને મોકલે છે. <ph name="BEGIN_LINK" />મેનેજ કરો<ph name="END_LINK" /></translation>
 <translation id="4681781466797808448">Chromium સ્કૅન ચાલુ કરો</translation>
@@ -177,8 +181,8 @@
 <translation id="4790638144988730920">તમારા Google એકાઉન્ટમાં Chromiumના ડેટાનો ઉપયોગ કરવાનું ચાલુ રાખો.</translation>
 <translation id="4828317641996116749">Chromium બધા પાસવર્ડ ચેક કરી શક્યું નથી. થોડા સમય પછી ફરી પ્રયાસ કરો.</translation>
 <translation id="4856138222358683580">Chromium ઍક્શન</translation>
+<translation id="4869706986935301458">જ્યારે તમે તમારા iPhone પર હો, ત્યારે Chromiumને ઝટપટ ખોલો</translation>
 <translation id="4904452304169763785">તમારા માટે Chromium ભાળ મેળવે તેવી પ્રાઇવસી કે સુરક્ષા સંબંધિત કોઈપણ સમસ્યાઓ માટેના અલર્ટ.</translation>
-<translation id="4908570938463711775">તમે શરૂ કરી શકો તે માટે Chromiumની સહાયરૂપ મૂળભૂત બાબતો વિશે જાણો</translation>
 <translation id="4962295957157529683">તમે અન્ય ખુલ્લી Chromium વિંડોમાં જે કાર્ય કરતા તા તે પૂર્ણ કરો.</translation>
 <translation id="4985291216379576555">ઑફલાઇન, Chromium અપડેટ ચેક કરી શકતાં નથી</translation>
 <translation id="4996471330284142407">Chromiumના સરળ, સુરક્ષિત અને અત્યાર સુધીના સૌથી ઝડપી વર્ઝન વડે વધુ કાર્યો પૂર્ણ કરો.</translation>
@@ -296,6 +300,7 @@
 <translation id="7395825497086981028">તમારો પાસવર્ડ <ph name="EMAIL" /> માટેના પાસવર્ડ મેનેજરમાં સાચવવામાં આવશે.</translation>
 <translation id="7434848749522628428"><ph name="USER_EMAIL" /> માટે આ પાસકી Password Managerમાં સાચવવામાં આવશે</translation>
 <translation id="7504829997542308412">Chromium ખોલો</translation>
+<translation id="7507535968973352823">Chromiumને કોઈપણ સમયે ઍક્સેસ કરવા માટે, તેને નીચેના વિસ્તારમાં મૂકો</translation>
 <translation id="7531461704633548377">Chromiumમાંથી</translation>
 <translation id="7554983317097061001">Chromium વિશે ટિપ: Chromiumને ડૉક પર ખસેડો</translation>
 <translation id="7576863740961052505">Chromiumના સેટિંગ મેનેજ કરો</translation>
@@ -307,6 +312,7 @@
 <translation id="7763454117143368771">જોખમકારક સાઇટથી સુરક્ષિત રહેવા અને તમારા પાસવર્ડ સલામત રાખવા માટે, તમારા ડિફૉલ્ટ બ્રાઉઝર તરીકે Chromiumનો ઉપયોગ કરો</translation>
 <translation id="7784950022329154821">તમે Chromium બંધ કરો, ત્યારે છૂપા ટૅબ લૉક કરો</translation>
 <translation id="78025249032851484">તમારા Chromiumનું વર્ઝન જૂનું છે.</translation>
+<translation id="784098351033299289">Chromium તમને દિશાનિર્દેશો તેમજ નકશાની લિંક પર સ્થાનિક માહિતી આપવા માટે, Google Mapsનો ઉપયોગ કરે છે</translation>
 <translation id="7859018312476869945">જ્યારે તમે ઍડ્રેસ બાર અથવા શોધ બૉક્સમાં ટાઇપ કરો છો, ત્યારે બહેતર સૂચનો મેળવવા માટે Chromium તમે જે ટાઇપ કરો છો તેને તમારા ડિફૉલ્ટ શોધ એન્જિનને મોકલે છે. આ સુવિધા છૂપા મોડમાં કામ કરતી નથી.</translation>
 <translation id="7890287942691234100">Chromium સ્કૅનરને ઉપયોગ કરવાનું શરૂ કરો</translation>
 <translation id="7905064834449738336">તમે પાસવર્ડનો ઉપયોગ કરો છો, ત્યારે જો તે ઑનલાઇન પબ્લિશ કરવામાં આવ્યો હોય તો Chromium તમને ચેતવણી આપે છે. આમ કરતી વખતે તમારા પાસવર્ડ અને વપરાશકર્તા નામ એન્ક્રિપ્ટેડ હોય છે, જેથી Google સહિત, કોઈપણ તેને વાંચી શકતું નથી.</translation>
@@ -353,6 +359,7 @@
 <translation id="8900052431807804054">Chromiumની સૌથી સશક્ત સુરક્ષા મેળવો</translation>
 <translation id="8908791447256515663">તમારા iPadના ડૉકમાંથી Chromium વધુ ઝડપથી ઍક્સેસ કરો.</translation>
 <translation id="8925569192291721236">કિંમત ટ્રૅક કરવાના અપડેટ અને Chromium ટિપ વડે ચાલુ રાખો.</translation>
+<translation id="8939412301975414416">Chromiumમાં બાળકની સલામતી સંબંધિત સુવિધાઓ મેળવવા માટે, તમે બાળક માટે સેટઅપ કરેલા Google એકાઉન્ટનો ઉપયોગ કરી શકો છો અથવા એકાઉન્ટ વિના Chromiumનો ઉપયોગ કરી શકો છો.</translation>
 <translation id="8950326149985259075">{THRESHOLD,plural, =1{જ્યારે {THRESHOLD} મિનિટ સુધી Chromiumનો ઉપયોગ ન કરવામાં આવે, ત્યારે આવું થાય છે}one{જ્યારે {THRESHOLD} મિનિટ સુધી Chromiumનો ઉપયોગ ન કરવામાં આવે, ત્યારે આવું થાય છે}other{જ્યારે {THRESHOLD} મિનિટ સુધી Chromiumનો ઉપયોગ ન કરવામાં આવે, ત્યારે આવું થાય છે}}</translation>
 <translation id="8963279154877372067">Chromium નોટિફિકેશનને કિંમતમાં ઘટાડા વિશે અલર્ટ મેળવવાની મંજૂરી આપો</translation>
 <translation id="8975812008711371178">Chromiumમાં વૉઇસની સુવિધા વડે શોધો.</translation>
@@ -371,4 +378,5 @@
 <translation id="924957577793602335">Chromiumને તમારું પોતાનું બનાવો</translation>
 <translation id="981812233959540767">Chromium Dino ગેમ રમો</translation>
 <translation id="985602178874221306">Chromium લેખકો</translation>
+<translation id="986520777495807752">Chromiumને ડિફૉલ્ટ તરીકે સેટ કરો</translation>
 </translationbundle>

@@ -19,12 +19,21 @@ import org.chromium.base.JniOnceCallback;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.content_public.browser.ImmersivePlaybackConfirmationStatus;
+import org.chromium.content_public.browser.ImmersiveProjectionType;
+import org.chromium.content_public.browser.ImmersiveStereoMode;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.navigation_controller.UserAgentOverrideOption;
 import org.chromium.content_public.common.ResourceRequestBody;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.base.WindowAndroid.KeyboardShortcutsDelegate;
 import org.chromium.ui.resources.dynamics.CaptureResult;
 import org.chromium.url.GURL;
+
+import java.lang.ref.WeakReference;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Java peer of the native class of the same name. */
 @JNINamespace("web_contents_delegate_android")
@@ -38,6 +47,15 @@ public class WebContentsDelegateAndroid {
     public static final int LOG_LEVEL_WARNING = 2;
     // Equivalent of WebCore::WebConsoleMessage::LevelError.
     public static final int LOG_LEVEL_ERROR = 3;
+
+    /**
+     * Map of native pointer to {@link WebContentsDelegateAndroid} instance. This allows us to avoid
+     * a global ref in native code of which there is a finite table of 51200 entries. We only hold a
+     * weak reference and rely on the provider of the object to hold a strong reference. This allows
+     * it to be GCed when it is no longer needed.
+     */
+    private static final Map<Long, WeakReference<WebContentsDelegateAndroid>> sRefMap =
+            new HashMap<>();
 
     /**
      * @param disposition The new tab disposition, defined in
@@ -81,6 +99,11 @@ public class WebContentsDelegateAndroid {
     }
 
     @CalledByNative
+    public boolean canDownload(GURL url, String requestMethod) {
+        return true;
+    }
+
+    @CalledByNative
     public void onUpdateTargetUrl(GURL url) {}
 
     @CalledByNative
@@ -92,6 +115,26 @@ public class WebContentsDelegateAndroid {
     public void handleKeyboardEvent(KeyEvent event) {
         // TODO(bulach): we probably want to re-inject the KeyEvent back into
         // the system. Investigate if this is at all possible.
+    }
+
+    @CalledByNative
+    public static boolean preHandleKeyboardEvent(WindowAndroid window, KeyEvent event) {
+        if (window == null) return false;
+        KeyboardShortcutsDelegate delegate = window.getKeyboardShortcutsDelegate();
+        if (delegate != null) {
+            return delegate.preHandleKeyboardEvent(event);
+        }
+        return false;
+    }
+
+    @CalledByNative
+    public static boolean handleKeyboardEventFallback(WindowAndroid window, KeyEvent event) {
+        if (window == null) return false;
+        KeyboardShortcutsDelegate delegate = window.getKeyboardShortcutsDelegate();
+        if (delegate != null) {
+            return delegate.handleKeyboardEvent(event);
+        }
+        return false;
     }
 
     /**
@@ -114,6 +157,28 @@ public class WebContentsDelegateAndroid {
      */
     @CalledByNative
     public void showRepostFormWarningDialog() {}
+
+    /**
+     * Called when the page wants to start immersive Picture-in-Picture playback session.
+     *
+     * @param stereoMode The default stereo mode to use, defined in {@link ImmersiveStereoMode}.
+     * @param projectionType The default projection type to use, defined in {@link
+     *     ImmersiveProjectionType}.
+     * @param callback The callback to be called when the user confirms or cancels the request. The
+     *     callback expects a packed integer containing the status and options.
+     */
+    @CalledByNative
+    public void requestImmersivePlaybackConfirmation(
+            @ImmersiveStereoMode int stereoMode,
+            @ImmersiveProjectionType int projectionType,
+            JniOnceCallback<Integer> callback) {
+        callback.onResult(ImmersivePlaybackConfirmationStatus.FAILED);
+    }
+
+    @CalledByNative
+    public boolean canEnterFullscreenModeForTab(RenderFrameHost renderFrameHost) {
+        return true;
+    }
 
     @CalledByNative
     public void enterFullscreenModeForTab(
@@ -391,4 +456,29 @@ public class WebContentsDelegateAndroid {
      * </ul>
      */
     public void lostPointerLock() {}
+
+    @CalledByNative
+    private static void registerRef(
+            long nativeWebContentsDelegateAndroid, WebContentsDelegateAndroid delegate) {
+        var oldValue = sRefMap.put(nativeWebContentsDelegateAndroid, new WeakReference<>(delegate));
+        if (oldValue != null) {
+            throw new IllegalStateException(
+                    "WebContentsDelegateAndroid already exists for native pointer: "
+                            + nativeWebContentsDelegateAndroid);
+        }
+    }
+
+    @CalledByNative
+    private static void unregisterRef(long nativeWebContentsDelegateAndroid) {
+        var oldValue = sRefMap.remove(nativeWebContentsDelegateAndroid);
+        assert oldValue != null;
+    }
+
+    @CalledByNative
+    private static @Nullable WebContentsDelegateAndroid getDelegate(
+            long nativeWebContentsDelegateAndroid) {
+        WeakReference<WebContentsDelegateAndroid> reference =
+                sRefMap.get(nativeWebContentsDelegateAndroid);
+        return reference == null ? null : reference.get();
+    }
 }

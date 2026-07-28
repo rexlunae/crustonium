@@ -11,6 +11,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/types/optional_ref.h"
 #include "base/types/strong_alias.h"
 #include "build/build_config.h"
 #include "components/autofill/core/common/language_code.h"
@@ -98,6 +99,10 @@ class WebAuthnCredManDelegate;
 #endif  // BUILDFLAG(IS_ANDROID)
 }  // namespace webauthn
 
+namespace metrics {
+class ProfileMetricsService;
+}  // namespace metrics
+
 namespace password_manager {
 
 class FieldInfoManager;
@@ -117,6 +122,7 @@ class PasswordRequirementsService;
 class PasswordReuseManager;
 class PasswordStoreInterface;
 class WebAuthnCredentialsDelegate;
+struct StoredCredential;
 struct PasswordForm;
 
 enum class ErrorMessageFlowType { kSaveFlow, kFillFlow };
@@ -127,6 +133,11 @@ enum class ErrorMessageFlowType { kSaveFlow, kFillFlow };
 // main frame here are also referring to the primary main frame.
 class PasswordManagerClient {
  public:
+  enum class PasswordFillTrigger {
+    kPasswordManagerAutofill,
+    kAgentTask,
+  };
+
   using CredentialsCallback = base::OnceCallback<void(const PasswordForm*)>;
   using ReauthSucceeded = base::StrongAlias<class ReauthSucceededTag, bool>;
 
@@ -137,20 +148,44 @@ class PasswordManagerClient {
 
   virtual ~PasswordManagerClient() = default;
 
+  // Convenience helper that calls the 2-argument version with std::nullopt.
+  // TODO(crbug.com/523735038): Clean up the helper and remove the `url`
+  // fallback parameter from the 2-argument version.
+  bool IsSavingAndFillingEnabled(const url::Origin& origin) const;
+
   // Is saving new data for password autofill and filling of saved data enabled
   // for the current profile and page? For example, saving is disabled in
-  // Incognito mode. |url| describes the URL to save the password for. It is not
-  // necessary the URL of the current page but can be a URL of a proxy or the
-  // page that hosted the form.
-  virtual bool IsSavingAndFillingEnabled(const GURL& url) const;
+  // Incognito mode. `origin` describes the origin to save the password for.
+  //
+  // Opaque origins (e.g., sandboxed iframes or data URLs) are blocked from
+  // saving and filling for security reasons.
+  // For an interim period, this behavior is gated by a kill-switch
+  // (`kBlockOpaqueOriginPasswordFilling`). During that period, continue to
+  // pass `url` if `url != origin.GetURL()`.
+  virtual bool IsSavingAndFillingEnabled(
+      const url::Origin& origin,
+      base::optional_ref<const GURL> url) const;
+
+  // Checks if filling is enabled on the current page.
+  // Convenience helper that calls the 2-argument version with std::nullopt.
+  // TODO(crbug.com/523735038): Clean up the helper and remove the `url`
+  // fallback parameter from the 2-argument version.
+  bool IsFillingEnabled(const url::Origin& origin) const;
 
   // Checks if filling is enabled on the current page. Filling is disabled in
-  // the presence of SSL errors on a page. |url| describes the URL to fill the
-  // password for. It is not necessary the URL of the current page but can be a
-  // URL of a proxy or subframe.
+  // the presence of SSL errors on a page. `origin` describes the origin to fill
+  // the password for.
+  //
+  // Opaque origins (e.g., sandboxed iframes or data URLs) are blocked from
+  // filling for security reasons.
+  // For an interim period, this behavior is gated by a kill-switch
+  // (`kPasswordBlockOpaqueOrigins`). During that period, continue to pass `url`
+  // if `url != origin.GetURL()`.
+  //
   // TODO(crbug.com/40685327): This method's name is misleading as it also
   // determines whether saving prompts should be shown.
-  virtual bool IsFillingEnabled(const GURL& url) const;
+  virtual bool IsFillingEnabled(const url::Origin& origin,
+                                base::optional_ref<const GURL> url) const;
 
   // Checks if the field was last filled with an OTP.
   virtual bool IsFieldFilledWithOtp(autofill::FormGlobalId form_id,
@@ -311,9 +346,9 @@ class PasswordManagerClient {
   // implementation is a noop. |was_autofilled_on_pageload| contains information
   // if password form was autofilled on pageload.
   virtual void PasswordWasAutofilled(
-      base::span<const PasswordForm> best_matches,
+      base::span<const StoredCredential> best_matches,
       const url::Origin& origin,
-      base::span<const PasswordForm> federated_matches,
+      base::span<const StoredCredential> federated_matches,
       bool was_autofilled_on_pageload);
 
   // Sends username/password from |preferred_match| for filling in the http auth
@@ -326,6 +361,9 @@ class PasswordManagerClient {
 
   // Gets prefs associated with this embedder.
   virtual PrefService* GetPrefs() const = 0;
+
+  // Returns the ProfileMetricsService associated with this client.
+  virtual metrics::ProfileMetricsService* GetProfileMetricsService() = 0;
 
   // Gets local state prefs.
   virtual PrefService* GetLocalStatePrefs() const = 0;
@@ -521,6 +559,9 @@ class PasswordManagerClient {
   // Returns true if the current page is to the new tab page.
   virtual bool IsNewTabPage() const = 0;
 
+  // Returns true if the current page is a Chrome sign-in page.
+  virtual bool IsChromeSigninPage() const;
+
   // Returns the WebAuthnCredentialsDelegate for the given driver, if available.
   virtual WebAuthnCredentialsDelegate* GetWebAuthnCredentialsDelegateForDriver(
       PasswordManagerDriver* driver);
@@ -532,7 +573,7 @@ class PasswordManagerClient {
 
   // Marks all credentials that have been loaded for this page and have been
   // received via the password sharing feature as notified.
-  virtual void MarkSharedCredentialsAsNotified(const GURL& url);
+  virtual void MarkSharedCredentialsAsNotified(const url::Origin& origin);
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // Returns the Chrome channel for the installation.
@@ -551,7 +592,7 @@ class PasswordManagerClient {
 
   // Possibly shows a promo priming the user to engage with password saving,
   // based on the current URL.
-  virtual void MaybeShowSavePasswordPrimingPromo(const GURL& current_url) = 0;
+  virtual void MaybeShowSavePasswordPrimingPromo(const url::Origin& origin) = 0;
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
         // BUILDFLAG(IS_CHROMEOS)
@@ -571,9 +612,14 @@ class PasswordManagerClient {
 
   virtual UndoPasswordChangeController* GetUndoPasswordChangeController();
 
-#if !BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/509852350): Figure out if this is needed on iOS and
+  //  implement it.
   virtual bool IsActorTaskActive();
-#endif  // !BUILDFLAG(IS_ANDROID)
+
+  // Notifies the client that a password fill event occurred.
+  virtual void OnPasswordFilled(PasswordManagerDriver* driver,
+                                const GURL& url,
+                                PasswordFillTrigger trigger_type);
 };
 
 }  // namespace password_manager

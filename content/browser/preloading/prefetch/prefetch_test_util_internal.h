@@ -7,17 +7,23 @@
 
 #include <string>
 
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "components/variations/scoped_variations_ids_provider.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/test/preloading_test_util.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_renderer_host.h"
-#include "content/test/test_content_browser_client.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
+#include "net/cookies/canonical_cookie.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -30,8 +36,8 @@ class RunLoop;
 
 namespace content {
 
-using OnPrefetchCompleteTestFuture =
-    base::test::TestFuture<network::URLLoaderCompletionStatus>;
+network::mojom::URLResponseHeadPtr SuccessfulPrefetchResponseHeadForTesting();
+
 using OnPrefetchReceiveRedirectTestFuture =
     base::test::TestFuture<net::RedirectInfo,
                            network::mojom::URLResponseHeadPtr>;
@@ -53,7 +59,7 @@ CreateStreamingURLLoaderWithoutPrefetchContainerForTests(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const network::ResourceRequest& prefetch_request,
     NotReachedTagForTestsOr<base::RunLoop*> on_response_received,
-    NotReachedTagForTestsOr<OnPrefetchCompleteTestFuture*> on_complete,
+    NotReachedTagForTestsOr<base::RunLoop*> on_complete,
     NotReachedTagForTestsOr<OnPrefetchReceiveRedirectTestFuture*>
         on_receive_redirect,
     NotReachedTagForTestsOr<base::RunLoop*> on_head_received,
@@ -209,21 +215,20 @@ class TestPrefetchService final : public PrefetchService {
   void PrefetchUrl(
       base::WeakPtr<PrefetchContainer> prefetch_container) override;
   void OnPrefetchCompletedOrFailed(
-      PrefetchContainer& prefetch_container,
-      const network::URLLoaderCompletionStatus& completion_status,
-      const std::optional<int>& response_code) override;
+      const PrefetchContainer& prefetch_container) override;
   void EvictPrefetch(size_t index);
 
   std::vector<base::WeakPtr<PrefetchContainer>> prefetches_;
 };
 
-// Helper for testing prefetching-side (i.e. not serving-side) metrics including
-// "PrefetchProxy.Prefetch.*" UMAs, `PrefetchReferringPageMetrics` and
-// Preloading_Attempt UKMs.
+// Helper for testing prefetching-side (i.e. not serving-side) metrics.
 class PrefetchingMetricsTestBase : public RenderViewHostTestHarness {
  public:
   PrefetchingMetricsTestBase();
   ~PrefetchingMetricsTestBase() override;
+
+  RenderFrameHostImpl* main_rfhi();
+  blink::DocumentToken MainDocumentToken();
 
   const int kTotalTimeDuration = 4321;
   const int kConnectTimeDuration = 123;
@@ -236,33 +241,41 @@ class PrefetchingMetricsTestBase : public RenderViewHostTestHarness {
     return attempt_entry_builder_.get();
   }
 
+  base::HistogramTester& histogram_tester() { return *histogram_tester_; }
+
   void SetUp() override;
   void TearDown() override;
+
+  // Checks the prefetch metrics recorded when the response is received.
+  void ExpectPrefetchResponseReceivedNotRecorded();
+  void ExpectPrefetchResponseReceivedRecorded(
+      net::HttpStatusCode response_code = net::HTTP_OK);
+
+  // Checks the prefetch metrics recorded when the prefetch is completed.
+  void ExpectPrefetchCompleteNotRecorded();
+  void ExpectPrefetchCompleteRecorded(std::optional<int> body_length,
+                                      int net_error = net::OK);
 
   // Prefetch didn't receive any net errors nor non-redirect responses.
   // Use more specific methods below to check UKMs, if applicable.
   void ExpectPrefetchNoNetErrorOrResponseReceived(
-      const base::HistogramTester& histogram_tester,
       bool is_eligible,
       bool browser_initiated_prefetch = false);
 
   // Prefetch was not started because it was not eligible.
-  void ExpectPrefetchNotEligible(const base::HistogramTester& histogram_tester,
-                                 PreloadingEligibility expected_eligibility,
+  void ExpectPrefetchNotEligible(PreloadingEligibility expected_eligibility,
                                  bool is_accurate = false,
                                  bool browser_initiated_prefetch = false);
 
   // Prefetch was started but failed before the final response nor any network
   // error is received.
   void ExpectPrefetchFailedBeforeResponseReceived(
-      const base::HistogramTester& histogram_tester,
       PrefetchStatus expected_prefetch_status,
       bool is_accurate = false);
 
   // Prefetch was started but failed due to a network error, before the final
   // response is received.
   void ExpectPrefetchFailedNetError(
-      const base::HistogramTester& histogram_tester,
       int expected_net_error_code,
       blink::mojom::SpeculationEagerness eagerness =
           blink::mojom::SpeculationEagerness::kImmediate,
@@ -272,13 +285,11 @@ class PrefetchingMetricsTestBase : public RenderViewHostTestHarness {
   // Prefetch was started but failed on or after the final response is
   // received.
   void ExpectPrefetchFailedAfterResponseReceived(
-      const base::HistogramTester& histogram_tester,
       net::HttpStatusCode expected_response_code,
       int expected_body_length,
       PrefetchStatus expected_prefetch_status);
 
-  void ExpectPrefetchSuccess(const base::HistogramTester& histogram_tester,
-                             int expected_body_length,
+  void ExpectPrefetchSuccess(int expected_body_length,
                              blink::mojom::SpeculationEagerness eagerness =
                                  blink::mojom::SpeculationEagerness::kImmediate,
                              bool is_accurate = false);
@@ -306,10 +317,20 @@ class PrefetchingMetricsTestBase : public RenderViewHostTestHarness {
   // `PrefetchContainer::RegisterCookieListener()`.
   network::mojom::CookieManager* cookie_manager();
 
+  bool SetCookie(const GURL& url, const std::string& value);
+
  private:
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
   std::unique_ptr<test::PreloadingAttemptUkmEntryBuilder>
       attempt_entry_builder_;
+  std::unique_ptr<base::HistogramTester> histogram_tester_;
+
+  // Except for some tests related to variations header (using
+  // `variations::VariationsIdsProvider::GetInstance()`), this is just to
+  // prevent `PrefetchContainer`'s resource request creation from crashing due
+  // to lack of a `VariationsIdsProvider`.
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+      variations::VariationsIdsProvider::Mode::kIgnoreSignedInState};
 };
 
 // Helpers for parametrized tests for rearchitecturing/refactoring of the core
@@ -335,9 +356,7 @@ struct PrefetchRearchParam final {
  public:
   static std::vector<PrefetchRearchParam> Params();
 
-  bool prefetch_scheduler;
-  bool prefetch_scheduler_progress_sync_best_effort;
-  bool graceful_notification;
+  bool force_off_the_main_thread;
 };
 
 class WithPrefetchRearchParam {
@@ -351,8 +370,7 @@ class WithPrefetchRearchParam {
 
  private:
   PrefetchRearchParam param_;
-  base::test::ScopedFeatureList feature_list_prefetch_scheduler_;
-  base::test::ScopedFeatureList feature_list_graceful_notification_;
+  base::test::ScopedFeatureList feature_list_force_off_the_main_thread_;
 };
 
 // A wrapper for `PrefetchService::SetInjectedEligibilityCheckForTesting`.
@@ -373,6 +391,18 @@ class PrefetchServiceInjectedEligibilityCheckFuture final {
   raw_ref<PrefetchService> prefetch_service_;
   TestFutureType result_callback_future_;
 };
+
+struct VerifyCommonRequestStateOptions {
+  bool use_prefetch_proxy = false;
+  net::RequestPriority expected_priority = net::RequestPriority::IDLE;
+  std::optional<std::string> sec_purpose_header_value = std::nullopt;
+  net::HttpRequestHeaders additional_headers;
+};
+
+void VerifyCommonRequestState(const GURL& url,
+                              const VerifyCommonRequestStateOptions& options,
+                              const network::ResourceRequest& request,
+                              BrowserContext* browser_context);
 
 }  // namespace content
 

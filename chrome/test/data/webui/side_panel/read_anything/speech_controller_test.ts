@@ -1,7 +1,8 @@
 // Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-import {BrowserProxy, MAX_SPEECH_LENGTH, NodeStore, ReadAloudHighlighter, SelectionController, setInstance, SpeechBrowserProxyImpl, SpeechController, VoiceLanguageController, WordBoundaries} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {BrowserProxy, ContentPositionSource, MAX_SPEECH_LENGTH, NodeStore, ReadAloudHighlighter, ReadAloudNode, SelectionController, setInstance, SpeechBrowserProxyImpl, SpeechController, VoiceLanguageController, WordBoundaries} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import type {Segment} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertFalse, assertGE, assertGT, assertNotEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 
 import {createSpeechErrorEvent, createSpeechSynthesisVoice, createWordBoundaryEvent, mockMetrics, setContent} from './common.js';
@@ -18,6 +19,7 @@ suite('SpeechController', () => {
   let isAudioCurrentlyPlayingChanged: boolean;
   let onPreviewVoicePlaying: boolean;
   let onEngineStateChange: boolean;
+  let onPlayingFromPosition: boolean;
   let metrics: TestMetricsBrowserProxy;
   let wordBoundaries: WordBoundaries;
   let nodeStore: NodeStore;
@@ -50,6 +52,7 @@ suite('SpeechController', () => {
     isAudioCurrentlyPlayingChanged = false;
     onPreviewVoicePlaying = false;
     onEngineStateChange = false;
+    onPlayingFromPosition = false;
     const speechListener = {
       onIsSpeechActiveChange() {
         isSpeechActiveChanged = true;
@@ -68,7 +71,7 @@ suite('SpeechController', () => {
       },
 
       onPlayingFromSelection() {
-
+        onPlayingFromPosition = true;
       },
 
       onWordBoundary() {},
@@ -161,6 +164,21 @@ suite('SpeechController', () => {
     assertFalse(!!speechController.getPreviewVoicePlaying());
   });
 
+  test('previewVoice start sets engine loaded', async () => {
+    const voice = createSpeechSynthesisVoice({lang: 'ko', name: 'December'});
+
+    speechController.previewVoice(voice);
+    const spoken = await speech.whenCalled('speak');
+    assertTrue(onEngineStateChange);
+    assertFalse(speechController.isEngineLoaded());
+
+    onEngineStateChange = false;
+    assertTrue(!!spoken.onstart, 'onstart');
+    spoken.onstart(new SpeechSynthesisEvent('type', {utterance: spoken}));
+    assertTrue(onEngineStateChange);
+    assertTrue(speechController.isEngineLoaded());
+  });
+
   test('onSpeechSettingsChange cancels and resumes speech if playing', () => {
     const text = 'In all the time I\'ve been by your side';
     setContent(text, readAloudModel);
@@ -175,7 +193,7 @@ suite('SpeechController', () => {
     assertEquals(0, speech.getCallCount('pause'));
     assertEquals(2, speech.getCallCount('cancel'));
     assertEquals(1, speech.getCallCount('speak'));
-    assertEquals(0, metrics.getCallCount('recordSpeechPlaybackLength'));
+    assertEquals(0, metrics.getCallCount('recordSpeechPlaybackLengthLegacy'));
   });
 
   test('onSpeechSettingsChange does not resume speech if not playing', () => {
@@ -192,7 +210,7 @@ suite('SpeechController', () => {
     assertEquals(0, speech.getCallCount('pause'));
     assertEquals(1, speech.getCallCount('cancel'));
     assertEquals(0, speech.getCallCount('speak'));
-    assertEquals(0, metrics.getCallCount('recordSpeechPlaybackLength'));
+    assertEquals(0, metrics.getCallCount('recordSpeechPlaybackLengthLegacy'));
   });
 
   test('onPlayPauseToggle updates state', () => {
@@ -258,7 +276,7 @@ suite('SpeechController', () => {
     onPlayPauseToggle('You\'ve heard before.');
     onPlayPauseToggle('You\'ve heard before.');
 
-    assertEquals(1, metrics.getCallCount('recordSpeechPlaybackLength'));
+    assertEquals(1, metrics.getCallCount('recordSpeechPlaybackLengthLegacy'));
   });
 
   test(
@@ -551,6 +569,74 @@ suite('SpeechController', () => {
         await metrics.whenCalled('recordSpeechStopSource'));
   });
 
+  test('engine timeout logged when stalled', async () => {
+    const textContent = 'Wait for it, wait for it';
+    setContent(textContent, readAloudModel);
+
+    // Swap global setTimeout to immediately fire the callback for this test
+    const originalSetTimeout = window.setTimeout;
+    let timeoutFired = false;
+
+    window.setTimeout = (fn: TimerHandler) => {
+      timeoutFired = true;
+      (fn as Function)();
+      return 1;
+    };
+
+    try {
+      onPlayPauseToggle(textContent);
+      await speech.whenCalled('speak');
+
+      // The engine is in LOADING state initially before onstart is fired
+      // <if expr="is_chromeos">
+      assertFalse(timeoutFired);
+      assertEquals(0, metrics.getCallCount('recordSpeechError'));
+      // </if>
+      // <if expr="not is_chromeos">
+      assertTrue(timeoutFired);
+      assertEquals(2, metrics.getCallCount('recordSpeechError'));
+      const errorArg1 = metrics.getArgs('recordSpeechError')[0];
+      const errorArg2 = metrics.getArgs('recordSpeechError')[1];
+
+      // Assuming ReadAnythingSpeechError is defined such that
+      // TIMEOUT_ENGINE_STALLED is 9 and TIMEOUT_STALLED_AFTER_RECOVERY is 10
+      assertEquals(9, errorArg1);
+      assertEquals(10, errorArg2);
+      // </if>
+    } finally {
+      window.setTimeout = originalSetTimeout;
+    }
+  });
+
+  test('engine timeout cleared on success', async () => {
+    const textContent = 'Successful speech utterance';
+    setContent(textContent, readAloudModel);
+
+    const originalClearTimeout = window.clearTimeout;
+    let clearTimeoutCalls = 0;
+    window.clearTimeout = (id: number|undefined) => {
+      clearTimeoutCalls++;
+      originalClearTimeout(id);
+    };
+
+    try {
+      onPlayPauseToggle(textContent);
+      const spoken = await speech.whenCalled('speak');
+
+      // Now simulate a successful start which should clear the timeout
+      spoken.onstart(new SpeechSynthesisEvent('type', {utterance: spoken}));
+      // <if expr="is_chromeos">
+      assertEquals(0, clearTimeoutCalls);
+      // </if>
+      // <if expr="not is_chromeos">
+      assertEquals(2, clearTimeoutCalls);
+      // </if>
+    } finally {
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
+
   test('speech finished clears state', async () => {
     const text = 'New phone who dis?';
     setContent(text, readAloudModel);
@@ -570,7 +656,7 @@ suite('SpeechController', () => {
     assertFalse(speechController.isSpeechActive());
     assertFalse(speechController.isPausedFromButton());
     assertFalse(speechController.isTemporaryPause());
-    assertEquals(1, metrics.getCallCount('recordSpeechPlaybackLength'));
+    assertEquals(1, metrics.getCallCount('recordSpeechPlaybackLengthLegacy'));
     assertEquals(
         chrome.readingMode.contentFinishedStopSource,
         await metrics.whenCalled('recordSpeechStopSource'));
@@ -712,5 +798,220 @@ suite('SpeechController', () => {
 
     speechController.onVoiceSelected(voice3);
     assertFalse(wordBoundaries.hasBoundaries());
+  });
+
+  test('onVoiceSelected logs voice language change', () => {
+    const voice1 = createSpeechSynthesisVoice({lang: 'en-US', name: 'Voice 1'});
+    const voice2 = createSpeechSynthesisVoice({lang: 'en-UK', name: 'Voice 2'});
+    const voice3 = createSpeechSynthesisVoice({lang: 'fr-FR', name: 'Voice 3'});
+
+    voiceLanguageController.setUserPreferredVoice(voice1);
+    metrics.reset();
+
+    // Different locale, same base language should log
+    speechController.onVoiceSelected(voice2);
+    assertEquals(1, metrics.getCallCount('recordVoiceLanguageChange'));
+    metrics.reset();
+
+    // Different language should log
+    speechController.onVoiceSelected(voice3);
+    assertEquals(1, metrics.getCallCount('recordVoiceLanguageChange'));
+    metrics.reset();
+
+    // Same voice should not log
+    speechController.onVoiceSelected(voice3);
+    assertEquals(0, metrics.getCallCount('recordVoiceLanguageChange'));
+  });
+
+  test('playFromContentPosition logs selection metric', async () => {
+    const text = 'This is a selection.';
+    setContent(text, readAloudModel);
+    const node = nodeStore.getDomNode(2)!;  // setContent uses id 2
+    speechController.onSelectionChange(
+        {node, offset: 0, source: ContentPositionSource.SELECTION});
+    const element = document.createElement('p');
+    element.textContent = text;
+
+    // Trigger play
+    speechController.onPlayPauseToggle(element);
+
+    // Wait for the setTimeout in playFromContentPosition_
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    assertEquals(1, metrics.getCallCount('incrementMetricCount'));
+    assertEquals(
+        'Accessibility.ReadAnything.ReadAloudPlayFromSelectionSessionCount',
+        metrics.getArgs('incrementMetricCount')[0]);
+  });
+
+  test('playFromContentPosition logs line focus metric', async () => {
+    chrome.readingMode.isLineFocusEnabled = true;
+    const text = 'Lost for kind words to say.';
+    const element = document.createElement('p');
+    const id = 2;
+    const node = document.createTextNode(text);
+    nodeStore.setDomNode(node, id);
+    const segments: Segment[] =
+        [{node: ReadAloudNode.create(node)!, start: 0, length: text.length}];
+    readAloudModel.setCurrentTextSegments(segments);
+    readAloudModel.setCurrentTextContent(text);
+    element.appendChild(node);
+    document.body.appendChild(element);
+    const range = document.createRange();
+    range.selectNode(node);
+    const rect = range.getClientRects().item(0);
+    assertTrue(!!rect);
+    const position = document.caretPositionFromPoint(rect.left, rect.top);
+    speechController.onLineFocusChange(position);
+
+    // Trigger play
+    speechController.onPlayPauseToggle(element);
+
+    // Wait for the setTimeout in playFromContentPosition_
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    assertEquals(1, metrics.getCallCount('incrementMetricCount'));
+    assertEquals(
+        'Accessibility.ReadAnything.ReadAloudPlayFromLineFocusSessionCount',
+        metrics.getArgs('incrementMetricCount')[0]);
+  });
+
+  test('playFromContentPosition with line focus reads from there', async () => {
+    chrome.readingMode.isLineFocusEnabled = true;
+    const text = 'Lost for kind words to say.';
+    const element = document.createElement('p');
+    const id = 2;
+    const node = document.createTextNode(text);
+    nodeStore.setDomNode(node, id);
+    const segments: Segment[] =
+        [{node: ReadAloudNode.create(node)!, start: 0, length: text.length}];
+    readAloudModel.setCurrentTextSegments(segments);
+    readAloudModel.setCurrentTextContent(text);
+    element.appendChild(node);
+    document.body.appendChild(element);
+    const range = document.createRange();
+    range.selectNode(node);
+    const rect = range.getClientRects().item(0);
+    assertTrue(!!rect);
+    const position = document.caretPositionFromPoint(rect.left, rect.top);
+    speechController.onLineFocusChange(position);
+
+    speechController.onPlayPauseToggle(element);
+    await speech.whenCalled('speak');
+
+    assertTrue(onPlayingFromPosition);
+  });
+
+  test(
+      'playFromContentPosition starts from beginning when line focus off',
+      async () => {
+        chrome.readingMode.isLineFocusEnabled = true;
+        const text = 'Nobody understands.';
+        const element = document.createElement('p');
+        const id = 2;
+        const node = document.createTextNode(text);
+        nodeStore.setDomNode(node, id);
+        const segments: Segment[] = [
+          {node: ReadAloudNode.create(node)!, start: 0, length: text.length},
+        ];
+        readAloudModel.setCurrentTextSegments(segments);
+        readAloudModel.setCurrentTextContent(text);
+        element.appendChild(node);
+        document.body.appendChild(element);
+        const range = document.createRange();
+        range.selectNode(node);
+        const rect = range.getClientRects().item(0);
+        assertTrue(!!rect);
+        const position = document.caretPositionFromPoint(rect.left, rect.top);
+
+        speechController.onLineFocusChange(position);
+        speechController.onLineFocusChange(null);
+
+        speechController.onPlayPauseToggle(element);
+        await speech.whenCalled('speak');
+
+        assertFalse(onPlayingFromPosition);
+      });
+
+  test('playFromContentPosition clears currentContentPosition', async () => {
+    const text = 'Clearing position test.';
+    setContent(text, readAloudModel);
+    const node = nodeStore.getDomNode(2)!;
+    speechController.onSelectionChange(
+        {node, offset: 0, source: ContentPositionSource.SELECTION});
+    const element = document.createElement('p');
+    element.textContent = text;
+
+    speechController.onPlayPauseToggle(element);
+    await speech.whenCalled('speak');
+    assertTrue(onPlayingFromPosition);
+
+    // Pause
+    speechController.onPlayPauseToggle(element);
+    onPlayingFromPosition = false;
+    speech.reset();
+
+    // Resume
+    speechController.onPlayPauseToggle(element);
+    await speech.whenCalled('resume');
+    assertFalse(onPlayingFromPosition);
+  });
+
+  test(
+      'playFromContentPosition with invalid node plays from next node',
+      async () => {
+        const text = 'This text does not have the target node.';
+        setContent(text, readAloudModel);
+
+        const element = document.createElement('p');
+
+        // Create an image node (invalid for read aloud)
+        const invalidNode = document.createElement('img');
+        element.appendChild(invalidNode);
+
+        const readAloudNode = ReadAloudNode.create(invalidNode);
+        assertTrue(!!readAloudNode);
+
+        // Create a text node that comes after the image
+        const node = document.createTextNode(text);
+        element.appendChild(node);
+        document.body.appendChild(element);
+
+        const id = 2;
+        nodeStore.setDomNode(node, id);
+        const segments: Segment[] = [
+          {node: ReadAloudNode.create(node)!, start: 0, length: text.length},
+        ];
+        readAloudModel.setCurrentTextSegments(segments);
+
+        // Instead of giving up, it should find the text segment because it
+        // follows the invalid image node in the DOM.
+        speechController.onSelectionChange({
+          node: invalidNode,
+          offset: 0,
+          source: ContentPositionSource.SELECTION,
+        });
+
+        // Trigger play.
+        speechController.onPlayPauseToggle(element);
+
+        await speech.whenCalled('speak');
+        assertTrue(onPlayingFromPosition);
+      });
+
+  test('clearReadAloudState clears currentContentPosition', async () => {
+    const text = 'Clearing state test.';
+    setContent(text, readAloudModel);
+    const node = nodeStore.getDomNode(2)!;
+    speechController.onSelectionChange(
+        {node, offset: 0, source: ContentPositionSource.SELECTION});
+    const element = document.createElement('p');
+    element.textContent = text;
+
+    speechController.clearReadAloudState();
+    speechController.onPlayPauseToggle(element);
+    await speech.whenCalled('speak');
+
+    assertFalse(onPlayingFromPosition);
   });
 });

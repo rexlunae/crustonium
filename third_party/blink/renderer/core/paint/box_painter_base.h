@@ -84,6 +84,7 @@ class BoxPainterBase {
       const PaintInfo&,
       const PhysicalRect&,
       const ComputedStyle&,
+      std::optional<BorderShapeReferenceRects> border_shape_rects,
       PhysicalBoxSides sides_to_include = PhysicalBoxSides());
 
   static void PaintInsetBoxShadowWithInnerRect(const PaintInfo&,
@@ -161,6 +162,16 @@ class BoxPainterBase {
                                  const PhysicalRect&,
                                  const PhysicalRect& scrolled_paint_rect,
                                  bool object_has_multiple_boxes);
+  void PaintFillLayerBorderAreaFillBox(const PaintInfo&,
+                                       const FillLayerInfo&,
+                                       Image*,
+                                       SkBlendMode composite_op,
+                                       const BackgroundImageGeometry&,
+                                       const PhysicalRect&,
+                                       const PhysicalRect& scrolled_paint_rect,
+                                       BackgroundBleedAvoidance,
+                                       bool include_text,
+                                       bool object_has_multiple_boxes);
   virtual void PaintTextClipMask(const PaintInfo&,
                                  const gfx::Rect& mask_rect,
                                  const PhysicalOffset& paint_offset,
@@ -181,6 +192,11 @@ class BoxPainterBase {
       const ContouredRect&,
       const ComputedStyle&,
       PhysicalBoxSides sides_to_include = PhysicalBoxSides());
+  static void PaintInsetBoxShadowForBorderShape(
+      const PaintInfo&,
+      const PhysicalRect&,
+      const ComputedStyle&,
+      std::optional<BorderShapeReferenceRects> border_shape_rects);
 
  private:
   const Document& document_;

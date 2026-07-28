@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/find_bar_host.h"
@@ -30,6 +31,7 @@
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
+#include "components/enterprise/data_controls/content/browser/last_replaced_clipboard_data.h"
 #include "components/enterprise/data_controls/core/browser/test_utils.h"
 #include "components/find_in_page/find_notification_details.h"
 #include "components/find_in_page/find_tab_helper.h"
@@ -45,9 +47,11 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/switches.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ozone_buildflags.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_modifiers.h"
@@ -61,6 +65,10 @@
 #include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 using base::ASCIIToUTF16;
 using content::WebContents;
@@ -84,6 +92,8 @@ DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
                                     kTextCopiedState);
 DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
                                     kTextSelectedState);
+DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
+                                    kReplacedDataUpdatedState);
 const ui::Accelerator ctrl_c_accelerator(ui::VKEY_C, ui::EF_CONTROL_DOWN);
 const ui::Accelerator ctrl_v_accelerator(ui::VKEY_V, ui::EF_CONTROL_DOWN);
 }  // namespace
@@ -210,7 +220,9 @@ class LegacyFindInPageTest : public InProcessBrowserTest {
 class FindBarViewsUiTest : public InteractiveBrowserTest,
                            public ::testing::WithParamInterface<bool> {
  public:
-  FindBarViewsUiTest() = default;
+  FindBarViewsUiTest() {
+    feature_list_.InitAndDisableFeature(features::kNonBlockingOsClipboardReads);
+  }
 
   void SetUp() override {
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
@@ -315,6 +327,7 @@ class FindBarViewsUiTest : public InteractiveBrowserTest,
   bool IsFindBarVisible() { return GetFindBarHost()->IsFindBarVisible(); }
 
  private:
+  base::test::ScopedFeatureList feature_list_;
   base::AutoReset<bool> enable_animation_for_test_ =
       FindBarHost::SetEnableAnimationsForTesting(false);
 };
@@ -537,7 +550,7 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, MAYBE_FocusRestore) {
 
       // Focus the location bar, open and close the find box, focus should
       // return to the location bar (same as before, just checking that
-      // http://crbug.com/23599 is fixed).
+      // http://crbug.com/41009575 is fixed).
       Focus(kOmniboxElementId),
       // Show the Find bar.
       ShowFindBar(), CheckHasFocus(FindBarView::kTextField),
@@ -688,10 +701,10 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest,
 
 // FindInPage on Mac doesn't use prepopulated values. Search there is global.
 #if !BUILDFLAG(IS_MAC) && !defined(USE_AURA)
-// Flaky because the test server fails to start? See: http://crbug.com/96594.
+// Flaky because the test server fails to start? See: http://crbug.com/40628598.
 // This tests that whenever you clear values from the Find box and close it that
 // it respects that and doesn't show you the last search, as reported in bug:
-// http://crbug.com/40121. For Aura see bug http://crbug.com/292299.
+// http://crbug.com/41124530. For Aura see bug http://crbug.com/40333035.
 IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, PrepopulateRespectBlank) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -764,8 +777,20 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, PasteWithoutTextChange) {
       CheckViewProperty(FindBarView::kElementId, &FindBarView::GetFindText,
                         kSearchA),
       // Reload the page to clear the matching result.
-      MoveMouseTo(kReloadButtonElementId), ClickMouse(),
-      WaitForWebContentsNavigation(kTabId),
+      // TODO(crbug.com/479732140): improve the test method to simplify the call.
+      MoveMouseTo(kReloadButtonElementId,
+#if !BUILDFLAG(IS_ANDROID)
+                  features::IsWebUIReloadButtonEnabled()
+                      ? RelativePositionSpecifier(
+                            base::BindOnce([](ui::TrackedElement* el) {
+                              return el->GetScreenBounds().CenterPoint();
+                            }))
+                      : CenterPoint()
+#else
+                  CenterPoint()
+#endif  // !BUILDFLAG(IS_ANDROID)
+                      ),
+      ClickMouse(), WaitForWebContentsNavigation(kTabId),
       WaitForState(views::test::kCurrentFocusedViewId,
                    ContentsWebView::kContentsWebViewElementId),
       // Focus the Find bar again to make sure the text is selected.
@@ -781,9 +806,9 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, PasteWithoutTextChange) {
           kTextCopiedState,
           [&]() {
             ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-            std::u16string clipboard_text;
-            clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste,
-                                /* data_dst = */ nullptr, &clipboard_text);
+            std::u16string clipboard_text = ui::clipboard_test_util::ReadText(
+                clipboard, ui::ClipboardBuffer::kCopyPaste,
+                /* data_dst = */ nullptr);
             return base::EqualsASCII(clipboard_text, "a");
           }),
       WaitForState(kTextCopiedState, true),
@@ -797,7 +822,7 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, PasteWithoutTextChange) {
               testing::Ne(FindResultState::kInitialActiveMatchOrdinalCount))));
 }
 
-// Slow flakiness on Linux. crbug.com/803743
+// Slow flakiness on Linux. crbug.com/41365845
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_CtrlEnter DISABLED_CtrlEnter
 #else
@@ -914,12 +939,12 @@ IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, DISABLED_SelectionDuringFind) {
   find_in_page::FindNotificationDetails details = WaitForFindResult();
   // We don't ever want the page to (potentially) scroll just from opening the
   // find bar, so the active match should always be 0 at this point.
-  // See http://crbug.com/1043550
+  // See http://crbug.com/40669090
   EXPECT_EQ(0, details.active_match_ordinal());
   EXPECT_EQ(5, details.number_of_matches());
 
   // Make sure pressing an arrow key doesn't result in a find request.
-  // See https://crbug.com/1127666
+  // See https://crbug.com/40719158
   auto* helper = find_in_page::FindTabHelper::FromWebContents(web_contents);
   int find_request_id = helper->current_find_request_id();
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_LEFT, false,
@@ -930,7 +955,7 @@ IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, DISABLED_SelectionDuringFind) {
   // Make sure calling Show while the findbar is already showing doesn't result
   // in a find request. It's wasted work, could cause some flicker in the
   // results, and was previously triggering another bug that caused an endless
-  // loop of searching and flickering results. See http://crbug.com/1129756
+  // loop of searching and flickering results. See http://crbug.com/40720370
   find_bar_controller->Show(false /*find_next*/);
   EXPECT_EQ(find_request_id, helper->current_find_request_id());
 
@@ -942,7 +967,7 @@ IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest, DISABLED_SelectionDuringFind) {
   EXPECT_EQ(5, details.number_of_matches());
 
   // Start a new find without a selection and verify we still get find results.
-  // See https://crbug.com/1124605
+  // See https://crbug.com/40717358
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_ESCAPE, false,
                                               false, false, false));
   // Wait until the focus settles.
@@ -1015,7 +1040,7 @@ IN_PROC_BROWSER_TEST_F(LegacyFindInPageTest,
   EXPECT_TRUE(IsFindBarVisible());
 }
 
-// See http://crbug.com/1142027
+// See http://crbug.com/40154511
 IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, MatchOrdinalStableWhileTyping) {
   const GURL page_foo =
       embedded_test_server()->GetURL("/find_in_page/foo.html");
@@ -1037,7 +1062,7 @@ INSTANTIATE_TEST_SUITE_P(, FindBarViewsUiTest, ::testing::Bool());
 IN_PROC_BROWSER_TEST_P(FindBarViewsUiTest, SelectionDuringFindPolicy) {
   const bool clipboard_restricted_by_policy = GetParam();
   if (clipboard_restricted_by_policy) {
-    data_controls::SetDataControls(browser()->profile()->GetPrefs(), {R"({
+    data_controls::SetDataControls(browser()->GetProfile()->GetPrefs(), {R"({
                                    "name": "rule_name",
                                    "rule_id": "rule_id",
                                    "destinations": {
@@ -1143,15 +1168,14 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, FindBarWidgetIsNotActivatable) {
 //
 // Disabled on Linux Wayland: Linux Wayland doesn't support window activation.
 // See crbug.com/40863331.
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_WAYLAND)
-#define MAYBE_FindBarTextfieldActivatesBrowserOnClick \
-  DISABLED_FindBarTextfieldActivatesBrowserOnClick
-#else
-#define MAYBE_FindBarTextfieldActivatesBrowserOnClick \
-  FindBarTextfieldActivatesBrowserOnClick
-#endif
+// Ensure FindBarTextfieldActivatesBrowserOnClick.
 IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest,
-                       MAYBE_FindBarTextfieldActivatesBrowserOnClick) {
+                       FindBarTextfieldActivatesBrowserOnClick) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Linux Wayland doesn't support window activation";
+  }
+#endif
   // Browser A: The browser window that comes with the test fixture.
   Browser* browser_a = browser();
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser_a));
@@ -1171,7 +1195,7 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest,
   ASSERT_TRUE(textfield->GetText().empty());
 
   // Create browser B and make it active with focus in the omnibox.
-  Browser* browser_b = CreateBrowser(browser_a->profile());
+  Browser* browser_b = CreateBrowser(browser_a->GetProfile());
   ASSERT_NE(nullptr, browser_b);
 
   views::Widget* browser_a_widget =
@@ -1226,7 +1250,7 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, BookmarkShortcutWithFindBarFocus) {
   const GURL page_a = embedded_test_server()->GetURL("/a.html");
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
 
   RunTestSequence(
@@ -1258,4 +1282,73 @@ IN_PROC_BROWSER_TEST_F(FindBarViewsUiTest, BookmarkShortcutWithFindBarFocus) {
       // without the fix, Cmd+D would be consumed by the text field and the
       // bubble would never appear.
       WaitForShow(kBookmarkNameFieldId));
+}
+
+// TODO(crbug.com/496762907): Deflake and reenable it.
+IN_PROC_BROWSER_TEST_P(FindBarViewsUiTest, DISABLED_CopyBlockedByPolicy) {
+  const bool clipboard_restricted_by_policy = GetParam();
+  if (clipboard_restricted_by_policy) {
+    data_controls::SetDataControls(browser()->GetProfile()->GetPrefs(), {R"({
+                                   "name": "rule_name",
+                                   "rule_id": "rule_id",
+                                   "destinations": {
+                                     "os_clipboard": true
+                                   },
+                                   "restrictions": [
+                                     {"class": "CLIPBOARD", "level": "BLOCK"}
+                                   ]
+                                 })"});
+  }
+  const std::string kExpectedText =
+      clipboard_restricted_by_policy
+          ? l10n_util::GetStringUTF8(
+                IDS_ENTERPRISE_DATA_CONTROLS_COPY_PREVENTION_WARNING_MESSAGE)
+          : "text";
+
+  RunTestSequence(
+      Init(embedded_test_server()->GetURL("/a.html")),
+      WaitForWebContentsReady(kTabId), ShowFindBar(),
+      WaitForShow(FindBarView::kTextField),
+      EnterText(FindBarView::kTextField, u"some text"),
+      WithView(FindBarView::kTextField,
+               [](views::Textfield* textfield) {
+                 textfield->SelectWord();
+                 EXPECT_EQ(textfield->GetSelectedText(), u"text");
+                 textfield->ExecuteCommand(
+                     std::to_underlying(ui::TouchEditable::MenuCommands::kCopy),
+                     0);
+               }),
+      PollState(
+          kTextCopiedState,
+          [&]() {
+            ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
+            std::u16string clipboard_text = ui::clipboard_test_util::ReadText(
+                clipboard, ui::ClipboardBuffer::kCopyPaste,
+                /* data_dst = */ nullptr);
+            return base::EqualsASCII(clipboard_text, kExpectedText);
+          }),
+      WaitForState(kTextCopiedState, true),
+      // When copying to the clipboard is restricted, we have to wait for the
+      // internal data tracking to identify the sequence number that will need
+      // to be replaced before pasting.
+      PollState(
+          kReplacedDataUpdatedState,
+          [&]() {
+            return !clipboard_restricted_by_policy ||
+                   ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(
+                       ui::ClipboardBuffer::kCopyPaste) ==
+                       data_controls::GetLastReplacedClipboardData().seqno;
+          }),
+      WaitForState(kReplacedDataUpdatedState, true),
+      // Regardless of whether the copied data made it to the clipboard, pasting
+      // it back into the FindBar will result in getting the original text back
+      // as the current policy doesn't block it.
+      WithView(
+          FindBarView::kTextField,
+          [](views::Textfield* textfield) {
+            textfield->ExecuteCommand(
+                std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
+          }),
+      WaitForViewProperty(FindBarView::kTextField, views::Textfield, Text,
+                          u"some text"));
 }

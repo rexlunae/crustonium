@@ -47,7 +47,6 @@ experimental domain SmartCardEmulation
       shutdown
 
       # Maps to SCARD_E_UNKNOWN_CARD.
-      # TODO(crbug.com/472114998): Rename Mojo's kUnknownError to kUnknownCard to match.
       unknown-card
 
       # Error code that is not mapped in this enum.
@@ -174,6 +173,7 @@ experimental domain SmartCardEmulation
   command reportBeginTransactionResult
     parameters
       string requestId
+      integer handle
 
   # Reports the successful result of a call that returns only a result code.
   # Used for: |SCardCancel|, |SCardDisconnect|, |SCardSetAttrib|, |SCardEndTransaction|.

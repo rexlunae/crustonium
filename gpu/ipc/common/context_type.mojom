@@ -9,6 +9,4 @@ enum ContextType {
   kWebGL1,
   kWebGL2,
   kOpenGLES2,
-  kOpenGLES3,
-  kOpenGLES31ForTesting,
 };

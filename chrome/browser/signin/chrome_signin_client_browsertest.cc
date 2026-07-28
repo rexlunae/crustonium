@@ -34,87 +34,21 @@ using testing::Not;
 using testing::Pair;
 using testing::UnorderedElementsAre;
 
-class ChromeSigninClientWithBookmarksInTransportModeBrowserTest
-    : public InProcessBrowserTest,
-      public testing::WithParamInterface<bool> {
- public:
-  // Equivalent to `kSigninFromBookmarksBubbleSyntheticTrialGroupNamePref` that
-  // is defined in `chrome_signin_client.cc`.
-  static constexpr char
-      kSigninFromBookmarksBubbleSyntheticTrialGroupNamePrefForTesting[] =
-          "UnoDesktopBookmarksEnabledInAccountFromBubbleGroup";
-  // Equivalent to `kBookmarksBubblePromoShownSyntheticTrialGroupNamePref` that
-  // is defined in `chrome_signin_client.cc`.
-  static constexpr char
-      kBookmarksBubblePromoShownSyntheticTrialGroupNamePrefForTesting[] =
-          "UnoDesktopBookmarksBubblePromoShownGroup";
-
-  ChromeSigninClientWithBookmarksInTransportModeBrowserTest() {
-    // Enables feature and register field trial. Note: disabling a feature will
-    // not register the field trial for the equivalent control group in tests -
-    // so we cannot test the Synthetic field trial tags for disabled features.
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{switches::kSyncEnableBookmarksInTransportMode, {}}}, {});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(
-    ChromeSigninClientWithBookmarksInTransportModeBrowserTest,
-    UnoDesktopSyntheticFieldTrialTags) {
-  PrefService* local_prefs = g_browser_process->local_state();
-  ASSERT_TRUE(
-      local_prefs
-          ->GetString(
-              kBookmarksBubblePromoShownSyntheticTrialGroupNamePrefForTesting)
-          .empty());
-  ASSERT_TRUE(
-      local_prefs
-          ->GetString(
-              kSigninFromBookmarksBubbleSyntheticTrialGroupNamePrefForTesting)
-          .empty());
-
-  // Simulates seeing the Signin Promo in the Bookmarks Saving bubble.
-  ChromeSigninClient::
-      MaybeAddUserToBookmarksBubblePromoShownSyntheticFieldTrial();
-
-  EXPECT_EQ(
-      local_prefs->GetString(
-          kBookmarksBubblePromoShownSyntheticTrialGroupNamePrefForTesting),
-      "scoped_feature_list_trial_group");
-  EXPECT_TRUE(
-      local_prefs
-          ->GetString(
-              kSigninFromBookmarksBubbleSyntheticTrialGroupNamePrefForTesting)
-          .empty());
-
-  // Simulates Signing in through the bookmarks bubble.
-  signin::MakeAccountAvailable(
-      IdentityManagerFactory::GetForProfile(browser()->profile()),
-      signin::AccountAvailabilityOptionsBuilder()
-          .AsPrimary(signin::ConsentLevel::kSignin)
-          .WithAccessPoint(signin_metrics::AccessPoint::kBookmarkBubble)
-          .Build("test@gmail.com"));
-
-  EXPECT_EQ(
-      local_prefs->GetString(
-          kBookmarksBubblePromoShownSyntheticTrialGroupNamePrefForTesting),
-      "scoped_feature_list_trial_group");
-  EXPECT_EQ(
-      local_prefs->GetString(
-          kSigninFromBookmarksBubbleSyntheticTrialGroupNamePrefForTesting),
-      "scoped_feature_list_trial_group");
-}
-
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 class ChromeSigninClientHatsSurveyBrowserTest : public InProcessBrowserTest {
  public:
+  ChromeSigninClientHatsSurveyBrowserTest() {
+    // Disable the (temporary) FRE refresh survey to avoid conflicts with the
+    // permanent identity surveys.
+    feature_list_.InitAndDisableFeature(
+        switches::kBeforeFirstRunDesktopRefreshSurvey);
+  }
+
   void SetUpOnMainThread() override {
     mock_hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+            browser()->GetProfile(),
+            base::BindRepeating(&BuildMockHatsService)));
   }
 
   void TearDownOnMainThread() override { mock_hats_service_ = nullptr; }
@@ -123,6 +57,8 @@ class ChromeSigninClientHatsSurveyBrowserTest : public InProcessBrowserTest {
 
  private:
   raw_ptr<MockHatsService> mock_hats_service_ = nullptr;
+
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // Tests that a HaTS survey is launched when a user signs in through an eligible
@@ -150,7 +86,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
   // Simulate a user signing in via the password bubble, which should trigger
   // the survey.
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakeAccountAvailable(
       identity_manager,
       signin::AccountAvailabilityOptionsBuilder()
@@ -164,7 +100,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
 // launched immediately when a browser is subsequently created for that profile.
 IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
                        HatsSurveyLaunchedOnBrowserCreationAfterSignin) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   // Keep the browser process running while browsers are closed.
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
@@ -207,6 +143,14 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
 // even if the user signs in through an eligible access point.
 IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
                        HatsSurveyNotLaunchedOnSigninUnsupportedLocale) {
+  auto* feature_list = base::FeatureList::GetInstance();
+  if (feature_list &&
+      feature_list->IsFeatureOverridden(
+          switches::kChromeIdentitySurveyPasswordBubbleSignin.name)) {
+    GTEST_SKIP() << "Feature is overridden by the field trial config,"
+                    "bypassing the embedded locale check.";
+  }
+
   // Set up the pseudo locale.
   auto locale = std::make_unique<ScopedBrowserLocale>("en-XA");
 
@@ -216,7 +160,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
   // Simulate a user signing in via the password bubble.
   // This would normally trigger the survey if the locale was supported.
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakeAccountAvailable(
       identity_manager,
       signin::AccountAvailabilityOptionsBuilder()

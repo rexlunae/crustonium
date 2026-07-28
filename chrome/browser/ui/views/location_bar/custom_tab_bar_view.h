@@ -8,9 +8,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/menus/simple_menu_model.h"
@@ -65,6 +67,10 @@ class CustomTabBarView : public views::AccessiblePaneView,
   void OnTabChangedAt(tabs::TabInterface* tab,
                       int index,
                       TabChangeType change_type) override;
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
 
   // IconLabelBubbleView::Delegate:
   SkColor GetIconLabelBubbleSurroundingForegroundColor() const override;
@@ -81,8 +87,8 @@ class CustomTabBarView : public views::AccessiblePaneView,
       security_state::SecurityLevel security_level) const override;
   bool ShowPageInfoDialog() override;
   const LocationBarModel* GetLocationBarModel() const override;
-  ui::ImageModel GetLocationIcon(LocationIconView::Delegate::IconFetchedCallback
-                                     on_icon_fetched) const override;
+  ui::ImageModel GetLocationIcon(
+      LocationIconView::Delegate::IconFetchedCallback on_icon_fetched) override;
 
   // Methods for testing.
   std::u16string title_for_testing() const { return last_title_; }
@@ -115,7 +121,7 @@ class CustomTabBarView : public views::AccessiblePaneView,
 
   // Get the app controller associated with the browser, if any.
   web_app::AppBrowserController* app_controller() const {
-    return browser_->app_controller();
+    return web_app::AppBrowserController::From(browser_);
   }
 
   // Populates child elements with page details from the current WebContents.

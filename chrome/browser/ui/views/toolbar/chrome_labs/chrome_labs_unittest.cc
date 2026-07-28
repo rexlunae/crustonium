@@ -9,6 +9,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -22,7 +23,7 @@
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_coordinator.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_item_view.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_view_controller.h"
-#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_controller.h"
+#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/unexpire_flags.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -74,7 +75,7 @@ BASE_FEATURE(kExpiredFlagTestFeature,
 const flags_ui::FeatureEntry::FeatureParam kTestVariationOther2[] = {
     {"Param1", "Value"}};
 const flags_ui::FeatureEntry::FeatureVariation kTestVariations2[] = {
-    {"Description", kTestVariationOther2, 1, nullptr}};
+    {"Description", kTestVariationOther2, nullptr}};
 
 std::vector<LabInfo> TestLabInfo() {
   std::vector<LabInfo> test_feature_info;
@@ -137,12 +138,13 @@ class ChromeLabsCoordinatorTest : public TestWithBrowserView {
         chrome_labs_prefs::kBrowserLabsEnabledEnterprisePolicy, true);
 
     chrome_labs_coordinator_ =
-        std::make_unique<ChromeLabsCoordinator>(browser_view()->browser());
+        ChromeLabsCoordinator::From(browser_view()->browser());
   }
 
   void TearDown() override {
     about_flags::GetCurrentFlagsState()->Reset();
     chrome_labs_coordinator_->TearDown();
+    chrome_labs_coordinator_ = nullptr;
     TestWithBrowserView::TearDown();
   }
 
@@ -159,7 +161,7 @@ class ChromeLabsCoordinatorTest : public TestWithBrowserView {
 
  protected:
   ScopedChromeLabsModelDataForTesting scoped_chrome_labs_model_data_;
-  std::unique_ptr<ChromeLabsCoordinator> chrome_labs_coordinator_;
+  raw_ptr<ChromeLabsCoordinator> chrome_labs_coordinator_ = nullptr;
 
  private:
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -269,7 +271,7 @@ class ChromeLabsViewControllerTest : public TestWithBrowserView {
     browser_view()
         ->browser()
         ->GetFeatures()
-        .pinned_toolbar_actions_controller()
+        .pinned_toolbar_actions()
         ->ShowActionEphemerallyInToolbar(kActionShowChromeLabs, true);
 
     std::unique_ptr<ChromeLabsBubbleView> bubble_view =
@@ -535,7 +537,7 @@ TEST_F(ChromeLabsViewControllerTest, RestartPromptShows) {
 // This test checks that the restart prompt does not show when the lab state has
 // not changed.
 // TODO(elainechien): This currently only works for default. This will be
-// changed to work for all states. See design doc in crbug/1145666.
+// changed to work for all states. See design doc in crbug.com/1145666.
 TEST_F(ChromeLabsViewControllerTest, SelectDefaultTwiceNoRestart) {
   std::unique_ptr<ChromeLabsViewController> view_controller =
       CreateViewController();
@@ -568,7 +570,7 @@ TEST_F(ChromeLabsViewControllerTest, DISABLED_ShowFeedbackPage) {
 TEST_F(ChromeLabsViewControllerTest, CleanUpNewBadgePrefsTest) {
   const base::DictValue& new_badge_prefs =
 #if BUILDFLAG(IS_CHROMEOS)
-      browser_view()->browser()->profile()->GetPrefs()->GetDict(
+      browser_view()->browser()->GetProfile()->GetPrefs()->GetDict(
           chrome_labs_prefs::kChromeLabsNewBadgeDictAshChrome);
 #else
       g_browser_process->local_state()->GetDict(
@@ -589,7 +591,7 @@ TEST_F(ChromeLabsViewControllerTest, CleanUpNewBadgePrefsTest) {
 
   scoped_chrome_labs_model_data_.SetModelDataForTesting(test_experiments);
 
-  UpdateChromeLabsNewBadgePrefs(browser_view()->browser()->profile());
+  UpdateChromeLabsNewBadgePrefs(browser_view()->browser()->GetProfile());
   EXPECT_FALSE(new_badge_prefs.contains(kFirstTestFeatureId));
   EXPECT_FALSE(new_badge_prefs.contains(kTestFeatureWithVariationId));
 }

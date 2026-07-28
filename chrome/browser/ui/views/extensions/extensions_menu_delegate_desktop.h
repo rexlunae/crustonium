@@ -7,19 +7,20 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "chrome/browser/ui/extensions/extensions_menu_handler.h"
 #include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_handler.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
 #include "ui/views/view_tracker.h"
+#include "url/origin.h"
 
 namespace views {
 class View;
 }  // namespace views
 
 class ExtensionsMenuViewModel;
-class Browser;
+class BrowserWindowInterface;
 class ExtensionsContainerViews;
 class ExtensionsMenuMainPageView;
 class ExtensionsMenuSitePermissionsPageView;
@@ -33,7 +34,7 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
                                       public ExtensionsMenuHandler {
  public:
   ExtensionsMenuDelegateDesktop(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       ExtensionsContainer* extensions_container,
       ExtensionsContainerViews* extensions_container_views,
       views::View* bubble_contents);
@@ -47,7 +48,7 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
       const extensions::ExtensionId& extension_id) override;
 
   // ExtensionsMenuViewModel::Observer:
-  void OnActiveWebContentsChanged() override;
+  void OnPageNavigation() override;
   void OnHostAccessRequestAdded(const extensions::ExtensionId& extension_id,
                                 int index) override;
   void OnHostAccessRequestUpdated(const extensions::ExtensionId& extension_id,
@@ -62,7 +63,10 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
                      int index) override;
   void OnActionRemoved(const ToolbarActionsModel::ActionId& action_id,
                        int index) override;
-  void OnActionUpdated(const ToolbarActionsModel::ActionId& action_id) override;
+  void OnActionUpdated(const ToolbarActionsModel::ActionId& action_id,
+                       int index) override;
+  void OnActionIconUpdated(const ToolbarActionsModel::ActionId& action_id,
+                           int index) override;
   void OnActionsInitialized() override;
   void OnToolbarPinnedActionsChanged() override;
   void OnUserPermissionsSettingsChanged() override;
@@ -72,11 +76,15 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
   void OpenSitePermissionsPage(
       const extensions::ExtensionId& extension_id) override;
   void CloseBubble() override;
+  void OnActionButtonClicked(
+      const extensions::ExtensionId& extension_id) override;
   void OnSiteSettingsToggleButtonPressed(bool is_on) override;
   void OnSiteAccessSelected(
       const extensions::ExtensionId& extension_id,
+      const url::Origin& origin,
       extensions::PermissionsManager::UserSiteAccess site_access) override;
   void OnExtensionToggleSelected(const extensions::ExtensionId& extension_id,
+                                 const url::Origin& origin,
                                  bool is_on) override;
   void OnReloadPageButtonClicked() override;
   void OnAllowExtensionClicked(
@@ -111,7 +119,7 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
                        ExtensionActionViewModel* action_model,
                        int index);
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   const raw_ref<ExtensionsContainer> extensions_container_;
   const raw_ptr<ExtensionsContainerViews> extensions_container_views_;
   const raw_ptr<views::View> bubble_contents_;

@@ -5,23 +5,37 @@
 #include "components/autofill/core/browser/payments/iban_save_manager.h"
 
 #include <algorithm>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "base/check_deref.h"
+#include "base/check_op.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/iban_metrics.h"
+#include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
 #include "components/autofill/core/browser/payments/payments_util.h"
 #include "components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_regexes.h"
+#include "components/autofill/core/common/signatures.h"
+#include "components/strike_database/strike_database.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/service/sync_user_settings.h"
 
 namespace autofill {
@@ -202,10 +216,20 @@ bool IbanSaveManager::AttemptToOfferUploadSave(Iban& import_candidate) {
       autofill_metrics::UploadIbanActionMetric::kOffered);
   bool show_save_prompt = !GetIbanSaveStrikeDatabase()->ShouldBlockFeature(
       GetPartialIbanHashString(base::UTF16ToUTF8(import_candidate.value())));
+#if BUILDFLAG(IS_ANDROID)
+  upload_request_details_.client_behavior_signals.push_back(
+      ClientBehaviorConstants::kShowAccountEmailInLegalMessage);
+#else
+  if (base::FeatureList::IsEnabled(features::kAutofillEnableWalletBrandingV2)) {
+    upload_request_details_.client_behavior_signals.push_back(
+        ClientBehaviorConstants::kShowAccountEmailInLegalMessage);
+  }
+#endif
   client_->GetPaymentsAutofillClient()
       ->GetPaymentsNetworkInterface()
       ->GetIbanUploadDetails(
           payments_data_manager().app_locale(),
+          upload_request_details_.client_behavior_signals,
           payments::GetBillingCustomerId(payments_data_manager()),
           import_candidate.GetCountryCode(),
           base::BindOnce(&IbanSaveManager::OnDidGetUploadDetails,
@@ -216,8 +240,8 @@ bool IbanSaveManager::AttemptToOfferUploadSave(Iban& import_candidate) {
 
 IbanSaveStrikeDatabase* IbanSaveManager::GetIbanSaveStrikeDatabase() {
   if (iban_save_strike_database_.get() == nullptr) {
-    iban_save_strike_database_ = std::make_unique<IbanSaveStrikeDatabase>(
-        IbanSaveStrikeDatabase(client_->GetStrikeDatabase()));
+    iban_save_strike_database_ =
+        std::make_unique<IbanSaveStrikeDatabase>(client_->GetStrikeDatabase());
   }
   return iban_save_strike_database_.get();
 }
@@ -226,10 +250,10 @@ void IbanSaveManager::OnUserDidDecideOnLocalSave(
     Iban import_candidate,
     payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
     std::u16string_view nickname) {
-  if (!nickname.empty()) {
-    std::u16string trimmed_nickname;
-    base::TrimWhitespace(nickname, base::TRIM_ALL, &trimmed_nickname);
-    import_candidate.set_nickname(trimmed_nickname);
+  const std::u16string_view trimmed_nickname =
+      base::TrimWhitespace(nickname, base::TRIM_ALL);
+  if (!trimmed_nickname.empty()) {
+    import_candidate.set_nickname(std::u16string(trimmed_nickname));
   }
 
   const std::string& partial_iban_hash =
@@ -266,12 +290,10 @@ void IbanSaveManager::OnUserDidDecideOnUploadSave(
     payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
     std::u16string_view nickname) {
   CHECK_NE(import_candidate.record_type(), Iban::kServerIban);
-  if (!nickname.empty()) {
-    std::u16string trimmed_nickname;
-    base::TrimWhitespace(nickname, base::TRIM_ALL, &trimmed_nickname);
-    if (!trimmed_nickname.empty()) {
-      import_candidate.set_nickname(trimmed_nickname);
-    }
+  const std::u16string_view trimmed_nickname =
+      base::TrimWhitespace(nickname, base::TRIM_ALL);
+  if (!trimmed_nickname.empty()) {
+    import_candidate.set_nickname(std::u16string(trimmed_nickname));
   }
 
   autofill_metrics::UploadIbanActionMetric action_metric;

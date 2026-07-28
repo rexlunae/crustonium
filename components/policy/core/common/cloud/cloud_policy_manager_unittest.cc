@@ -91,12 +91,14 @@ ConfigurationPolicyProvider* TestHarness::CreateProvider(
     SchemaRegistry* registry,
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
   // Create and initialize the store.
-  auto store = std::make_unique<MockCloudPolicyStore>();
+  auto store = std::make_unique<MockCloudPolicyStore>(
+      dm_protocol::GetChromeUserPolicyType());
   store_ = store.get();
   store_->NotifyStoreLoaded();
   std::unique_ptr<MockCloudPolicyStore> extension_install_store;
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store = std::make_unique<MockCloudPolicyStore>();
+  extension_install_store = std::make_unique<MockCloudPolicyStore>(
+      dm_protocol::kChromeExtensionInstallUserCloudPolicyType);
   extension_install_store_ = extension_install_store.get();
   extension_install_store_->NotifyStoreLoaded();
 #endif
@@ -187,14 +189,17 @@ class CloudPolicyManagerTest : public testing::Test {
     policy_.payload().mutable_searchsuggestenabled()->set_value(false);
     policy_.Build();
 
-    auto store = std::make_unique<MockCloudPolicyStore>();
+    auto store = std::make_unique<MockCloudPolicyStore>(
+        dm_protocol::GetChromeUserPolicyType());
     store_ = store.get();
     EXPECT_CALL(*store_, Load());
     std::unique_ptr<MockCloudPolicyStore> extension_install_store;
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-    extension_install_store = std::make_unique<MockCloudPolicyStore>();
+    extension_install_store = std::make_unique<MockCloudPolicyStore>(
+        dm_protocol::kChromeExtensionInstallUserCloudPolicyType);
     extension_install_store_ = extension_install_store.get();
-    EXPECT_CALL(*extension_install_store_, Load());
+    // Never allowed unless explicitly initialized.
+    EXPECT_CALL(*extension_install_store_, Load()).Times(0);
 #endif
     manager_ = std::make_unique<MockCloudPolicyManager>(
         std::move(store), std::move(extension_install_store),
@@ -243,9 +248,6 @@ TEST_F(CloudPolicyManagerTest, InitAndShutdown) {
       std::make_unique<em::PolicyData>(policy_.policy_data()));
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
   store_->NotifyStoreLoaded();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   Mock::VerifyAndClearExpectations(&observer_);
   EXPECT_TRUE(expected_bundle_.Equals(manager_->policies()));
   EXPECT_TRUE(manager_->IsInitializationComplete(POLICY_DOMAIN_CHROME));
@@ -269,9 +271,6 @@ TEST_F(CloudPolicyManagerTest, InitAndShutdown) {
 TEST_F(CloudPolicyManagerTest, RegistrationAndFetch) {
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
   store_->NotifyStoreLoaded();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   Mock::VerifyAndClearExpectations(&observer_);
   EXPECT_TRUE(manager_->IsInitializationComplete(POLICY_DOMAIN_CHROME));
 
@@ -296,9 +295,6 @@ TEST_F(CloudPolicyManagerTest, RegistrationAndFetch) {
 TEST_F(CloudPolicyManagerTest, Update) {
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
   store_->NotifyStoreLoaded();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   Mock::VerifyAndClearExpectations(&observer_);
   EXPECT_TRUE(manager_->IsInitializationComplete(POLICY_DOMAIN_CHROME));
   PolicyBundle empty_bundle;
@@ -318,9 +314,6 @@ TEST_F(CloudPolicyManagerTest, RefreshNotRegistered) {
 
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
   store_->NotifyStoreLoaded();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   Mock::VerifyAndClearExpectations(&observer_);
 
   // A refresh on a non-registered store should not block.
@@ -339,9 +332,6 @@ TEST_F(CloudPolicyManagerTest, RefreshSuccessful) {
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
   EXPECT_CALL(*client, SetupRegistration(_, _, _));
   store_->NotifyStoreLoaded();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   Mock::VerifyAndClearExpectations(client);
   Mock::VerifyAndClearExpectations(&observer_);
 
@@ -376,7 +366,7 @@ TEST_F(CloudPolicyManagerTest, RefreshSuccessful) {
   Mock::VerifyAndClearExpectations(&observer_);
 }
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS_CORE)) && !BUILDFLAG(IS_IOS)
 TEST_F(CloudPolicyManagerTest, ComponentPolicyInitWithPendingRefresh) {
   auto client_ptr = std::make_unique<MockCloudPolicyClient>();
   MockCloudPolicyClient* client = client_ptr.get();
@@ -393,9 +383,6 @@ TEST_F(CloudPolicyManagerTest, ComponentPolicyInitWithPendingRefresh) {
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
   EXPECT_CALL(*client, SetupRegistration(_, _, _));
   store_->NotifyStoreLoaded();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   Mock::VerifyAndClearExpectations(client);
   Mock::VerifyAndClearExpectations(&observer_);
 
@@ -435,9 +422,6 @@ TEST_F(CloudPolicyManagerTest, SignalOnError) {
   store_->set_policy_data_for_testing(
       std::make_unique<em::PolicyData>(policy_.policy_data()));
   EXPECT_CALL(observer_, OnUpdatePolicy(manager_.get()));
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  extension_install_store_->NotifyStoreLoaded();
-#endif
   store_->NotifyStoreError();
   Mock::VerifyAndClearExpectations(&observer_);
 

@@ -6,11 +6,11 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/task/sequenced_task_runner.h"
 #import "base/time/time.h"
 #import "components/enterprise/idle/idle_pref_names.h"
 #import "components/enterprise/idle/metrics.h"
 #import "components/policy/core/common/policy_pref_names.h"
-#import "components/prefs/pref_service.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
@@ -23,11 +23,11 @@
 #import "ios/chrome/browser/policy/ui_bundled/idle/idle_timeout_policy_utils.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_ui_provider.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
-#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
@@ -41,7 +41,8 @@
 
 @interface IdleTimeoutPolicySceneAgent () <
     IdleServiceObserving,
-    IdleTimeoutConfirmationCoordinatorDelegate>
+    IdleTimeoutConfirmationCoordinatorDelegate,
+    SceneUIBlockerStateObserver>
 @end
 
 @implementation IdleTimeoutPolicySceneAgent {
@@ -66,7 +67,7 @@
 
   // Service handling IdleTimeout and IdleTimeoutActions policies.
   // IdleTimeoutPolicySceneAgents observe this service.
-  raw_ptr<enterprise_idle::IdleService, DanglingUntriaged> _idleService;
+  raw_ptr<enterprise_idle::IdleService> _idleService;
 
   // Flag indicating whether this dialog is allowed to display the snackbar.
   // This is used to show the snackbar on the same scene that shows the timeout
@@ -81,6 +82,11 @@
   // data is cleared, and to hide the triggered UI changes when tabs are closed
   // or the user is signed out.
   UIWindow* _launchScreenWindow;
+}
+
+- (void)setSceneState:(SceneState*)sceneState {
+  [super setSceneState:sceneState];
+  [sceneState.uiBlockerState addObserver:self];
 }
 
 - (instancetype)initWithSceneUIProvider:(id<SceneUIProvider>)sceneUIProvider
@@ -106,19 +112,14 @@
   // Tear down objects tied to the scene state before it is deleted.
   [self tearDownObservers];
   _mainBrowser = nullptr;
+  _idleService = nullptr;
   [self stopIdleTimeoutConfirmationCoordinator];
+  [sceneState.uiBlockerState removeObserver:self];
 }
 
 - (void)sceneStateDidEnableUI:(SceneState*)sceneState {
   // Setup objects that need the browser UI objects before being set.
   [self setupObserver];
-}
-
-- (void)sceneStateDidHideModalOverlay:(SceneState*)sceneState {
-  // Called to check if the dialog needs to be shown after a UI blocker has been
-  // released. This is the case when one scene is closed while showing the
-  // dialog, so any other open scene should take over showing the countdown.
-  [self maybeShowIdleTimeoutConfirmationDialog];
 }
 
 - (void)sceneState:(SceneState*)sceneState
@@ -130,6 +131,15 @@
   // needed because the scene state might not be foregrounded yet when
   // `onIdleTimeoutActionsCompleted` is called on foreground.
   [self maybeShowPostActionSnackbar];
+}
+
+#pragma mark - SceneUIBlockerStateObserver
+
+- (void)didHideModalOverlay {
+  // Called to check if the dialog needs to be shown after a UI blocker has been
+  // released. This is the case when one scene is closed while showing the
+  // dialog, so any other open scene should take over showing the countdown.
+  [self maybeShowIdleTimeoutConfirmationDialog];
 }
 
 #pragma mark - IdleServiceObserving
@@ -199,10 +209,6 @@
   _idleServiceObserverBridge.reset();
 }
 
-- (PrefService*)prefService {
-  return _mainBrowser->GetProfile()->GetPrefs();
-}
-
 // Returns whether the scene and app states allow for the idle timeout snackbar
 // to show if idle actions have run.
 - (BOOL)isUIAvailableToShowSnackbar {
@@ -244,27 +250,7 @@
   std::optional<int> messageId =
       enterprise_idle::GetIdleTimeoutActionsSnackbarMessageId(
           _idleService->GetLastActionSet());
-
-  // TODO(crbug.com/409821312): Change this back to CHECK when the cause for the
-  // crash is found. The crash is possibly related to BrowserSignin=2 also being
-  // set, but it is not reproducible yet.
-  if (!messageId) {
-    signin::IdentityManager* identityManager =
-        IdentityManagerFactory::GetForProfile(_mainBrowser->GetProfile());
-    DUMP_WILL_BE_CHECK(messageId)
-        << "The last IdleTimeout action set was empty. IdleTimeoutActions: "
-        << _mainBrowser->GetProfile()
-               ->GetPrefs()
-               ->GetList(enterprise_idle::prefs::kIdleTimeoutActions)
-               .DebugString()
-        << ", BrowserSignin:"
-        << GetApplicationContext()->GetLocalState()->GetInteger(
-               prefs::kBrowserSigninPolicy)
-        << "Signin status: "
-        << identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin);
-    _idleService->OnIdleTimeoutSnackbarPresented();
-    return;
-  }
+  CHECK(messageId) << "There is no snackbar message for the set of actions";
 
   NSString* messageText = l10n_util::GetNSString(*messageId);
 
@@ -318,18 +304,13 @@
   }
 
   // Return YES if the scene is not blocked by a modal overlay.
-  return !self.sceneState.presentingModalOverlay;
+  return !self.sceneState.uiBlockerState.presentingModalOverlay;
 }
 
 // Shows the notification dialog if these two conditions are satisfied:
 // 1. the UI is available
 // 2. it was never shown or if a scene displaying the dialog
 // was closed and anoher foregrouded window remained open.
-// TODO(crbug.com/364574533): `showIdleTimeoutConfirmation` will be called from
-// `sceneStateDidHideModalOverlay` in the case of multiple profiles when the
-// window that shows the _uiBlocker is closed. Call
-// `stopPresentingAndRunActionsAfterwards` without showing the dialog for <1
-// second as it looks buggy when this happens.
 - (void)maybeShowIdleTimeoutConfirmationDialog {
   // Initially set the pending snackbar flag to false in case it was set on
   // startup but actions failed to complete.
@@ -347,8 +328,9 @@
   // Set the pending snackbar flag for the agent that will show the dialog then
   // show then dismiss any modals and display the dialog.
   _pendingDisplayingSnackbar = YES;
-  _UIBlocker = std::make_unique<ScopedUIBlocker>(self.sceneState,
-                                                 UIBlockerExtent::kApplication);
+  SceneState* sceneState = self.sceneState;
+  _UIBlocker =
+      ScopedUIBlocker::AppScoped(sceneState, sceneState.profileState.appState);
   __weak __typeof(self) weakSelf = self;
   [_sceneHandler dismissModalDialogsWithCompletion:^{
     [weakSelf showIdleTimeoutConfirmation];

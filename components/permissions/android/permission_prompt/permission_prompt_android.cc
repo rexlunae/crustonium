@@ -33,7 +33,7 @@ PermissionPromptAndroid::PermissionPromptAndroid(
   std::transform(delegate_->Requests().begin(), delegate_->Requests().end(),
                  std::back_inserter(requests_),
                  [](const std::unique_ptr<PermissionRequest>& request_ptr) {
-                   return request_ptr->GetWeakPtr();
+                   return request_ptr->GetSafeRef();
                  });
 }
 
@@ -115,21 +115,27 @@ PermissionPromptAndroid::ReasonForUsingQuietUi() const {
   return delegate_->ReasonForUsingQuietUi();
 }
 
-base::android::ScopedJavaLocalRef<jstring>
-PermissionPromptAndroid::GetPositiveButtonText(JNIEnv* env,
-                                               bool is_one_time) const {
-  return ConvertUTF16ToJavaString(env, std::u16string_view());
-}
-base::android::ScopedJavaLocalRef<jstring>
-PermissionPromptAndroid::GetNegativeButtonText(JNIEnv* env,
-                                               bool is_one_time) const {
-  return ConvertUTF16ToJavaString(env, std::u16string_view());
-}
-base::android::ScopedJavaLocalRef<jstring>
-PermissionPromptAndroid::GetPositiveEphemeralButtonText(
-    JNIEnv* env,
+std::u16string PermissionPromptAndroid::GetPositiveButtonText(
     bool is_one_time) const {
-  return ConvertUTF16ToJavaString(env, std::u16string_view());
+  return std::u16string();
+}
+std::u16string PermissionPromptAndroid::GetNegativeButtonText(
+    bool is_one_time) const {
+  return std::u16string();
+}
+std::u16string PermissionPromptAndroid::GetPositiveEphemeralButtonText(
+    bool is_one_time) const {
+  return std::u16string();
+}
+
+std::optional<GeolocationPromptType>
+PermissionPromptAndroid::GetGeolocationPromptType() const {
+  CHECK(!requests_.empty());
+  if (requests_[0]->GetGeolocationPromptType().has_value()) {
+    CHECK_EQ(requests_.size(), 1u);
+    return requests_[0]->GetGeolocationPromptType();
+  }
+  return std::nullopt;
 }
 
 size_t PermissionPromptAndroid::PermissionCount() const {
@@ -138,14 +144,14 @@ size_t PermissionPromptAndroid::PermissionCount() const {
 
 ContentSettingsType PermissionPromptAndroid::GetContentSettingType(
     size_t position) const {
-  const std::vector<base::WeakPtr<PermissionRequest>>& requests = Requests();
+  const std::vector<base::SafeRef<PermissionRequest>>& requests = Requests();
   CHECK_LT(position, requests.size());
   return requests[position]->GetContentSettingsType();
 }
 
 static bool IsValidMediaRequestGroup(
-    const std::vector<base::WeakPtr<PermissionRequest>>& requests) {
-  if (requests.size() < 2 || !requests[0] || !requests[1]) {
+    const std::vector<base::SafeRef<PermissionRequest>>& requests) {
+  if (requests.size() < 2) {
     return false;
   }
   return ((requests[0]->request_type() == RequestType::kMicStream &&
@@ -155,13 +161,13 @@ static bool IsValidMediaRequestGroup(
 }
 
 void PermissionPromptAndroid::CheckValidRequestGroup(
-    const std::vector<base::WeakPtr<PermissionRequest>>& requests) const {
+    const std::vector<base::SafeRef<PermissionRequest>>& requests) const {
   DCHECK_EQ(static_cast<size_t>(2u), requests.size());
   DCHECK((IsValidMediaRequestGroup(requests)));
 }
 
 int PermissionPromptAndroid::GetIconId() const {
-  const std::vector<base::WeakPtr<PermissionRequest>>& requests = Requests();
+  const std::vector<base::SafeRef<PermissionRequest>>& requests = Requests();
   if (requests.size() == 1) {
     if (requests[0]->request_type() == RequestType::kStorageAccess) {
       return IDR_ANDROID_GLOBE;
@@ -174,7 +180,7 @@ int PermissionPromptAndroid::GetIconId() const {
 
 PermissionRequest::AnnotatedMessageText
 PermissionPromptAndroid::GetAnnotatedMessageText() const {
-  const std::vector<base::WeakPtr<PermissionRequest>>& requests = Requests();
+  const std::vector<base::SafeRef<PermissionRequest>>& requests = Requests();
   if (requests.size() == 1) {
     return requests[0]->GetDialogAnnotatedMessageText(
         delegate_->GetEmbeddingOrigin());
@@ -194,7 +200,7 @@ PermissionPromptAndroid::GetAnnotatedMessageText() const {
 }
 
 bool PermissionPromptAndroid::ShouldUseRequestingOriginFavicon() const {
-  const std::vector<base::WeakPtr<PermissionRequest>>& requests = Requests();
+  const std::vector<base::SafeRef<PermissionRequest>>& requests = Requests();
   CHECK_GT(requests.size(), 0U);
 
   return requests[0]->request_type() == RequestType::kStorageAccess;
@@ -204,7 +210,7 @@ GURL PermissionPromptAndroid::GetRequestingOrigin() const {
   return delegate_->GetRequestingOrigin();
 }
 
-const std::vector<base::WeakPtr<permissions::PermissionRequest>>&
+const std::vector<base::SafeRef<permissions::PermissionRequest>>&
 PermissionPromptAndroid::Requests() const {
   return requests_;
 }

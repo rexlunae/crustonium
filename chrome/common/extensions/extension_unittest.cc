@@ -20,8 +20,8 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_test_util.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/crx_file/id_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/command.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_resource.h"
@@ -31,6 +31,7 @@
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/content_scripts_handler.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/base/mime_sniffer.h"
 #include "net/dns/mock_host_resolver.h"
@@ -40,6 +41,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using base::FilePath;
 using extension_test_util::LoadManifest;
@@ -336,7 +339,7 @@ TEST(ExtensionTest, MimeTypeSniffing) {
   // Finally, an extension that we pack right. This. Instant.
   // This verifies that the modern extensions Chrome packs are always
   // recognized as the extension mime type.
-  // Regression test for https://crbug.com/831284.
+  // Regression test for https://crbug.com/40571035.
   TestExtensionDir test_dir;
   test_dir.WriteManifest(R"(
       {

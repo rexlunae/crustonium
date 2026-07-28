@@ -21,6 +21,7 @@
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
 #include "components/omnibox/browser/history_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/url_formatter/url_fixer.h"
 #include "url/gurl.h"
 
@@ -90,6 +91,8 @@ const char* AutocompleteProvider::TypeToString(Type type) {
       return "ContextualSearch";
     case TYPE_TAB_GROUP:
       return "TabGroup";
+    case TYPE_CROSS_DEVICE_TAB:
+      return "CrossDeviceTab";
     default:
       DUMP_WILL_BE_NOTREACHED()
           << "Unhandled AutocompleteProvider::Type " << type;
@@ -203,6 +206,8 @@ AutocompleteProvider::AsOmniboxEventProviderType() const {
       return metrics::OmniboxEventProto::CONTEXTUAL_SEARCH_PROVIDER;
     case TYPE_TAB_GROUP:
       return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
+    case TYPE_CROSS_DEVICE_TAB:
+      return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;
     default:
       // TODO(crbug.com/40940012) This was a NOTREACHED that we converted to
       //   help debug crbug.com/1499235 since NOTREACHED's don't log their
@@ -244,12 +249,14 @@ AutocompleteProvider::AdjustedInputAndStarterPackKeyword
 AutocompleteProvider::AdjustInputForStarterPackKeyword(
     const AutocompleteInput& input,
     const TemplateURLService* turl_service) {
-  if (input.prefer_keyword()) {
+  if (input.in_keyword_mode()) {
     AutocompleteInput keyword_input = input;
     const TemplateURL* template_url =
         AutocompleteInput::GetSubstitutingTemplateURLForInput(turl_service,
                                                               &keyword_input);
-    if (template_url && template_url->starter_pack_id() > 0) {
+    if (template_url &&
+        template_url->starter_pack_id() !=
+            template_url_starter_pack_data::StarterPackId::kNone) {
       return {keyword_input, template_url};
     }
   }

@@ -6,10 +6,12 @@
 
 #include <algorithm>
 
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/common/task_annotator.h"
 #include "base/trace_event/trace_event.h"
@@ -34,9 +36,9 @@
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_input_event_attribution.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_context.mojom-blink.h"
-#include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/widget/visual_properties.mojom-blink.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -179,6 +181,22 @@ WidgetBase::~WidgetBase() {
   DCHECK(!layer_tree_view_);
 }
 
+void WidgetBase::SetInitialFrameSink(
+    CrossVariantMojoRemote<viz::mojom::blink::CompositorFrameSinkInterfaceBase>
+        initial_frame_sink,
+    CrossVariantMojoReceiver<
+        viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>
+        initial_frame_sink_client,
+    CrossVariantMojoReceiver<mojom::blink::RenderInputRouterClientInterfaceBase>
+        initial_viz_rir_client) {
+  initial_frame_sink_pipes_.emplace();
+  initial_frame_sink_pipes_->initial_frame_sink = std::move(initial_frame_sink);
+  initial_frame_sink_pipes_->initial_frame_sink_client =
+      std::move(initial_frame_sink_client);
+  initial_frame_sink_pipes_->initial_viz_rir_client =
+      std::move(initial_viz_rir_client);
+}
+
 void WidgetBase::InitializeCompositing(
     PageScheduler& page_scheduler,
     const display::ScreenInfos& screen_infos,
@@ -281,10 +299,9 @@ void WidgetBase::InitializeNonCompositing() {
   initialized_ = true;
 }
 
-void WidgetBase::OnFirstContentfulPaint(
-    const base::TimeTicks& first_paint_time) {
+void WidgetBase::OnFirstContentfulPaint() {
   if (widget_input_handler_manager_) {
-    widget_input_handler_manager_->OnFirstContentfulPaint(first_paint_time);
+    widget_input_handler_manager_->OnFirstContentfulPaint();
   }
 }
 
@@ -577,9 +594,10 @@ void WidgetBase::WasHidden() {
   client_->WasHidden();
 }
 
-void WidgetBase::WasShown(bool was_evicted,
-                          mojom::blink::RecordContentToVisibleTimeRequestPtr
-                              record_tab_switch_time_request) {
+void WidgetBase::WasShown(
+    bool was_evicted,
+    const std::optional<RecordContentToVisibleTimeRequest>&
+        record_tab_switch_time_request) {
   // The frame must be attached to the frame tree (which makes it no longer
   // provisional) before changing visibility.
   DCHECK(!IsForProvisionalFrame());
@@ -590,42 +608,31 @@ void WidgetBase::WasShown(bool was_evicted,
   SetHidden(false);
 
   if (record_tab_switch_time_request) {
+    // Requests with saved frames should be sent to the DelegatedFrameHost.
+    CHECK(!record_tab_switch_time_request
+               ->AllEventsAreTabSwitchesWithSavedFrame());
     LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(
-        tab_switch_time_recorder_.TabWasShown(
-            false /* has_saved_frames */,
-            record_tab_switch_time_request->event_start_time,
-            record_tab_switch_time_request->destination_is_loaded,
-            record_tab_switch_time_request->show_reason_tab_switching,
-            record_tab_switch_time_request->show_reason_bfcache_restore));
+        tab_switch_time_recorder_.TabWasShown(*record_tab_switch_time_request));
   }
 
   client_->WasShown(was_evicted);
 }
 
 void WidgetBase::RequestSuccessfulPresentationTimeForNextFrame(
-    mojom::blink::RecordContentToVisibleTimeRequestPtr visible_time_request) {
-  DCHECK(visible_time_request);
+    const RecordContentToVisibleTimeRequest& visible_time_request) {
   if (is_hidden_) {
     return;
   }
   TRACE_EVENT0("renderer",
                "WidgetBase::RequestSuccessfulPresentationTimeForNextFrame");
 
-  if (visible_time_request->show_reason_unfolding) {
-    LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(
-        tab_switch_time_recorder_.GetCallbackForNextFrameAfterUnfold(
-            visible_time_request->event_start_time));
-    return;
-  }
+  // Requests with saved frames should be sent to the DelegatedFrameHost.
+  CHECK(!visible_time_request.AllEventsAreTabSwitchesWithSavedFrame());
 
   // Tab was shown while widget was already painting, eg. due to being
   // captured.
   LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(
-      tab_switch_time_recorder_.TabWasShown(
-          false /* has_saved_frames */, visible_time_request->event_start_time,
-          visible_time_request->destination_is_loaded,
-          visible_time_request->show_reason_tab_switching,
-          visible_time_request->show_reason_bfcache_restore));
+      tab_switch_time_recorder_.TabWasShown(visible_time_request));
 }
 
 void WidgetBase::CancelSuccessfulPresentationTimeRequest() {
@@ -661,6 +668,11 @@ void WidgetBase::UpdateCompositorScrollState(
   client_->UpdateCompositorScrollState(commit_data);
 }
 
+void WidgetBase::UpdateAnimatedImageState(
+    const cc::CompositorCommitData& commit_data) {
+  client_->UpdateAnimatedImageState(commit_data);
+}
+
 void WidgetBase::OnDeferMainFrameUpdatesChanged(bool defer) {
   // LayerTreeHost::CreateThreaded() will defer main frame updates immediately
   // until it gets a LocalSurfaceId. That's before the
@@ -678,10 +690,8 @@ void WidgetBase::OnDeferMainFrameUpdatesChanged(bool defer) {
   widget_input_handler_manager_->OnDeferMainFrameUpdatesChanged(defer);
 }
 
-void WidgetBase::OnDeferCommitsChanged(
-    bool defer,
-    cc::PaintHoldingReason reason,
-    std::optional<cc::PaintHoldingCommitTrigger> trigger) {
+void WidgetBase::OnDeferCommitsChanged(bool defer,
+                                       cc::PaintHoldingReason reason) {
   // The input handler wants to know about the commit status for metric purposes
   // and to enable/disable input.
   widget_input_handler_manager_->OnDeferCommitsChanged(defer, reason);
@@ -791,19 +801,6 @@ void WidgetBase::RequestNewLayerTreeFrameSink(
   // internal begin frame source is started.
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
-  if (base::FeatureList::IsEnabled(
-          ::features::kInternalBeginFrameSourceOnManyDidNotProduceFrame) &&
-      !params.embedder_params->synthetic_begin_frame_source &&
-      !settings.single_thread_proxy_scheduler &&
-      !settings.using_synchronous_renderer_compositor &&
-      !command_line.HasSwitch(switches::kAllowPreCommitInput)) {
-    static const uint64_t num_did_not_produce_frame = static_cast<uint64_t>(
-        ::features::kNumDidNotProduceFrameBeforeInternalBeginFrameSource.Get());
-    params.embedder_params
-        ->num_did_not_produce_frame_before_internal_begin_frame_source =
-        num_did_not_produce_frame;
-    params.embedder_params->auto_needs_begin_frame = true;
-  }
 
   if (base::FeatureList::IsEnabled(::features::kManualBeginFrame) &&
       !command_line.HasSwitch(switches::kAllowPreCommitInput)) {
@@ -842,11 +839,44 @@ void WidgetBase::FinishRequestNewLayerTreeFrameSink(
 
   viz_input_receiver_.reset();
 
+  // If there are initial frame sink pipes already sent by the browser, use
+  // those instead of requesting creation with new pipes.
+  const bool has_initial_sink =
+      initial_frame_sink_pipes_ &&
+      initial_frame_sink_pipes_->initial_frame_sink.is_valid();
+  CHECK_EQ(has_initial_sink,
+           initial_frame_sink_pipes_ &&
+               initial_frame_sink_pipes_->initial_frame_sink_client.is_valid());
+  CHECK_EQ(has_initial_sink,
+           initial_frame_sink_pipes_ &&
+               initial_frame_sink_pipes_->initial_viz_rir_client.is_valid());
+  base::UmaHistogramBoolean("GPU.EarlyInitialFrameSinkUsed", has_initial_sink);
+  // Record the start time to measure wait time until the first BeginFrame.
+  frame_sink_bind_time_ = base::TimeTicks::Now();
+  waiting_for_first_begin_frame_ = true;
+  is_using_early_frame_sink_ = has_initial_sink;
+
+  if (has_initial_sink) {
+    viz_input_receiver_.Bind(
+        std::move(initial_frame_sink_pipes_->initial_viz_rir_client),
+        task_runner_);
+    params.compositor_frame_sink_receiver.reset();
+    params.compositor_frame_sink_client.reset();
+    params.embedder_params->pipes.compositor_frame_sink_remote =
+        ToCrossVariantMojoType(
+            std::move(initial_frame_sink_pipes_->initial_frame_sink));
+    params.embedder_params->pipes.client_receiver = ToCrossVariantMojoType(
+        std::move(initial_frame_sink_pipes_->initial_frame_sink_client));
+    initial_frame_sink_pipes_.reset();
+  }
+
   if (Platform::Current()->IsGpuCompositingDisabled()) {
-    widget_host_->CreateFrameSink(
-        std::move(params.compositor_frame_sink_receiver),
-        std::move(params.compositor_frame_sink_client),
-        viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
+    if (!has_initial_sink) {
+      widget_host_->CreateFrameSink(
+          std::move(params.compositor_frame_sink_receiver),
+          std::move(params.compositor_frame_sink_client),
+          viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
+    }
     widget_host_->RegisterRenderFrameMetadataObserver(
         std::move(params.render_frame_metadata_observer_client_receiver),
         std::move(params.render_frame_metadata_observer_remote));
@@ -883,19 +913,18 @@ void WidgetBase::FinishRequestNewLayerTreeFrameSink(
 
   constexpr bool automatic_flushes = false;
   constexpr bool support_locking = false;
-  constexpr bool lose_context_when_out_of_memory = true;
 
   auto context_provider = viz::ContextProviderCommandBuffer::CreateForRaster(
       gpu_channel_host, kGpuStreamIdDefault, kGpuStreamPriorityDefault,
       GURL(params.url), automatic_flushes, support_locking, limits,
-      viz::command_buffer_metrics::ContextType::RENDERER_COMPOSITOR,
-      lose_context_when_out_of_memory);
+      viz::command_buffer_metrics::ContextType::RENDERER_COMPOSITOR);
 
 #if BUILDFLAG(IS_ANDROID)
   if (Platform::Current()->IsSynchronousCompositingEnabledForAndroidWebView() &&
       !is_embedded_) {
     // TODO(ericrk): Collapse with non-webview registration below.
-    if (::features::IsUsingVizFrameSubmissionForWebView()) {
+    if (::features::IsUsingVizFrameSubmissionForWebView() &&
+        !has_initial_sink) {
       widget_host_->CreateFrameSink(
           std::move(params.compositor_frame_sink_receiver),
           std::move(params.compositor_frame_sink_client),
@@ -925,10 +954,12 @@ void WidgetBase::FinishRequestNewLayerTreeFrameSink(
     return;
   }
 #endif
-  widget_host_->CreateFrameSink(
-      std::move(params.compositor_frame_sink_receiver),
-      std::move(params.compositor_frame_sink_client),
-      viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
+  if (!has_initial_sink) {
+    widget_host_->CreateFrameSink(
+        std::move(params.compositor_frame_sink_receiver),
+        std::move(params.compositor_frame_sink_client),
+        viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
+  }
   widget_host_->RegisterRenderFrameMetadataObserver(
       std::move(params.render_frame_metadata_observer_client_receiver),
       std::move(params.render_frame_metadata_observer_remote));
@@ -938,6 +969,72 @@ void WidgetBase::FinishRequestNewLayerTreeFrameSink(
                gpu_channel_host->CreateClientSharedImageInterface(),
                params.embedder_params.get()),
            std::move(params.render_frame_metadata_observer));
+}
+
+std::unique_ptr<cc::LayerTreeFrameSink> WidgetBase::CreateUnboundedFrameSink(
+    CrossVariantMojoRemote<viz::mojom::blink::CompositorFrameSinkInterfaceBase>
+        unbounded_sink_remote,
+    CrossVariantMojoReceiver<
+        viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>
+        unbounded_client_receiver) {
+  scoped_refptr<gpu::GpuChannelHost> gpu_channel_host =
+      Platform::Current()->EstablishGpuChannelSync();
+  if (!gpu_channel_host) {
+    return nullptr;
+  }
+
+  auto embedder_params = std::make_unique<
+      cc::mojo_embedder::AsyncLayerTreeFrameSink::InitParams>();
+  embedder_params->compositor_task_runner =
+      Platform::Current()->CompositorThreadTaskRunner();
+  if (!embedder_params->compositor_task_runner) {
+    embedder_params->compositor_task_runner =
+        main_thread_compositor_task_runner_;
+  }
+  embedder_params->io_thread_id = Platform::Current()->GetIOThreadId();
+  if (base::FeatureList::IsEnabled(::features::kEnableADPFRendererMain)) {
+    embedder_params->main_thread_id = main_thread_id_;
+  }
+  embedder_params->wants_animate_only_begin_frames = true;
+  embedder_params->no_compositor_frame_acks =
+      base::FeatureList::IsEnabled(::features::kNoCompositorFrameAcks);
+
+  embedder_params->pipes.compositor_frame_sink_remote =
+      mojo::PendingRemote<viz::mojom::CompositorFrameSink>(
+          std::move(unbounded_sink_remote));
+  embedder_params->pipes.client_receiver =
+      mojo::PendingReceiver<viz::mojom::CompositorFrameSinkClient>(
+          std::move(unbounded_client_receiver));
+
+  if (Platform::Current()->IsGpuCompositingDisabled()) {
+    return std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
+        /*context_provider=*/nullptr,
+        /*worker_context_provider=*/nullptr,
+        gpu_channel_host->CreateClientSharedImageInterface(),
+        embedder_params.get());
+  }
+
+  scoped_refptr<viz::RasterContextProvider> worker_context_provider =
+      Platform::Current()->SharedCompositorWorkerContextProvider(
+          &RasterDarkModeFilterImpl::Instance());
+  if (!worker_context_provider) {
+    return nullptr;
+  }
+
+  gpu::SharedMemoryLimits limits = gpu::SharedMemoryLimits::ForMailboxContext();
+  auto context_provider = viz::ContextProviderCommandBuffer::CreateForRaster(
+      gpu_channel_host, kGpuStreamIdDefault, kGpuStreamPriorityDefault,
+      GURL("chrome://gpu/WidgetBase::CreateUnboundedFrameSink"),
+      /*automatic_flushes=*/false, /*support_locking=*/false, limits,
+      viz::command_buffer_metrics::ContextType::RENDERER_COMPOSITOR);
+  if (!context_provider) {
+    return nullptr;
+  }
+
+  return std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
+      std::move(context_provider), std::move(worker_context_provider),
+      gpu_channel_host->CreateClientSharedImageInterface(),
+      embedder_params.get());
 }
 
 void WidgetBase::DidCommitAndDrawCompositorFrame() {
@@ -1048,11 +1145,24 @@ void WidgetBase::UpdateVisualState() {
       ShouldRecordBeginMainFrameMetrics()
           ? DocumentUpdateReason::kBeginMainFrame
           : DocumentUpdateReason::kTest;
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   client_->UpdateLifecycle(WebLifecycleUpdate::kAll, lifecycle_reason);
+  if (!weak_this) {
+    return;
+  }
   client_->SetSuppressFrameRequestsWorkaroundFor704763Only(false);
 }
 
 void WidgetBase::BeginMainFrame(const viz::BeginFrameArgs& args) {
+  // Log the wait time from frame sink bind to the first BeginFrame.
+  if (waiting_for_first_begin_frame_) {
+    base::TimeDelta latency = base::TimeTicks::Now() - frame_sink_bind_time_;
+    const char* path_type = is_using_early_frame_sink_ ? "Early" : "Standard";
+    base::UmaHistogramTimes(
+        base::StrCat({"GPU.FrameSink.BindToFirstFrameLatency.", path_type}),
+        latency);
+    waiting_for_first_begin_frame_ = false;
+  }
   base::TimeTicks raf_aligned_input_start_time;
   if (ShouldRecordBeginMainFrameMetrics()) {
     raf_aligned_input_start_time = base::TimeTicks::Now();
@@ -1160,7 +1270,11 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
   std::optional<gfx::Rect> control_bounds;
   std::optional<gfx::Rect> selection_bounds;
   if (frame_widget) {
+    base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
     new_info = frame_widget->TextInputInfo();
+    if (!weak_this) {
+      return;
+    }
     // This will be used to decide whether or not to show VK when VK policy is
     // manual.
     last_vk_visibility_request =
@@ -1205,7 +1319,7 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
       params->ime_text_spans_info =
           frame_widget->GetImeTextSpansInfo(new_info.ime_text_spans);
     }
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     if (next_previous_flags_ == kInvalidNextPreviousFlagsValue) {
       // Due to a focus change, values will be reset by the frame.
       // That case we only need fresh NEXT/PREVIOUS information.
@@ -1339,8 +1453,15 @@ void WidgetBase::UpdateCompositionInfo(bool immediate_request) {
     // Composition information is only available on editable node.
     range = gfx::Range::InvalidRange();
   } else {
+    base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
     GetCompositionRange(&range);
+    if (!weak_this) {
+      return;
+    }
     GetCompositionCharacterBounds(&character_bounds);
+    if (!weak_this) {
+      return;
+    }
   }
 
   if (!immediate_request &&
@@ -1365,7 +1486,11 @@ void WidgetBase::UpdateCompositionInfo(bool immediate_request) {
 
 void WidgetBase::ForceTextInputStateUpdate() {
 #if BUILDFLAG(IS_ANDROID)
+  base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
   UpdateSelectionBounds();
+  if (!weak_this) {
+    return;
+  }
   UpdateTextInputStateInternal(false, true /* reply_to_request */);
 #endif
 }
@@ -1433,10 +1558,6 @@ void WidgetBase::SetHidden(bool hidden) {
     FlushInputProcessedCallback();
 
   SetCompositorVisible(!is_hidden_);
-
-  if (widget_input_handler_manager_) {
-    widget_input_handler_manager_->SetHidden(is_hidden_);
-  }
 }
 
 ui::TextInputType WidgetBase::GetTextInputType() {
@@ -1506,9 +1627,13 @@ void WidgetBase::ImeSetComposition(
     const gfx::Range& replacement_range,
     int selection_start,
     int selection_end,
-    mojom::blink::ImeState ime_state) {
-  if (!ShouldHandleImeEvents())
+    mojom::blink::ImeState ime_state,
+    DOMNodeIdType target_dom_node_id) {
+  // If the browser is setting a targeted composition, ignore normal IME focus
+  // requirements.
+  if (target_dom_node_id.is_null() && !ShouldHandleImeEvents()) {
     return;
+  }
 
   FrameWidget* frame_widget = client_->FrameWidget();
   if (!frame_widget)
@@ -1521,9 +1646,13 @@ void WidgetBase::ImeSetComposition(
   }
 
   ImeEventGuard guard(weak_ptr_factory_.GetWeakPtr());
-  if (!frame_widget->SetComposition(text, ime_text_spans, replacement_range,
-                                    selection_start, selection_end,
-                                    ime_state)) {
+  bool success = frame_widget->SetComposition(
+      text, ime_text_spans, replacement_range, selection_start, selection_end,
+      ime_state, target_dom_node_id);
+  if (!guard.IsValid()) {
+    return;
+  }
+  if (!success) {
     // If we failed to set the composition text, then we need to let the browser
     // process to cancel the input method's ongoing composition session, to make
     // sure we are in a consistent state.
@@ -1538,9 +1667,13 @@ void WidgetBase::ImeSetComposition(
 void WidgetBase::ImeCommitText(const String& text,
                                const Vector<ui::ImeTextSpan>& ime_text_spans,
                                const gfx::Range& replacement_range,
-                               int relative_cursor_pos) {
-  if (!ShouldHandleImeEvents())
+                               int relative_cursor_pos,
+                               DOMNodeIdType target_dom_node_id) {
+  // If the browser is setting a targeted composition, ignore normal IME focus
+  // requirements.
+  if (target_dom_node_id.is_null() && !ShouldHandleImeEvents()) {
     return;
+  }
 
   FrameWidget* frame_widget = client_->FrameWidget();
   if (!frame_widget)
@@ -1554,7 +1687,10 @@ void WidgetBase::ImeCommitText(const String& text,
   ImeEventGuard guard(weak_ptr_factory_.GetWeakPtr());
   input_handler_.set_handling_input_event(true);
   frame_widget->CommitText(text, ime_text_spans, replacement_range,
-                           relative_cursor_pos);
+                           relative_cursor_pos, target_dom_node_id);
+  if (!guard.IsValid()) {
+    return;
+  }
   input_handler_.set_handling_input_event(false);
   UpdateCompositionInfo(false /* not an immediate request */);
 }
@@ -1574,6 +1710,9 @@ void WidgetBase::ImeFinishComposingText(bool keep_selection) {
   ImeEventGuard guard(weak_ptr_factory_.GetWeakPtr());
   input_handler_.set_handling_input_event(true);
   frame_widget->FinishComposingText(keep_selection);
+  if (!guard.IsValid()) {
+    return;
+  }
   input_handler_.set_handling_input_event(false);
   UpdateCompositionInfo(false /* not an immediate request */);
 }
@@ -1645,14 +1784,19 @@ void WidgetBase::OnImeEventGuardFinish(ImeEventGuard* guard) {
   // ime event.
   UpdateSelectionBounds();
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  if (guard->show_virtual_keyboard())
+  if (!guard->IsValid()) {
+    return;
+  }
+  if (guard->show_virtual_keyboard()) {
     ShowVirtualKeyboard();
-  else
+  } else {
     UpdateTextInputState();
+  }
 #endif
 }
 
-void WidgetBase::RequestAnimationAfterDelay(const base::TimeDelta& delay,
+void WidgetBase::RequestAnimationAfterDelay(cc::BeginMainFrameReason reason,
+                                            const base::TimeDelta& delay,
                                             bool urgent) {
   if (delay.is_zero()) {
     // See the comment in MainThreadEventQueue::QueueEvent() explaining why we
@@ -1661,7 +1805,7 @@ void WidgetBase::RequestAnimationAfterDelay(const base::TimeDelta& delay,
         input_handler_.handling_input_event() &&
         ::features::IsEligibleForThrottleMainFrameTo60Hz() &&
         base::FeatureList::IsEnabled(features::kUrgentMainFrameForInput);
-    client_->ScheduleAnimation(urgent || urgent_for_input);
+    client_->ScheduleAnimation(reason, urgent || urgent_for_input);
     return;
   }
 
@@ -1680,7 +1824,8 @@ void WidgetBase::RequestAnimationAfterDelayTimerFired(TimerBase*) {
   bool urgent_for_input =
       input_handler_.handling_input_event() &&
       base::FeatureList::IsEnabled(features::kUrgentMainFrameForInput);
-  client_->ScheduleAnimation(/*urgent=*/urgent_for_input);
+  client_->ScheduleAnimation(cc::BeginMainFrameReason::kDelayedTimerFired,
+                             /*urgent=*/urgent_for_input);
 }
 
 float WidgetBase::GetOriginalDeviceScaleFactor() const {
@@ -1731,8 +1876,13 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
         screen_infos_.current().display_color_spaces);
   }
 
-  if (orientation_changed)
+  if (orientation_changed) {
+    auto weak_this = weak_ptr_factory_.GetWeakPtr();
     client_->OrientationChanged();
+    if (!weak_this) {
+      return;
+    }
+  }
 
   client_->DidUpdateSurfaceAndScreen(previous_original_screen_infos);
 }

@@ -30,13 +30,13 @@
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/position.h"
+#include "third_party/blink/renderer/core/editing/position_units.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_selection.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -266,9 +266,7 @@ class GranularityAdjuster final {
 
         // If we're selecting within a table cell, constrain the selection
         // to stay within that cell to avoid including unwanted table structure
-        if (RuntimeEnabledFeatures::
-                RestrictTableCellSelectionToBoundaryEnabled() &&
-            EnclosingTableCell(visible_paragraph_end.DeepEquivalent())) {
+        if (EnclosingTableCell(visible_paragraph_end.DeepEquivalent())) {
           return visible_paragraph_end.DeepEquivalent();
         }
 
@@ -386,8 +384,8 @@ PositionInFlatTree ComputeEndRespectingGranularity(
       start, end, granularity);
 }
 
-SelectionInDOMTree SelectionAdjuster::AdjustSelectionRespectingGranularity(
-    const SelectionInDOMTree& selection,
+SelectionInDomTree SelectionAdjuster::AdjustSelectionRespectingGranularity(
+    const SelectionInDomTree& selection,
     TextGranularity granularity,
     const WordInclusion inclusion = WordInclusion::kDefault) {
   return GranularityAdjuster::AdjustSelection(selection, granularity,
@@ -604,9 +602,9 @@ class ShadowBoundaryAdjuster final {
   }
 };
 
-SelectionInDOMTree
+SelectionInDomTree
 SelectionAdjuster::AdjustSelectionToAvoidCrossingShadowBoundaries(
-    const SelectionInDOMTree& selection) {
+    const SelectionInDomTree& selection) {
   return ShadowBoundaryAdjuster::AdjustSelection(selection);
 }
 SelectionInFlatTree
@@ -746,9 +744,9 @@ EditingBoundaryAdjuster::IsEditingBoundary<EditingInFlatTreeStrategy>(
   return IsEditable(node) != is_previous_node_editable;
 }
 
-SelectionInDOMTree
+SelectionInDomTree
 SelectionAdjuster::AdjustSelectionToAvoidCrossingEditingBoundaries(
-    const SelectionInDOMTree& selection) {
+    const SelectionInDomTree& selection) {
   return EditingBoundaryAdjuster::AdjustSelection(selection);
 }
 SelectionInFlatTree
@@ -803,6 +801,13 @@ class SelectionTypeAdjuster final {
         CanonicalPositionOf(backward_end_position).IsNull()) {
       backward_end_position = range.EndPosition();
     }
+    // After the canonicalization above, the start and end positions may become
+    // inverted when the selection crosses editing boundaries in shadow DOM with
+    // slotted content. Fall back to the original range positions in this case.
+    if (forward_start_position > backward_end_position) {
+      forward_start_position = range.StartPosition();
+      backward_end_position = range.EndPosition();
+    }
     const EphemeralRangeTemplate<Strategy> minimal_range(forward_start_position,
                                                          backward_end_position);
     if (minimal_range.IsCollapsed() || selection.IsAnchorFirst()) {
@@ -816,8 +821,8 @@ class SelectionTypeAdjuster final {
   }
 };
 
-SelectionInDOMTree SelectionAdjuster::AdjustSelectionType(
-    const SelectionInDOMTree& selection) {
+SelectionInDomTree SelectionAdjuster::AdjustSelectionType(
+    const SelectionInDomTree& selection) {
   return SelectionTypeAdjuster::AdjustSelection(selection);
 }
 SelectionInFlatTree SelectionAdjuster::AdjustSelectionType(

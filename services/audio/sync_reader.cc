@@ -93,9 +93,9 @@ SyncReader::SyncReader(
 SyncReader::~SyncReader() {
   OutputGlitchCounter::LogStats log_stats = glitch_counter_->GetLogStats();
 
-  TRACE_EVENT_INSTANT2("audio", "~SyncReader", TRACE_EVENT_SCOPE_THREAD,
-                       "Missed callbacks", log_stats.miss_count_,
-                       "Total callbacks", log_stats.callback_count_);
+  TRACE_EVENT_INSTANT("audio", "~SyncReader", "Missed callbacks",
+                      log_stats.miss_count_, "Total callbacks",
+                      log_stats.callback_count_);
 
   log_callback_.Run(base::StringPrintf(
       "ASR: number of detected audio glitches: %" PRIuS " out of %" PRIuS,
@@ -142,16 +142,9 @@ void SyncReader::RequestMoreData(base::TimeDelta delay,
   // in the anomalous case if the renderer is unable to keep up with real-time.
   output_bus_->Zero();
 
-  uint32_t control_signal = 0;
-  if (delay.is_max()) {
-    // std::numeric_limits<uint32_t>::max() is a special signal which is
-    // returned after the browser stops the output device in response to a
-    // renderer side request.
-    control_signal = std::numeric_limits<uint32_t>::max();
-  }
-
-  size_t sent_bytes = socket_.Send(base::byte_span_from_ref(control_signal));
-  if (sent_bytes != sizeof(control_signal)) {
+  constexpr uint32_t kControlSignal = 0;
+  size_t sent_bytes = socket_.Send(base::byte_span_from_ref(kControlSignal));
+  if (sent_bytes != sizeof(kControlSignal)) {
     // Ensure we don't log consecutive errors as this can lead to a large
     // amount of logs.
     if (!had_socket_error_) {
@@ -160,8 +153,8 @@ void SyncReader::RequestMoreData(base::TimeDelta delay,
           "ASR: No room in socket buffer.";
       PLOG(WARNING) << socket_send_failure_message;
       log_callback_.Run(socket_send_failure_message);
-      TRACE_EVENT_INSTANT0("audio", socket_send_failure_message,
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("audio",
+                          perfetto::StaticString(socket_send_failure_message));
     }
   } else {
     had_socket_error_ = false;
@@ -222,8 +215,8 @@ bool SyncReader::Read(media::AudioBus* dest, bool is_mixing) {
 }
 
 void SyncReader::Close() {
-  uint32_t exit_signal = std::numeric_limits<uint32_t>::max() - 1;
-  socket_.Send(base::byte_span_from_ref(exit_signal));
+  constexpr uint32_t kExitSignal = std::numeric_limits<uint32_t>::max() - 1;
+  socket_.Send(base::byte_span_from_ref(kExitSignal));
 
   socket_.Close();
   output_bus_.reset();
@@ -268,8 +261,7 @@ bool SyncReader::WaitUntilDataIsReady() {
   // Receive timed out or another error occurred.  Receive can timeout if the
   // renderer is unable to deliver audio data within the allotted time.
   if (!bytes_received || renderer_buffer_index != buffer_index_) {
-    TRACE_EVENT_INSTANT0("audio", "SyncReader::Read timed out",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("audio", "SyncReader::Read timed out");
 
     base::TimeDelta time_since_start = base::TimeTicks::Now() - start_time;
     base::UmaHistogramCustomTimes("Media.AudioOutputControllerDataNotReady",

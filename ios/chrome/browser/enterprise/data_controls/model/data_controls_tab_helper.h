@@ -8,11 +8,13 @@
 #import "base/functional/callback.h"
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
+#import "base/scoped_observation.h"
 #import "components/enterprise/data_controls/core/browser/verdict.h"
+#import "ios/chrome/browser/enterprise/data_controls/model/data_controls_pasteboard_manager_observer.h"
 #import "ios/chrome/browser/enterprise/data_controls/utils/clipboard_utils.h"
-#import "ios/chrome/browser/enterprise/data_controls/utils/data_controls_utils.h"
-#import "ios/chrome/browser/shared/public/commands/data_controls_commands.h"
-#import "ios/web/public/lazy_web_state_user_data.h"
+#import "ios/chrome/browser/enterprise/enterprise_dialog/model/warning_dialog.h"
+#import "ios/chrome/browser/shared/public/commands/enterprise_commands.h"
+#import "ios/web/public/web_state_user_data.h"
 #import "url/gurl.h"
 
 @protocol SnackbarCommands;
@@ -23,12 +25,15 @@ class WebState;
 
 namespace data_controls {
 
+class DataControlsPasteboardManager;
+
 // Manages Enterprise Data Control policies for the associated tab. These
 // policies determine whether certain user actions, like clipboard operations
 // (copying, pasting), are permitted. Such restrictions only apply to managed
 // profiles; for all other profiles, these actions are unrestricted.
 class DataControlsTabHelper
-    : public web::LazyWebStateUserData<DataControlsTabHelper> {
+    : public web::WebStateUserData<DataControlsTabHelper>,
+      public DataControlsPasteboardManagerObserver {
  public:
   DataControlsTabHelper(const DataControlsTabHelper&) = delete;
   DataControlsTabHelper& operator=(const DataControlsTabHelper&) = delete;
@@ -46,8 +51,25 @@ class DataControlsTabHelper
   // Determines if sharing should be allowed.
   bool ShouldAllowShare();
 
-  // Sets the command handler for Data Controls.
-  void SetDataControlsCommandsHandler(id<DataControlsCommands> handler);
+  // Returns true if the Search With data controls feature is enabled.
+  static bool IsSearchWithFeatureEnabled();
+
+  // Determines if the "Search With [Default Search Engine]" action is allowed
+  // for the current tab (source URL) by enterprise policies. This is a
+  // synchronous check used during context menu construction to decide if the
+  // context menu should include this item.
+  bool IsSearchWithAllowed();
+
+  // Determines if the "Search With [Default Search Engine]" action should be
+  // executed for the current tab (source URL) by enterprise policies. Checks
+  // the policy's verdict and manages the action: allows, reports, or shows a
+  // warning dialog and executes the search asynchronously only if the user
+  // explicitly proceeds.
+  void ShouldAllowSearchWith(size_t text_length,
+                             base::OnceCallback<void(bool)> callback);
+
+  // Sets the command handler for Enterprise.
+  void SetEnterpriseCommandsHandler(id<EnterpriseCommands> handler);
 
   // Sets the snackbar handler.
   void SetSnackbarHandler(id<SnackbarCommands> snackbar_handler);
@@ -55,9 +77,25 @@ class DataControlsTabHelper
   // Called after the clipboard has been read from.
   void DidFinishClipboardRead();
 
+  // DataControlsPasteboardManagerObserver override: Called when the pasteboard
+  // content is changed.
+  void OnPasteboardContentChanged() override;
+
  private:
-  friend class web::LazyWebStateUserData<DataControlsTabHelper>;
+  friend class web::WebStateUserData<DataControlsTabHelper>;
   explicit DataControlsTabHelper(web::WebState* web_state);
+
+  // An enum class that keeps track of the state of the current paste event for
+  // each tab. More event states will be added in the future for the Pasted
+  // Content DLP Rules feature.
+  //
+  // TODO(crbug.com/531672160): Add event states for pasted content DLP Rules.
+  enum class PasteEventState {
+    // No ongoing paste event.
+    kIdle,
+    // Waiting for users to make a decision from Warning Dialog.
+    kDisplayingWarningDialog,
+  };
 
   // Returns true if clipboard data controls are enabled.
   bool IsClipboardDataControlsEnabled() const;
@@ -86,9 +124,17 @@ class DataControlsTabHelper
                    base::OnceCallback<void(bool)> callback,
                    bool bypassed);
 
+  // Finalizes the search with action invoking the callback.
+  void FinishSearchWith(const GURL& source_url,
+                        base::WeakPtr<ProfileIOS> source_profile,
+                        const ui::ClipboardMetadata& metadata,
+                        Verdict verdict,
+                        base::OnceCallback<void(bool)> callback,
+                        bool bypassed);
+
   // Displays a warning dialog associated with a user's action (e.g., copy,
   // paste, share).
-  void ShowWarningDialog(DataControlsDialog::Type dialog_type,
+  void ShowWarningDialog(enterprise::DialogType dialog_type,
                          std::string_view org_domain,
                          base::OnceCallback<void(bool)> on_bypassed_callback);
 
@@ -102,12 +148,17 @@ class DataControlsTabHelper
   // outlive `this`.
   raw_ptr<web::WebState> web_state_;
 
-  // The data controller command handler.
-  __weak id<DataControlsCommands> commands_handler_ = nil;
+  // The enterprise command handler.
+  __weak id<EnterpriseCommands> enterprise_handler_ = nil;
 
   // The snackbar command handler.
   __weak id<SnackbarCommands> snackbar_handler_ = nil;
 
+  PasteEventState paste_event_state_ = PasteEventState::kIdle;
+
+  base::ScopedObservation<DataControlsPasteboardManager,
+                          DataControlsPasteboardManagerObserver>
+      scoped_observation_{this};
   base::WeakPtrFactory<DataControlsTabHelper> weak_factory_{this};
 };
 

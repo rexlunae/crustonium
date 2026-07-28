@@ -25,8 +25,6 @@
 
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 
-#include <algorithm>
-
 #include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
 #include "media/base/audio_bus.h"
@@ -141,16 +139,21 @@ BaseAudioContext::BaseAudioContext(LocalDOMWindow* window,
     : ActiveScriptWrappable<BaseAudioContext>({}),
       ExecutionContextLifecycleStateObserver(window),
       InspectorHelperMixin(*AudioGraphTracer::FromWindow(*window), String()),
+      destination_node_(nullptr),
       task_runner_(window->GetTaskRunner(TaskType::kInternalMedia)),
       deferred_task_handler_(DeferredTaskHandler::Create(
           window->GetTaskRunner(TaskType::kInternalMedia),
-          render_quantum_frames)) {}
+          render_quantum_frames)),
+      periodic_wave_sine_(nullptr),
+      periodic_wave_square_(nullptr),
+      periodic_wave_sawtooth_(nullptr),
+      periodic_wave_triangle_(nullptr) {}
 
 BaseAudioContext::~BaseAudioContext() {
   {
     // We may need to destroy summing junctions, which must happen while this
     // object is still valid and with the graph lock held.
-    DeferredTaskHandler::GraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
     destination_handler_ = nullptr;
   }
 
@@ -219,19 +222,12 @@ void BaseAudioContext::Uninitialize() {
   listener_->Handler().WaitForHRTFDatabaseLoaderThreadCompletion();
 
   Clear();
-
-  DCHECK(!is_resolving_resume_promises_);
-  DCHECK_EQ(pending_promises_resolvers_.size(), 0u);
 }
 
 void BaseAudioContext::Dispose() {
   // BaseAudioContext is going away, so remove the context from the orphan
   // handlers.
   GetDeferredTaskHandler().ClearContextFromOrphanHandlers();
-
-  // Reject any pending resolvers to avoid memory leaks or crashes (e.g.
-  // ScriptPromiseResolver requiring detachment).
-  RejectPendingResolvers();
 }
 
 void BaseAudioContext::ContextLifecycleStateChanged(
@@ -778,7 +774,7 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
 
 void BaseAudioContext::NotifySourceNodeStartedProcessing(AudioNode* node) {
   DCHECK(IsMainThread());
-  DeferredTaskHandler::GraphAutoLocker locker(this);
+  DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
   GetDeferredTaskHandler().GetActiveSourceHandlers()->insert(&node->Handler());
   node->Handler().MakeConnection();
@@ -787,9 +783,9 @@ void BaseAudioContext::NotifySourceNodeStartedProcessing(AudioNode* node) {
 void BaseAudioContext::ReleaseActiveSourceNodes() {
   DCHECK(IsMainThread());
 
-  DeferredTaskHandler::GraphAutoLocker locker(this);
+  DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
-  for (auto source_handler :
+  for (const auto& source_handler :
        *GetDeferredTaskHandler().GetActiveSourceHandlers()) {
     source_handler->BreakConnectionWithLock();
   }
@@ -807,7 +803,7 @@ void BaseAudioContext::HandleStoppableSourceNodes() {
     // check doesn't have to be done every render quantum, if this checking
     // becomes to expensive.  It's ok to do this on a less frequency basis as
     // long as the active nodes eventually get stopped if they're done.
-    for (auto handler : *active_source_handlers) {
+    for (const auto& handler : *active_source_handlers) {
       switch (handler->GetNodeType()) {
         case AudioHandler::NodeType::kNodeTypeAudioBufferSource:
         case AudioHandler::NodeType::kNodeTypeOscillator:
@@ -824,47 +820,6 @@ void BaseAudioContext::HandleStoppableSourceNodes() {
   }
 }
 
-void BaseAudioContext::PerformCleanupOnMainThread() {
-  DCHECK(IsMainThread());
-
-  // When a posted task is performed, the execution context might be gone.
-  if (!GetExecutionContext()) {
-    return;
-  }
-
-  DeferredTaskHandler::GraphAutoLocker locker(this);
-
-  if (is_resolving_resume_promises_) {
-    for (auto& resolver : pending_promises_resolvers_) {
-      if (control_thread_state_ == V8AudioContextState::Enum::kClosed) {
-        resolver->Reject(MakeGarbageCollected<DOMException>(
-            DOMExceptionCode::kInvalidStateError,
-            "Cannot resume a context that has been closed"));
-      } else {
-        SetContextState(V8AudioContextState::Enum::kRunning);
-        resolver->Resolve();
-      }
-    }
-    pending_promises_resolvers_.clear();
-    is_resolving_resume_promises_ = false;
-  }
-
-  has_posted_cleanup_task_ = false;
-}
-
-void BaseAudioContext::ScheduleMainThreadCleanup() {
-  DCHECK(IsAudioThread());
-
-  if (has_posted_cleanup_task_) {
-    return;
-  }
-  PostCrossThreadTask(
-      *task_runner_, FROM_HERE,
-      CrossThreadBindOnce(&BaseAudioContext::PerformCleanupOnMainThread,
-                          WrapCrossThreadPersistent(this)));
-  has_posted_cleanup_task_ = true;
-}
-
 void BaseAudioContext::RejectPendingDecodeAudioDataResolvers() {
   // Now reject any pending decodeAudioData resolvers
   for (auto& resolver : decode_audio_resolvers_) {
@@ -876,16 +831,6 @@ void BaseAudioContext::RejectPendingDecodeAudioDataResolvers() {
 
 void BaseAudioContext::RejectPendingResolvers() {
   DCHECK(IsMainThread());
-
-  // Audio context is closing down so reject any resume promises that are still
-  // pending.
-
-  for (auto& resolver : pending_promises_resolvers_) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kInvalidStateError, "Audio context is going away"));
-  }
-  pending_promises_resolvers_.clear();
-  is_resolving_resume_promises_ = false;
 
   RejectPendingDecodeAudioDataResolvers();
 }
@@ -914,7 +859,6 @@ void BaseAudioContext::StartRendering() {
 void BaseAudioContext::Trace(Visitor* visitor) const {
   visitor->Trace(destination_node_);
   visitor->Trace(listener_);
-  visitor->Trace(pending_promises_resolvers_);
   visitor->Trace(decode_audio_resolvers_);
   visitor->Trace(periodic_wave_sine_);
   visitor->Trace(periodic_wave_square_);
@@ -945,7 +889,7 @@ void BaseAudioContext::NotifyWorkletIsReady() {
   {
     // `audio_worklet_thread_` is constantly peeked by the rendering thread,
     // So we protect it with the graph lock.
-    DeferredTaskHandler::GraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
     // At this point, the WorkletGlobalScope must be ready so it is safe to keep
     // the reference to the AudioWorkletThread for the future worklet operation.
@@ -978,7 +922,8 @@ void BaseAudioContext::NotifyWorkletIsReady() {
 void BaseAudioContext::UpdateWorkletGlobalScopeOnRenderingThread() {
   DCHECK(!IsMainThread());
 
-  if (TryLock()) {
+  DeferredTaskHandler::GraphAutoTryLocker try_locker(GetDeferredTaskHandler());
+  if (try_locker.IsAcquired()) {
     // Even when `audio_worklet_thread_` is successfully assigned, the current
     // render thread could still be a thread of AudioOutputDevice.  Updates the
     // the global scope only when the thread affinity is correct.
@@ -988,8 +933,6 @@ void BaseAudioContext::UpdateWorkletGlobalScopeOnRenderingThread() {
       DCHECK(global_scope);
       global_scope->SetCurrentFrame(CurrentSampleFrame());
     }
-
-    unlock();
   }
 }
 

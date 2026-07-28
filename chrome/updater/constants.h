@@ -6,6 +6,7 @@
 #define CHROME_UPDATER_CONSTANTS_H_
 
 #include <optional>
+#include <utility>
 
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -98,6 +99,12 @@ inline constexpr char kPatchWorkerSwitch[] = "patch-worker";
 
 // Run as an unzip worker.
 inline constexpr char kUnzipWorkerSwitch[] = "unzip-worker";
+
+#if BUILDFLAG(IS_MAC)
+// Command line switch to run the patch worker at background priority.
+inline constexpr char kPatchWorkerBackgroundPrioritySwitch[] =
+    "patch-worker-background-priority";
+#endif
 
 // Run as a network worker.
 inline constexpr char kNetWorkerSwitch[] = "net-worker";
@@ -210,6 +217,9 @@ inline constexpr char kEnterpriseSwitch[] =
 // Specifies that no UI should be shown.
 inline constexpr char kSilentSwitch[] = "silent";  // backward-compatibility.
 
+// Valid values for the kSilentSwitch.
+inline constexpr char kSilentSwitchValueAllowUAC[] = "allow-uac";
+
 // The "alwayslaunchcmd" switch specifies that launch commands are to be run
 // unconditionally, even for silent modes.
 inline constexpr char kAlwaysLaunchCmdSwitch[] = "alwayslaunchcmd";
@@ -251,6 +261,9 @@ inline constexpr char kCmdLinePrefersUser[] = "prefers-user";
 // The "installsource" switch allows an `installsource` that is reported in
 // pings to be user defined on the offline installer command line.
 inline constexpr char kInstallSourceSwitch[] = "installsource";
+
+// An experimental flag to use a WebView-based UI.
+inline constexpr char kWebViewUISwitch[] = "webviewui";
 
 // File system paths.
 //
@@ -336,13 +349,8 @@ inline constexpr double kProbabilityOfIncreasedDelay = 0.1;
 // reported in such a way that their range does not conflict with the range of
 // generic errors defined by the metainstaller, the `update_client` module, or
 // Windows.
-#if BUILDFLAG(IS_WIN)
 inline constexpr int kCustomInstallErrorBase =
-    static_cast<int>(update_client::InstallError::CUSTOM_ERROR_BASE) + 74000;
-#else
-inline constexpr int kCustomInstallErrorBase =
-    static_cast<int>(update_client::InstallError::CUSTOM_ERROR_BASE);
-#endif
+    std::to_underlying(update_client::InstallError::CUSTOM_ERROR_BASE) + 74000;
 
 // Running the application installer failed.
 inline constexpr int kErrorApplicationInstallerFailed =
@@ -564,6 +572,9 @@ inline constexpr int kErrorNoApps = kUpdaterErrorBase + 83;
 // A path references the parent directory.
 inline constexpr int kErrorPathReferencesParent = kUpdaterErrorBase + 84;
 
+// The net-worker subprocess failed to drop root privileges.
+inline constexpr int kErrorFailedToDropPrivileges = kUpdaterErrorBase + 85;
+
 // Policy Management constants.
 // The maximum value allowed for policy AutoUpdateCheckPeriodMinutes.
 inline constexpr int kMaxAutoUpdateCheckPeriodMinutes = 43200;
@@ -596,6 +607,9 @@ inline constexpr bool kInstallPolicyDefault = kPolicyEnabled;
 inline constexpr bool kUpdatePolicyDefault = kPolicyEnabled;
 
 // Policy manager constants.
+// Policy source strings below are persisted to event history logs (see
+// //docs/updater/history_log.md) and serialized in GetPoliciesJson Mojo
+// responses. Changing the values is a backwards-incompatible change.
 inline constexpr char kSourceDMPolicyManager[] = "Device Management";
 inline constexpr char kSourceDefaultValuesPolicyManager[] = "Default";
 inline constexpr char kSourceDictValuesPolicyManager[] = "DictValuePolicy";

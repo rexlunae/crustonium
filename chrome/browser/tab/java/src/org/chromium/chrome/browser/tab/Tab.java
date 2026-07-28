@@ -13,8 +13,10 @@ import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.Callback;
 import org.chromium.base.Token;
 import org.chromium.base.UserDataHost;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -27,10 +29,8 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
-import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 
 /**
  * Tab is a visual/functional unit that encapsulates the content (not just web site content from
@@ -47,26 +47,6 @@ public interface Tab extends TabLifecycle {
     @interface TabLoadStatus {
         int PAGE_LOAD_FAILED = 0;
         int DEFAULT_PAGE_LOAD = 1;
-    }
-
-    /** Tracks the media indicator state of the tab. */
-    @IntDef({
-        MediaState.NONE,
-        MediaState.MUTED,
-        MediaState.AUDIBLE,
-        MediaState.RECORDING,
-        MediaState.SHARING,
-        MediaState.MAX_VALUE,
-    })
-    @Target(ElementType.TYPE_USE)
-    @Retention(RetentionPolicy.SOURCE)
-    @interface MediaState {
-        int NONE = 0;
-        int MUTED = 1;
-        int AUDIBLE = 2;
-        int RECORDING = 3;
-        int SHARING = 4;
-        int MAX_VALUE = SHARING;
     }
 
     /** The result of the loadUrl. */
@@ -108,7 +88,7 @@ public interface Tab extends TabLifecycle {
     void removeObserver(TabObserver observer);
 
     /** Returns if the given {@link TabObserver} is present. */
-    boolean hasObserver(TabObserver observer);
+    boolean hasObserverForTesting(TabObserver observer);
 
     /**
      * Returns the {@link UserDataHost} that manages {@link UserData} objects attached to. This is
@@ -122,6 +102,9 @@ public interface Tab extends TabLifecycle {
 
     /** Returns the web contents associated with this tab. */
     @Nullable WebContents getWebContents();
+
+    /** Returns the navigation start time in milliseconds of the latest navigation. */
+    long getNavigationStartMs();
 
     /**
      * Returns the {@link Activity} {@link Context} if this {@link Tab} is attached to an {@link
@@ -175,7 +158,10 @@ public interface Tab extends TabLifecycle {
     @TabId
     int getId();
 
-    /** Returns parameters that should be used for a lazily loaded Tab. May be null. */
+    /**
+     * Returns parameters that should be used for a lazily initialized or navigated Tab. May be
+     * null.
+     */
     @Nullable LoadUrlParams getPendingLoadParams();
 
     /**
@@ -265,6 +251,13 @@ public interface Tab extends TabLifecycle {
     boolean isFrozen();
 
     /**
+     * Suppresses view focus changes for the WebContents.
+     *
+     * @param suppressed Whether to suppress focus changes.
+     */
+    void setFocusChangeSuppressed(boolean suppressed);
+
+    /**
      * Returns Whether the tab can currently be interacted with by the user. This requires the view
      * owned by the Tab to be visible and in a state where the user can interact with it (i.e. not
      * in something like the phone tab switcher).
@@ -300,49 +293,40 @@ public interface Tab extends TabLifecycle {
     LoadUrlResult loadUrl(LoadUrlParams params);
 
     /**
-     * Freezes the tab by saving its {@link WebContents} to an {@link WebContentsState} and
-     * destroying the {@link WebContents}. If the tab is already frozen this is a no-op. The tab
-     * must be closing or inactive to be frozen.
-     *
-     * <p>An experiment is in progress to change the implementation of this method to invoke {@link
-     * WebContents#discard()} instead. See https://crbug.com/448420873. If the experiment is
-     * launched this method will be renamed to {@code discard()}.
+     * Discards the tab by saving its {@link WebContents} to an {@link WebContentsState} and
+     * destroying the {@link WebContents}. If the tab is already frozen/discarded this is a no-op.
+     * The tab must be closing or inactive to be discarded.
      */
-    void freeze();
+    void discard();
 
     /**
-     * Freezes the tabs and stores the URL in the tab's WebContentsState. If the tab is already
-     * frozen this method still appends the navigation entry, but skips the process of freezing the
-     * tab.
-     *
-     * <p>An experiment is in progress to change the implementation of this method to invoke {@link
-     * WebContents#discard()} and use a pending {@link LoadUrlParams} instead of freezing the tab.
-     * See https://crbug.com/448420873. If the experiment is launched this method will be renamed to
-     * {@code discardAndAppendPendingNavigation()}.
+     * Discards the tabs and stores the URL in the tab's WebContentsState. If the tab is already
+     * frozen/discarded this method still appends the navigation entry, but skips the process of
+     * discarding the tab. If there is already a pending navigation, it will be replaced by this
+     * one.
      *
      * @param params Parameters describing the url load. Note that it is important to set correct
      *     page transition as it is used for ranking URLs in the history so the omnibox can report
      *     suggestions correctly.
      * @param title The title of the tab to use on UI surfaces before it is navigated to.
      */
-    void freezeAndAppendPendingNavigation(LoadUrlParams params, @Nullable String title);
+    void discardAndAppendPendingNavigation(LoadUrlParams params, @Nullable String title);
 
     /**
-     * Loads the tab if it's not loaded (e.g. because it was killed in background). This will
-     * trigger a regular load for tabs with pending lazy first load (tabs opened in background on
-     * low-memory devices).
+     * Loads the tab if it's not loaded (e.g. frozen, lazily loaded, it was background, etc.).
      *
-     * @param caller The caller of this method.
+     * @param forceBackingSize Whether to force setting the physical backing size.
      * @return true iff the Tab handled the request.
      */
-    boolean loadIfNeeded(int caller);
+    boolean loadIfNeeded(boolean forceBackingSize);
 
     /** Reloads the current page content. */
     void reload();
 
     /**
      * Reloads the current page content.
-     * This version ignores the cache and reloads from the network.
+     *
+     * <p>This version ignores the cache and reloads from the network.
      */
     void reloadIgnoringCache();
 
@@ -528,4 +512,21 @@ public interface Tab extends TabLifecycle {
      * TabDragStateData}. This exists as a convenience method for plumbing the data to native.
      */
     boolean isDragging();
+
+    /** Returns whether the tab has a TabInterfaceAndroid object. */
+    boolean hasTabInterfaceAndroid();
+
+    /** Returns the supplier for whether the tab is currently being used for offscreen rendering. */
+    NonNullObservableSupplier<Boolean> getIsOffscreenRenderingSupplier();
+
+    /** Starts offscreen rendering for this tab. */
+    void startOffscreenRendering();
+
+    /** Resets the offscreen rendering state for this tab. */
+    void stopOffscreenRendering();
+
+    /** Gets the memory usage of this tab in bytes asynchronously. */
+    default void getMemoryUsageBytes(Callback<Long> callback) {
+        callback.onResult(0L);
+    }
 }

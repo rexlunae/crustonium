@@ -8,11 +8,8 @@
 #include <optional>
 #include <utility>
 
-#include "base/functional/callback.h"
-#include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/autofill/mock_autofill_popup_controller.h"
 #include "chrome/browser/ui/views/autofill/popup/mock_accessibility_selection_delegate.h"
@@ -41,7 +38,6 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_utils.h"
 
@@ -82,7 +78,7 @@ class PopupRowViewTest : public ChromeViewsTestBase {
   void ShowView(int line_number,
                 bool has_control,
                 bool is_acceptable = true,
-                SuggestionType type = SuggestionType::kAddressEntry) {
+                SuggestionType type = SuggestionType::kPasswordEntry) {
     std::vector<Suggestion> suggestions(line_number + 1, Suggestion(type));
     suggestions[line_number].type = type;
     suggestions[line_number].acceptability =
@@ -455,6 +451,17 @@ TEST_F(PopupRowViewTest,
   generator().ClickLeftButton();
 }
 
+TEST_F(PopupRowViewTest, DatalistEntriesDoNotIgnoreInitialHoverClick) {
+  ShowView(/*line_number=*/0, /*has_control=*/false,
+           /*is_acceptable=*/true, SuggestionType::kDatalistEntry);
+
+  generator().MoveMouseTo(
+      row_view().GetContentView().GetBoundsInScreen().CenterPoint());
+  Paint();
+  EXPECT_CALL(controller(), AcceptSuggestion);
+  generator().ClickLeftButton();
+}
+
 TEST_F(PopupRowViewTest, NoCrashOnMouseAcceptingWithInvalidatedController) {
   EXPECT_CALL(controller(), ShouldIgnoreMouseObservedOutsideItemBoundsCheck())
       .WillOnce(Return(true));
@@ -479,9 +486,9 @@ TEST_F(PopupRowViewTest, SelectSuggestionOnFocusedContent) {
 }
 
 TEST_F(PopupRowViewTest, ContentViewA11yAttributes) {
-  ShowView(/*line_number=*/0,
-           {Suggestion("dummy_value", "dummy_label", Suggestion::Icon::kNoIcon,
-                       SuggestionType::kAddressEntry)});
+  ShowView(/*line_number=*/0, {Suggestion(u"dummy_value", u"dummy_label",
+                                          Suggestion::Icon::kNoIcon,
+                                          SuggestionType::kAddressEntry)});
 
   views::ViewAccessibility& accessibility =
       row_view().GetContentView().GetViewAccessibility();
@@ -498,7 +505,7 @@ TEST_F(PopupRowViewTest, ContentViewA11yAttributes) {
 
 TEST_F(PopupRowViewTest, AccessibleProperties) {
   ShowView(/*line_number=*/0,
-           {Suggestion("test_value", "test_label", Suggestion::Icon::kNoIcon,
+           {Suggestion(u"test_value", u"test_label", Suggestion::Icon::kNoIcon,
                        SuggestionType::kAddressEntry)});
 
   ui::AXNodeData node_data;

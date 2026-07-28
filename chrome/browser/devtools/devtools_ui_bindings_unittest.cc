@@ -10,6 +10,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/devtools/devtools_dispatch_http_request_params.h"
 #include "chrome/browser/devtools/devtools_http_service_handler.h"
@@ -17,12 +18,15 @@
 #include "chrome/browser/devtools/features.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/sync/test/test_sync_service.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_web_contents_factory.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -35,6 +39,184 @@
 using testing::_;
 
 class DevToolsUIBindingsTest : public testing::Test {};
+
+class DevToolsUIBindingsLoadNetworkResourceTest : public testing::Test {
+ public:
+  void SetUp() override {
+    profile_ = std::make_unique<TestingProfile>();
+    web_contents_ = web_contents_factory_.CreateWebContents(profile_.get());
+    bindings_ = std::make_unique<DevToolsUIBindings>(web_contents_);
+  }
+
+  content::WebContents* web_contents() { return web_contents_; }
+  DevToolsUIBindings* bindings() { return bindings_.get(); }
+
+  void CallLoadNetworkResource(const std::string& url,
+                               const std::string& headers,
+                               int stream_id,
+                               DevToolsUIBindings::DispatchCallback callback) {
+    bindings_->LoadNetworkResource(std::move(callback), url, headers,
+                                   stream_id);
+  }
+
+ protected:
+  content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfile> profile_;
+  content::TestWebContentsFactory web_contents_factory_;
+  raw_ptr<content::WebContents> web_contents_;
+  std::unique_ptr<DevToolsUIBindings> bindings_;
+};
+
+class MockDevToolsUIBindingsDelegate : public DevToolsUIBindings::Delegate {
+ public:
+  explicit MockDevToolsUIBindingsDelegate(
+      content::WebContents* inspected_web_contents)
+      : inspected_web_contents_(inspected_web_contents) {}
+
+  content::WebContents* GetInspectedWebContents() override {
+    return inspected_web_contents_;
+  }
+  void ActivateWindow() override {}
+  void CloseWindow() override {}
+  void Inspect(scoped_refptr<content::DevToolsAgentHost> host) override {}
+  void SetInspectedPageBounds(const gfx::Rect& rect) override {}
+  void InspectElementCompleted() override {}
+  void SetIsDocked(bool is_docked) override {}
+  void OpenInNewTab(const std::string& url) override {}
+  void OpenSearchResultsInNewTab(const std::string& query) override {}
+  void SetWhitelistedShortcuts(const std::string& message) override {}
+  void SetEyeDropperActive(bool active) override {}
+  void OpenNodeFrontend() override {}
+  void InspectedContentsClosing() override {}
+  void OnLoadCompleted() override {}
+  void ReadyForTest() override {}
+  void ConnectionReady() override {}
+  void SetOpenNewWindowForPopups(bool value) override {}
+  infobars::ContentInfoBarManager* GetInfoBarManager() override {
+    return nullptr;
+  }
+  void RenderProcessGone(bool crashed) override {}
+  void ShowCertificateViewer(const std::string& cert_chain) override {}
+  int GetDockStateForLogging() override { return 0; }
+  int GetOpenedByForLogging() override { return 0; }
+  int GetClosedByForLogging() override { return 0; }
+
+ private:
+  raw_ptr<content::WebContents> inspected_web_contents_;
+};
+
+TEST_F(DevToolsUIBindingsLoadNetworkResourceTest,
+       AllowsFileSchemeFromRemoteFrontendWithFlag) {
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kAllowUnsafeDevToolsRemoteFileLoading);
+
+  GURL remote_url("devtools://devtools/remote/serve_rev/@12345/inspector.html");
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             remote_url);
+
+  base::RunLoop run_loop;
+  base::DictValue result;
+
+  CallLoadNetworkResource(
+      "file:///etc/passwd", "", 0,
+      base::BindLambdaForTesting([&](const base::Value* value) {
+        result = value->GetDict().Clone();
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+
+  auto* msg = result.FindString("messageOverride");
+  EXPECT_EQ(msg, nullptr);
+  EXPECT_NE(result.FindInt("statusCode"), 403);
+}
+
+TEST_F(DevToolsUIBindingsLoadNetworkResourceTest,
+       AllowsFileSchemeFromLocalFrontends) {
+  std::vector<GURL> local_urls = {
+      GURL("devtools://devtools/bundled/devtools_app.html"),
+      GURL("devtools://devtools/custom/inspector.html"),
+      GURL("devtools://devtools/blank")};
+
+  for (const GURL& local_url : local_urls) {
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                               local_url);
+
+    base::RunLoop run_loop;
+    base::DictValue result;
+
+    CallLoadNetworkResource(
+        "file:///etc/passwd", "", 0,
+        base::BindLambdaForTesting([&](const base::Value* value) {
+          result = value->GetDict().Clone();
+          run_loop.Quit();
+        }));
+    run_loop.Run();
+
+    auto* msg = result.FindString("messageOverride");
+    EXPECT_EQ(msg, nullptr);
+    EXPECT_NE(result.FindInt("statusCode"), 403);
+  }
+}
+
+TEST_F(DevToolsUIBindingsLoadNetworkResourceTest,
+       ClearExtensionsAPIOnNavigatingAway) {
+  bindings()->RegisterExtensionsAPIForTesting("http://example.test", "script");
+  EXPECT_EQ(bindings()->GetExtensionsAPIForTesting().size(), 1u);
+
+  // Navigate to a valid DevTools URL first.
+  GURL devtools_url("devtools://devtools/bundled/devtools_app.html");
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             devtools_url);
+  EXPECT_EQ(bindings()->GetExtensionsAPIForTesting().size(), 1u);
+
+  // Navigate away to a non-DevTools URL.
+  GURL print_url("https://example.test");
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             print_url);
+  EXPECT_TRUE(bindings()->GetExtensionsAPIForTesting().empty());
+}
+
+TEST_F(DevToolsUIBindingsLoadNetworkResourceTest,
+       BlocksFileSchemeFromUntrustedFrontends) {
+  std::vector<GURL> untrusted_urls = {
+      GURL("devtools://devtools/remote/serve_rev/@12345/inspector.html"),
+      GURL("https://chrome-devtools-frontend.appspot.com/serve_rev/@12345/"
+           "inspector.html"),
+      GURL("https://example.com/index.html")};
+
+  // Set up inspected WebContents to be a local file.
+  content::WebContents* inspected_web_contents =
+      web_contents_factory_.CreateWebContents(profile_.get());
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      inspected_web_contents, GURL("file:///tmp/index.html"));
+
+  auto delegate =
+      std::make_unique<MockDevToolsUIBindingsDelegate>(inspected_web_contents);
+  bindings()->SetDelegate(delegate.release());
+
+  for (const GURL& untrusted_url : untrusted_urls) {
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                               untrusted_url);
+
+    base::RunLoop run_loop;
+    base::DictValue result;
+
+    CallLoadNetworkResource(
+        "file:///etc/passwd", "", 0,
+        base::BindLambdaForTesting([&](const base::Value* value) {
+          result = value->GetDict().Clone();
+          run_loop.Quit();
+        }));
+    run_loop.Run();
+
+    EXPECT_EQ(result.FindInt("statusCode"), 403);
+    ASSERT_NE(result.FindString("messageOverride"), nullptr);
+    EXPECT_EQ(*result.FindString("messageOverride"),
+              "Local file loading is restricted for remote DevTools. Use "
+              "--allow-unsafe-devtools-remote-file-loading to enable it.");
+  }
+}
 
 TEST_F(DevToolsUIBindingsTest, SanitizeFrontendURL) {
   std::vector<std::pair<std::string, std::string>> tests = {
@@ -135,8 +317,16 @@ TEST_F(DevToolsUIBindingsTest, SanitizeFrontendURL) {
        "devtools://devtools/?panel=sources"},
       {"devtools://devtools/?panel=resources",
        "devtools://devtools/?panel=resources"},
-      {"devtools://devtools/?panel=performance",
-       "devtools://devtools/?panel=performance"},
+      {"devtools://devtools/?panel=timeline",
+       "devtools://devtools/?panel=timeline"},
+      {"devtools://devtools/?panel=heap-profiler",
+       "devtools://devtools/?panel=heap-profiler"},
+      {"devtools://devtools/?panel=lighthouse",
+       "devtools://devtools/?panel=lighthouse"},
+      {"devtools://devtools/?panel=security",
+       "devtools://devtools/?panel=security"},
+      {"devtools://devtools/?panel=chrome-recorder",
+       "devtools://devtools/?panel=chrome-recorder"},
       {"devtools://devtools/?panel=unsupported", "devtools://devtools/"},
   };
 
@@ -211,7 +401,7 @@ class MockServiceHandler : public DevToolsHttpServiceHandler {
 
   GURL BaseURL() const override { return GURL("http://localhost:8000"); }
   signin::OAuthConsumerId OAuthConsumerId() const override {
-    return signin::OAuthConsumerId::kDevtoolsAida;
+    return signin::OAuthConsumerId::kDevtoolsAiCode;
   }
   net::NetworkTrafficAnnotationTag NetworkTrafficAnnotationTag()
       const override {
@@ -771,10 +961,6 @@ TEST_F(DevToolsUIBindingsHostConfigTest, GetHostConfigWithFeatures) {
   base::DictValue initial_config =
       DevToolsUIBindings::GetHostConfigDictionary(profile_.get());
 
-  const base::DictValue* initial_durable_messages =
-      initial_config.FindDict("devToolsEnableDurableMessages");
-  ASSERT_FALSE(initial_durable_messages);
-
   const base::DictValue* initial_protocol_monitor =
       initial_config.FindDict("devToolsProtocolMonitor");
   ASSERT_TRUE(initial_protocol_monitor);
@@ -785,21 +971,28 @@ TEST_F(DevToolsUIBindingsHostConfigTest, GetHostConfigWithFeatures) {
   ASSERT_TRUE(initial_freestyler);
   EXPECT_TRUE(initial_freestyler->FindBool("enabled").value_or(false));
 
+  const base::DictValue* initial_aiv2_arch =
+      initial_config.FindDict("devToolsAiV2Architecture");
+  ASSERT_TRUE(initial_aiv2_arch);
+  EXPECT_FALSE(initial_aiv2_arch->FindBool("enabled").value_or(true));
+
+  const base::DictValue* initial_instrumentation_breakpoints =
+      initial_config.FindDict("devToolsInstrumentationBreakpoints");
+  ASSERT_TRUE(initial_instrumentation_breakpoints);
+  EXPECT_FALSE(
+      initial_instrumentation_breakpoints->FindBool("enabled").value_or(true));
+
   // Enable features.
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
-      {::features::kDevToolsEnableDurableMessages,
-       ::features::kDevToolsProtocolMonitor, ::features::kDevToolsFreestyler},
+      {::features::kDevToolsProtocolMonitor, ::features::kDevToolsFreestyler,
+       ::features::kDevToolsAiV2Architecture,
+       ::features::kDevToolsInstrumentationBreakpoints},
       {});
 
   // Verify state of features after enabling them.
   base::DictValue result =
       DevToolsUIBindings::GetHostConfigDictionary(profile_.get());
-
-  const base::DictValue* durable_messages =
-      result.FindDict("devToolsEnableDurableMessages");
-  ASSERT_TRUE(durable_messages);
-  EXPECT_TRUE(durable_messages->FindBool("enabled").value_or(false));
 
   const base::DictValue* protocol_monitor =
       result.FindDict("devToolsProtocolMonitor");
@@ -809,6 +1002,44 @@ TEST_F(DevToolsUIBindingsHostConfigTest, GetHostConfigWithFeatures) {
   const base::DictValue* freestyler = result.FindDict("devToolsFreestyler");
   ASSERT_TRUE(freestyler);
   EXPECT_TRUE(freestyler->FindBool("enabled").value_or(false));
+
+  const base::DictValue* aiv2_arch =
+      result.FindDict("devToolsAiV2Architecture");
+  ASSERT_TRUE(aiv2_arch);
+  EXPECT_TRUE(aiv2_arch->FindBool("enabled").value_or(false));
+
+  const base::DictValue* instrumentation_breakpoints =
+      result.FindDict("devToolsInstrumentationBreakpoints");
+  ASSERT_TRUE(instrumentation_breakpoints);
+  EXPECT_TRUE(
+      instrumentation_breakpoints->FindBool("enabled").value_or(false));
+}
+
+TEST_F(DevToolsUIBindingsHostConfigTest, GetHostConfigGdpProfiles) {
+  base::DictValue config =
+      DevToolsUIBindings::GetHostConfigDictionary(profile_.get());
+
+  const base::DictValue* gdp_profiles = config.FindDict("devToolsGdpProfiles");
+  ASSERT_TRUE(gdp_profiles);
+  std::optional<bool> gdp_enabled = gdp_profiles->FindBool("enabled");
+  ASSERT_TRUE(gdp_enabled.has_value());
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_FALSE(*gdp_enabled);
+#else
+  EXPECT_TRUE(*gdp_enabled);
+#endif
+
+  const base::DictValue* gdp_profiles_availability =
+      config.FindDict("devToolsGdpProfilesAvailability");
+  ASSERT_TRUE(gdp_profiles_availability);
+  std::optional<bool> availability_enabled =
+      gdp_profiles_availability->FindBool("enabled");
+  ASSERT_TRUE(availability_enabled.has_value());
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_ANDROID)
+  EXPECT_TRUE(*availability_enabled);
+#else
+  EXPECT_FALSE(*availability_enabled);
+#endif
 }
 
 TEST_F(DevToolsUIBindingsHostConfigTest, SetChromeFlag) {

@@ -8,13 +8,16 @@ import 'chrome://settings/settings.js';
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {assertEquals, assertFalse, assertGE, assertTrue, assertDeepEquals} from 'chrome://webui-test/chai_assert.js';
-import {CrSettingsPrefs, ModelExecutionEnterprisePolicyValue, loadTimeData} from 'chrome://settings/settings.js';
+import {CrSettingsPrefs, ModelExecutionEnterprisePolicyValue, loadTimeData, MetricsBrowserProxyImpl} from 'chrome://settings/settings.js';
 import type {SettingsPrefsElement} from 'chrome://settings/settings.js';
+import {OpenWindowProxyImpl} from 'chrome://settings/settings.js';
 import type {CrButtonElement, SettingsAutofillAiEntriesListElement, SettingsSimpleConfirmationDialogElement, SettingsAutofillAiAddOrEditDialogElement} from 'chrome://settings/lazy_load.js';
 import {AiEnterpriseFeaturePrefName, EntityDataManagerProxyImpl} from 'chrome://settings/lazy_load.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
+import {TestOpenWindowProxy} from 'chrome://webui-test/test_open_window_proxy.js';
 
 import {TestEntityDataManagerProxy} from './test_entity_data_manager_proxy.js';
+import {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 // clang-format on
 
 const AttributeTypeDataType = chrome.autofillPrivate.AttributeTypeDataType;
@@ -23,13 +26,11 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
   let entityDataManager: TestEntityDataManagerProxy;
   let settingsPrefs: SettingsPrefsElement;
 
-  suiteSetup(function() {
-    settingsPrefs = document.createElement('settings-prefs');
-    return CrSettingsPrefs.initialized;
-  });
-
-  setup(function() {
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+
+    settingsPrefs = document.createElement('settings-prefs');
+    await CrSettingsPrefs.initialized;
 
     // Ensure clean state for prefs.
     settingsPrefs.set('prefs.autofill.profile_enabled.value', true);
@@ -51,6 +52,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
           editEntityTypeString: 'Edit car',
           deleteEntityTypeString: 'Delete car',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
         },
         entityInstanceLabel: 'Toyota',
         entityInstanceSubLabel: 'Car',
@@ -65,6 +67,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
           editEntityTypeString: 'Edit passport',
           deleteEntityTypeString: 'Delete passport',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
         },
         entityInstanceLabel: 'John Doe',
         entityInstanceSubLabel: 'Passport',
@@ -99,20 +102,20 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
 
   async function createEntriesList(
       eligibleUser: boolean = true,
-      autofillAiIgnoresWhetherAddressFillingIsEnabled: boolean = false,
+      autofillSettingsEnterprisePolicyEnabled: boolean = false,
       autofillAiAvailableByDefault: boolean = false,
       canEnableOrDisableAutofillAi: boolean =
           false): Promise<SettingsAutofillAiEntriesListElement> {
     loadTimeData.overrideValues({
       userEligibleForAutofillAi: eligibleUser,
-      AutofillAiIgnoresWhetherAddressFillingIsEnabled:
-          autofillAiIgnoresWhetherAddressFillingIsEnabled,
+      AutofillSettingsEnterprisePolicyEnabled:
+          autofillSettingsEnterprisePolicyEnabled,
       autofillAiAvailableByDefault: autofillAiAvailableByDefault,
       canEnableOrDisableAutofillAi: canEnableOrDisableAutofillAi,
     });
     const entriesList: SettingsAutofillAiEntriesListElement =
         document.createElement('settings-autofill-ai-entries-list');
-    entriesList.prefs = settingsPrefs.prefs;
+    entriesList.prefs = settingsPrefs.prefs!;
     document.body.appendChild(entriesList);
     await flushTasks();
     return entriesList;
@@ -152,7 +155,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
       async function() {
         const entriesList = await createEntriesList(
             /*eligibleUser=*/ false,
-            /*autofillAiIgnoresWhetherAddressFillingIsEnabled=*/ false,
+            /*autofillSettingsEnterprisePolicyEnabled=*/ false,
             /*autofillAiAvailableByDefault=*/ true,
             /*canEnableOrDisableAutofillAi=*/ true);
 
@@ -165,7 +168,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
             entriesList.shadowRoot!.querySelector<CrButtonElement>(
                 '#addEntityInstance');
         assertTrue(!!addButton);
-        assertEquals(addButton.disabled, false);
+        assertFalse(addButton.disabled);
 
         assertTrue(
             isVisible(entriesList.shadowRoot!.querySelector('#entries')));
@@ -177,7 +180,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
   test('CannotUseAutofillAiDisablesTheFeature', async function() {
     const entriesList = await createEntriesList(
         /*eligibleUser=*/ false,
-        /*autofillAiIgnoresWhetherAddressFillingIsEnabled=*/ false,
+        /*autofillSettingsEnterprisePolicyEnabled=*/ false,
         /*autofillAiAvailableByDefault=*/ true,
         /*canEnableOrDisableAutofillAi=*/ false);
     updateOptInStatus(false, entriesList);
@@ -211,7 +214,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
       async function() {
         const entriesList = await createEntriesList(
             /*eligibleUser=*/ false,
-            /*autofillAiIgnoresWhetherAddressFillingIsEnabled=*/ false,
+            /*autofillSettingsEnterprisePolicyEnabled=*/ false,
             /*autofillAiAvailableByDefault=*/ true,
             /*canEnableOrDisableAutofillAi=*/ true);
         await flushTasks();
@@ -235,7 +238,7 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
       async function() {
         const entriesList = await createEntriesList(
             /*userEligible=*/ true,
-            /*autofillAiIgnoresWhetherAddressFillingIsEnabled=*/ true);
+            /*autofillSettingsEnterprisePolicyEnabled=*/ true);
         updateOptInStatus(true, entriesList);
         await flushTasks();
 
@@ -282,6 +285,82 @@ suite('AutofillAiEntriesListUiReflectsEligibilityStatus', function() {
 
     assertTrue(addButton.disabled);
   });
+
+  test('DisableAddButtotWhenAddressAutofillDisabled', async function() {
+    const entriesList = await createEntriesList();
+    entriesList.allowEditingPref = {
+      key: '',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    };
+    updateOptInStatus(true, entriesList);
+    entriesList.setPrefValue('autofill.profile_enabled', true);
+    await flushTasks();
+
+    const addButton = entriesList.shadowRoot!.querySelector<CrButtonElement>(
+        '#addEntityInstance');
+    assertTrue(!!addButton);
+    assertFalse(addButton.disabled);
+
+    entriesList.setPrefValue('autofill.profile_enabled', false);
+    await flushTasks();
+
+    assertTrue(addButton.disabled);
+  });
+
+  test('DisableAddButtonWhenAiPredictionsDisabled', async function() {
+    const entriesList = await createEntriesList();
+    entriesList.allowEditingPref = {
+      key: '',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    };
+    updateOptInStatus(true, entriesList);
+    entriesList.setPrefValue(
+        AiEnterpriseFeaturePrefName.AUTOFILL_AI,
+        ModelExecutionEnterprisePolicyValue.ALLOW);
+    await flushTasks();
+
+    const addButton = entriesList.shadowRoot!.querySelector<CrButtonElement>(
+        '#addEntityInstance');
+    assertTrue(!!addButton);
+    assertFalse(addButton.disabled);
+
+    entriesList.setPrefValue(
+        AiEnterpriseFeaturePrefName.AUTOFILL_AI,
+        ModelExecutionEnterprisePolicyValue.DISABLE);
+    await flushTasks();
+
+    assertTrue(addButton.disabled);
+  });
+
+  test(
+      'AddressAutofillForcedTrueValueShouldNotOverrideAllowEditingPrefValue',
+      async function() {
+        const entriesList = await createEntriesList();
+        entriesList.allowEditingPref = {
+          key: '',
+          type: chrome.settingsPrivate.PrefType.BOOLEAN,
+          value: false,  // Editing is disabled
+        };
+        updateOptInStatus(true, entriesList);
+        entriesList.setPrefValue('autofill.profile_enabled', true);
+        await flushTasks();
+
+        const addButton =
+            entriesList.shadowRoot!.querySelector<CrButtonElement>(
+                '#addEntityInstance');
+        assertTrue(!!addButton);
+        assertTrue(addButton.disabled);
+
+        entriesList.set('prefs.autofill.profile_enabled', {
+          enforcement: chrome.settingsPrivate.Enforcement.ENFORCED,
+          value: true,
+        });
+        await flushTasks();
+
+        assertTrue(addButton.disabled);
+      });
 });
 
 suite('AutofillAiEntriesListUiTest', function() {
@@ -292,15 +371,14 @@ suite('AutofillAiEntriesListUiTest', function() {
   let testEntityTypes: chrome.autofillPrivate.EntityType[];
   let settingsPrefs: SettingsPrefsElement;
 
-  suiteSetup(function() {
-    settingsPrefs = document.createElement('settings-prefs');
-    return CrSettingsPrefs.initialized;
-  });
-
-  setup(function() {
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+
+    settingsPrefs = document.createElement('settings-prefs');
+    await CrSettingsPrefs.initialized;
     loadTimeData.overrideValues({
       userEligibleForAutofillAi: true,
+      enableAutofillAiWalletPrivatePasses: true,
     });
 
     entityDataManager = new TestEntityDataManagerProxy();
@@ -314,6 +392,7 @@ suite('AutofillAiEntriesListUiTest', function() {
         editEntityTypeString: 'Edit driver\'s license',
         deleteEntityTypeString: 'Delete driver\'s license',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
       },
       attributeInstances: [
         {
@@ -347,6 +426,7 @@ suite('AutofillAiEntriesListUiTest', function() {
         editEntityTypeString: 'Edit passport',
         deleteEntityTypeString: 'Delete passport',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
       },
       {
         typeName: 6,
@@ -355,6 +435,7 @@ suite('AutofillAiEntriesListUiTest', function() {
         editEntityTypeString: '',
         deleteEntityTypeString: '',
         supportsWalletStorage: true,
+        passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
       },
       {
         typeName: 2,
@@ -363,6 +444,7 @@ suite('AutofillAiEntriesListUiTest', function() {
         editEntityTypeString: 'Edit car',
         deleteEntityTypeString: 'Delete car',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
       },
     ];
     // Initially not sorted alphabetically. The production code should sort them
@@ -375,6 +457,7 @@ suite('AutofillAiEntriesListUiTest', function() {
         entityInstanceLabel: 'Toyota',
         entityInstanceSubLabel: 'Car',
         storedInWallet: true,
+        walletEntityUrl: 'https://wallet.google.com',
       },
       {
         guid: '1fd09cdc-35b8-4367-8f1a-18c8c0733af0',
@@ -420,7 +503,7 @@ suite('AutofillAiEntriesListUiTest', function() {
   async function createEntriesList(
       allowedEntityTypes: Set<number>|null = null) {
     entriesList = document.createElement('settings-autofill-ai-entries-list');
-    entriesList.prefs = settingsPrefs.prefs;
+    entriesList.prefs = settingsPrefs.prefs!;
     entriesList.allowedEntityTypes = allowedEntityTypes;
     document.body.appendChild(entriesList);
     await flushTasks();
@@ -435,9 +518,13 @@ suite('AutofillAiEntriesListUiTest', function() {
   }
 
   // Tests that walletable entities have an icon button mentionining the wallet
-  // type in its title. Local entities have an actionable button which allows
-  // users editing and deleting.
+  // type in its title and linking to the provided URL.
+  // Local entities have an actionable button which allows users editing and
+  // deleting.
   test('AutofillAiWalletEntitiesHaveWalletPassesIconButton', async function() {
+    const openWindowProxy = new TestOpenWindowProxy();
+    OpenWindowProxyImpl.setInstance(openWindowProxy);
+
     await createEntriesList();
 
     const listItems =
@@ -464,6 +551,9 @@ suite('AutofillAiEntriesListUiTest', function() {
         assertEquals(
             loadTimeData.getString('remoteWalletPassesLinkLabel'),
             iconButton.title);
+        iconButton.click();
+        const url = await openWindowProxy.whenCalled('openUrl');
+        assertEquals('https://wallet.google.com', url);
       }
     }
   });
@@ -638,9 +728,7 @@ suite('AutofillAiEntriesListUiTest', function() {
               detail: testEntityInstance,
             }));
 
-        const addedOrEditedEntityInstance =
-            await entityDataManager.whenCalled('addOrUpdateEntityInstance');
-        assertDeepEquals(testEntityInstance, addedOrEditedEntityInstance);
+        await flushTasks();
       }));
 
   test('AddButtonShowsEntityInstancesList', async function() {
@@ -835,17 +923,194 @@ suite('AutofillAiEntriesListUiTest', function() {
   });
 });
 
+suite('AutofillAiEntriesListUserActionsTest', function() {
+  let entriesList: SettingsAutofillAiEntriesListElement;
+  let entityDataManager: TestEntityDataManagerProxy;
+  let metricsBrowserProxy: TestMetricsBrowserProxy;
+  let testEntityInstance: chrome.autofillPrivate.EntityInstance;
+  let testEntityTypes: chrome.autofillPrivate.EntityType[];
+  let settingsPrefs: SettingsPrefsElement;
+
+  setup(async function() {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+
+    settingsPrefs = document.createElement('settings-prefs');
+    await CrSettingsPrefs.initialized;
+    loadTimeData.overrideValues({
+      userEligibleForAutofillAi: true,
+    });
+
+    entityDataManager = new TestEntityDataManagerProxy();
+    EntityDataManagerProxyImpl.setInstance(entityDataManager);
+    metricsBrowserProxy = new TestMetricsBrowserProxy();
+    MetricsBrowserProxyImpl.setInstance(metricsBrowserProxy);
+
+    testEntityInstance = {
+      type: {
+        typeName: 1,
+        typeNameAsString: 'Driver\'s license',
+        addEntityTypeString: 'Add driver\'s license',
+        editEntityTypeString: 'Edit driver\'s license',
+        deleteEntityTypeString: 'Delete driver\'s license',
+        supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
+      },
+      attributeInstances: [],
+      guid: 'd70b5bb7-49a6-4276-b4b7-b014dacdc9e6',
+      nickname: 'My license',
+      shouldAuthenticateToView: false,
+    };
+    const testEntityInstancesWithLabels:
+        chrome.autofillPrivate.EntityInstanceWithLabels[] = [{
+      guid: 'd70b5bb7-49a6-4276-b4b7-b014dacdc9e6',
+      type: testEntityInstance.type,
+      entityInstanceLabel: 'John Doe',
+      entityInstanceSubLabel: 'Driver\'s license',
+      storedInWallet: false,
+    }];
+
+    testEntityTypes = [{
+      typeName: 6,
+      typeNameAsString: 'Flight',
+      addEntityTypeString: 'Add flight reservation',
+      editEntityTypeString: 'Edit flight reservation',
+      deleteEntityTypeString: 'Delete flight reservation',
+      supportsWalletStorage: false,
+      passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
+    }];
+
+    entityDataManager.setGetOptInStatusResponse(true);
+    entityDataManager.setGetWritableEntityTypesResponse(testEntityTypes);
+    entityDataManager.setLoadEntityInstancesResponse(
+        testEntityInstancesWithLabels);
+  });
+
+  async function createEntriesList(
+      allowedEntityTypes: Set<number>|null = null, pageName: string = '',
+      metricEntityTypes: Record<number, string>|null = null) {
+    entriesList = document.createElement('settings-autofill-ai-entries-list');
+    entriesList.prefs = settingsPrefs.prefs!;
+    entriesList.allowedEntityTypes = allowedEntityTypes;
+    entriesList.metricEntityTypes = metricEntityTypes;
+    entriesList.pageName = pageName;
+    document.body.appendChild(entriesList);
+    await flushTasks();
+  }
+
+  test('LogsAddUserAction', async function() {
+    await createEntriesList(
+        new Set([
+          6,  // Flight
+        ]),
+        'Travel',
+        {
+          6: 'FlightReservation',
+        });
+
+    const addButton = entriesList.shadowRoot!.querySelector<HTMLElement>(
+        '#addEntityInstance');
+    assertTrue(!!addButton);
+    addButton.click();
+    await flushTasks();
+
+    const addSpecificEntityTypeButton =
+        entriesList.shadowRoot!.querySelector<HTMLElement>(
+            '#addSpecificEntityType');
+    assertTrue(!!addSpecificEntityTypeButton);
+    addSpecificEntityTypeButton.click();
+    await flushTasks();
+
+    const userAction = await metricsBrowserProxy.whenCalled('recordAction');
+    assertEquals(
+        'Settings.YourSavedInfo.Travel.Add.FlightReservation', userAction);
+  });
+
+  test('LogsEditUserAction', async function() {
+    const entityTypes = [{
+      typeName: 1,
+      typeNameAsString: 'Driver\'s license',
+      addEntityTypeString: 'Add driver\'s license',
+      editEntityTypeString: 'Edit driver\'s license',
+      deleteEntityTypeString: 'Delete driver\'s license',
+      supportsWalletStorage: false,
+      passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
+    }];
+    entityDataManager.setGetWritableEntityTypesResponse(entityTypes);
+    await createEntriesList(
+        new Set([
+          1,  // Driver's license
+        ]),
+        'IdentityDocs',
+        {
+          1: 'DriversLicense',
+        });
+    entityDataManager.setGetEntityInstanceByGuidResponse(testEntityInstance);
+
+    const actionMenuButton =
+        entriesList.shadowRoot!.querySelector<HTMLElement>('#moreButton');
+    assertTrue(!!actionMenuButton);
+    actionMenuButton.click();
+    await flushTasks();
+
+    const editButton = entriesList.shadowRoot!.querySelector<HTMLElement>(
+        '#menuEditEntityInstance');
+    assertTrue(!!editButton);
+    editButton.click();
+    await flushTasks();
+
+    const userAction = await metricsBrowserProxy.whenCalled('recordAction');
+    assertEquals(
+        'Settings.YourSavedInfo.IdentityDocs.Edit.DriversLicense', userAction);
+  });
+
+  test('LogsDeleteUserAction', async function() {
+    const entityTypes = [{
+      typeName: 1,
+      typeNameAsString: 'Driver\'s license',
+      addEntityTypeString: 'Add driver\'s license',
+      editEntityTypeString: 'Edit driver\'s license',
+      deleteEntityTypeString: 'Delete driver\'s license',
+      supportsWalletStorage: false,
+      passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
+    }];
+    entityDataManager.setGetWritableEntityTypesResponse(entityTypes);
+    await createEntriesList(
+        new Set([
+          1,  // Driver's license
+        ]),
+        'IdentityDocs',
+        {
+          1: 'DriversLicense',
+        });
+
+    const actionMenuButton =
+        entriesList.shadowRoot!.querySelector<HTMLElement>('#moreButton');
+    assertTrue(!!actionMenuButton);
+    actionMenuButton.click();
+    await flushTasks();
+
+    const deleteButton = entriesList.shadowRoot!.querySelector<HTMLElement>(
+        '#menuRemoveEntityInstance');
+    assertTrue(!!deleteButton);
+    deleteButton.click();
+    await flushTasks();
+
+    const userAction = await metricsBrowserProxy.whenCalled('recordAction');
+    assertEquals(
+        'Settings.YourSavedInfo.IdentityDocs.Delete.DriversLicense',
+        userAction);
+  });
+});
+
 suite('AutofillAiEntriesListLongLabelsUiTest', function() {
   let entriesList: SettingsAutofillAiEntriesListElement;
   let settingsPrefs: SettingsPrefsElement;
 
-  suiteSetup(function() {
-    settingsPrefs = document.createElement('settings-prefs');
-    return CrSettingsPrefs.initialized;
-  });
-
   setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+
+    settingsPrefs = document.createElement('settings-prefs');
+    await CrSettingsPrefs.initialized;
     const entityDataManager = new TestEntityDataManagerProxy();
     EntityDataManagerProxyImpl.setInstance(entityDataManager);
 
@@ -860,6 +1125,7 @@ suite('AutofillAiEntriesListLongLabelsUiTest', function() {
           editEntityTypeString: 'Edit car',
           deleteEntityTypeString: 'Delete car',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
         },
         entityInstanceLabel: 'A label'.repeat(100),
         entityInstanceSubLabel: 'Car',
@@ -874,6 +1140,7 @@ suite('AutofillAiEntriesListLongLabelsUiTest', function() {
           editEntityTypeString: 'Edit passport',
           deleteEntityTypeString: 'Delete passport',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
         },
         entityInstanceLabel: 'John Doe',
         entityInstanceSubLabel: 'Sublabel'.repeat(100),
@@ -888,6 +1155,7 @@ suite('AutofillAiEntriesListLongLabelsUiTest', function() {
           editEntityTypeString: 'Edit passport',
           deleteEntityTypeString: 'Delete passport',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
         },
         entityInstanceLabel: 'Mark Donald',
         entityInstanceSubLabel: 'Passport',
@@ -909,7 +1177,7 @@ suite('AutofillAiEntriesListLongLabelsUiTest', function() {
         `prefs.${AiEnterpriseFeaturePrefName.AUTOFILL_AI}.value`,
         ModelExecutionEnterprisePolicyValue.ALLOW);
     entriesList = document.createElement('settings-autofill-ai-entries-list');
-    entriesList.prefs = settingsPrefs.prefs;
+    entriesList.prefs = settingsPrefs.prefs!;
     document.body.appendChild(entriesList);
 
     await flushTasks();
@@ -937,139 +1205,5 @@ suite('AutofillAiEntriesListLongLabelsUiTest', function() {
     assertEquals(labels[4]!.scrollWidth, labels[4]!.offsetWidth);
     assertTrue(labels[5]!.textContent.includes('Passport'));
     assertEquals(labels[5]!.scrollWidth, labels[5]!.offsetWidth);
-  });
-});
-
-suite('AutofillAiEntriesListAuthenticationTest', function() {
-  let entriesList: SettingsAutofillAiEntriesListElement;
-  let entityDataManager: TestEntityDataManagerProxy;
-  let testEntityInstance: chrome.autofillPrivate.EntityInstance;
-  let settingsPrefs: SettingsPrefsElement;
-
-  suiteSetup(function() {
-    settingsPrefs = document.createElement('settings-prefs');
-    return CrSettingsPrefs.initialized;
-  });
-
-  setup(function() {
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    loadTimeData.overrideValues({userEligibleForAutofillAi: true});
-
-    entityDataManager = new TestEntityDataManagerProxy();
-    EntityDataManagerProxyImpl.setInstance(entityDataManager);
-
-    testEntityInstance = {
-      type: {
-        typeName: 1,
-        typeNameAsString: 'Driver\'s license',
-        addEntityTypeString: 'Add driver\'s license',
-        editEntityTypeString: 'Edit driver\'s license',
-        deleteEntityTypeString: 'Delete driver\'s license',
-        supportsWalletStorage: false,
-      },
-      attributeInstances: [],
-      guid: 'd70b5bb7-49a6-4276-b4b7-b014dacdc9e6',
-      nickname: 'My license',
-      shouldAuthenticateToView: true,
-    };
-
-    const testEntityInstancesWithLabels:
-        chrome.autofillPrivate.EntityInstanceWithLabels[] = [
-      {
-        guid: testEntityInstance.guid,
-        type: testEntityInstance.type,
-        entityInstanceLabel: 'John Doe',
-        entityInstanceSubLabel: 'Driver\'s license',
-        storedInWallet: false,
-      },
-    ];
-
-    entityDataManager.setGetOptInStatusResponse(true);
-    entityDataManager.setLoadEntityInstancesResponse(
-        testEntityInstancesWithLabels);
-    entityDataManager.setGetEntityInstanceByGuidResponse(testEntityInstance);
-
-    settingsPrefs.set(
-        `prefs.${AiEnterpriseFeaturePrefName.AUTOFILL_AI}.value`,
-        ModelExecutionEnterprisePolicyValue.ALLOW);
-  });
-
-  teardown(function() {
-    CrSettingsPrefs.resetForTesting();
-  });
-
-  async function createEntriesList() {
-    entriesList = document.createElement('settings-autofill-ai-entries-list');
-    entriesList.prefs = settingsPrefs.prefs;
-    document.body.appendChild(entriesList);
-    await flushTasks();
-  }
-
-  async function clickEditMenu() {
-    const entityInstancesListElement =
-        entriesList.shadowRoot!.querySelector<HTMLElement>('#entries');
-    assertTrue(!!entityInstancesListElement);
-
-    const actionMenuButton =
-        entityInstancesListElement.querySelector<HTMLElement>('#moreButton');
-    assertTrue(!!actionMenuButton);
-    actionMenuButton.click();
-    await flushTasks();
-
-    const editButton = entriesList.shadowRoot!.querySelector<HTMLElement>(
-        '#menuEditEntityInstance');
-    assertTrue(!!editButton);
-    editButton.click();
-  }
-
-  test('AuthenticationRequired_Success', async function() {
-    await createEntriesList();
-    entityDataManager.setAuthenticateUserBeforeViewingEntityDataResponse(true);
-
-    await clickEditMenu();
-    await entityDataManager.whenCalled(
-        'authenticateUserBeforeViewingEntityData');
-    await flushTasks();
-
-    // Dialog should be open
-    const dialog =
-        entriesList.shadowRoot!.querySelector('#addOrEditEntityInstanceDialog');
-    assertTrue(!!dialog);
-  });
-
-  test('AuthenticationRequired_Failure', async function() {
-    await createEntriesList();
-    entityDataManager.setAuthenticateUserBeforeViewingEntityDataResponse(false);
-
-    await clickEditMenu();
-    await entityDataManager.whenCalled(
-        'authenticateUserBeforeViewingEntityData');
-    await flushTasks();
-
-    // Dialog should NOT be open
-    const dialog =
-        entriesList.shadowRoot!.querySelector('#addOrEditEntityInstanceDialog');
-    assertFalse(!!dialog);
-  });
-
-  test('AuthenticationNotRequired_EntityNotSensitive', async function() {
-    await createEntriesList();
-    const nonSensitiveEntity = structuredClone(testEntityInstance);
-    nonSensitiveEntity.shouldAuthenticateToView = false;
-    entityDataManager.setGetEntityInstanceByGuidResponse(nonSensitiveEntity);
-    await clickEditMenu();
-
-    // Auth should NOT be called
-    assertEquals(
-        0,
-        entityDataManager.getCallCount(
-            'authenticateUserBeforeViewingEntityData'));
-    await flushTasks();
-
-    // Dialog should be open, which is always the case when it is part of the
-    // DOM.
-    const dialog =
-        entriesList.shadowRoot!.querySelector('#addOrEditEntityInstanceDialog');
-    assertTrue(!!dialog);
   });
 });

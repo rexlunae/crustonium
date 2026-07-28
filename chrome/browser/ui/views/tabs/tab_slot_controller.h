@@ -11,7 +11,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/ui/tabs/tab_style.h"
 #include "chrome/browser/ui/tabs/tab_types.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
@@ -23,6 +23,10 @@ class TabGroup;
 class TabSlotView;
 
 enum class BrowserFrameActiveState;
+
+namespace tabs {
+class TabInterface;
+}
 
 namespace gfx {
 class Point;
@@ -40,6 +44,8 @@ class ListSelectionModel;
 namespace views {
 class View;
 }
+
+class HoverCardAnchorTarget;
 
 // Controller for tabs and group headers.
 class TabSlotController {
@@ -114,6 +120,11 @@ class TabSlotController {
                                      const gfx::Point& p,
                                      ui::mojom::MenuSourceType source_type) = 0;
 
+  virtual void TabKeyboardFocusChangedTo(const tabs::TabInterface* tab) = 0;
+
+  // Returns the number of tabs in the tabstrip.
+  virtual int GetTabCount() const = 0;
+
   // Returns whether `tab` is the active tab. The active tab is the one whose
   // content is shown in the browser.
   virtual bool IsActiveTab(const TabSlotView* tab) const = 0;
@@ -121,11 +132,8 @@ class TabSlotController {
   // Returns whether `tab` is selected.
   virtual bool IsTabSelected(const TabSlotView* tab) const = 0;
 
-  // Returns true if any tab or one of its children has focus.
-  virtual bool IsFocusInTabs() const = 0;
-
-  // Returns true if The tab should have a compacted leading edge.
-  virtual bool ShouldCompactLeadingEdge() const = 0;
+  // Returns true if any tab or group header has focus.
+  virtual bool IsFocusInTabStrip() const = 0;
 
   // Potentially starts a drag for the specified Tab.
   virtual void MaybeStartDrag(TabSlotView* source,
@@ -158,14 +166,19 @@ class TabSlotController {
   virtual void OnMouseEventInTab(views::View* source,
                                  const ui::MouseEvent& event) = 0;
 
-  // Updates hover-card content, anchoring and visibility based on what tab is
-  // hovered and whether the card should be shown. Providing a nullptr for `tab`
-  // will cause the tab hover card to be hidden. `update_type` is used to decide
-  // how the show, hide, or update will be processed.
-  virtual void UpdateHoverCard(Tab* tab, HoverCardUpdateType update_type) = 0;
+  // Updates the group's contents and metadata when its tab membership changes.
+  // This should be called when a tab is added to or removed from a group.
+  virtual void OnGroupContentsChanged(const tab_groups::TabGroupId& group) = 0;
 
-  // Returns true if the hover card is showing for the given tab.
-  virtual bool HoverCardIsShowingForTab(Tab* tab) = 0;
+  // Updates hover-card content, anchoring and visibility based on what tab is
+  // hovered and whether the card should be shown. Providing a nullptr for
+  // `anchor_target` will cause the tab hover card to be hidden. `update_type`
+  // is used to decide how the show, hide, or update will be processed.
+  virtual void UpdateHoverCard(HoverCardAnchorTarget* anchor_target,
+                               HoverCardUpdateType update_type) = 0;
+
+  // Returns true if the hover card is showing for the given target.
+  virtual bool HoverCardIsShowing(HoverCardAnchorTarget* anchor_target) = 0;
 
   // Updates the hover effect for all affected tabs when a hover happens on
   // `tab`.
@@ -183,6 +196,9 @@ class TabSlotController {
   // This can only be done when the TabController can guarantee that nothing
   // in the same window will redraw on top of the the favicon area of any tab.
   virtual bool CanPaintThrobberToLayer() const = 0;
+
+  // Returns true if the tab strip is painted on a glass frame.
+  virtual bool IsGlassFrame() const = 0;
 
   // Returns the color of the separator between the tabs.
   virtual SkColor GetTabSeparatorColor() const = 0;
@@ -234,12 +250,6 @@ class TabSlotController {
   virtual Browser* GetBrowser() = 0;
 
   virtual BrowserWindowInterface* GetBrowserWindowInterface() = 0;
-
-#if BUILDFLAG(IS_CHROMEOS)
-  // Returns whether the current app instance is locked for OnTask. Only
-  // relevant for non-web browser scenarios.
-  virtual bool IsLockedForOnTask() = 0;
-#endif
 
  protected:
   virtual ~TabSlotController() = default;

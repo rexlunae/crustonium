@@ -9,15 +9,16 @@ import type {WebuiBrowserAppElement} from './app.js';
 export function getHtml(this: WebuiBrowserAppElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
-<div class="activeFrame" id="rootContainer">
+<div id="rootContainer">
   <div id="topContainer">
-    <div class="titlebarDiv" @mousedown="${this.onTabDragMouseDown_}">
+    <div class="titlebarDiv" @mousedown="${this.onTabDragMousedown_}">
       <div class="tabstripDiv" style="margin-left:${this.tabStripInset_}px">
         <webui-browser-tab-strip id="tabstrip"
-          @tab-click="${this.onTabClick_}"
-          @tab-drag-out-of-bounds="${this.onTabDragOutOfBounds_}"
-          @tab-close="${this.onTabClosed_}"
-          @tab-add="${this.onAddTabClick_}">
+            ?inactive-frame="${this.inactive_}"
+            @tab-activated="${this.onTabActivated_}"
+            @tab-added="${this.onTabAdded_}"
+            @tab-closed="${this.onTabClosed_}"
+            @tab-updated="${this.onTabUpdated_}">
         </webui-browser-tab-strip>
       </div>
       <if expr="not is_macosx">
@@ -38,17 +39,19 @@ export function getHtml(this: WebuiBrowserAppElement) {
       </if>
     </div>
     <div id="searchBar">
-      <cr-icon-button iron-icon="cr:arrow-back"
+      <cr-icon-button id="backButton" iron-icon="cr:arrow-back"
         ?disabled="${this.backButtonDisabled_}"
-        @click="${this.onBackClick_}"></cr-icon-button>
-      <cr-icon-button iron-icon="cr:arrow-forward"
+        @click="${this.onBackClick_}"
+        @contextmenu="${this.onBackContextmenu_}"></cr-icon-button>
+      <cr-icon-button id="forwardButton" iron-icon="cr:arrow-forward"
         ?disabled="${this.forwardButtonDisabled_}"
-        @click="${this.onForwardClick_}"></cr-icon-button>
+        @click="${this.onForwardClick_}"
+        @contextmenu="${this.onForwardContextmenu_}"></cr-icon-button>
       <cr-icon-button class="${this.reloadOrStopIcon_}"
-        title="${this.reloadOrStopTooltip_()}'"
+        title="${this.reloadOrStopTooltip_()}"
         @click="${this.onReloadOrStopClick_}"></cr-icon-button>
       <div id="addressBox">
-        <cr-searchbox id="address"></cr-searchbox>
+        <webui-browser-searchbox id="address"></webui-browser-searchbox>
         <cr-button id="locationIconButton" type="button"
           ?hidden="${!this.showLocationIconButton_}"
           @click="${this.onLocationIconClick_}">
@@ -58,13 +61,15 @@ export function getHtml(this: WebuiBrowserAppElement) {
       </div>
       <webui-browser-extensions-bar id="extensionsBar">
       </webui-browser-extensions-bar>
+      <cr-icon-button id="bookmarksButton" iron-icon="webui-browser:bookmark"
+        @click="${this.onBookmarksClick_}"></cr-icon-button>
       <cr-icon-button id="avatarButton" iron-icon="cr:person"
         @click="${this.onAvatarClick_}"></cr-icon-button>
       <cr-icon-button id="appMenuButton" iron-icon="cr:more-vert"
         title="$i18n{appMenuTooltip}"
         @click="${this.onAppMenuClick_}"></cr-icon-button>
     </div>
-    <webui-browser-bookmark-bar id="bookmarkBar">
+    <webui-browser-bookmark-bar id="bookmarkBar" hidden>
     </webui-browser-bookmark-bar>
   </div>
   <div id="main">

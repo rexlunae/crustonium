@@ -44,11 +44,13 @@
 /devserver
 /directxsdk
 /dragonbox/src
+/disarm/src
 /edk2
 /elfutils/src
 /espresso/lib/
 /eyesfree/src
 /fast_float/src
+/fadec/src
 /fuchsia-sdk/images
 /fuchsia-sdk/images-internal
 /fuchsia-sdk/sdk
@@ -61,7 +63,6 @@
 /googlefonts_testdata/data
 /guava/lib/
 /ink/src/
-/ink_stroke_modeler/src/
 /instrumented_libs/
 /javalang/src/
 /javax_inject/lib/
@@ -86,6 +87,7 @@
 /llvm-bootstrap-install
 /llvm-build-tools
 /llvm-build/
+/llvm-libclang
 /mesa/src
 /microsoft_dxheaders/src
 /webauthn/src
@@ -147,7 +149,10 @@
 /syzygy
 /syzygy/binaries
 /tint/src
-/usb_ids
+/typescript/linux-amd64/src
+/typescript/mac-amd64/src
+/typescript/mac-arm64/src
+/typescript/windows-amd64/src
 /v8-i18n
 /vulkan-headers/src
 /vulkan-loader/src

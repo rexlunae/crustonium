@@ -493,7 +493,7 @@ void Frame::UpdateVisibleToHitTesting() {
   if (auto* local_owner = DynamicTo<HTMLFrameOwnerElement>(owner_.Get())) {
     self_visible_to_hit_testing =
         !local_owner->GetLayoutObject() ||
-        local_owner->GetLayoutObject()->Style()->VisibleToHitTesting();
+        local_owner->GetLayoutObject()->StyleRef().VisibleToHitTesting();
   }
 
   bool visible_to_hit_testing =
@@ -588,6 +588,7 @@ void Frame::ApplyFrameOwnerProperties(
   owner->SetAllowFullscreen(properties->allow_fullscreen);
   owner->SetAllowPaymentRequest(properties->allow_payment_request);
   owner->SetIsDisplayNone(properties->is_display_none);
+  owner->SetResponsiveSizing(properties->responsive_sizing);
   owner->SetColorScheme(properties->color_scheme);
   owner->SetPreferredColorScheme(properties->preferred_color_scheme);
 }
@@ -677,8 +678,7 @@ void Frame::FocusPage(LocalFrame* originating_frame) {
   // is specially permitted to change focus without user interaction.
   if (originating_frame &&
       (LocalFrame::HasTransientUserActivation(originating_frame) ||
-       originating_frame->GetSettings()
-           ->GetAllowWindowFocusWithoutUserGesture())) {
+       originating_frame->GetSettings()->GetAllowUnrestrictedWindowFocus())) {
     // Ask the browser process to focus the page.
     GetPage()->GetChromeClient().FocusPage();
 
@@ -948,9 +948,8 @@ bool Frame::SwapImpl(
 
       // This trace event is needed to detect the main frame of the
       // renderer in telemetry metrics. See crbug.com/692112#c11.
-      TRACE_EVENT_INSTANT1("loading", "markAsMainFrame",
-                           TRACE_EVENT_SCOPE_THREAD, "frame",
-                           ::blink::GetFrameIdForTracing(new_local_frame));
+      TRACE_EVENT_INSTANT("loading", "markAsMainFrame", "frame",
+                          ::blink::GetFrameIdForTracing(new_local_frame));
     }
   }
 
@@ -1037,6 +1036,16 @@ void Frame::AdjustOffsetByAncestorFrames(gfx::Point* origin_point) {
     }
     current_frame = current_frame->Parent();
   }
+}
+
+bool Frame::IsDescendantOf(const Frame* other) const {
+  const Frame* current = this;
+  do {
+    if (current == other) {
+      return true;
+    }
+  } while ((current = current->Parent()));
+  return false;
 }
 
 }  // namespace blink

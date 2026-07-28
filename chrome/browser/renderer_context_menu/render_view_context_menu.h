@@ -14,12 +14,10 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/autofill/autofill_context_menu_manager.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
-#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "components/compose/buildflags.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
 #include "components/lens/buildflags.h"
@@ -28,7 +26,6 @@
 #include "components/renderer_context_menu/render_view_context_menu_base.h"
 #include "components/renderer_context_menu/render_view_context_menu_observer.h"
 #include "components/renderer_context_menu/render_view_context_menu_proxy.h"
-#include "components/search_engines/template_url.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/common/buildflags.h"
@@ -39,6 +36,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/text_constants.h"
 #include "ui/menus/simple_menu_model.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -46,19 +44,27 @@
 #include "chrome/browser/extensions/menu_manager.h"
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
+#endif
+
 class AccessibilityLabelsMenuObserver;
-class Browser;
+class BrowserWindowInterface;
 #if BUILDFLAG(ENABLE_COMPOSE)
 class ChromeComposeClient;
 #endif
-class ClickToCallContextMenuObserver;
 class LinkToTextMenuObserver;
 class PrintPreviewContextMenuObserver;
 class Profile;
 class ReadWriteCardObserver;
 class SpellingMenuObserver;
 class SpellingOptionsSubMenuObserver;
+class TemplateURL;
 class ToastController;
+
+namespace send_tab_to_self {
+class SendTabToSelfContextMenuDelegate;
+}
 
 namespace content {
 class RenderFrameHost;
@@ -79,6 +85,10 @@ class MediaPlayerAction;
 }
 }  // namespace blink
 
+namespace dictation {
+class DictationMenuObserver;
+}
+
 namespace ui {
 class DataTransferEndpoint;
 }
@@ -97,13 +107,18 @@ class DlpRulesManager;
 }  // namespace policy
 #endif
 
+#if !BUILDFLAG(IS_ANDROID)
+namespace split_tabs {
+enum class SplitTabLayout;
+}
+#endif
+
 class RenderViewContextMenu
     : public RenderViewContextMenuBase,
       public custom_handlers::ProtocolHandlerRegistry::Observer {
  public:
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kExitFullscreenMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kComposeMenuItem);
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kGlicCloseMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kGlicReloadMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kGlicArchiveConversationMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kGlicShareImageMenuItem);
@@ -111,18 +126,23 @@ class RenderViewContextMenu
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kRegionSearchItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSearchForImageItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSearchForVideoFrameItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kVideoFrameSubmenuItem);
 
   using ExecutePluginActionCallback =
       base::OnceCallback<void(content::RenderFrameHost*,
                               blink::mojom::PluginActionType)>;
 
   RenderViewContextMenu(content::RenderFrameHost& render_frame_host,
-                        const content::ContextMenuParams& params);
+                        const content::ContextMenuParams& params,
+                        bool is_paste_enabled,
+                        bool is_paste_and_match_style_enabled);
 
   RenderViewContextMenu(const RenderViewContextMenu&) = delete;
   RenderViewContextMenu& operator=(const RenderViewContextMenu&) = delete;
 
   ~RenderViewContextMenu() override;
+
+  void MenuClosed(ui::SimpleMenuModel* source) override;
 
   // Adds the spell check service item to the context menu.
   static void AddSpellCheckServiceItem(ui::SimpleMenuModel* menu,
@@ -133,6 +153,9 @@ class RenderViewContextMenu
   bool IsCommandIdVisible(int command_id) const override;
   bool IsCommandIdEnabled(int command_id) const override;
   void ExecuteCommand(int command_id, int event_flags) override;
+  bool IsItemForCommandIdDynamic(int command_id) const override;
+  std::u16string GetLabelForCommandId(int command_id) const override;
+  ui::ImageModel GetIconForCommandId(int command_id) const override;
   void AddSpellCheckServiceItem(bool is_checked) override;
   void AddAccessibilityLabelsServiceItem(bool is_checked) override;
 
@@ -159,7 +182,8 @@ class RenderViewContextMenu
 
   // This may return nullptr (e.g. for WebUI dialogs). Virtual to allow tests to
   // override.
-  virtual Browser* GetBrowser() const;
+  virtual BrowserWindowInterface* GetBrowser() const;
+  bool IsNormalBrowser() const;
 
   // May return nullptr if the WebContents does not have an associated
   // BrowserWindowInterface (e.g. in isolated WebUI, or in tests).
@@ -222,15 +246,16 @@ class RenderViewContextMenu
                                bool started_from_context_menu) override;
 
  private:
+  std::u16string GetElidedSelectionText(size_t max_length,
+                                        gfx::BreakType break_type);
+
+  void ExecGlic();
+
   friend class RenderViewContextMenuTest;
   friend class TestRenderViewContextMenu;
   friend class FormatUrlForClipboardTest;
 
   static bool IsDevToolsURL(const GURL& url);
-
-  // Returns true if the command id is gated by fenced frame untrusted network
-  // status.
-  static bool IsCommandGatedByFencedFrameUntrustedNetworkStatus(int id);
 
   // Formats a URL to be written to the clipboard and returns the formatted
   // string. Used by WriteURLToClipboard(), but kept in a separate function so
@@ -305,6 +330,7 @@ class RenderViewContextMenu
   void AppendTranslateItem();
   void AppendMediaRouterItem();
   void AppendReadAnythingItem();
+  void AppendSaveToMemoryBanksItem();
   void AppendGlicItems();
   void AppendRotationItems();
   void AppendSpellingAndSearchSuggestionItems();
@@ -314,6 +340,7 @@ class RenderViewContextMenu
   // Returns true if the items were appended. This might not happen in all
   // cases, e.g. these are only appended if a screen reader is enabled.
   bool AppendAccessibilityLabelsItems();
+  void AppendDictationItems();
   void AppendSearchProvider();
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   void AppendCurrentExtensionItems();
@@ -321,16 +348,24 @@ class RenderViewContextMenu
   void AppendPrintPreviewItems();
   void AppendSearchWebForImageItems();
   void AppendGlicShareImageItem();
+  bool CanAppendRegionSearchItem() const;
+  bool CanAppendGlicShareImageItem() const;
+  void AppendLensGeminiSection();
+  void AppendRevisedTextSelectionSection();
   void AppendProtocolHandlerSubMenu();
   void AppendSharingItems();
-  void AppendClickToCallItem();
   void AppendRegionSearchItem();
   void AppendLiveCaptionItem();
   void AppendSendTabToSelfItem(bool add_separator);
-  void AppendUserNotesItems();
   bool AppendQRCodeGeneratorItem(bool for_image,
                                  bool draw_icon,
-                                 bool add_separator);
+                                 bool add_separator,
+                                 bool ignore_simplification = false);
+  void AddItemWithOptionalIcon(int command,
+                               int string,
+                               const gfx::VectorIcon& icon);
+  bool IsPasswordField() const;
+  bool ShouldUseSimplifiedTextSelection() const;
 
   std::unique_ptr<ui::DataTransferEndpoint> CreateDataEndpoint(
       bool notify_if_restricted) const;
@@ -338,10 +373,8 @@ class RenderViewContextMenu
   // Helper function for checking policies.
   bool IsSaveAsItemAllowedByPolicy(const GURL& item_url) const;
 
-  // Helper function for checking fenced frame tree untrusted network access
-  // status. For context menu commands that are gated on fenced frame untrusted
-  // network status, this check should be applied.
-  bool IsUntrustedNetworkDisabled() const;
+  // Helper functions for checking policies.
+  bool IsSearchAllowedByPolicy() const;
 
   // Helper function for checking if text query should be opened in Lens. Checks
   // whether Lens is available and whether the text selection entrypoint flag is
@@ -369,7 +402,6 @@ class RenderViewContextMenu
 
   // Command execution functions.
   void ExecOpenWebApp();
-  void ExecOpenLinkPreview();
   void ExecProtocolHandler(int event_flags, int handler_index);
   void ExecOpenLinkInProfile(int profile_index);
   void ExecInspectElement();
@@ -407,6 +439,8 @@ class RenderViewContextMenu
   void ExecOpenCompose();
 #endif
   void ExecOpenInReadAnything();
+  void ExecListenToThisPage();
+  void ExecSaveToMemoryBanks();
 
   void MediaPlayerAction(const blink::mojom::MediaPlayerAction& action);
   void SearchForVideoFrame(int event_flags,
@@ -416,6 +450,12 @@ class RenderViewContextMenu
   void PluginActionAt(const gfx::Point& location,
                       blink::mojom::PluginActionType plugin_action);
   void OpenTextQueryInLens();
+
+  // Returns the WebContents used for data control policy checks. This usually
+  // returns the source WebContents, but if the context menu is shown in a
+  // Reading Mode side panel or immersive view, it returns the WebContents of
+  // the original page being distilled.
+  content::WebContents* GetWebContentsForDataControls() const;
 
   // Returns a list of registered ProtocolHandlers that can handle the clicked
   // on URL.
@@ -443,6 +483,8 @@ class RenderViewContextMenu
   void OnSupervisedUserURLFilterChecked(
       supervised_user::WebFilteringResult result);
 
+  void MaybeAppendOpenGlicItem(bool add_separator = true);
+
   // Opens the Lens overlay to search a region defined by the given bounds of
   // the view and the image to be searched. Tab bounds and view bounds are
   // relative to the screen and in DP, while image bounds are relative to the
@@ -469,7 +511,7 @@ class RenderViewContextMenu
   // next to the active tab. If the active tab is already in the split view,
   // then the tab that wasn't the source of the link will be navigated to the
   // link instead.
-  void OpenLinkInSplitView();
+  void OpenLinkInSplitView(split_tabs::SplitTabLayout layout);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   // The destination URL to use if the user tries to search for or navigate to
@@ -497,6 +539,12 @@ class RenderViewContextMenu
   // - Whether or not the registered protocols have changed since the menu was
   //   built.
   bool is_protocol_submenu_valid_ = false;
+
+  // Inspect sub-menu handling.
+  ui::SimpleMenuModel inspect_submenu_model_;
+
+  // Video frame sub-menu handling.
+  ui::SimpleMenuModel video_frame_submenu_model_;
 
   // An observer that handles spelling suggestions, "Add to dictionary", and
   // "Use enhanced spell check" items.
@@ -536,14 +584,12 @@ class RenderViewContextMenu
 
   std::unique_ptr<LinkToTextMenuObserver> link_to_text_menu_observer_;
 
+  std::unique_ptr<dictation::DictationMenuObserver> dictation_menu_observer_;
+
   // In the case of a MimeHandlerView this will point to the WebContents that
   // embeds the MimeHandlerViewGuest. Otherwise this will be the same as
   // |source_web_contents_|.
   const raw_ptr<content::WebContents, DanglingUntriaged> embedder_web_contents_;
-
-  // Click to call menu observer.
-  std::unique_ptr<ClickToCallContextMenuObserver>
-      click_to_call_context_menu_observer_;
 
 #if BUILDFLAG(IS_CHROMEOS)
   // The system app (if any) associated with the WebContents we're in.
@@ -561,45 +607,21 @@ class RenderViewContextMenu
   // Responsible for handling autofill related context menu items.
   autofill::AutofillContextMenuManager autofill_context_menu_manager_;
 
-  // Fenced frame can disable its untrusted network in exchange for access to
-  // unpartitioned cross-site data. To prevent cross-site data from leaking out
-  // of fenced frame, context menu commands should be gated on untrusted network
-  // status if:
-  // 1. It can be executed within a fenced frame.
-  // 2. It can transfer information out of fenced frame. Network request is the
-  // primary concern.
-  //
-  // See:
-  // https://github.com/WICG/fenced-frame/blob/master/explainer/fenced_frames_with_local_unpartitioned_data_access.md#revoking-network-access
+  // Whether the "Paste" menu item should be enabled.
+  const bool is_paste_enabled_;
 
-  // Note: Add `NO_IFTTT=<reason>` in the CL description if the linter is not
-  // applicable. For example, if a new command that is not gated on fenced frame
-  // network status is added, the following look up table does not require any
-  // change.
-  //
-  // LINT.IfChange(CommandsGatedOnFencedFrameUntrustedNetworkStatus)
-  static constexpr auto kFencedFrameUntrustedNetworkStatusGatedCommands =
-      base::MakeFixedFlatSet<int>(
-          {// For opening a link.
-           IDC_CONTENT_CONTEXT_OPENLINKNEWTAB,
-           IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW,
-           IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD,
-           IDC_OPEN_LINK_IN_PROFILE_FIRST, IDC_OPEN_LINK_IN_PROFILE_LAST,
-           IDC_CONTENT_CONTEXT_OPENLINKSPLITVIEW,
+  // Whether the "Paste and Match Style" menu item should be enabled.
+  const bool is_paste_and_match_style_enabled_;
 
-           // Open link commands that appear in certain scenarios.
-           IDC_CONTENT_CONTEXT_OPENLINKBOOKMARKAPP,
-           IDC_CONTENT_CONTEXT_OPENLINKINPROFILE, IDC_CONTENT_CONTEXT_GOTOURL,
-           IDC_CONTENT_CONTEXT_OPENLINKWITH, IDC_CONTENT_CONTEXT_OPENAVNEWTAB,
-           IDC_CONTENT_CONTEXT_OPENIMAGENEWTAB,
+  std::unique_ptr<ui::SimpleMenuModel> send_tab_to_self_submenu_;
+  std::unique_ptr<send_tab_to_self::SendTabToSelfContextMenuDelegate>
+      send_tab_to_self_submenu_delegate_;
 
-           // Link preview feature.
-           IDC_CONTENT_CONTEXT_OPENLINKPREVIEW,
+  std::unique_ptr<ui::SimpleMenuModel> split_layout_submenu_;
 
-           // Image loading commands.
-           IDC_CONTENT_CONTEXT_LOAD_IMAGE,
-           IDC_CONTENT_CONTEXT_OPEN_ORIGINAL_IMAGE_NEW_TAB});
-  // LINT.ThenChange(//chrome/app/chrome_command_ids.h:ChromeCommandIds)
+  //  Used for CTR metrics of menu item for opening Glic.
+  bool glic_item_shown_ = false;
+  bool glic_item_executed_ = false;
 
   base::WeakPtrFactory<RenderViewContextMenu> weak_pointer_factory_{this};
 };

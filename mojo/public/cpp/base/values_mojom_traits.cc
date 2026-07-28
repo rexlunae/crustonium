@@ -4,10 +4,10 @@
 
 #include "mojo/public/cpp/base/values_mojom_traits.h"
 
+#include <cmath>
 #include <memory>
 #include <utility>
 
-#include "base/compiler_specific.h"
 #include "base/features.h"
 
 namespace mojo {
@@ -73,6 +73,9 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
       return true;
     }
     case mojo_base::mojom::ValueDataView::Tag::kDoubleValue: {
+      if (!std::isfinite(data.double_value())) {
+        return false;
+      }
       *value_out = base::Value(data.double_value());
       return true;
     }
@@ -87,10 +90,7 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
     case mojo_base::mojom::ValueDataView::Tag::kBinaryValue: {
       mojo::ArrayDataView<uint8_t> binary_data_view;
       data.GetBinaryValueDataView(&binary_data_view);
-      const char* data_pointer =
-          reinterpret_cast<const char*>(binary_data_view.data());
-      base::Value::BlobStorage blob_storage(
-          data_pointer, UNSAFE_TODO(data_pointer + binary_data_view.size()));
+      base::Value::BlobStorage blob_storage(std::from_range, binary_data_view);
       *value_out = base::Value(std::move(blob_storage));
       return true;
     }

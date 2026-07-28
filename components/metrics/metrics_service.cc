@@ -152,6 +152,7 @@
 #include "base/trace_event/named_trigger.h"
 #include "build/build_config.h"
 #include "components/metrics/clean_exit_beacon.h"
+#include "components/metrics/drive_metrics_provider.h"
 #include "components/metrics/environment_recorder.h"
 #include "components/metrics/field_trials_provider.h"
 #include "components/metrics/metrics_features.h"
@@ -321,6 +322,7 @@ void RecordUserLogStoreState(UserLogStoreState state) {
 void MetricsService::RegisterPrefs(PrefRegistrySimple* registry) {
   MetricsStateManager::RegisterPrefs(registry);
   MetricsLog::RegisterPrefs(registry);
+  DriveMetricsProvider::RegisterPrefs(registry);
   StabilityMetricsProvider::RegisterPrefs(registry);
   MetricsReportingService::RegisterPrefs(registry);
 
@@ -479,6 +481,11 @@ int MetricsService::GetLowEntropySource() {
   return state_manager_->GetLowEntropySource();
 }
 
+void MetricsService::Purge() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  reporting_service_.metrics_log_store()->Purge();
+}
+
 int MetricsService::GetOldLowEntropySource() {
   return state_manager_->GetOldLowEntropySource();
 }
@@ -617,8 +624,11 @@ void MetricsService::ClearFgBgIdIfNeeded(
   current_log_->ClearFgBgId();
 }
 
-void MetricsService::OnAppEnterBackground(bool keep_recording_in_background) {
-  base::RecordAction(base::UserMetricsAction("UMA_OnBackgrounded"));
+void MetricsService::OnAppEnterBackground(bool keep_recording_in_background,
+                                          bool emit_uma_action) {
+  if (emit_uma_action) {
+    base::RecordAction(base::UserMetricsAction("UMA_OnBackgrounded"));
+  }
   std::optional<bool> previous_is_in_foreground = is_in_foreground_;
   is_in_foreground_ = false;
   reporting_service_.OnAppEnterBackground();
@@ -671,8 +681,11 @@ void MetricsService::OnAppEnterBackground(bool keep_recording_in_background) {
   }
 }
 
-void MetricsService::OnAppEnterForeground(bool force_open_new_log) {
-  base::RecordAction(base::UserMetricsAction("UMA_OnForegrounded"));
+void MetricsService::OnAppEnterForeground(bool force_open_new_log,
+                                          bool emit_uma_action) {
+  if (emit_uma_action) {
+    base::RecordAction(base::UserMetricsAction("UMA_OnForegrounded"));
+  }
   std::optional<bool> previous_is_in_foreground = is_in_foreground_;
   is_in_foreground_ = true;
   reporting_service_.OnAppEnterForeground();
@@ -710,26 +723,6 @@ void MetricsService::OnAppEnterForeground(bool force_open_new_log) {
   }
 }
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-
-void MetricsService::Flush() {
-  if (recording_active() && !IsTooEarlyToCloseLog()) {
-#if BUILDFLAG(IS_ANDROID)
-    client_->MergeSubprocessHistograms();
-#endif  // BUILDFLAG(IS_ANDROID)
-    {
-      ScopedTerminationChecker scoped_termination_checker(
-          "UMA.MetricsService.OnFlushScopedTerminationChecker");
-      // Trim and store unsent logs so that they're not lost in case of a crash
-      // before upload time. However, the in-memory log store is unchanged.
-      // I.e., logs that are trimmed will still be available in memory. After
-      // uploading (whether successful or not), the log store is trimmed and
-      // stored again, and at that time, the in-memory log store will be
-      // updated.
-      log_store()->TrimAndPersistUnsentLogs(
-          /*overwrite_in_memory_store=*/false);
-    }
-  }
-}
 
 void MetricsService::OnPageLoadStarted() {
   delegating_provider_.OnPageLoadStarted();
@@ -828,17 +821,16 @@ void MetricsService::InitPerUserMetrics() {
   client_->InitPerUserMetrics();
 }
 
-std::optional<bool> MetricsService::GetCurrentUserMetricsConsent() const {
-  return client_->GetCurrentUserMetricsConsent();
+std::optional<bool> MetricsService::GetCurrentUserMetricsChoice() const {
+  return client_->GetCurrentUserMetricsChoice();
 }
 
 std::optional<std::string> MetricsService::GetCurrentUserId() const {
   return client_->GetCurrentUserId();
 }
 
-void MetricsService::UpdateCurrentUserMetricsConsent(
-    bool user_metrics_consent) {
-  client_->UpdateCurrentUserMetricsConsent(user_metrics_consent);
+void MetricsService::UpdateCurrentUserMetricsChoice(bool user_choice) {
+  client_->UpdateCurrentUserMetricsChoice(user_choice);
 }
 
 void MetricsService::ResetClientId() {
@@ -1629,7 +1621,7 @@ void MetricsService::OnClonedInstallDetected() {
   // since the cloned install detector works asynchronously, it is possible that
   // this is called after logs were already sent. However, practically speaking,
   // this should not happen, since logs are only sent late into the session.
-  reporting_service_.metrics_log_store()->Purge();
+  Purge();
 }
 
 // static

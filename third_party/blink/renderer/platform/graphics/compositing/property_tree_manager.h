@@ -163,6 +163,9 @@ class PropertyTreeManager {
   static bool DirectlyUpdatePageScaleTransform(
       cc::LayerTreeHost&,
       const TransformPaintPropertyNode&);
+  static void DirectlyUpdateScrollingContentsCullRect(
+      cc::LayerTreeHost&,
+      const ScrollPaintPropertyNode&);
 
   // This function only updates the cc scroll tree scroll offset and does not
   // update the cc transform node's scroll offset.
@@ -198,7 +201,8 @@ class PropertyTreeManager {
   // here once the work is ready.
   void UpdateConditionalRenderSurfaceReasons(
       const cc::LayerList& layers,
-      const HashSet<int>& layers_having_text);
+      const HashSet<int>& layers_having_text,
+      const HashSet<int>& layers_having_video);
 
   void EnsureCompositorNodesForAnchorPositionAdjustmentContainers(
       const StackScrollTranslationVector& scroll_translations);

@@ -35,13 +35,13 @@
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/switches.h"
 #include "extensions/renderer/extension_throttle_manager.h"
 #endif
 
 #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY)
-#include "chrome/common/request_header_integrity/request_header_integrity_url_loader_throttle.h"  // nogncheck crbug.com/1125897
+#include "chrome/common/request_header_integrity/request_header_integrity_url_loader_throttle.h"  // nogncheck crbug.com/40147906
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -54,7 +54,7 @@
 
 namespace {
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 std::unique_ptr<extensions::ExtensionThrottleManager>
 CreateExtensionThrottleManager() {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -204,7 +204,7 @@ URLLoaderThrottleProviderImpl::CreateThrottles(
     }
   }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (!extension_throttle_manager_) {
     extension_throttle_manager_ = CreateExtensionThrottleManager();
   }
@@ -269,16 +269,17 @@ URLLoaderThrottleProviderImpl::CreateThrottles(
             [](const blink::LocalFrameToken& token,
                const scoped_refptr<base::SequencedTaskRunner>
                    main_thread_task_runner,
-               const url::Origin& origin,
+               const std::optional<url::Origin>& initiator,
+               const url::Origin& idp_origin,
                blink::mojom::IdpSigninStatus status) {
               if (content::RenderThread::IsMainThread()) {
-                blink::SetIdpSigninStatus(token, origin, status);
+                blink::SetIdpSigninStatus(token, idp_origin, status);
                 return;
               }
               if (main_thread_task_runner) {
                 main_thread_task_runner->PostTask(
                     FROM_HERE, base::BindOnce(&blink::SetIdpSigninStatus, token,
-                                              origin, status));
+                                              idp_origin, status));
               }
             },
             local_frame_token.value(), main_thread_task_runner_));
@@ -291,7 +292,7 @@ URLLoaderThrottleProviderImpl::CreateThrottles(
 }
 
 void URLLoaderThrottleProviderImpl::SetOnline(bool is_online) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (extension_throttle_manager_) {
     extension_throttle_manager_->SetOnline(is_online);
   }

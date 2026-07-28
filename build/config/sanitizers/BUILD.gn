@@ -177,9 +177,10 @@ if (is_asan && is_linux) {
   }
 }
 
-# TODO(crbug.com/447520906): Because of `build/android/android_only_explicit_jni_exports.lst`,
-# `sanitizer_shared_hooks` shared library doesn't export any
-# functions. It will cause undefined symbols when linking binaries.
+# TODO(crbug.com/447520906): Because of
+# `build/android/android_only_explicit_jni_exports.lst`,
+# `sanitizer_shared_hooks` shared library doesn't export any functions. It will
+# cause undefined symbols when linking binaries.
 if (is_asan && is_linux) {
   source_set("hooks_sources") {
     sources = [ "//build/sanitizers/sanitizer_hooks.cc" ]
@@ -236,11 +237,6 @@ if (use_dlcloseshim) {
 # Applies linker flags necessary when either :deps or :default_sanitizer_flags
 # are used.
 config("default_sanitizer_ldflags") {
-  visibility = [
-    ":default_sanitizer_flags",
-    ":deps",
-  ]
-
   if (is_posix || is_fuchsia) {
     sanitizers = []  # sanitizers applicable to both clang and rustc
     ldflags = []
@@ -278,8 +274,9 @@ config("default_sanitizer_ldflags") {
       if (use_libfuzzer) {
         ldflags += [ "-fsanitize=fuzzer-no-link" ]
         if (is_mac) {
-          # TODO(crbug.com/40611636): on macOS, dead code stripping does not work
-          # well with `pc-table` instrumentation enabled by `fuzzer-no-link`.
+          # TODO(crbug.com/40611636): on macOS, dead code stripping does not
+          # work well with `pc-table` instrumentation enabled by
+          # `fuzzer-no-link`.
           ldflags += [ "-fno-sanitize-coverage=pc-table" ]
         }
       } else {
@@ -368,7 +365,8 @@ config("common_sanitizer_flags") {
       "-gcolumn-info",
     ]
 
-    # Frame pointers are controlled in //build/config/compiler:default_stack_frames
+    # Frame pointers are controlled in
+    # //build/config/compiler:default_stack_frames
   }
 }
 
@@ -476,6 +474,7 @@ config("cfi_icall_disable") {
 
 config("coverage_flags") {
   cflags = []
+  inputs = []
   if (use_sanitizer_coverage) {
     # Used by sandboxing code to allow coverage dump to be written on the disk.
     defines = [ "SANITIZER_COVERAGE" ]
@@ -500,10 +499,12 @@ config("coverage_flags") {
     if (sanitizer_coverage_allowlist != "") {
       cflags += [ "-fsanitize-coverage-allowlist=" +
                   rebase_path(sanitizer_coverage_allowlist, root_build_dir) ]
+      inputs += [ sanitizer_coverage_allowlist ]
     }
     if (sanitizer_coverage_ignorelist != "") {
       cflags += [ "-fsanitize-coverage-ignorelist=" +
                   rebase_path(sanitizer_coverage_ignorelist, root_build_dir) ]
+      inputs += [ sanitizer_coverage_ignorelist ]
     }
   }
 
@@ -714,29 +715,13 @@ config("not_fuzzed") {
     # Since we aren't instrumenting with coverage, code size is less of a
     # concern, so use a more aggressive optimization level than
     # optimize_for_fuzzing (-O1). When given multiple optimization flags, clang
-    # obeys the last one, so as long as this flag comes after -O1, it should work.
-    # Since this config will always be depended on after
+    # obeys the last one, so as long as this flag comes after -O1, it should
+    # work. Since this config will always be depended on after
     # "//build/config/compiler:default_optimization" (which adds -O1 when
     # optimize_for_fuzzing is true), -O2 should always be the second flag. Even
     # though this sounds fragile, it isn't a big deal if it breaks, since proto
     # fuzzers will still work, they will just be slightly slower.
     cflags = [ "-O2" ]
-
-    # Adding -O2 alone is not enough, we also need to make sure that
-    # the sanitizer coverage flags that are included by `default_sanitizer_flags`
-    # are disabled. Unfortunately, this can't be done using
-    # not_fuzzed_remove_nonasan_configs since it can't selectively remove the
-    # sanitizer coverage flags from `default_sanitizer_flags`.
-    cflags += [ "-fsanitize-coverage=0" ]
-
-    # We need to include this config when we remove default_sanitizer_flags or
-    # else there will be linking errors. We would remove default_sanitizer_flags
-    # here as well, but gn doesn't permit this.
-    if (!is_msan) {
-      # We don't actually remove sanitization when MSan is being used so there
-      # is no need to add default_sanitizer_ldflags in that case
-      configs = [ ":default_sanitizer_ldflags" ]
-    }
   }
 }
 
@@ -819,6 +804,7 @@ config("alloc_token") {
         "-Wl,--export-dynamic-symbol=__alloc_token_1_pvalloc",
         "-Wl,--export-dynamic-symbol=__alloc_token_1_realloc",
         "-Wl,--export-dynamic-symbol=__alloc_token_1_valloc",
+
         # go/keep-sorted end
       ]
     }

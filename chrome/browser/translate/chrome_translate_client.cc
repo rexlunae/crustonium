@@ -10,6 +10,7 @@
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
@@ -44,13 +45,21 @@
 #include "components/translate/core/browser/translate_metrics_logger.h"
 #include "components/translate/core/browser/translate_prefs.h"
 #include "components/translate/core/common/language_detection_details.h"
+#include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_util.h"
 #include "components/variations/service/variations_service.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
+#include "pdf/buildflags.h"
 #include "third_party/metrics_proto/translate_event.pb.h"
 #include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(ENABLE_PDF)
+#include "base/barrier_callback.h"
+#include "components/pdf/browser/pdf_document_helper.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/android_theme_resources.h"
@@ -60,10 +69,16 @@
 #include "content/public/browser/visibility.h"
 #else
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
+#include "chrome/browser/ui/toasts/toast_features.h"
+#include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
+#include "ui/base/l10n/l10n_util.h"
 #endif
 
 namespace {
@@ -96,9 +111,77 @@ bool IsAutomaticTranslationType(translate::TranslationType type) {
          type == translate::TranslationType::kAutomaticTranslationByLink ||
          type == translate::TranslationType::kAutomaticTranslationByPref ||
          type == translate::TranslationType::
-                     kAutomaticTranslationToPredefinedTarget;
+                     kAutomaticTranslationToPredefinedTarget ||
+         type == translate::TranslationType::kForcedTranslationByCommandline;
 }
-#endif
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_PDF)
+void OnPdfDocumentLoadComplete(
+    base::WeakPtr<ChromeTranslateClient> client,
+    base::OnceCallback<void(bool)> completion_callback) {
+  if (!client) {
+    std::move(completion_callback).Run(false);
+    return;
+  }
+  pdf::PDFDocumentHelper* pdf_helper =
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(client->web_contents());
+  if (!pdf_helper) {
+    std::move(completion_callback).Run(false);
+    return;
+  }
+
+  enum class PdfCheckType { kMeaningfulText, kJavaScript, kPasswordProtected };
+  using PdfCheckResult = std::pair<PdfCheckType, bool>;
+
+  // The first parameter (3) is the number of times `pdf_checks_barrier` must
+  // be called (once for `HasMeaningfulText`, once for `HasJavaScript`, and
+  // once for `IsPasswordProtected`) before executing `completion_callback`.
+  auto pdf_checks_barrier = base::BarrierCallback<PdfCheckResult>(
+      3, base::BindOnce(
+             [](base::OnceCallback<void(bool)> completion_callback,
+                std::vector<PdfCheckResult> results) {
+               bool has_meaningful_text = false;
+               bool has_javascript = true;
+               bool is_password_protected = true;
+               for (const auto& [type, value] : results) {
+                 switch (type) {
+                   case PdfCheckType::kMeaningfulText:
+                     has_meaningful_text = value;
+                     break;
+                   case PdfCheckType::kJavaScript:
+                     has_javascript = value;
+                     break;
+                   case PdfCheckType::kPasswordProtected:
+                     is_password_protected = value;
+                     break;
+                 }
+               }
+               std::move(completion_callback)
+                   .Run(has_meaningful_text && !has_javascript &&
+                        !is_password_protected);
+             },
+             std::move(completion_callback)));
+
+  pdf_helper->HasMeaningfulText(base::BindOnce(
+      [](base::RepeatingCallback<void(PdfCheckResult)> barrier, bool result) {
+        barrier.Run({PdfCheckType::kMeaningfulText, result});
+      },
+      pdf_checks_barrier));
+
+  pdf_helper->HasJavaScript(base::BindOnce(
+      [](base::RepeatingCallback<void(PdfCheckResult)> barrier, bool result) {
+        barrier.Run({PdfCheckType::kJavaScript, result});
+      },
+      pdf_checks_barrier));
+
+  pdf_helper->IsPasswordProtected(base::BindOnce(
+      [](base::RepeatingCallback<void(PdfCheckResult)> barrier, bool result) {
+        barrier.Run({PdfCheckType::kPasswordProtected, result});
+      },
+      pdf_checks_barrier));
+}
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 }  // namespace
 
@@ -209,8 +292,9 @@ bool ChromeTranslateClient::ShowTranslateUI(
     const std::string& target_language,
     translate::TranslateErrors error_type,
     bool triggered_from_menu) {
-  DCHECK(web_contents());
-  DCHECK(translate_manager_);
+  if (!web_contents() || !translate_manager_) {
+    return false;
+  }
 
   if (error_type != translate::TranslateErrors::NONE) {
     step = translate::TRANSLATE_STEP_TRANSLATE_ERROR;
@@ -220,34 +304,34 @@ bool ChromeTranslateClient::ShowTranslateUI(
 // and iOS (in ios/chrome/browser/translate/chrome_ios_translate_client.mm).
 #if BUILDFLAG(IS_ANDROID)
   DCHECK(!TranslateService::IsTranslateBubbleEnabled());
-    // Message UI.
-    translate::TranslationType translate_type =
-        GetLanguageState().translation_type();
-    // Use the automatic translation Snackbar if the current translation is an
-    // automatic translation and there was no error.
-    if (IsAutomaticTranslationType(translate_type) &&
-        step != translate::TRANSLATE_STEP_TRANSLATE_ERROR) {
-      // The Automatic translation snackbar is only shown after translation
-      // has completed. The translating step is a no-op with the Snackbar.
-      if (step == translate::TRANSLATE_STEP_AFTER_TRANSLATE) {
-        // An automatic translation has completed show the snackbar.
-        if (!auto_translate_snackbar_controller_) {
-          auto_translate_snackbar_controller_ =
-              std::make_unique<translate::AutoTranslateSnackbarController>(
-                  web_contents(), translate_manager_->GetWeakPtr());
-        }
-        auto_translate_snackbar_controller_->ShowSnackbar(target_language);
+  // Message UI.
+  translate::TranslationType translate_type =
+      GetLanguageState().translation_type();
+  // Use the automatic translation Snackbar if the current translation is an
+  // automatic translation and there was no error.
+  if (IsAutomaticTranslationType(translate_type) &&
+      step != translate::TRANSLATE_STEP_TRANSLATE_ERROR) {
+    // The Automatic translation snackbar is only shown after translation
+    // has completed. The translating step is a no-op with the Snackbar.
+    if (step == translate::TRANSLATE_STEP_AFTER_TRANSLATE) {
+      // An automatic translation has completed show the snackbar.
+      if (!auto_translate_snackbar_controller_) {
+        auto_translate_snackbar_controller_ =
+            std::make_unique<translate::AutoTranslateSnackbarController>(
+                web_contents(), translate_manager_->GetWeakPtr());
       }
-    } else {
-      // Not an automatic translation. Use TranslateMessage instead.
-      if (!translate_message_) {
-        translate_message_ = std::make_unique<translate::TranslateMessage>(
-            web_contents(), translate_manager_->GetWeakPtr(),
-            base::BindRepeating([]() {}));
-      }
-      translate_message_->ShowTranslateStep(step, source_language,
-                                            target_language);
+      auto_translate_snackbar_controller_->ShowSnackbar(target_language);
     }
+  } else {
+    // Not an automatic translation. Use TranslateMessage instead.
+    if (!translate_message_) {
+      translate_message_ = std::make_unique<translate::TranslateMessage>(
+          web_contents(), translate_manager_->GetWeakPtr(),
+          base::BindRepeating([]() {}));
+    }
+    translate_message_->ShowTranslateStep(step, source_language,
+                                          target_language);
+  }
   translate_manager_->GetActiveTranslateMetricsLogger()->LogUIChange(true);
 #else
   DCHECK(TranslateService::IsTranslateBubbleEnabled());
@@ -315,6 +399,44 @@ bool ChromeTranslateClient::IsTranslatableURL(const GURL& url) {
   return TranslateService::IsTranslatableURL(url);
 }
 
+void ChromeTranslateClient::CheckIfPdfIsTranslatable(
+    base::OnceCallback<void(bool)> callback) {
+#if BUILDFLAG(ENABLE_PDF)
+  if (!base::FeatureList::IsEnabled(translate::kEnableTranslatePdf)) {
+    std::move(callback).Run(false);
+    return;
+  }
+  pdf::PDFDocumentHelper* pdf_helper =
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(web_contents());
+  if (!pdf_helper) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  auto wrapped_callback =
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), false);
+
+  pdf_helper->RegisterForDocumentLoadComplete(
+      base::BindOnce(&OnPdfDocumentLoadComplete, weak_factory_.GetWeakPtr(),
+                     std::move(wrapped_callback)));
+#else
+  std::move(callback).Run(false);
+#endif
+}
+
+void ChromeTranslateClient::UndoTranslate() {
+  std::string source_language = GetLanguageState().source_language();
+  std::string target_language = GetLanguageState().current_language();
+
+  if (GetLanguageState().IsPageTranslated()) {
+    GetTranslateManager()->RevertTranslation();
+  }
+
+  ShowTranslateUI(translate::TRANSLATE_STEP_AFTER_UNDO, source_language,
+                  target_language, translate::TranslateErrors::NONE,
+                  /*triggered_from_menu=*/true);
+}
+
 // content::WebContentsObserver implementation.
 void ChromeTranslateClient::WebContentsDestroyed() {
   // Translation process can be interrupted.
@@ -377,7 +499,9 @@ ShowTranslateBubbleResult ChromeTranslateClient::ShowBubble(
     translate::TranslateErrors error_type,
     bool is_user_gesture) {
   DCHECK(translate_manager_);
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
 
   // |browser| might be NULL when testing. In this case, Show(...) should be
   // called because the implementation for testing is used.
@@ -387,7 +511,7 @@ ShowTranslateBubbleResult ChromeTranslateClient::ShowBubble(
                                         error_type, is_user_gesture);
   }
 
-  if (web_contents() != browser->tab_strip_model()->GetActiveWebContents()) {
+  if (web_contents() != browser->GetTabStripModel()->GetActiveWebContents()) {
     return ShowTranslateBubbleResult::kWebContentsNotActive;
   }
 
@@ -396,7 +520,8 @@ ShowTranslateBubbleResult ChromeTranslateClient::ShowBubble(
   // because the bubble takes the focus from the other widgets including the
   // browser windows. So it is checked that |browser| is the last activated
   // browser, not is now activated.
-  if (browser != chrome::FindLastActive()) {
+  if (browser !=
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser()) {
     return ShowTranslateBubbleResult::kBrowserWindowNotActive;
   }
 
@@ -406,11 +531,40 @@ ShowTranslateBubbleResult ChromeTranslateClient::ShowBubble(
     if (GetLanguageState().InTranslateNavigation()) {
       return ShowTranslateBubbleResult::kSuccess;
     }
+    ToastController* toast_controller =
+        ToastController::MaybeGetForWebContents(web_contents());
+    bool is_toast_enabled =
+        toast_controller &&
+        base::FeatureList::IsEnabled(toast_features::kTranslateToast);
+
+    // If not in a translate navigation, this is the first time we are
+    // auto-translating this page/site in this session. Show the toast instead
+    // of the bubble.
+    if (step == translate::TRANSLATE_STEP_AFTER_TRANSLATE) {
+      TranslateBubbleController* controller =
+          TranslateBubbleController::From(browser);
+      if (controller && controller->GetTranslateBubble()) {
+        return TranslateBubbleFactory::Show(
+            BrowserWindow::FromBrowser(browser), web_contents(), step,
+            source_language, target_language, error_type, is_user_gesture);
+      }
+
+      if (is_toast_enabled) {
+        ToastParams params(ToastId::kTranslate);
+        std::u16string language_name = l10n_util::GetDisplayNameForLocale(
+            target_language, g_browser_process->GetApplicationLocale(), true);
+        params.body_string_replacement_params.push_back(language_name);
+        toast_controller->MaybeShowToast(std::move(params));
+      }
+    }
+    if (is_toast_enabled) {
+      return ShowTranslateBubbleResult::kSuccess;
+    }
   }
 
-  return TranslateBubbleFactory::Show(browser->window(), web_contents(), step,
-                                      source_language, target_language,
-                                      error_type, is_user_gesture);
+  return TranslateBubbleFactory::Show(
+      BrowserWindow::FromBrowser(browser), web_contents(), step,
+      source_language, target_language, error_type, is_user_gesture);
 }
 #endif
 

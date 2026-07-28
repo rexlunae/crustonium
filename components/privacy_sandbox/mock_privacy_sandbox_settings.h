@@ -36,24 +36,6 @@ class MockPrivacySandboxSettings
               (override));
   MOCK_METHOD(void, ClearTopicSettings, (base::Time, base::Time), (override));
   MOCK_METHOD(base::Time, TopicsDataAccessibleSince, (), (override, const));
-  MOCK_METHOD(bool, IsAttributionReportingEverAllowed, (), (override, const));
-  MOCK_METHOD(bool,
-              IsAttributionReportingAllowed,
-              (const url::Origin&,
-               const url::Origin&,
-               content::RenderFrameHost*),
-              (override, const));
-  MOCK_METHOD(bool,
-              MaySendAttributionReport,
-              (const url::Origin&,
-               const url::Origin&,
-               const url::Origin&,
-               content::RenderFrameHost*),
-              (override, const));
-  MOCK_METHOD(bool,
-              IsAttributionReportingTransitionalDebuggingAllowed,
-              (const url::Origin&, const url::Origin&),
-              (override, const));
   MOCK_METHOD(void,
               SetFledgeJoiningAllowed,
               (const std::string&, bool),
@@ -66,7 +48,7 @@ class MockPrivacySandboxSettings
               IsFledgeAllowed,
               (const url::Origin&,
                const url::Origin&,
-               content::InterestGroupApiOperation,
+               privacy_sandbox::InterestGroupApiOperation,
                content::RenderFrameHost*),
               (override, const));
   MOCK_METHOD(
@@ -86,12 +68,6 @@ class MockPrivacySandboxSettings
   MOCK_METHOD(bool,
               IsSharedStorageSelectURLAllowed,
               (const url::Origin&, const url::Origin&, std::string*, bool*),
-              (override, const));
-  MOCK_METHOD(bool,
-              IsFencedStorageReadAllowed,
-              (const url::Origin&,
-               const url::Origin&,
-               content::RenderFrameHost*),
               (override, const));
   MOCK_METHOD(bool,
               IsPrivateAggregationAllowed,

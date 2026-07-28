@@ -148,13 +148,16 @@ class ArCoreGl : public mojom::XRFrameDataProvider,
           environment_provider) override;
 
   // XRPresentationProvider
-  void SubmitFrameMissing(int16_t frame_index, const gpu::SyncToken&) override;
+  void SubmitFrameMissing(
+      int16_t frame_index,
+      gpu::SharedImageExportResult camera_export_multi_result) override;
   void SubmitFrame(int16_t frame_index,
                    base::TimeDelta time_waited) override;
-  void SubmitFrameDrawnIntoTexture(int16_t frame_index,
-                                   const std::vector<LayerId>& layer_ids,
-                                   const gpu::SyncToken&,
-                                   base::TimeDelta time_waited) override;
+  void SubmitFrameDrawnIntoTexture(
+      int16_t frame_index,
+      std::vector<device::mojom::XRLayerUpdatePtr> layer_updates,
+      gpu::SharedImageExportResult camera_export_multi_result,
+      base::TimeDelta time_waited) override;
   void UpdateLayerBounds(int16_t frame_index,
                          const gfx::RectF& left_bounds,
                          const gfx::RectF& right_bounds,

@@ -9,7 +9,7 @@ import type {RateMenuElement} from 'chrome-untrusted://read-anything-side-panel.
 import {assertEquals, assertNotEquals} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
-import {assertCheckMarksForDropdown, assertHeadersForDropdown, assertTestSettingsAreNotDefaultSettings, mockMetrics, TEST_RANDOM_VALUE_SETTINGS} from './common.js';
+import {assertCheckMarksForDropdown, assertTestSettingsAreNotDefaultSettings, mockMetrics, TEST_RANDOM_VALUE_SETTINGS} from './common.js';
 import {FakeReadingMode} from './fake_reading_mode.js';
 import type {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 
@@ -28,7 +28,7 @@ suite('RateMenuElement', () => {
     chrome.readingMode = readingMode as unknown as typeof chrome.readingMode;
     metrics = mockMetrics();
 
-    rateMenu = document.createElement('rate-menu') as RateMenuElement;
+    rateMenu = document.createElement('rate-menu');
     document.body.appendChild(rateMenu);
   });
 
@@ -36,9 +36,7 @@ suite('RateMenuElement', () => {
     assertCheckMarksForDropdown(rateMenu);
   });
 
-  test('does not have headers', () => {
-    assertHeadersForDropdown(rateMenu.$.menu, /*shouldHaveHeaders=*/ false);
-  });
+
 
   test('rate change is propagated', async () => {
     const rate1 = 1;

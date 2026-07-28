@@ -16,7 +16,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Mediator for the {@link TabSwitcherDrawable} for the {@link TabSwitcherPane}. */
@@ -37,7 +37,7 @@ public class TabSwitcherPaneDrawableMediator {
         mNotificationDotSupplier = notificationDotSupplier;
         mModel = model;
 
-        notificationDotSupplier.addObserver(mNotificationDotObserver);
+        notificationDotSupplier.addSyncObserverAndPostIfNonNull(mNotificationDotObserver);
         TabModelUtils.runOnTabStateInitialized(
                 tabModelSelector,
                 mCallbackController.makeCancelable(this::onTabStateInitializedInternal));
@@ -55,7 +55,7 @@ public class TabSwitcherPaneDrawableMediator {
 
     private void onTabStateInitializedInternal(TabModelSelector tabModelSelector) {
         mTabCountSupplier = tabModelSelector.getModel(false).getTabCountSupplier();
-        mTabCountSupplier.addObserver(mTabCountSupplierObserver);
+        mTabCountSupplier.addSyncObserverAndPostIfNonNull(mTabCountSupplierObserver);
     }
 
     private void updateNotificationDot(TabModelDotInfo tabModelDotInfo) {

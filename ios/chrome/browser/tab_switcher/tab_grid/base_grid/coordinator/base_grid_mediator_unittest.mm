@@ -18,6 +18,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/scoped_feature_list.h"
 #import "base/test/test_timeouts.h"
 #import "base/time/time.h"
 #import "components/commerce/core/commerce_feature_list.h"
@@ -41,7 +42,10 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/snapshots/model/model_swift.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_browser_agent.h"
+#import "ios/chrome/browser/snapshots/model/snapshot_id.h"
+#import "ios/chrome/browser/snapshots/model/snapshot_id_wrapper.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_collection_drag_drop_metrics.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_item_identifier.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_mediator_test.h"
@@ -83,6 +87,9 @@ const char kHasNoPriceDropUserAction[] = "Commerce.TabGridSwitched.NoPriceDrop";
 
 }  // namespace
 
+@interface BaseGridMediator (Test) <SnapshotStorageObserver>
+@end
+
 class BaseGridMediatorTest
     : public GridMediatorTestClass,
       public ::testing::WithParamInterface<GridMediatorType> {
@@ -92,7 +99,7 @@ class BaseGridMediatorTest
 
   void SetUp() override {
     GridMediatorTestClass::SetUp();
-    mode_holder_ = [[TabGridModeHolder alloc] init];
+    mode_holder_ = [[TabGridModeHolder alloc] initWithTabGridState:nil];
     if (GetParam() == TEST_INCOGNITO_MEDIATOR) {
       mediator_ =
           [[IncognitoGridMediator alloc] initWithModeHolder:mode_holder_];
@@ -512,12 +519,11 @@ TEST_P(BaseGridMediatorTest, TestToolbarsNormalModeWithWebstates) {
   // Force the toolbar configuration by setting the view as currently selected.
   [mediator_ currentlySelectedGrid:YES];
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.closeAllButton);
-  EXPECT_TRUE(fake_toolbars_mediator_.configuration.doneButton);
+  EXPECT_TRUE(fake_toolbars_mediator_.configuration.exitTabGridButton);
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.newTabButton);
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.searchButton);
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.selectTabsButton);
 
-  EXPECT_FALSE(fake_toolbars_mediator_.configuration.undoButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.deselectAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.selectAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.addToButton);
@@ -533,14 +539,12 @@ TEST_P(BaseGridMediatorTest, TestToolbarsSelectionModeWithoutSelection) {
   [mediator_ selectTabsButtonTapped:nil];
 
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.selectAllButton);
-  EXPECT_TRUE(fake_toolbars_mediator_.configuration.doneButton);
   EXPECT_EQ(0u, fake_toolbars_mediator_.configuration.selectedItemsCount);
 
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.newTabButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.searchButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.selectTabsButton);
-  EXPECT_FALSE(fake_toolbars_mediator_.configuration.undoButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.deselectAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.addToButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeSelectedTabsButton);
@@ -560,7 +564,6 @@ TEST_P(BaseGridMediatorTest, TestToolbarsSelectionModeWithSelection) {
                                                       ->GetWebStateAt(1)]];
 
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.selectAllButton);
-  EXPECT_TRUE(fake_toolbars_mediator_.configuration.doneButton);
   EXPECT_EQ(1u, fake_toolbars_mediator_.configuration.selectedItemsCount);
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.closeSelectedTabsButton);
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.shareButton);
@@ -570,7 +573,6 @@ TEST_P(BaseGridMediatorTest, TestToolbarsSelectionModeWithSelection) {
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.newTabButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.searchButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.selectTabsButton);
-  EXPECT_FALSE(fake_toolbars_mediator_.configuration.undoButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.deselectAllButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.cancelSearchButton);
 }
@@ -582,7 +584,6 @@ TEST_P(BaseGridMediatorTest, NoToolbarUpdateNotSelected) {
   [mediator_ selectTabsButtonTapped:nil];
 
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.selectAllButton);
-  EXPECT_TRUE(fake_toolbars_mediator_.configuration.doneButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeSelectedTabsButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.shareButton);
 
@@ -595,7 +596,6 @@ TEST_P(BaseGridMediatorTest, NoToolbarUpdateNotSelected) {
 
   // No update on the configuration as the mediator is no longer selected.
   EXPECT_TRUE(fake_toolbars_mediator_.configuration.selectAllButton);
-  EXPECT_TRUE(fake_toolbars_mediator_.configuration.doneButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.closeSelectedTabsButton);
   EXPECT_FALSE(fake_toolbars_mediator_.configuration.shareButton);
 }
@@ -618,7 +618,6 @@ TEST_P(BaseGridMediatorTest, NTPSelectedWithoutGroup) {
   TabGridToolbarsConfiguration* configuration =
       fake_toolbars_mediator_.configuration;
   EXPECT_TRUE(configuration.selectAllButton);
-  EXPECT_TRUE(configuration.doneButton);
   EXPECT_EQ(1u, configuration.selectedItemsCount);
   EXPECT_TRUE(configuration.closeSelectedTabsButton);
   EXPECT_TRUE(configuration.addToButton);
@@ -628,7 +627,6 @@ TEST_P(BaseGridMediatorTest, NTPSelectedWithoutGroup) {
   EXPECT_FALSE(configuration.newTabButton);
   EXPECT_FALSE(configuration.searchButton);
   EXPECT_FALSE(configuration.selectTabsButton);
-  EXPECT_FALSE(configuration.undoButton);
   EXPECT_FALSE(configuration.deselectAllButton);
   EXPECT_FALSE(configuration.cancelSearchButton);
 
@@ -675,7 +673,6 @@ TEST_P(BaseGridMediatorTest, SelectedTabWithGroup) {
   TabGridToolbarsConfiguration* configuration =
       fake_toolbars_mediator_.configuration;
   EXPECT_TRUE(configuration.selectAllButton);
-  EXPECT_TRUE(configuration.doneButton);
   EXPECT_EQ(1u, configuration.selectedItemsCount);
   EXPECT_TRUE(configuration.closeSelectedTabsButton);
   EXPECT_TRUE(configuration.addToButton);
@@ -685,7 +682,6 @@ TEST_P(BaseGridMediatorTest, SelectedTabWithGroup) {
   EXPECT_FALSE(configuration.newTabButton);
   EXPECT_FALSE(configuration.searchButton);
   EXPECT_FALSE(configuration.selectTabsButton);
-  EXPECT_FALSE(configuration.undoButton);
   EXPECT_FALSE(configuration.deselectAllButton);
   EXPECT_FALSE(configuration.cancelSearchButton);
 
@@ -724,28 +720,17 @@ TEST_P(BaseGridMediatorTest, SelectedTabWithGroup) {
 TEST_P(BaseGridMediatorTest, CloseAllThenAddWebState) {
   EXPECT_EQ(3UL, consumer_.items.size());
   [mediator_ closeAllButtonTapped:nil];
-
-  if (base::FeatureList::IsEnabled(kTabSwitcherOverflowMenu)) {
-    // Simulate closing all items if the Overflow Menu is enabled. This is
-    // needed because the Overflow Menu presents a confirmation dialog instead
-    // of immediately closing all items when the Close All button is tapped.
-    [mediator_ closeAllItems];
-  }
+  // Simulate closing all items. This is needed because the Overflow Menu
+  // presents a confirmation dialog instead of immediately closing all items
+  [mediator_ closeAllItems];
 
   TabGridToolbarsConfiguration* configuration =
       fake_toolbars_mediator_.configuration;
   EXPECT_TRUE(configuration.newTabButton);
   EXPECT_TRUE(configuration.searchButton);
-  if (GetParam() == TEST_REGULAR_MEDIATOR &&
-      !base::FeatureList::IsEnabled(kTabSwitcherOverflowMenu)) {
-    // Undo is only available in regular when the edit button is enabled.
-    EXPECT_TRUE(configuration.undoButton);
-  } else {
-    EXPECT_FALSE(configuration.undoButton);
-  }
 
   EXPECT_FALSE(configuration.selectAllButton);
-  EXPECT_FALSE(configuration.doneButton);
+  EXPECT_FALSE(configuration.exitTabGridButton);
   EXPECT_EQ(0u, configuration.selectedItemsCount);
   EXPECT_FALSE(configuration.closeSelectedTabsButton);
   EXPECT_FALSE(configuration.addToButton);
@@ -762,12 +747,11 @@ TEST_P(BaseGridMediatorTest, CloseAllThenAddWebState) {
 
   configuration = fake_toolbars_mediator_.configuration;
   EXPECT_TRUE(configuration.closeAllButton);
-  EXPECT_TRUE(configuration.doneButton);
+  EXPECT_TRUE(configuration.exitTabGridButton);
   EXPECT_TRUE(configuration.newTabButton);
   EXPECT_TRUE(configuration.searchButton);
   EXPECT_TRUE(configuration.selectTabsButton);
 
-  EXPECT_FALSE(configuration.undoButton);
   EXPECT_FALSE(configuration.deselectAllButton);
   EXPECT_FALSE(configuration.selectAllButton);
   EXPECT_FALSE(configuration.addToButton);
@@ -798,7 +782,6 @@ TEST_P(BaseGridMediatorTest, SelectedTabAndGroupWithGroup) {
   TabGridToolbarsConfiguration* configuration =
       fake_toolbars_mediator_.configuration;
   EXPECT_TRUE(configuration.selectAllButton);
-  EXPECT_TRUE(configuration.doneButton);
   EXPECT_EQ(2u, configuration.selectedItemsCount);
   EXPECT_TRUE(configuration.closeSelectedTabsButton);
   EXPECT_TRUE(configuration.addToButton);
@@ -808,7 +791,6 @@ TEST_P(BaseGridMediatorTest, SelectedTabAndGroupWithGroup) {
   EXPECT_FALSE(configuration.newTabButton);
   EXPECT_FALSE(configuration.searchButton);
   EXPECT_FALSE(configuration.selectTabsButton);
-  EXPECT_FALSE(configuration.undoButton);
   EXPECT_FALSE(configuration.deselectAllButton);
   EXPECT_FALSE(configuration.cancelSearchButton);
 
@@ -1298,6 +1280,37 @@ TEST_P(BaseGridMediatorTest, FetchTabSnapshotAndFavicon) {
 
   [mediator_ fetchTabSnapshotAndFavicon:item completion:barrier];
   run_loop.Run();
+}
+
+// Tests that the snapshot update is ignored during a batch operation is active
+// and the feature is enabled.
+TEST_P(BaseGridMediatorTest, SnapshotIgnoredBatchOperationGuardTest) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kGridMediatorSnapshotUpdateBatchGuard);
+
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  SnapshotID snapshot_id = SnapshotID(web_state->GetUniqueIdentifier());
+
+  SnapshotIDWrapper* wrapper =
+      [[SnapshotIDWrapper alloc] initWithSnapshotID:snapshot_id];
+
+  // When no batch operation is in progress, snapshot update should be
+  // processed.
+  NSUInteger initial_count = consumer_.replaceItemCount;
+  [mediator_ didUpdateSnapshotStorageWithSnapshotID:wrapper];
+  EXPECT_EQ(initial_count + 1, consumer_.replaceItemCount);
+
+  // When a batch operation is in progress, snapshot update should be ignored.
+  {
+    WebStateList::ScopedBatchOperation lock =
+        browser_->GetWebStateList()->StartBatchOperation();
+    [mediator_ didUpdateSnapshotStorageWithSnapshotID:wrapper];
+    EXPECT_EQ(initial_count + 1, consumer_.replaceItemCount);
+  }
+
+  // When the batch operation ends, snapshot update should be processed.
+  [mediator_ didUpdateSnapshotStorageWithSnapshotID:wrapper];
+  EXPECT_EQ(initial_count + 2, consumer_.replaceItemCount);
 }
 
 INSTANTIATE_TEST_SUITE_P(

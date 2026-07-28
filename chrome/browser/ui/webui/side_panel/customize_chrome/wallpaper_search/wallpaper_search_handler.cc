@@ -15,6 +15,7 @@
 #include "base/base64.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/task/sequenced_task_runner.h"
@@ -22,6 +23,7 @@
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/token.h"
+#include "base/values.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
@@ -31,11 +33,12 @@
 #include "chrome/browser/search/background/wallpaper_search/wallpaper_search_data.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/survey_config.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/webui/cr_components/theme_color_picker/customize_chrome_colors.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_string_map.h"
@@ -58,7 +61,6 @@
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -144,7 +146,6 @@ WallpaperSearchHandler::WallpaperSearchHandler(
     int64_t session_id,
     WallpaperSearchStringMap* string_map)
     : profile_(profile),
-      data_decoder_(std::make_unique<data_decoder::DataDecoder>()),
       image_decoder_(*image_decoder),
       wallpaper_search_background_manager_(
           *wallpaper_search_background_manager),
@@ -252,7 +253,7 @@ void WallpaperSearchHandler::GetDescriptors(GetDescriptorsCallback callback) {
   resource_request->url =
       GURL(base::StrCat({kGstaticBaseURL, "descriptors_en-US.json"}));
   resource_request->request_initiator =
-      url::Origin::Create(GURL(chrome::kChromeUINewTabURL));
+      url::Origin::Create(chrome::ChromeUINewTabURLAsGURL());
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   descriptors_simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
@@ -315,7 +316,7 @@ void WallpaperSearchHandler::GetInspirations(GetInspirationsCallback callback) {
   resource_request->url =
       GURL(base::StrCat({kGstaticBaseURL, "inspirations_en-US.json"}));
   resource_request->request_initiator =
-      url::Origin::Create(GURL(chrome::kChromeUINewTabURL));
+      url::Origin::Create(chrome::ChromeUINewTabURLAsGURL());
 
   inspirations_simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
@@ -488,7 +489,7 @@ void WallpaperSearchHandler::SetBackgroundToInspirationImage(
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = GURL(background_url);
   resource_request->request_initiator =
-      url::Origin::Create(GURL(chrome::kChromeUINewTabURL));
+      url::Origin::Create(chrome::ChromeUINewTabURLAsGURL());
 
   image_download_simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
@@ -578,12 +579,14 @@ void WallpaperSearchHandler::ShowFeedbackPage() {
     return;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   if (!browser) {
     return;
   }
   OptimizationGuideKeyedService* opt_guide_keyed_service =
-      OptimizationGuideKeyedServiceFactory::GetForProfile(browser->profile());
+      OptimizationGuideKeyedServiceFactory::GetForProfile(
+          browser->GetProfile());
   if (!opt_guide_keyed_service ||
       !opt_guide_keyed_service->ShouldFeatureBeCurrentlyAllowedForFeedback(
           optimization_guide::proto::LogAiDataRequest::kWallpaperSearch)) {
@@ -637,27 +640,17 @@ void WallpaperSearchHandler::OnDescriptorsRetrieved(
   if (remainder) {
     response = std::string(*remainder);
   }
-  data_decoder_->ParseJson(
-      response,
-      base::BindOnce(&WallpaperSearchHandler::OnDescriptorsJsonParsed,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void WallpaperSearchHandler::OnDescriptorsJsonParsed(
-    GetDescriptorsCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.has_value() || !result->is_dict()) {
-    DVLOG(1) << "Parsing JSON failed: " << result.error();
+  std::optional<base::DictValue> dict =
+      base::JSONReader::ReadDict(response, base::JSON_PARSE_RFC);
+  if (!dict.has_value()) {
+    DVLOG(1) << "Parsing JSON failed.";
     std::move(callback).Run(nullptr);
     return;
   }
 
-  const base::ListValue* descriptor_a =
-      result->GetDict().FindList("descriptor_a");
-  const base::ListValue* descriptor_b =
-      result->GetDict().FindList("descriptor_b");
-  const base::ListValue* descriptor_c_labels =
-      result->GetDict().FindList("descriptor_c");
+  const base::ListValue* descriptor_a = dict->FindList("descriptor_a");
+  const base::ListValue* descriptor_b = dict->FindList("descriptor_b");
+  const base::ListValue* descriptor_c_labels = dict->FindList("descriptor_c");
   if (!descriptor_a || !descriptor_b || !descriptor_c_labels) {
     DVLOG(1) << "Parsing JSON failed: no valid descriptors.";
     std::move(callback).Run(nullptr);
@@ -826,23 +819,17 @@ void WallpaperSearchHandler::OnInspirationsRetrieved(
   if (remainder) {
     response = std::string(*remainder);
   }
-  data_decoder_->ParseJson(
-      response,
-      base::BindOnce(&WallpaperSearchHandler::OnInspirationsJsonParsed,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void WallpaperSearchHandler::OnInspirationsJsonParsed(
-    GetInspirationsCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.has_value() || !result->is_list()) {
-    DVLOG(1) << "Parsing JSON failed: " << result.error();
+  std::optional<base::ListValue> list =
+      base::JSONReader::ReadList(response, base::JSON_PARSE_RFC);
+  if (!list.has_value()) {
+    DVLOG(1) << "Parsing JSON failed.";
     std::move(callback).Run(std::nullopt);
     return;
   }
+
   std::vector<side_panel::customize_chrome::mojom::InspirationGroupPtr>
       mojo_inspiration_groups;
-  for (const auto& inspiration : result->GetList()) {
+  for (const auto& inspiration : *list) {
     if (!inspiration.is_dict()) {
       continue;
     }

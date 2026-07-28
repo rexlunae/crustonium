@@ -18,28 +18,29 @@ import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.hub.DelegateButtonData;
-import org.chromium.chrome.browser.hub.DisplayButtonData;
-import org.chromium.chrome.browser.hub.FullButtonData;
 import org.chromium.chrome.browser.hub.HubColorScheme;
 import org.chromium.chrome.browser.hub.Pane;
 import org.chromium.chrome.browser.hub.PaneHubController;
 import org.chromium.chrome.browser.hub.PaneId;
-import org.chromium.chrome.browser.hub.ResourceButtonData;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthController;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager.IncognitoReauthCallback;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabModel;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
+import org.chromium.chrome.browser.ui.actions.button.DelegateButtonData;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
+import org.chromium.chrome.browser.ui.actions.button.ResourceButtonData;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.chrome.tab_ui.R;
@@ -91,18 +92,15 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
 
                 @Override
                 public void onIncognitoReauthSuccess() {
-                    TabGroupModelFilter incognitoTabGroupModelFilter =
-                            mIncognitoTabGroupModelFilterSupplier.get();
-                    @Nullable
+                    TabModel incognitoTabModel = mIncognitoTabModelSupplier.get();
                     TabSwitcherPaneCoordinator coordinator = getTabSwitcherPaneCoordinator();
-                    if (!getIsVisibleSupplier().get()
+                    if (!mIsVisibleSupplier.get()
                             || coordinator == null
-                            || !incognitoTabGroupModelFilter.getTabModel().isActiveModel()) {
+                            || !incognitoTabModel.isActiveModel()) {
                         return;
                     }
 
-                    coordinator.resetWithListOfTabs(
-                            incognitoTabGroupModelFilter.getRepresentativeTabList());
+                    coordinator.resetWithListOfTabs(incognitoTabModel.getRepresentativeTabList());
                     coordinator.setInitialScrollIndexOffset();
                     coordinator.requestAccessibilityFocusOnCurrentTab();
 
@@ -124,7 +122,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
             };
 
     /** Not safe to use until initWithNative. */
-    private final Supplier<TabGroupModelFilter> mIncognitoTabGroupModelFilterSupplier;
+    private final Supplier<TabModel> mIncognitoTabModelSupplier;
 
     private final ResourceButtonData mReferenceButtonData;
     private final FullButtonData mEnabledNewTabButtonData;
@@ -138,7 +136,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
     /**
      * @param context The activity context.
      * @param factory The factory used to construct {@link TabSwitcherPaneCoordinator}s.
-     * @param incognitoTabGroupModelFilterSupplier The incognito tab model filter.
+     * @param incognitoTabModelSupplier The incognito tab model.
      * @param newTabButtonClickListener The {@link OnClickListener} for the new tab button.
      * @param incognitoReauthControllerSupplier Supplier for the incognito reauth controller.
      * @param onToolbarAlphaChange Observer to notify when alpha changes during animations.
@@ -152,7 +150,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
     IncognitoTabSwitcherPane(
             Context context,
             TabSwitcherPaneCoordinatorFactory factory,
-            Supplier<TabGroupModelFilter> incognitoTabGroupModelFilterSupplier,
+            Supplier<TabModel> incognitoTabModelSupplier,
             OnClickListener newTabButtonClickListener,
             @Nullable OneshotSupplier<IncognitoReauthController> incognitoReauthControllerSupplier,
             DoubleConsumer onToolbarAlphaChange,
@@ -160,7 +158,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             MonotonicObservableSupplier<CompositorViewHolder> compositorViewHolderSupplier,
             TabGroupCreationUiDelegate tabGroupCreationUiDelegate,
-            @Nullable MonotonicObservableSupplier<Boolean> xrSpaceModeObservableSupplier) {
+            NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier) {
         super(
                 PaneId.INCOGNITO_TAB_SWITCHER,
                 context,
@@ -174,7 +172,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
                 xrSpaceModeObservableSupplier);
 
         mColorScheme = HubColorScheme.INCOGNITO;
-        mIncognitoTabGroupModelFilterSupplier = incognitoTabGroupModelFilterSupplier;
+        mIncognitoTabModelSupplier = incognitoTabModelSupplier;
         mLastClosedTabId = Tab.INVALID_TAB_ID;
 
         // TODO(crbug.com/40946413): Update this string to not be an a11y string and it should
@@ -192,12 +190,10 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
                         R.string.button_new_incognito_tab,
                         R.drawable.new_tab_icon);
         mEnabledNewTabButtonData =
-                new DelegateButtonData(
-                        newTabButtonData,
-                        () -> {
-                            newTabButtonClickListener.onClick(null);
-                        });
-        mDisabledNewTabButtonData = new DelegateButtonData(newTabButtonData, null);
+                new DelegateButtonData.Builder(newTabButtonData)
+                        .setOnPress(newTabButtonClickListener::onClick)
+                        .build();
+        mDisabledNewTabButtonData = new DelegateButtonData.Builder(newTabButtonData).build();
 
         if (incognitoReauthControllerSupplier != null) {
             mCallbackController = new CallbackController();
@@ -245,13 +241,12 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
 
     @Override
     public void showAllTabs() {
-        resetWithListOfTabs(mIncognitoTabGroupModelFilterSupplier.get().getRepresentativeTabList());
+        resetWithListOfTabs(mIncognitoTabModelSupplier.get().getRepresentativeTabList());
     }
 
     @Override
     public @Nullable Tab getCurrentTab() {
-        return TabModelUtils.getCurrentTab(
-                mIncognitoTabGroupModelFilterSupplier.get().getTabModel());
+        return TabModelUtils.getCurrentTab(mIncognitoTabModelSupplier.get());
     }
 
     @Override
@@ -264,8 +259,8 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
         @Nullable TabSwitcherPaneCoordinator coordinator = getTabSwitcherPaneCoordinator();
         if (coordinator == null) return;
 
-        @Nullable TabGroupModelFilter filter = mIncognitoTabGroupModelFilterSupplier.get();
-        if (filter == null || !filter.isTabModelRestored()) {
+        @Nullable TabModel tabModel = mIncognitoTabModelSupplier.get();
+        if (tabModel == null || !tabModel.isTabModelRestored()) {
             // The tab list is trying to show without the filter being ready. This happens when
             // first trying to show a the pane. If this happens an attempt to show will be made
             // when the filter's restoreCompleted() method is invoked in TabSwitcherPaneMediator.
@@ -278,8 +273,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
             return;
         }
 
-        boolean isNotVisibleOrSelected =
-                !getIsVisibleSupplier().get() || !filter.getTabModel().isActiveModel();
+        boolean isNotVisibleOrSelected = !mIsVisibleSupplier.get() || !tabModel.isActiveModel();
         boolean incognitoReauthShowing = isIncognitoReauthPending();
 
         if (isNotVisibleOrSelected || incognitoReauthShowing) {
@@ -296,7 +290,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
                     && ChromeFeatureList.isEnabled(
                             SensitiveContentFeatures.SENSITIVE_CONTENT_WHILE_SWITCHING_TABS)) {
                 TabUiUtils.updateViewContentSensitivityForTabs(
-                        filter.getTabModel(),
+                        tabModel,
                         coordinator::setTabSwitcherContentSensitivity,
                         "SensitiveContent.TabSwitching.IncognitoTabSwitcherPane.Sensitivity");
             }
@@ -325,10 +319,9 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
     private @Nullable IncognitoTabModel getIncognitoTabModel() {
         if (!mIsNativeInitialized) return null;
 
-        TabGroupModelFilter incognitoTabGroupModelFilter =
-                mIncognitoTabGroupModelFilterSupplier.get();
-        assert incognitoTabGroupModelFilter != null;
-        return (IncognitoTabModel) incognitoTabGroupModelFilter.getTabModel();
+        TabModel incognitoTabModel = mIncognitoTabModelSupplier.get();
+        assert incognitoTabModel != null;
+        return (IncognitoTabModel) incognitoTabModel;
     }
 
     private void setNewTabButtonEnabledState(boolean enabled) {
@@ -371,12 +364,10 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
     }
 
     private @TabCloseMethod int getFinalTabCloseMethod(TabSwitcherPaneCoordinator paneCoordinator) {
-        Supplier<Integer> recentlySwipedTabIdSupplier =
-                paneCoordinator.getRecentlySwipedTabIdSupplier();
-        @Nullable
+        int recentlySwipedTabId = paneCoordinator.getRecentlySwipedTabIdSupplier().get();
         Supplier<Boolean> dialogShowingOrAnimationSupplier =
                 paneCoordinator.getTabGridDialogShowingOrAnimationSupplier();
-        boolean wasClosedViaSwipe = wasFinalTabSwiped(recentlySwipedTabIdSupplier);
+        boolean wasClosedViaSwipe = wasFinalTabSwiped(recentlySwipedTabId);
 
         // We can tell if the final tab was closed via the Tab List Editor by checking to see if
         // the Tab List Editor requires a clean up, which is not complete until after we initialize
@@ -384,7 +375,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
         boolean wasClosedViaTabListEditor = paneCoordinator.doesTabListEditorNeedCleanup();
 
         boolean isTabGridDialogVisible =
-                dialogShowingOrAnimationSupplier != null && dialogShowingOrAnimationSupplier.get();
+                SupplierUtils.getOr(dialogShowingOrAnimationSupplier, false);
 
         if (isIncognitoReauthShowing()) {
             return TabCloseMethod.CLOSED_WHILE_REAUTH_VISIBLE;
@@ -400,10 +391,8 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
     }
 
     /** Returns whether the final tab was swiped close. */
-    private boolean wasFinalTabSwiped(Supplier<Integer> recentlySwipedTabIdSupplier) {
-        return recentlySwipedTabIdSupplier.get() != null
-                && recentlySwipedTabIdSupplier.get() != Tab.INVALID_TAB_ID
-                && recentlySwipedTabIdSupplier.get() == mLastClosedTabId;
+    private boolean wasFinalTabSwiped(int recentlySwipedTabId) {
+        return recentlySwipedTabId != Tab.INVALID_TAB_ID && recentlySwipedTabId == mLastClosedTabId;
     }
 
     /**
@@ -457,7 +446,7 @@ public class IncognitoTabSwitcherPane extends TabSwitcherPaneBase {
                 mForceCleanup = true;
                 mOnAnimationStatusChange.onResult(false);
             } else {
-                mIsAnimatingSupplier.addObserver(mOnAnimationStatusChange);
+                mIsAnimatingSupplier.addSyncObserverAndPostIfNonNull(mOnAnimationStatusChange);
             }
         }
 

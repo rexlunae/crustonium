@@ -45,11 +45,13 @@
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/named_animation_trigger_map.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -75,6 +77,7 @@ void UpdateAnimationTiming(
 // static
 void DocumentAnimations::FindRelevantTriggerAttachments(
     CSSAnimation& animation,
+    TriggerScopedNameMap& global_trigger_map,
     TriggerAttachmentMap& relevant_attachments_out) {
   const Member<const StyleTriggerAttachmentVector>&
       animation_trigger_attachments = animation.GetTriggerAttachments();
@@ -87,46 +90,54 @@ void DocumentAnimations::FindRelevantTriggerAttachments(
     return;
   }
 
-  // Map to accumulate all scoped triggers known to ancestors (who might be
-  // aware of triggers that are outside the owning_element's ancestry but in the
-  // same trigger-scope - such a trigger might come later in tree-order and
-  // therefore be the correct candidate).
-  TriggerScopedNameMap* ancestors_named_triggers =
+  // Map to accumulate triggers defined on elements in the ancestry of the
+  // owning element. These are to be checked first before looking at the global
+  // list.
+  TriggerScopedNameMap* ancestor_trigger_map =
       MakeGarbageCollected<TriggerScopedNameMap>();
 
   const Element* element = owning_element;
   while (element) {
-    const LayoutBox* element_box = element->GetLayoutBox();
-    if (!element_box) {
-      element = element->parentElement();
-      continue;
-    }
-
-    for (const auto& fragment : element_box->PhysicalFragments()) {
-      const TriggerScopedNameMap* named_triggers = fragment.NamedTriggers();
-      if (!named_triggers) {
-        continue;
-      }
-
-      for (const auto& entry : *named_triggers) {
-        ancestors_named_triggers->Set(entry.key, entry.value);
+    if (NamedAnimationTriggerMap* element_named_triggers =
+            element->NamedTriggers()) {
+      for (const auto& named_trigger : element_named_triggers->Keys()) {
+        TriggerScopedName* trigger_scoped_name =
+            ToTriggerScopedName(*named_trigger, *element);
+        // Within the ancestry, the nearest ancestor with the name is selected,
+        // so keep the first entry found. insert() no-ops when the key is
+        // already present, matching that "skip if already found" semantics in a
+        // single lookup.
+        ancestor_trigger_map->insert(trigger_scoped_name, element);
       }
     }
 
     element = element->parentElement();
   }
 
+  const auto add_relevant_trigger =
+      [&](const Element* source, TriggerScopedName* trigger_scoped_name,
+          const StyleTriggerAttachment* attachment) {
+        AnimationTrigger* trigger =
+            source->NamedTrigger(trigger_scoped_name->GetScopedName());
+        DCHECK(trigger);
+        relevant_attachments_out.Set(trigger_scoped_name,
+                                     std::make_pair(trigger, attachment));
+      };
+
   for (const auto& attachment : *animation_trigger_attachments) {
     TriggerScopedName* trigger_scoped_name =
         ToTriggerScopedName(*attachment->TriggerName(), *owning_element);
 
-    auto it = ancestors_named_triggers->find(trigger_scoped_name);
-    if (it != ancestors_named_triggers->end()) {
-      AnimationTrigger* trigger =
-          it->value->NamedTrigger(trigger_scoped_name->GetScopedName());
-      DCHECK(trigger);
-      relevant_attachments_out.Set(trigger_scoped_name,
-                                   std::make_pair<>(trigger, attachment));
+    auto it = ancestor_trigger_map->find(trigger_scoped_name);
+    if (it != ancestor_trigger_map->end()) {
+      add_relevant_trigger(it->value, trigger_scoped_name, attachment);
+      continue;
+    }
+
+    // If we didn't find a name in the ancestry, search the global map.
+    it = global_trigger_map.find(trigger_scoped_name);
+    if (it != global_trigger_map.end()) {
+      add_relevant_trigger(it->value, trigger_scoped_name, attachment);
     }
   }
 }
@@ -220,7 +231,7 @@ void DocumentAnimations::UpdateAnimations(
 
   if (document_->GetPendingAnimations().Update(paint_artifact_compositor)) {
     DCHECK(document_->View());
-    document_->View()->ScheduleAnimation();
+    document_->View()->ScheduleAnimation(cc::BeginMainFrameReason::kAnimation);
   }
 
   UpdateCompositorAnimationTriggers(paint_artifact_compositor);
@@ -278,6 +289,69 @@ HeapVector<Member<Animation>> DocumentAnimations::getAnimations(
   return animations;
 }
 
+void SVGImageAnimationsToReset::Trace(Visitor* visitor) const {
+  visitor->Trace(animations_to_resume_);
+}
+
+void SVGImageAnimationsToReset::Clear() {
+  animations_to_resume_.clear();
+}
+
+void SVGImageAnimationsToReset::Add(CSSAnimation& animation) {
+  animations_to_resume_.push_back(animation);
+}
+
+void SVGImageAnimationsToReset::Resume() {
+  HeapVector<Member<CSSAnimation>> animations_to_resume;
+  animations_to_resume.swap(animations_to_resume_);
+  for (CSSAnimation* animation : animations_to_resume) {
+    if (!animation || animation->ReplaceStateRemoved() ||
+        !animation->effect()) {
+      continue;
+    }
+    animation->Unpause();
+  }
+}
+
+bool SVGImageAnimationsToReset::HasAnimationForTesting(
+    const CSSAnimation& animation) const {
+  for (const CSSAnimation* animation_to_resume : animations_to_resume_) {
+    if (animation_to_resume == &animation) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void DocumentAnimations::PrepareAnimationsForSVGImageReset(
+    SVGImageAnimationsToReset& animations_to_reset) {
+  DCHECK(document_);
+  DCHECK(document_->View());
+  DCHECK(document_->GetFrame());
+  DCHECK(document_->GetFrame()->GetChromeClient().IsIsolatedSVGChromeClient());
+
+  // Called only from the isolated SVG image reset path. Rewind CSS animations
+  // to time=0 and collect the ones that were running so the caller can resume
+  // them later. Explicitly paused animations keep their paused state and are
+  // not collected for resuming.
+  animations_to_reset.Clear();
+  for (auto& timeline : timelines_) {
+    for (const auto& animation : timeline->GetAnimations()) {
+      auto* css_animation = DynamicTo<CSSAnimation>(animation.Get());
+      if (!css_animation || css_animation->ReplaceStateRemoved() ||
+          !css_animation->effect()) {
+        continue;
+      }
+      const bool should_resume_after_paint = !css_animation->Paused();
+      css_animation->SetCurrentTimeInternal(AnimationTimeDelta());
+      if (should_resume_after_paint) {
+        css_animation->pause();
+        animations_to_reset.Add(*css_animation);
+      }
+    }
+  }
+}
+
 void DocumentAnimations::DetachCompositorTimelines() {
   if (!Platform::Current()->IsThreadedAnimationEnabled() ||
       !document_->GetSettings()->GetAcceleratedCompositingEnabled() ||
@@ -323,6 +397,7 @@ void DocumentAnimations::Trace(Visitor* visitor) const {
   visitor->Trace(timelines_);
   visitor->Trace(triggers_);
   visitor->Trace(triggered_animations_);
+  visitor->Trace(global_deferred_timelines_);
 }
 
 void DocumentAnimations::GetAnimationsTargetingTreeScope(
@@ -405,10 +480,6 @@ void DocumentAnimations::RemoveReplacedAnimations(
   }
 }
 
-void DocumentAnimations::UpdateAnimationTriggerAttachments() {
-  ExecuteTriggerAttachmentUpdates();
-}
-
 void DocumentAnimations::AddAnimationTrigger(AnimationTrigger& trigger) {
   triggers_.insert(&trigger);
 }
@@ -425,9 +496,24 @@ void DocumentAnimations::UpdateCompositorAnimationTriggers(
   }
 }
 
-void DocumentAnimations::ExecuteTriggerAttachmentUpdates() {
+void DocumentAnimations::UpdateAnimationTriggerAttachments() {
+  if (!document_->GetLayoutView()) {
+    return;
+  }
+
   HeapHashSet<WeakMember<CSSAnimation>> triggered_animations;
   triggered_animations.swap(triggered_animations_);
+
+  TriggerScopedNameMap* global_trigger_map =
+      MakeGarbageCollected<TriggerScopedNameMap>();
+
+  for (const auto& fragment : document_->GetLayoutView()->PhysicalFragments()) {
+    if (const TriggerScopedNameMap* named_triggers = fragment.NamedTriggers()) {
+      for (const auto& entry : *named_triggers) {
+        global_trigger_map->Set(entry.key, entry.value);
+      }
+    }
+  }
 
   for (CSSAnimation* animation : triggered_animations) {
     const Member<const StyleTriggerAttachmentVector>&
@@ -435,8 +521,10 @@ void DocumentAnimations::ExecuteTriggerAttachmentUpdates() {
     TriggerAttachmentMap relevant_attachments;
     if (animation_trigger_attachments) {
       AddTriggeredAnimation(animation);
-      FindRelevantTriggerAttachments(*animation, relevant_attachments);
+      FindRelevantTriggerAttachments(*animation, *global_trigger_map,
+                                     relevant_attachments);
     }
+
     // Add new triggers, remove obsolete ones.
     UpdateTriggerAttachments(*animation, relevant_attachments);
   }
@@ -444,6 +532,47 @@ void DocumentAnimations::ExecuteTriggerAttachmentUpdates() {
 
 void DocumentAnimations::AddTriggeredAnimation(CSSAnimation* animation) {
   triggered_animations_.insert(animation);
+}
+
+void DocumentAnimations::RetargetAnimationsForPseudoElement(
+    PseudoElement* new_effect_target) {
+  CHECK(new_effect_target);
+  Element& originating_element =
+      new_effect_target->UltimateOriginatingElement();
+  PseudoId pseudo_id = new_effect_target->GetPseudoId();
+  AtomicString pseudo_argument = new_effect_target->GetPseudoArgument();
+  for (auto& timeline : timelines_) {
+    for (auto& animation : timeline->GetAnimations()) {
+      if (animation->ReplaceStateRemoved()) {
+        continue;
+      }
+      if (!animation->effect() || (!animation->effect()->IsCurrent() &&
+                                   !animation->effect()->IsInEffect())) {
+        continue;
+      }
+      KeyframeEffect* effect = DynamicTo<KeyframeEffect>(animation->effect());
+      if (!effect) {
+        continue;
+      }
+      Element* target = effect->target();
+      if (!target || !target->isConnected()) {
+        continue;
+      }
+      if (*target != originating_element) {
+        continue;
+      }
+      Element* effect_target = effect->EffectTarget();
+      if (effect_target == new_effect_target) {
+        continue;
+      }
+      if (PseudoElement* candidate = DynamicTo<PseudoElement>(effect_target)) {
+        if (candidate->GetPseudoId() == pseudo_id &&
+            candidate->GetPseudoArgument() == pseudo_argument) {
+          effect->UpdateEffectTarget(new_effect_target);
+        }
+      }
+    }
+  }
 }
 
 }  // namespace blink

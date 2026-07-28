@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/feature_list.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser.h"
@@ -12,6 +13,7 @@
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_model.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_bubble_view.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_coordinator.h"
@@ -65,12 +67,15 @@ class ChromeLabsTestHelper {
   // SetUpOnMainThread().
   void PinChromeLabsButton(Browser* browser) {
     PinnedToolbarActionsModel* const actions_model =
-        PinnedToolbarActionsModel::Get(browser->profile());
+        PinnedToolbarActionsModel::Get(browser->GetProfile());
     actions_model->UpdatePinnedState(kActionShowChromeLabs, true);
+    CHECK(!features::IsWebUIPinnedToolbarActionsEnabled())
+        << "Test needs modification to support WebUIPinnedToolbarActions";
     views::test::WaitForAnimatingLayoutManager(
-        BrowserView::GetBrowserViewForBrowser(browser)
-            ->toolbar()
-            ->pinned_toolbar_actions_container());
+        static_cast<PinnedToolbarActionsContainer*>(
+            BrowserView::GetBrowserViewForBrowser(browser)
+                ->toolbar_button_provider()
+                ->GetPinnedToolbarActions()));
   }
 
   // Clicks the Chrome Labs button to show the bubble.
@@ -140,7 +145,7 @@ class ChromeLabsUiTest : public DialogBrowserTest {
   }
   void ShowUi(const std::string& name) override {
     // Bubble bounds may exceed display's work area.
-    // https://crbug.com/893292
+    // https://crbug.com/41419544
     set_should_verify_dialog_bounds(false);
     helper_->ShowChromeLabsBubble(browser());
   }
@@ -185,15 +190,13 @@ class ChromeLabsMultipleFeaturesUiTest : public DialogBrowserTest {
   }
   void ShowUi(const std::string& name) override {
     // Bubble bounds may exceed display's work area.
-    // https://crbug.com/893292
+    // https://crbug.com/41419544
     set_should_verify_dialog_bounds(false);
     helper_->ShowChromeLabsBubble(browser());
 
     // Scroll to a little after the dialog inset to ensure that scrolling does
     // not make the contents too close to the title.
-    browser()
-        ->GetFeatures()
-        .chrome_labs_coordinator()
+    ChromeLabsCoordinator::From(browser())
         ->GetChromeLabsBubbleView()
         ->GetScrollViewForTesting()
         ->ScrollByOffset(

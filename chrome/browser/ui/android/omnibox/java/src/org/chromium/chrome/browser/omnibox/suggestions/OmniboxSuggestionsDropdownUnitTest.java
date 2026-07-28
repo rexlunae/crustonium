@@ -8,20 +8,24 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import static org.chromium.ui.test.util.MockitoHelper.clearInvocations;
+
 import android.content.Context;
 import android.view.ContextThemeWrapper;
-import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.widget.FrameLayout;
 
+import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.After;
@@ -30,30 +34,41 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdown.SuggestionLayoutScrollListener;
+import org.chromium.components.omnibox.OmniboxFeatureList;
+import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
+import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
+import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link OmniboxSuggestionsDropdown}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(sdk = 29)
+@Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
 public class OmniboxSuggestionsDropdownUnitTest {
     public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
     private @Mock Runnable mDropdownScrollListener;
     private @Mock Runnable mDropdownScrollToTopListener;
     private @Mock OmniboxSuggestionsDropdownAdapter mAdapter;
     private @Mock View mView;
+    private @Mock OmniboxSuggestionsDropdown.NavigationListener mNavigationListener;
 
     private Context mContext;
     private OmniboxSuggestionsDropdown mDropdown;
     private OmniboxSuggestionsDropdown.SuggestionLayoutScrollListener mListener;
     private FrameLayout.LayoutParams mLayoutParams;
+    private final SettableNonNullObservableSupplier<Boolean> mChipVisibilitySupplier =
+            ObservableSuppliers.createNonNull(false);
 
     @Before
     public void setUp() {
@@ -223,7 +238,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
     @Test
     public void translateChildrenVertical() {
-        View childView = Mockito.mock(View.class);
+        View childView = mock(View.class);
 
         mDropdown.translateChildrenVertical(45.6f);
         mDropdown.onChildAttachedToWindow(childView);
@@ -235,7 +250,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
     @Test
     public void setChildAlpha() {
-        View childView = Mockito.mock(View.class);
+        View childView = mock(View.class);
 
         mDropdown.setChildAlpha(0.6f);
         mDropdown.onChildAttachedToWindow(childView);
@@ -261,35 +276,10 @@ public class OmniboxSuggestionsDropdownUnitTest {
     public void updateVisualScrollState_notAtTop_doesNotScroll() {
         // Scroll down to move away from the top.
         mListener.updateKeyboardVisibilityAndScroll(10, 10);
-        Mockito.clearInvocations(mListener);
+        clearInvocations(mListener);
 
         mListener.updateVisualScrollState();
         verify(mListener, times(0)).postOnAnimation(any());
-    }
-
-    @Test
-    public void testToolbarPosition() {
-        // Feature OFF, Toolbar at the TOP.
-        ChromeFeatureList.sAndroidBottomToolbarV2ReverseOrderSuggestionsList.setForTesting(false);
-        mDropdown.setToolbarPosition(ControlsPosition.TOP);
-        assertTrue(mDropdown.getToolbarOnTopForTesting());
-        assertEquals(Gravity.TOP, mLayoutParams.gravity);
-
-        // Feature OFF, Toolbar at the BOTTOM.
-        mDropdown.setToolbarPosition(ControlsPosition.BOTTOM);
-        assertTrue(mDropdown.getToolbarOnTopForTesting());
-        assertEquals(Gravity.TOP, mLayoutParams.gravity);
-
-        // Feature ON, Toolbar at the TOP.
-        ChromeFeatureList.sAndroidBottomToolbarV2ReverseOrderSuggestionsList.setForTesting(true);
-        mDropdown.setToolbarPosition(ControlsPosition.TOP);
-        assertTrue(mDropdown.getToolbarOnTopForTesting());
-        assertEquals(Gravity.TOP, mLayoutParams.gravity);
-
-        // Feature ON, Toolbar at the BOTTOM.
-        mDropdown.setToolbarPosition(ControlsPosition.BOTTOM);
-        assertFalse(mDropdown.getToolbarOnTopForTesting());
-        assertEquals(Gravity.BOTTOM, mLayoutParams.gravity);
     }
 
     @Test
@@ -363,5 +353,77 @@ public class OmniboxSuggestionsDropdownUnitTest {
                                 KeyEvent.KEYCODE_TAB,
                                 0,
                                 KeyEvent.META_ALT_ON)));
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.RESET_SUGGESTIONS_SCROLL)
+    public void testOnLayoutChildren_flagEnabled_scrolledToTop() {
+        mListener.onLayoutChildren(null, new RecyclerView.State());
+        verify(mListener).scrollToPositionWithOffset(0, 0);
+    }
+
+    @Test
+    @DisableFeatures(OmniboxFeatureList.RESET_SUGGESTIONS_SCROLL)
+    public void testOnLayoutChildren_flagDisabled_noScroll() {
+        mListener.onLayoutChildren(null, new RecyclerView.State());
+        verify(mListener, times(0)).scrollToPositionWithOffset(anyInt(), anyInt());
+    }
+
+    @Test
+    public void testSetAllowParkingAtSentinel() {
+        SelectionController controller = mDropdown.getSelectionControllerForTesting();
+
+        mDropdown.setAllowParkingAtSentinel(true);
+        assertTrue(controller.isParkedAtSentinel());
+
+        mDropdown.setAllowParkingAtSentinel(false);
+        assertFalse(controller.isParkedAtSentinel());
+    }
+
+    @Test
+    public void testNavigationListener_notifiedOnKeyDown() {
+        mDropdown.setNavigationListener(mNavigationListener);
+        when(mDropdown.isShown()).thenReturn(true);
+
+        mDropdown.onKeyDown(
+                KeyEvent.KEYCODE_TAB,
+                new KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB, 0));
+
+        verify(mNavigationListener).onNavigationStateChange(anyBoolean());
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_ASYNC_VIEW_INFLATION)
+    public void testRecycledViewPool_NotClearedAndReused() {
+        ModelList listItems = new ModelList();
+        var listener = new SuggestionLayoutScrollListener(mContext);
+        OmniboxSuggestionsDropdown dropdown =
+                new OmniboxSuggestionsDropdown(mContext, null, listener);
+        // Setting model list initializes the real adapter and view pool.
+        dropdown.setModelList(listItems);
+
+        PreWarmingRecycledViewPool pool =
+                (PreWarmingRecycledViewPool) dropdown.getRecycledViewPool();
+
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+
+        // Verify pool is initially pre-warmed.
+        assertEquals(
+                PreWarmingRecycledViewPool.PRE_WARMED_DEFAULT_VIEW_COUNT,
+                pool.getRecycledViewCount(OmniboxSuggestionUiType.DEFAULT));
+
+        listItems.add(
+                new ListItem(
+                        OmniboxSuggestionUiType.DEFAULT,
+                        new PropertyModel(SuggestionCommonProperties.ALL_KEYS)));
+
+        // Force layout to trigger recycler interactions (binding the item).
+        dropdown.measure(0, 0);
+        dropdown.layout(0, 0, 100, 100);
+
+        // Verify that the pool was not cleared and one view was reused.
+        assertEquals(
+                PreWarmingRecycledViewPool.PRE_WARMED_DEFAULT_VIEW_COUNT - 1,
+                pool.getRecycledViewCount(OmniboxSuggestionUiType.DEFAULT));
     }
 }

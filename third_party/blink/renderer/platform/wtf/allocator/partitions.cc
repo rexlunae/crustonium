@@ -32,8 +32,10 @@
 
 #include "base/allocator/partition_alloc_features.h"
 #include "base/allocator/partition_alloc_support.h"
+#include "base/compiler_specific.h"
 #include "base/debug/alias.h"
 #include "base/feature_list.h"
+#include "base/memory/aligned_memory.h"
 #include "base/no_destructor.h"
 #include "base/strings/safe_sprintf.h"
 #include "base/task/sequenced_task_runner.h"
@@ -69,6 +71,12 @@ partition_alloc::PartitionRoot* Partitions::array_buffer_root_ = nullptr;
 partition_alloc::PartitionRoot* Partitions::buffer_root_ = nullptr;
 
 namespace {
+
+// Whether to populate "discardable bytes" in "light" stats reported via
+// `Partitions::DumpMemoryStats`. This involves traversing the free list which
+// is expensive.
+BASE_FEATURE(kPartitionsDumpPopulateDiscardableBytes,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Reads feature configuration and returns a suitable
 // `PartitionOptions`.
@@ -160,12 +168,10 @@ void Partitions::InitializeArrayBufferPartition() {
   CHECK(initialized_);
   CHECK(!ArrayBufferPartitionInitialized());
 
-  // BackupRefPtr disallowed because it will prevent allocations from being 16B
-  // aligned as required by ArrayBufferContents.
+
   static base::NoDestructor<partition_alloc::PartitionAllocator>
       array_buffer_allocator([]() {
         partition_alloc::PartitionOptions opts;
-        opts.backup_ref_ptr = partition_alloc::PartitionOptions::kDisabled;
         // When the V8 virtual memory cage is enabled, the ArrayBuffer
         // partition must be placed inside of it. For that, PA's
         // ConfigurablePool is created inside the V8 Cage during
@@ -200,15 +206,23 @@ void Partitions::DumpMemoryStats(
   // accessed only on the main thread.
   DCHECK(IsMainThread());
 
+  const bool populate_discardable_bytes =
+      !is_light_dump ||
+      base::FeatureList::IsEnabled(kPartitionsDumpPopulateDiscardableBytes);
+
   if (auto* fast_malloc_partition = FastMallocPartition()) {
     fast_malloc_partition->DumpStats("fast_malloc", is_light_dump,
+                                     populate_discardable_bytes,
                                      partition_stats_dumper);
   }
   if (ArrayBufferPartitionInitialized()) {
     ArrayBufferPartition()->DumpStats("array_buffer", is_light_dump,
+                                      populate_discardable_bytes,
                                       partition_stats_dumper);
   }
-  BufferPartition()->DumpStats("buffer", is_light_dump, partition_stats_dumper);
+  BufferPartition()->DumpStats("buffer", is_light_dump,
+                               populate_discardable_bytes,
+                               partition_stats_dumper);
 }
 
 namespace {
@@ -336,13 +350,28 @@ void* Partitions::BufferTryRealloc(void* p, size_t n, const char* type_name) {
 }
 
 // static
+void* Partitions::BufferTryAlignedZeroedMalloc(size_t n,
+                                               size_t alignment,
+                                               const char* type_name) {
+  return BufferPartition()->AlignedAlloc<
+      partition_alloc::AllocFlags::kZeroFill |
+      partition_alloc::AllocFlags::kReturnNull>(alignment, n);
+}
+
+// static
 void Partitions::BufferFree(void* p) {
   BufferPartition()->Free(p);
 }
 
 // static
+void Partitions::BufferAlignedFree(void* p) {
+  BufferPartition()->AlignedFree(p);
+}
+
+// static
 void Partitions::BufferFreeWithSize(void* p, size_t size) {
-  BufferPartition()->FreeWithSize(p, size);
+  BufferPartition()->Free<partition_alloc::FreeFlags::kWithSizeHint>(
+      p, {.size = size});
 }
 
 // static
@@ -368,8 +397,8 @@ void* Partitions::FastMalloc(size_t n, const char* type_name) {
 void* Partitions::FastZeroedMalloc(size_t n, const char* type_name) {
   auto* fast_malloc_partition = FastMallocPartition();
   if (fast_malloc_partition) [[unlikely]] {
-    return fast_malloc_partition
-        ->AllocInline<partition_alloc::AllocFlags::kZeroFill>(n, type_name);
+    return fast_malloc_partition->Alloc<partition_alloc::AllocFlags::kZeroFill>(
+        n, type_name);
   } else {
     return calloc(n, 1);
   }

@@ -26,12 +26,8 @@ using ::one_time_tokens::SmsOtpBackend;
 namespace autofill {
 
 OneTimeTokenServiceFactory::OneTimeTokenServiceFactory()
-    : ProfileKeyedServiceFactory(
-          "OneTimeTokenServiceFactory",
-          ProfileSelections::Builder()
-              .WithRegular(ProfileSelection::kOwnInstance)
-              .WithGuest(ProfileSelection::kOwnInstance)
-              .Build()) {
+    : ProfileKeyedServiceFactory("OneTimeTokenServiceFactory",
+                                 ProfileSelections::BuildForRegularProfile()) {
 #if BUILDFLAG(IS_ANDROID)
   DependsOn(AndroidSmsOtpBackendFactory::GetInstance());
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -46,7 +42,7 @@ OneTimeTokenServiceFactory* OneTimeTokenServiceFactory::GetInstance() {
 
 OneTimeTokenService* OneTimeTokenServiceFactory::GetForProfile(
     Profile* profile) {
-  return static_cast<OneTimeTokenServiceImpl*>(
+  return static_cast<OneTimeTokenService*>(
       GetInstance()->GetServiceForBrowserContext(profile, /*create=*/true));
 }
 
@@ -61,7 +57,8 @@ OneTimeTokenServiceFactory::BuildServiceInstanceForBrowserContext(
   one_time_tokens::GmailOtpBackend* gmail_otp_backend =
       base::FeatureList::IsEnabled(
           one_time_tokens::features::kGmailOtpRetrievalService)
-          ? GmailOtpBackendFactory::GetForBrowserContext(context)
+          ? GmailOtpBackendFactory::GetForProfile(
+                Profile::FromBrowserContext(context))
           : nullptr;
 
   return std::make_unique<OneTimeTokenServiceImpl>(sms_otp_backend,

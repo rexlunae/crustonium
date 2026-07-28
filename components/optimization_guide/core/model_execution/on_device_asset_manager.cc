@@ -20,20 +20,6 @@ namespace optimization_guide {
 
 namespace {
 
-proto::OptimizationTarget GetOptimizationTargetForSafetyModel() {
-  return features::ShouldUseGeneralizedSafetyModel()
-             ? proto::OptimizationTarget::OPTIMIZATION_TARGET_GENERALIZED_SAFETY
-             : proto::OptimizationTarget::OPTIMIZATION_TARGET_TEXT_SAFETY;
-}
-
-SafetyModelInfo::SafetyModelType GetSafetyModelTypeFromOptimizationTarget(
-    proto::OptimizationTarget target) {
-  return target == proto::OptimizationTarget::
-                       OPTIMIZATION_TARGET_GENERALIZED_SAFETY
-             ? SafetyModelInfo::SafetyModelType::kGeneralizedSafetyModel
-             : SafetyModelInfo::SafetyModelType::kTextSafetyModel;
-}
-
 }  // namespace
 
 OnDeviceAssetManager::OnDeviceAssetManager(
@@ -82,7 +68,7 @@ void OnDeviceAssetManager::RegisterTextSafetyAndLanguageModels() {
 
   if (!text_safety_model_observation_.IsRegistered()) {
     text_safety_model_observation_.Observe(
-        GetOptimizationTargetForSafetyModel(),
+        proto::OptimizationTarget::OPTIMIZATION_TARGET_GENERALIZED_SAFETY,
         /*model_metadata=*/std::nullopt);
   }
   if (!language_detection_model_observation_.IsRegistered()) {
@@ -96,12 +82,9 @@ void OnDeviceAssetManager::OnModelUpdated(
     proto::OptimizationTarget optimization_target,
     base::optional_ref<const ModelInfo> model_info) {
   switch (optimization_target) {
-    case proto::OPTIMIZATION_TARGET_GENERALIZED_SAFETY:
-    case proto::OPTIMIZATION_TARGET_TEXT_SAFETY: {
+    case proto::OPTIMIZATION_TARGET_GENERALIZED_SAFETY: {
       std::unique_ptr<SafetyModelInfo> safety_model_info =
-          SafetyModelInfo::Load(
-              GetSafetyModelTypeFromOptimizationTarget(optimization_target),
-              model_info);
+          SafetyModelInfo::Load(model_info);
 
       if (safety_model_info) {
         service_controller_->MaybeUpdateSafetyModel(
@@ -131,19 +114,28 @@ void OnDeviceAssetManager::StateChanged(
   for (auto feature : OnDeviceFeatureSet::All()) {
     adaptation_loaders_.MaybeRegisterModelDownload(
         feature, new_spec,
-        usage_tracker_->WasOnDeviceEligibleFeatureRecentlyUsed(feature));
+        usage_tracker_->WasUseCaseRecentlyUsed(ToUseCaseName(feature)));
   }
 }
 
-void OnDeviceAssetManager::OnDeviceEligibleFeatureFirstUsed(
-    mojom::OnDeviceFeature feature) {
+void OnDeviceAssetManager::OnDeviceEligibleUseCaseUsed(
+    const std::string& use_case_name,
+    bool is_first_usage) {
+  if (!is_first_usage) {
+    return;
+  }
+  auto feature = GetFeatureForUseCase(use_case_name);
+  if (!feature) {
+    return;
+  }
+
   const OnDeviceModelComponentState* state =
       on_device_component_state_manager_->GetState();
   std::optional<OnDeviceBaseModelSpec> new_spec =
       state ? std::make_optional(state->GetBaseModelSpec()) : std::nullopt;
   adaptation_loaders_.MaybeRegisterModelDownload(
-      feature, new_spec,
-      usage_tracker_->WasOnDeviceEligibleFeatureRecentlyUsed(feature));
+      *feature, new_spec,
+      usage_tracker_->WasUseCaseRecentlyUsed(use_case_name));
 }
 
 }  // namespace optimization_guide

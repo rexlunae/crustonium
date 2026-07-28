@@ -47,7 +47,6 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -71,8 +70,12 @@ std::optional<int> GetQuantizedLength(const CSSValue& value) {
     return result;
   }
 
-  result = static_cast<int>(
-      std::round(LayoutUnit::kFixedPointDenominator * primitive_value.value()));
+  int limit =
+      std::numeric_limits<int>::max() / LayoutUnit::kFixedPointDenominator;
+  result = (primitive_value.value() > limit)
+               ? std::numeric_limits<int>::max()
+               : std::round(LayoutUnit::kFixedPointDenominator *
+                            primitive_value.value());
   return result;
 }
 
@@ -182,7 +185,7 @@ template <class K>
 void KeyframeEffectModelBase::SetFrames(HeapVector<K>& keyframes) {
   // TODO(samli): Should also notify/invalidate the animation
   keyframes_.clear();
-  keyframes_.AppendVector(keyframes);
+  keyframes_.append_range(keyframes);
   IndexKeyframesAndResolveComputedOffsets();
   ClearCachedData();
 }
@@ -533,6 +536,7 @@ void KeyframeEffectModelBase::EnsureKeyframeGroups() const {
                                                    computed_offset);
       has_revert_ |= property_specific_keyframe->IsRevert();
       has_revert_ |= property_specific_keyframe->IsRevertLayer();
+      has_revert_ |= property_specific_keyframe->IsRevertRule();
       group->AppendKeyframe(property_specific_keyframe);
     }
   }

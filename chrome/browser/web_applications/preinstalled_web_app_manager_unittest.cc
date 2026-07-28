@@ -26,7 +26,6 @@
 #include "base/test/test_future.h"
 #include "base/time/default_clock.h"
 #include "build/build_config.h"
-#include "chrome/browser/extensions/extension_management_test_util.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
@@ -261,20 +260,24 @@ class PreinstalledWebAppManagerTest : public testing::Test {
 
   base::test::ScopedCommandLine command_line_;
 #endif
+ protected:
   raw_ptr<FakeWebAppProvider> provider_ = nullptr;
   std::unique_ptr<Profile> profile_;
 
+ private:
   // To support context of browser threads.
   content::BrowserTaskEnvironment task_environment_;
 };
 
 TEST_F(PreinstalledWebAppManagerTest, ReplacementExtensionBlockedByPolicy) {
-  using PolicyUpdater = extensions::ExtensionManagementPrefUpdater<
-      sync_preferences::TestingPrefServiceSyncable>;
   auto test_profile = CreateProfile();
-  sync_preferences::TestingPrefServiceSyncable* prefs =
-      test_profile->GetTestingPrefService();
   set_profile(std::move(test_profile));
+
+  provider_ = FakeWebAppProvider::Get(profile_.get());
+  test::AwaitStartWebAppProviderAndSubsystems(profile_.get());
+
+  auto& extensions_manager =
+      static_cast<FakeExtensionsManager&>(provider_->extensions_manager());
 
   GURL install_url("https://test.app");
   constexpr char kExtensionId[] = "abcdefghijklmnopabcdefghijklmnop";
@@ -300,25 +303,22 @@ TEST_F(PreinstalledWebAppManagerTest, ReplacementExtensionBlockedByPolicy) {
     ASSERT_EQ(options_list.size(), 0u);
   };
 
-  PolicyUpdater(prefs).SetBlocklistedByDefault(false);
+  // By default, not blocked.
   expect_present();
 
-  PolicyUpdater(prefs).SetBlocklistedByDefault(true);
+  // Block it.
+  extensions_manager.SetExtensionBlockedByPolicy(kExtensionId, true);
   expect_not_present();
 
-  PolicyUpdater(prefs).SetIndividualExtensionInstallationAllowed(kExtensionId,
-                                                                 true);
+  // Unblock it.
+  extensions_manager.SetExtensionBlockedByPolicy(kExtensionId, false);
   expect_present();
-
-  PolicyUpdater(prefs).SetBlocklistedByDefault(false);
-  PolicyUpdater(prefs).SetIndividualExtensionInstallationAllowed(kExtensionId,
-                                                                 false);
-  expect_not_present();
 
   // Force installing the replaced extension also blocks the replacement.
-  PolicyUpdater(prefs).SetIndividualExtensionAutoInstalled(
-      kExtensionId, /*update_url=*/{}, /*forced=*/true);
+  extensions_manager.SetExtensionForceInstalled(kExtensionId, true);
+  expect_not_present();
 
+  extensions_manager.SetExtensionForceInstalled(kExtensionId, false);
   expect_present();
 }
 
@@ -675,7 +675,8 @@ class PreinstalledWebAppManagerBasicTest : public WebAppTest {
   }
 
   PreinstalledWebAppManagerBasicTest()
-      : app_id_(GenerateAppIdFromManifestId(webapps::ManifestId(GURL(kManifestId)))) {}
+      : app_id_(GenerateAppIdFromManifestId(
+            webapps::ManifestId(GURL(kManifestId)))) {}
   ~PreinstalledWebAppManagerBasicTest() override = default;
 
   void SetUp() override {
@@ -692,20 +693,21 @@ class PreinstalledWebAppManagerBasicTest : public WebAppTest {
     fake_provider().SetSynchronizePreinstalledAppsOnStartup(true);
     fake_provider()
         .preinstalled_web_app_manager()
-        .SetPreinstalledAppForUpdatingForTesting(
-            PreinstalledAppForUpdating{.manifest_id = webapps::ManifestId(GURL(kManifestId)),
-                                       .install_url = GURL(kInstallUrl)});
+        .SetPreinstalledAppForUpdatingForTesting(PreinstalledAppForUpdating{
+            webapps::ManifestId(GURL(kManifestId)),
+            GURL(kInstallUrl)});
     auto fake_extensions_manager = std::make_unique<FakeExtensionsManager>();
-    fake_extensions_manager->SetExtensionsSytemReady(true);
+    fake_extensions_manager->SetExtensionsSystemReady(true);
     fake_provider().SetExtensionsManager(std::move(fake_extensions_manager));
 
     SetupPageState();
   }
 
-  void SetupPageState(webapps::ManifestId manifest_id = webapps::ManifestId(GURL(kManifestId)),
-                      GURL install_url = GURL(kInstallUrl),
-                      GURL start_url = GURL(kStartUrl),
-                      GURL manifest_url = GURL(kManifestUrl)) {
+  void SetupPageState(
+      webapps::ManifestId manifest_id = webapps::ManifestId(GURL(kManifestId)),
+      GURL install_url = GURL(kInstallUrl),
+      GURL start_url = GURL(kStartUrl),
+      GURL manifest_url = GURL(kManifestUrl)) {
     // Make sure the 'manifest' preinstall state matches the app factory
     // preinstall state
     fake_web_contents_manager().CreateBasicInstallPageState(
@@ -714,7 +716,7 @@ class PreinstalledWebAppManagerBasicTest : public WebAppTest {
     // Make the manifest state match GetInstallOptionsWithFactory().
     auto& page_state =
         fake_web_contents_manager().GetOrCreatePageState(install_url);
-    page_state.manifest_before_default_processing->id = manifest_id;
+    page_state.manifest_before_default_processing->id = manifest_id.value();
     page_state.manifest_before_default_processing->name = kAppName;
 
     auto& icon_state = fake_web_contents_manager().GetOrCreateIconState(
@@ -738,6 +740,8 @@ class PreinstalledWebAppManagerBasicTest : public WebAppTest {
 #endif
 
   const webapps::AppId app_id_;
+  base::AutoReset<bool> bypass_awaiting_dependencies_{
+      PreinstalledWebAppManager::BypassAwaitingDependenciesForTesting()};
 };
 
 TEST_F(PreinstalledWebAppManagerBasicTest, PreinstallWorks) {
@@ -772,8 +776,8 @@ class PreinstalledWebAppManagerChatUpdate
     fake_provider()
         .preinstalled_web_app_manager()
         .SetPreinstalledAppForUpdatingForTesting(
-            PreinstalledAppForUpdating{.manifest_id = GetChatManifestId(),
-                                       .install_url = GetChatInstallUrl()});
+            PreinstalledAppForUpdating{GetChatManifestId(),
+                                       GetChatInstallUrl()});
   }
 
   GURL GetChatInstallUrl() const {
@@ -845,7 +849,7 @@ TEST_F(PreinstalledWebAppManagerChatUpdate, UpdateOccursForChat) {
   // Fake out the association fetcher, so we don't have to handle those
   // requests.
   auto fake_association_manager =
-      std::make_unique<FakeWebAppOriginAssociationManager>();
+      std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
   fake_association_manager->set_pass_through(true);
   fake_provider().SetOriginAssociationManager(
       std::move(fake_association_manager));

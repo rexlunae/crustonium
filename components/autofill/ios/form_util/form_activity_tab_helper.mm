@@ -192,8 +192,7 @@ void RecordFormSubmissionCountMetrics(const base::DictValue& message_body) {
   if (!source) {
     SCOPED_CRASH_KEY_NUMBER("FormSubmissionReport", "invalid-source",
                             static_cast<int>(*source));
-    NOTREACHED(base::NotFatalUntil::M141);
-    return;
+    NOTREACHED();
   }
 
   // Record one histogram for each count and type as we want to see
@@ -350,12 +349,12 @@ void HandleSubmissionError(const base::DictValue& message) {
 void FormActivityTabHelper::OnFormMessageReceived(
     web::WebState* web_state,
     const web::ScriptMessage& message) {
-  if (!message.body() || !message.body()->is_dict()) {
+  if (!message.legacy_body() || !message.legacy_body()->is_dict()) {
     // Ignore invalid message.
     return;
   }
 
-  const auto& message_body = message.body()->GetDict();
+  const auto& message_body = message.legacy_body()->GetDict();
 
   RecordFormActivityMetrics(message_body);
 
@@ -381,6 +380,9 @@ void FormActivityTabHelper::HandleFormActivity(
   FormActivityParams params;
   if (!FormActivityParams::FromMessage(message, &params)) {
     return;
+  }
+  if (force_submitted_by_user_for_testing_ && params.type == "focus") {
+    params.has_user_gesture = true;
   }
 
   web::WebFramesManager* frames_manager =
@@ -416,13 +418,13 @@ void FormActivityTabHelper::HandleFormRemoval(
 void FormActivityTabHelper::FormSubmissionHandler(
     web::WebState* web_state,
     const web::ScriptMessage& message) {
-  if (!message.body() || !message.body()->is_dict()) {
+  if (!message.legacy_body() || !message.legacy_body()->is_dict()) {
     // Ignore invalid message.
     RecordFormSubmissionOutcome(FormSubmissionOutcome::kInvalidMessageBody);
     return;
   }
 
-  const base::DictValue& message_body = message.body()->GetDict();
+  const base::DictValue& message_body = message.legacy_body()->GetDict();
   const std::string* frame_id = message_body.FindString("frameID");
   if (!frame_id) {
     RecordFormSubmissionOutcome(FormSubmissionOutcome::kNoFrameID);
@@ -476,7 +478,8 @@ void FormActivityTabHelper::FormSubmissionHandler(
   // the main page (using logic from the popup blocker), or if the keyboard
   // is visible.
   BOOL submitted_by_user = message.is_user_interacting() ||
-                           web_state->GetWebViewProxy().keyboardVisible;
+                           web_state->GetWebViewProxy().keyboardVisible ||
+                           force_submitted_by_user_for_testing_;
 
   std::string form_name;
   if (maybe_form_name) {
@@ -520,7 +523,7 @@ void FormActivityTabHelper::FormSubmissionHandler(
 
   // A form is considered "perfectly filled" if none of its fields were edited
   // by the user, unless that field was autofilled in the first place.
-  const bool perfect_filling = IsFormPerfectlyFilled(form);
+  const bool perfect_filling = IsFormDataPerfectlyFilled(form);
 
   for (auto& observer : observers_) {
     observer.DocumentSubmitted(web_state, sender_frame, form, submitted_by_user,

@@ -18,6 +18,7 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/clipboard_types.h"
+#include "content/public/browser/disallow_activation_reason.h"
 #include "content/public/browser/document_service.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -64,6 +65,7 @@ class CONTENT_EXPORT ClipboardHostImpl
   // policies and invokes FinishPasteIfAllowed upon completion.
   void PasteIfPolicyAllowed(ui::ClipboardBuffer clipboard_buffer,
                             const ui::ClipboardFormatType& data_type,
+                            ui::ClipboardSequenceNumberToken seqno,
                             ClipboardPasteData clipboard_paste_data,
                             IsClipboardPasteAllowedCallback callback);
 
@@ -79,6 +81,10 @@ class CONTENT_EXPORT ClipboardHostImpl
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteHtml_Empty);
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteSvg);
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteSvg_Empty);
+  FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteBookmark_ValidUrl);
+  FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest,
+                           WriteBookmark_InvalidUrl_DoesNotCrash);
+  FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteBookmark_EmptyUrl);
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteBitmap);
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest, WriteBitmap_Empty);
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplWriteTest,
@@ -98,6 +104,8 @@ class CONTENT_EXPORT ClipboardHostImpl
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplChangeTest, AddClipboardListener);
   FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplChangeTest,
                            ClipboardListenerDisconnect);
+  FRIEND_TEST_ALL_PREFIXES(ClipboardHostImplChangeTest,
+                           NoNotificationToInactiveDocument);
 
   // mojom::ClipboardHost
   void RegisterClipboardListener(
@@ -148,9 +156,6 @@ class CONTENT_EXPORT ClipboardHostImpl
       GetPlatformPermissionStateCallback callback) override;
 #endif
 
-  std::vector<std::u16string> ReadAvailableTypesImpl(
-      ui::ClipboardBuffer clipboard_buffer);
-
   absl::uint128 GetSequenceNumberImpl(ui::ClipboardBuffer clipboard_buffer);
 
   // Checks if the renderer allows pasting.  This check is skipped if called
@@ -184,21 +189,113 @@ class CONTENT_EXPORT ClipboardHostImpl
       const ClipboardPasteData& data,
       std::optional<std::u16string> replacement_data);
 
+  // Does the same thing as the previous functions but for custom formats.
+  // The raw binary `data` is written to the clipboard using the specified
+  // `format`.
+  //
+  // This method can be called asynchronously.
+  virtual void OnCopyCustomFormatAllowedResult(
+      const std::u16string& format,
+      mojo_base::BigBuffer data,
+      const ui::ClipboardFormatType& data_type,
+      const ClipboardPasteData& paste_data,
+      std::optional<std::u16string> replacement_data);
+
   using CopyAllowedCallback = base::OnceCallback<void()>;
 
+  void OnReadAvailableTypes(ui::ClipboardBuffer clipboard_buffer,
+                            ReadAvailableTypesCallback callback,
+                            std::vector<std::u16string> types);
+
+  void OnGetAllAvailableFormatsForReadAvailableTypes(
+      ui::ClipboardBuffer clipboard_buffer,
+      std::optional<ui::DataTransferEndpoint> data_dst,
+      ReadAvailableTypesCallback callback,
+      base::flat_set<ui::ClipboardFormatType> formats);
+
   void OnReadPng(ui::ClipboardBuffer clipboard_buffer,
+                 ui::ClipboardSequenceNumberToken seqno,
                  ReadPngCallback callback,
                  const std::vector<uint8_t>& data);
+
+  void OnReadPngWithText(ui::ClipboardBuffer clipboard_buffer,
+                         ui::ClipboardSequenceNumberToken seqno,
+                         ReadPngCallback callback,
+                         std::vector<uint8_t> data,
+                         std::u16string text);
+
+  void OnReadText(ui::ClipboardBuffer clipboard_buffer,
+                  ui::ClipboardSequenceNumberToken seqno,
+                  ReadTextCallback callback,
+                  std::u16string text);
+
+  void OnReadHtml(ui::ClipboardBuffer clipboard_buffer,
+                  ui::ClipboardSequenceNumberToken seqno,
+                  ReadHtmlCallback callback,
+                  std::u16string markup,
+                  GURL src_url,
+                  uint32_t fragment_start,
+                  uint32_t fragment_end);
+
+  void OnReadSvg(ui::ClipboardBuffer clipboard_buffer,
+                 ui::ClipboardSequenceNumberToken seqno,
+                 ReadSvgCallback callback,
+                 std::u16string svg);
+
+  void OnReadRtf(ui::ClipboardBuffer clipboard_buffer,
+                 ui::ClipboardSequenceNumberToken seqno,
+                 ReadRtfCallback callback,
+                 std::string rtf);
+
+  void OnReadFiles(ui::ClipboardBuffer clipboard_buffer,
+                   ui::ClipboardSequenceNumberToken seqno,
+                   ReadFilesCallback callback,
+                   std::vector<ui::FileInfo> filenames);
+
+  // Completes ReadFiles() once the data controls / DLP policy decision is
+  // available. Grants the renderer read access to only the files the policy
+  // allows, so no capability is ever issued for blocked files.
+  void OnReadFilesPolicyResult(
+      std::vector<ui::FileInfo> filenames,
+      ReadFilesCallback callback,
+      std::optional<ClipboardPasteData> clipboard_paste_data);
+
+  void OnReadDataTransferCustomData(ui::ClipboardBuffer clipboard_buffer,
+                                    const std::u16string& type,
+                                    ui::ClipboardSequenceNumberToken seqno,
+                                    ReadDataTransferCustomDataCallback callback,
+                                    std::u16string data);
+
+  void OnGetSourceClipboardEndpoint(const ui::ClipboardFormatType& data_type,
+                                    ClipboardPasteData clipboard_paste_data,
+                                    IsClipboardPasteAllowedCallback callback,
+                                    std::optional<size_t> data_size,
+                                    ui::ClipboardSequenceNumberToken seqno,
+                                    content::ClipboardEndpoint data_dst,
+                                    content::ClipboardEndpoint source);
+
+  void OnReadUnsanitizedCustomFormat(
+      ui::ClipboardSequenceNumberToken seqno,
+      ReadUnsanitizedCustomFormatCallback callback,
+      std::string data);
+
+  void OnExtractCustomPlatformNames(
+      const std::string& format_name,
+      std::optional<ui::DataTransferEndpoint> data_endpoint,
+      ui::ClipboardSequenceNumberToken seqno,
+      ReadUnsanitizedCustomFormatCallback callback,
+      std::map<std::string, std::string> custom_format_names);
+
+  void OnReadAvailableTypesForUpdate(absl::uint128 change_id,
+                                     std::vector<std::u16string> types);
+
+  void ExtractText(ui::ClipboardBuffer clipboard_buffer,
+                   std::optional<ui::DataTransferEndpoint> data_dst,
+                   base::OnceCallback<void(std::u16string)> callback);
 
   // Resets `clipboard_writer_` to write its data to the clipboard, and
   // reinitialize it in preparation for the next write.
   void ResetClipboardWriter();
-
-  // Creates a `ui::DataTransferEndpoint` representing the last committed URL.
-  std::unique_ptr<ui::DataTransferEndpoint> CreateDataEndpoint();
-
-  // Creates a `content::ClipboardEndpoint` representing the last committed URL.
-  ClipboardEndpoint CreateClipboardEndpoint();
 
   // Stops observing clipboard changes and resets the listener.
   void StopObservingClipboard();

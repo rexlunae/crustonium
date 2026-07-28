@@ -33,6 +33,7 @@
 namespace blink {
 
 class DocumentFragment;
+class HTMLSpanElement;
 class ReplacementFragment;
 
 class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
@@ -46,7 +47,7 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
     kSanitizeFragment = 1 << 5
   };
 
-  typedef unsigned CommandOptions;
+  using CommandOptions = unsigned;
 
   ReplaceSelectionCommand(Document&,
                           DocumentFragment*,
@@ -54,8 +55,6 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
                           PasswordEchoBehavior,
                           InputEvent::InputType = InputEvent::InputType::kNone,
                           DataTransfer* = nullptr);
-
-  EphemeralRange InsertedRange() const;
 
   void Trace(Visitor*) const override;
 
@@ -65,8 +64,9 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
   void DoApply(EditingState*) override;
   InputEvent::InputType GetInputType() const override;
   bool IsReplaceSelectionCommand() const override;
-  void HandleStyleSpansBeforeInsertion(ReplacementFragment& fragment,
-                                       const Position& insertion_pos);
+  HTMLSpanElement* PreserveWhiteSpaceForNode(Node* node, EditingState*);
+  void HandleStyleSpansBeforeInsertion(const Position& insertion_pos,
+                                       ReplacementFragment& fragment);
 
   class InsertedNodes {
     STACK_ALLOCATED();
@@ -103,6 +103,7 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
                           const Position&,
                           InsertedNodes&,
                           EditingState*);
+  EphemeralRange InsertedRange() const;
 
   void UpdateNodesInserted(Node*);
   bool ShouldRemoveEndBR(HTMLBRElement*, const VisiblePosition&);
@@ -128,7 +129,7 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
 
   bool ShouldPerformSmartReplace() const;
   void AddSpacesForSmartReplace(EditingState*);
-  void CompleteHTMLReplacement(const Position& last_position_to_select,
+  void CompleteHtmlReplacement(const Position& last_position_to_select,
                                EditingState*);
   void MergeTextNodesAroundPosition(Position&,
                                     Position& position_only_to_be_updated,
@@ -138,6 +139,8 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
                              EditingState*,
                              PasswordEchoBehavior);
   void SetUpStyle(const VisibleSelection&);
+  bool ShouldNormalizeNbspInInsertedContent(EditingState*) const;
+  void NormalizeNbspInInsertedContent(EditingState*);
   void InsertParagraphSeparatorIfNeeds(const VisibleSelection&,
                                        const ReplacementFragment&,
                                        EditingState*);

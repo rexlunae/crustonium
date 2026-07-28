@@ -19,16 +19,16 @@ export function getHtml(this: SpComponentsDemoElement) {
   <div class="row center">
     <label id="urlCountLabel">Number of url items</label>
     <cr-slider id="urlCountSlider" min="1" max="30" .value="${this.urlCount_}"
-        @cr-slider-value-changed="${this.onUrlCountChanged_}"
+        @cr-slider-value-changed="${this.onUrlCountCrSliderValueChanged_}"
         aria-labelledby="urlCountLabel">
     </cr-slider>
   </div>
   <cr-checkbox ?checked="${this.hideBackButton_}"
-      @checked-changed="${this.onHideBackButtonChanged_}">
+      @checked-changed="${this.onHideBackButtonCheckedChanged_}">
     Hide back button in heading
   </cr-checkbox>
   <cr-checkbox ?checked="${this.showBadges_}"
-      @checked-changed="${this.onShowBadgesChanged_}">
+      @checked-changed="${this.onShowBadgesCheckedChanged_}">
     Show item badges
   </cr-checkbox>
   <div class="row center">
@@ -36,7 +36,7 @@ export function getHtml(this: SpComponentsDemoElement) {
     <select id="itemSizeSelect" class="md-select"
         aria-labelledby="itemSizeLabel"
         .value="${this.itemSize_}"
-        @change="${this.onItemSizeChanged_}">
+        @change="${this.onItemSizeChange_}">
       ${this.itemSizeOptions_.map(item => html`
         <option .value="${item}">${item}</option>
       `)}
@@ -84,7 +84,10 @@ export function getHtml(this: SpComponentsDemoElement) {
       body="Some more descriptive text explaining how to add content">
   </sp-empty-state>
   <cr-button class="floating-button">
-    <cr-icon slot="prefix-icon" icon="cr:add"></cr-icon>
+    <cr-icon slot="prefix-icon"
+        icon="${this.webuiRoundedIconsEnabled_
+            ? 'sp:add-circle'
+            : 'sp:add-circle-old'}"></cr-icon>
     Add content
   </cr-button>
 </div>

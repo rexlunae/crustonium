@@ -17,10 +17,11 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
-#include "base/test/trace_test_utils.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/trace_event/trace_buffer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_event_impl.h"
+#include "base/trace_event/trace_log.h"
 #include "base/values.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
@@ -84,15 +85,15 @@ TraceEntryInfo GetTraceEntryInfoFromValue(const base::DictValue& value) {
 void EnableTraceLog(std::string_view category) {
   TraceLog::GetInstance()->SetEnabled(
       base::trace_event::TraceConfig(category, ""));
-  // AsyncEnabledStateObserver will receive enabled notification one message
-  // loop iteration later.
+  // TraceNetLogObserver will receive enabled notification one message loop
+  // iteration later.
   base::RunLoop().RunUntilIdle();
 }
 
 void DisableTraceLog() {
   TraceLog::GetInstance()->SetDisabled();
-  // AsyncEnabledStateObserver will receive disabled notification one message
-  // loop iteration later.
+  // TraceNetLogObserver will receive disabled notification one message loop
+  // iteration later.
   base::RunLoop().RunUntilIdle();
 }
 

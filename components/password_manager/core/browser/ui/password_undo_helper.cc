@@ -6,6 +6,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 #include "components/undo/undo_operation.h"
@@ -27,7 +28,7 @@ class PasswordOperation : public UndoOperation {
   PasswordOperation(PasswordStoreInterface* profile_store,
                     PasswordStoreInterface* account_store,
                     UndoManager* undo_manager,
-                    const password_manager::PasswordForm& form)
+                    const PasswordForm& form)
       : profile_store_(profile_store),
         account_store_(account_store),
         undo_manager_(undo_manager),
@@ -54,7 +55,7 @@ class PasswordOperation : public UndoOperation {
   int GetRedoLabelId() const override { return 0; }
 
  private:
-  void AddLogin(const password_manager::PasswordForm& form) {
+  void AddLogin(const PasswordForm& form) {
     // Add redo operation for an added form.
     DCHECK(profile_store_);
     DCHECK(undo_manager_);
@@ -64,14 +65,14 @@ class PasswordOperation : public UndoOperation {
             PasswordOperation<PasswordOperationType::kRemoveOperation>>(
             profile_store_, account_store_, undo_manager_, form_));
     if (form.IsUsingAccountStore()) {
-      account_store_->AddLogin(form);
+      account_store_->AddLogin(FromPasswordForm(form));
     }
     if (form.IsUsingProfileStore()) {
-      profile_store_->AddLogin(form);
+      profile_store_->AddLogin(FromPasswordForm(form));
     }
   }
 
-  void UpdateLogin(const password_manager::PasswordForm& new_form) {
+  void UpdateLogin(const PasswordForm& new_form) {
     DCHECK(profile_store_);
     DCHECK(undo_manager_);
 
@@ -80,31 +81,31 @@ class PasswordOperation : public UndoOperation {
             PasswordOperation<PasswordOperationType::kUpdateOperation>>(
             profile_store_, account_store_, undo_manager_, form_));
     if (new_form.IsUsingAccountStore()) {
-      account_store_->UpdateLogin(new_form);
+      account_store_->UpdateLogin(FromPasswordForm(new_form));
     }
     if (new_form.IsUsingProfileStore()) {
-      profile_store_->UpdateLogin(new_form);
+      profile_store_->UpdateLogin(FromPasswordForm(new_form));
     }
   }
 
-  void RemoveLogin(const password_manager::PasswordForm& form) {
+  void RemoveLogin(const PasswordForm& form) {
     // Add undo operation for a removed form.
     undo_manager_->AddUndoOperation(
         std::make_unique<
             PasswordOperation<PasswordOperationType::kAddOperation>>(
             profile_store_, account_store_, undo_manager_, form_));
     if (form.IsUsingAccountStore()) {
-      account_store_->RemoveLogin(FROM_HERE, form);
+      account_store_->RemoveLogin(FROM_HERE, FromPasswordForm(form));
     }
     if (form.IsUsingProfileStore()) {
-      profile_store_->RemoveLogin(FROM_HERE, form);
+      profile_store_->RemoveLogin(FROM_HERE, FromPasswordForm(form));
     }
   }
 
   raw_ptr<PasswordStoreInterface> profile_store_;
   raw_ptr<PasswordStoreInterface> account_store_;
   raw_ptr<UndoManager> undo_manager_ = nullptr;
-  password_manager::PasswordForm form_;
+  PasswordForm form_;
 };
 
 }  // namespace
@@ -113,14 +114,13 @@ PasswordUndoHelper::PasswordUndoHelper(PasswordStoreInterface* profile_store,
                                        PasswordStoreInterface* account_store)
     : profile_store_(profile_store), account_store_(account_store) {}
 
-void PasswordUndoHelper::PasswordRemoved(
-    const password_manager::PasswordForm& form) {
+void PasswordUndoHelper::PasswordRemoved(const PasswordForm& form) {
   undo_manager_.AddUndoOperation(
       std::make_unique<PasswordOperation<PasswordOperationType::kAddOperation>>(
           profile_store_, account_store_, &undo_manager_, form));
 }
 void PasswordUndoHelper::BackupPasswordRemoved(
-    const password_manager::PasswordForm& form_with_backup) {
+    const PasswordForm& form_with_backup) {
   undo_manager_.AddUndoOperation(
       std::make_unique<
           PasswordOperation<PasswordOperationType::kUpdateOperation>>(

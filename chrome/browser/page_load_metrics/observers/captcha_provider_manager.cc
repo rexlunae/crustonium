@@ -4,12 +4,40 @@
 
 #include "chrome/browser/page_load_metrics/observers/captcha_provider_manager.h"
 
+#include <string_view>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 
 namespace page_load_metrics {
+
+namespace {
+
+constexpr char kReCaptchaUrlSubstring[] = "google.com/recaptcha/";
+constexpr char kReCaptchaNetUrlSubstring[] = "recaptcha.net/recaptcha/";
+constexpr char kHCaptchaUrlSubstring[] = "hcaptcha.com/";
+constexpr char kCloudflareTurnstileUrlSubstring[] =
+    "challenges.cloudflare.com/";
+
+CaptchaProvider GetCaptchaProviderForUrlPattern(std::string_view url_pattern) {
+  if (url_pattern.find(kReCaptchaUrlSubstring) != std::string::npos) {
+    return CaptchaProvider::kReCaptcha;
+  }
+  if (url_pattern.find(kReCaptchaNetUrlSubstring) != std::string::npos) {
+    return CaptchaProvider::kReCaptcha;
+  }
+  if (url_pattern.find(kHCaptchaUrlSubstring) != std::string::npos) {
+    return CaptchaProvider::kHCaptcha;
+  }
+  if (url_pattern.find(kCloudflareTurnstileUrlSubstring) != std::string::npos) {
+    return CaptchaProvider::kCloudflareTurnstile;
+  }
+  return CaptchaProvider::kUnknown;
+}
+
+}  // namespace
 
 // static
 CaptchaProviderManager* CaptchaProviderManager::GetInstance() {
@@ -45,8 +73,9 @@ void CaptchaProviderManager::SetCaptchaProviders(
     const std::vector<std::string>& captcha_providers) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 
-  for (std::string captcha_provider : captcha_providers) {
+  for (std::string_view captcha_provider : captcha_providers) {
     UrlPattern pattern;
+    pattern.provider = GetCaptchaProviderForUrlPattern(captcha_provider);
 
     // Split the captcha provider url pattern into host and path.
     auto slash_pos = captcha_provider.find_first_of('/');
@@ -66,14 +95,14 @@ void CaptchaProviderManager::SetCaptchaProviders(
     // corresponding flags.
     if (pattern.host.front() == '*') {
       pattern.has_subdomain_wildcard = true;
-      pattern.host = pattern.host.substr(1);
+      pattern.host = std::move(pattern.host).substr(1);
     }
     if (!pattern.path.empty() && pattern.path.back() == '*') {
       pattern.has_path_wildcard = true;
-      pattern.path = pattern.path.substr(0, pattern.path.size() - 1);
+      pattern.path = std::move(pattern.path).substr(0, pattern.path.size() - 1);
     }
 
-    captcha_provider_patterns_.push_back(pattern);
+    captcha_provider_patterns_.push_back(std::move(pattern));
   }
 
   is_loaded_ = true;
@@ -82,9 +111,12 @@ void CaptchaProviderManager::SetCaptchaProviders(
 bool CaptchaProviderManager::IsCaptchaUrl(const GURL& url) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!loaded() || empty()) {
-    return false;
-  }
+  return GetCaptchaProviderForUrl(url).has_value();
+}
+
+std::optional<CaptchaProvider> CaptchaProviderManager::GetCaptchaProviderForUrl(
+    const GURL& url) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   for (const UrlPattern& pattern : captcha_provider_patterns_) {
     // First, check if the host matches the pattern.
@@ -111,11 +143,11 @@ bool CaptchaProviderManager::IsCaptchaUrl(const GURL& url) const {
     const bool path_wildcard_match =
         pattern.has_path_wildcard && url.path().starts_with(pattern.path);
     if (pattern.path.empty() || path_exact_match || path_wildcard_match) {
-      return true;
+      return pattern.provider;
     }
   }
 
-  return false;
+  return std::nullopt;
 }
 
 }  // namespace page_load_metrics

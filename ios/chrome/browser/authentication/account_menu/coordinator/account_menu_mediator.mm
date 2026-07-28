@@ -8,11 +8,11 @@
 #import <string>
 
 #import "base/functional/callback_helpers.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/prefs/pref_service.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/authentication/account_menu/coordinator/account_menu_mediator_delegate.h"
@@ -31,19 +31,21 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
+#import "ios/chrome/browser/settings/manage_sync/public/sync_error_settings_command_handler.h"
 #import "ios/chrome/browser/settings/model/sync/utils/account_error_ui_info.h"
 #import "ios/chrome/browser/settings/model/sync/utils/identity_error_util.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/sync_error_settings_command_handler.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/sync/model/sync_observer_bridge.h"
 
 @interface AccountMenuMediator () <AuthenticationFlowDelegate,
-                                   IdentityManagerObserverBridgeDelegate,
+                                   AuthenticationServiceObserving,
+                                   IdentityManagerObserving,
                                    SyncObserverModelBridge>
 
 // Redefine as readwrite.
@@ -58,6 +60,8 @@
   raw_ptr<signin::IdentityManager> _identityManager;
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityManagerObserver;
+  std::unique_ptr<AuthenticationServiceObserverBridge>
+      _authServiceObserverBridge;
   raw_ptr<PrefService> _prefs;
   // The access point from which this account menu was triggered.
   AccountMenuAccessPoint _accessPoint;
@@ -80,6 +84,7 @@
   // Records the displayed primary account info by the view. Used to limit the
   // view updates to only when one of these values is updated.
   NSString* _primaryAccountDisplayedEmail;
+  // The name may be nil if it has not yet been fetched.
   NSString* _primaryAccountDisplayedUserFullName;
   UIImage* _primaryAccountDisplayedAvatar;
   // The URL which the the account menu was viewed from when
@@ -99,6 +104,7 @@
                         accessPoint:(AccountMenuAccessPoint)accessPoint
                                 URL:(const GURL&)url
                prepareChangeProfile:(ProceduralBlock)prepareChangeProfile {
+  CHECK(authService->SigninEnabled(), base::NotFatalUntil::M152);
   self = [super init];
   if (self) {
     CHECK(syncService);
@@ -114,15 +120,16 @@
     _identityManagerObserver =
         std::make_unique<signin::IdentityManagerObserverBridge>(
             _identityManager, self);
+    _authServiceObserverBridge =
+        std::make_unique<AuthenticationServiceObserverBridge>(
+            _authenticationService, self);
     _prefs = prefs;
     _accessPoint = accessPoint;
+    base::UmaHistogramEnumeration("Signin.IOSAccountMenu.Opened", _accessPoint);
     _url = url;
     _prepareChangeProfile = prepareChangeProfile;
-    _primaryIdentityBeforeSignin = _authenticationService->GetPrimaryIdentity(
-        signin::ConsentLevel::kSignin);
-    // TODO(crbug.com/442569188): Replace by check once the cause of
-    // crbug.com/442569188 is identified.
-    DUMP_WILL_BE_CHECK(_primaryIdentityBeforeSignin);
+    _primaryIdentityBeforeSignin = _authenticationService->GetPrimaryIdentity();
+    CHECK(_primaryIdentityBeforeSignin);
     _syncService = syncService;
     _syncObserver = std::make_unique<SyncObserverBridge>(self, _syncService);
     [self updateIdentitiesIfAllowed];
@@ -131,14 +138,19 @@
   return self;
 }
 
+- (void)dealloc {
+  CHECK(!_authenticationService, base::NotFatalUntil::M152);
+}
+
 - (void)disconnect {
+  _identityManagerObserver.reset();
+  _authServiceObserverBridge.reset();
+  _syncObserver.reset();
   _blockUpdates = YES;
   _accountManagerService = nullptr;
   _authenticationService = nullptr;
-  _identityManagerObserver.reset();
   _identityManager = nullptr;
   _prefs = nullptr;
-  _syncObserver.reset();
   _syncService = nullptr;
   _identities = nil;
   _primaryIdentityBeforeSignin = nullptr;
@@ -210,14 +222,14 @@
   return _error;
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onEndBatchOfPrimaryAccountChanges {
+- (void)batchOfPrimaryAccountChangesDidEnd {
   if (_blockUpdates) {
     return;
   }
   id<SystemIdentity> primaryIdentity =
-      _authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+      _authenticationService->GetPrimaryIdentity();
   if (primaryIdentity) {
     _primaryIdentityBeforeSignin = primaryIdentity;
     [self updateIdentitiesIfAllowed];
@@ -235,11 +247,11 @@
                  userTappedClose:NO];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   [self updateIdentitiesIfAllowed];
 }
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   [self updateIdentitiesIfAllowed];
 }
 
@@ -325,6 +337,7 @@
       } else {
         base::RecordAction(
             base::UserMetricsAction("Signin_AccountMenu_ErrorButton_Reauth"));
+        self.userInteractionsBlocked = YES;
         [self.syncErrorSettingsCommandHandler openPrimaryAccountReauthDialog];
       }
       break;
@@ -429,12 +442,15 @@
 
 #pragma mark - AuthenticationFlowDelegate
 
-- (void)
-    authenticationFlowDidSignInInSameProfileWithCancelationReason:
-        (signin_ui::CancelationReason)cancelationReason
-                                                         identity:
-                                                             (id<SystemIdentity>)
-                                                                 identity {
+- (void)authenticationFlowDidSignInInSameProfileWithIdentity:
+            (id<SystemIdentity>)identity
+                                           cancelationReason:
+                                               (signin_ui::CancelationReason)
+                                                   cancelationReason
+
+                                                  completion:(ProceduralBlock)
+                                                                 completion {
+  CHECK(completion);
   BOOL success =
       cancelationReason == signin_ui::CancelationReason::kNotCanceled;
   [_delegate signinFinished];
@@ -455,7 +471,7 @@
                            signedIdentity:identity
                           userTappedClose:NO];
   } else if (_accountManagerService->IsValidIdentity(
-                 _primaryIdentityBeforeSignin)) {
+                 _primaryIdentityBeforeSignin.gaiaId)) {
     // If the sign-in failed, sign back in previous account if possible and
     // restart using the account menu.
     _authenticationService->SignIn(
@@ -469,6 +485,7 @@
                            signedIdentity:nil
                           userTappedClose:NO];
   }
+  completion();
 }
 
 - (void)authenticationFlowWillSwitchProfileWithReadyCompletion:
@@ -492,10 +509,32 @@
       continuation = CreateChangeProfileOpensURLContinuation(_url);
       break;
     }
+    case AccountMenuAccessPoint::kPageActionMenu:
+    case AccountMenuAccessPoint::kGeminiEntryFlow:
+      continuation = CreateChangeProfileOpensURLContinuation(_url);
+      break;
+    case AccountMenuAccessPoint::kAppBar:
+    case AccountMenuAccessPoint::kOverflowMenu:
+      // No continuation to trigger after a profile switching.
+      break;
   }
   void (^completion)() = base::CallbackToBlock(
       base::BindOnce(std::move(readyCompletion), std::move(continuation)));
   [self.delegate profileWillSwitchWithCompletion:completion];
+}
+
+#pragma mark - AuthenticationServiceObserving
+
+- (void)onServiceStatusChanged {
+  if (!_authenticationService->SigninEnabled()) {
+    _blockUpdates = YES;
+    self.userInteractionsBlocked = YES;
+    [self.delegate
+        mediatorWantsToBeDismissed:self
+             withCancelationReason:signin_ui::CancelationReason::kFailed
+                    signedIdentity:nil
+                   userTappedClose:NO];
+  }
 }
 
 #pragma mark - Private
@@ -513,30 +552,54 @@
   NSMutableArray<NSString*>* gaiaIDsToRemove = [NSMutableArray array];
   NSMutableArray<NSString*>* gaiaIDsToAdd = [NSMutableArray array];
   NSMutableArray<NSString*>* gaiaIDsToKeep = [NSMutableArray array];
-  for (id<SystemIdentity> secondaryIdentity : identitiesOnDevice) {
-    GaiaId gaiaID = secondaryIdentity.gaiaId;
-    if (secondaryIdentity == _primaryIdentityBeforeSignin) {
+
+  // Identifies identities to add and to keep.
+  for (id<SystemIdentity> identityOnDevice in identitiesOnDevice) {
+    GaiaId gaiaID = identityOnDevice.gaiaId;
+
+    // TODO(crbug.com/517249368): Use `equalTo:` when equality is defined as
+    // gaiaId equality.
+    if (identityOnDevice == _primaryIdentityBeforeSignin) {
       continue;
     }
-    BOOL mustAdd = YES;
-    for (id<SystemIdentity> displayedIdentity : _identities) {
+    BOOL alreadyDisplayed = NO;
+    for (NSUInteger i = 0; i < _identities.count; ++i) {
+      id<SystemIdentity> displayedIdentity = _identities[i];
       if (gaiaID == displayedIdentity.gaiaId) {
         [gaiaIDsToKeep addObject:gaiaID.ToNSString()];
-        mustAdd = NO;
+        alreadyDisplayed = YES;
+        // Update the identity object in case it has changed.
+        _identities[i] = identityOnDevice;
         break;
       }
     }
-    if (mustAdd) {
-      [_identities addObject:secondaryIdentity];
+    if (!alreadyDisplayed) {
+      [_identities addObject:identityOnDevice];
       [gaiaIDsToAdd addObject:gaiaID.ToNSString()];
     }
   }
 
+  // Identifies identities to remove.
   for (NSUInteger i = 0; i < _identities.count; ++i) {
     id<SystemIdentity> identity = _identities[i];
-    if (![identitiesOnDevice containsObject:identity] ||
-        identity == _primaryIdentityBeforeSignin) {
-      [gaiaIDsToRemove addObject:identity.gaiaId.ToNSString()];
+    GaiaId gaiaID = identity.gaiaId;
+    // TODO(crbug.com/517249368): Use `equalTo:` when equality is defined as
+    // gaiaId equality.
+    BOOL isStillOnDevice = NO;
+    for (id<SystemIdentity> identityOnDevice in identitiesOnDevice) {
+      if (gaiaID == identityOnDevice.gaiaId) {
+        isStillOnDevice = YES;
+        break;
+      }
+    }
+    // We must use Gaia ID for comparison here because `containsObject:` relies
+    // on `isEqual:`. For some `SystemIdentity` implementations, two objects
+    // representing the same account may not be `isEqual:` (for example if their
+    // internal state like refresh token validity differs).
+    // Using Gaia ID ensures that we only remove an identity if the account is
+    // truly gone from the device.
+    if (!isStillOnDevice || identity == _primaryIdentityBeforeSignin) {
+      [gaiaIDsToRemove addObject:gaiaID.ToNSString()];
       [_identities removeObjectAtIndex:i--];
       // There will be a new object at place `i`. So we must decrease `i`.
     }

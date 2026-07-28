@@ -30,14 +30,14 @@
 #include "extensions/common/manifest_constants.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 
-namespace extensions {
-
-namespace csp_validator {
+namespace extensions::csp_validator {
 
 namespace {
 
 const char kDefaultSrc[] = "default-src";
 const char kScriptSrc[] = "script-src";
+const char kScriptSrcElem[] = "script-src-elem";
+const char kScriptSrcAttr[] = "script-src-attr";
 const char kObjectSrc[] = "object-src";
 const char kFrameSrc[] = "frame-src";
 const char kChildSrc[] = "child-src";
@@ -63,17 +63,20 @@ const char kAllowTopNavigation[] = "allow-top-navigation";
 // List of CSP hash-source prefixes that are accepted. Blink is a bit more
 // lenient, but we only accept standard hashes to be forward-compatible.
 // http://www.w3.org/TR/2015/CR-CSP2-20150721/#hash_algo
-const char* const kHashSourcePrefixes[] = {
-  "'sha256-",
-  "'sha384-",
-  "'sha512-"
+constexpr std::string_view kHashSourcePrefixes[] = {
+    "'sha256-",
+    "'sha384-",
+    "'sha512-",
 };
 
-// TODO(karandeepb): This is not the same list as used by the CSP spec. See
-// https://infra.spec.whatwg.org/#ascii-whitespace.
-const char kWhitespaceDelimiters[] = " \t\r\n";
-
 constexpr char kChromeResourcesUrl[] = "chrome://resources";
+constexpr const char* const kExtensionsAllowedToUseChromeResources[] = {
+    extension_misc::kChromeVoxExtensionId,
+    extension_misc::kIndigoExtensionId,
+    // Used for ComponentExtensionWorkerChromeResourcesBrowserTest.
+    extension_misc::kChromeResourcesTestExtensionId,
+    extension_misc::kAimEligibilityExtensionId,
+};
 
 using Directive = CSPParser::Directive;
 
@@ -200,7 +203,7 @@ bool isNonWildcardTLD(const std::string& url,
     return true;
 
   // Allow *.googleapis.com to be allowlisted for backwards-compatibility.
-  // (crbug.com/409952)
+  // (crbug.com/41129714)
   if (host == "googleapis.com")
     return true;
 
@@ -216,10 +219,10 @@ bool IsHashSource(std::string_view source) {
     return false;
 
   size_t hash_end = source.length() - 1;
-  for (const char* prefix : kHashSourcePrefixes) {
+  for (std::string_view prefix : kHashSourcePrefixes) {
     if (base::StartsWith(source, prefix,
                          base::CompareCase::INSENSITIVE_ASCII)) {
-      for (size_t i = strlen(prefix); i < hash_end; ++i) {
+      for (size_t i = prefix.length(); i < hash_end; ++i) {
         const char c = source[i];
         // The hash must be base64-encoded. Do not allow any other characters.
         if (!base::IsAsciiAlpha(c) && !base::IsAsciiDigit(c) && c != '+' &&
@@ -298,8 +301,9 @@ std::string GetAppSandboxSecureDirectiveValues(
     // Keyword directive sources are surrounded with quotes, e.g. 'self',
     // 'sha256-...', 'unsafe-eval', 'nonce-...'. These do not specify a remote
     // host or '*', so keep them and restrict the rest.
-    if (source_lower.size() > 1u && source_lower[0] == '\'' &&
-        source_lower.back() == '\'') {
+    if ((source_lower.size() > 1u && source_lower[0] == '\'' &&
+         source_lower.back() == '\'') ||
+        source_lower == "blob:" || source_lower == "filesystem:") {
       seen_self_or_none |= source_lower == "'none'" || source_lower == "'self'";
       sane_csp_parts.push_back(source_lower);
     } else if (warnings) {
@@ -391,7 +395,7 @@ class CSPEnforcer {
   CSPEnforcer(const CSPEnforcer&) = delete;
   CSPEnforcer& operator=(const CSPEnforcer&) = delete;
 
-  virtual ~CSPEnforcer() {}
+  virtual ~CSPEnforcer() = default;
 
   // Returns the enforced CSP.
   // Emits warnings in |warnings| for insecure directive values. If
@@ -484,7 +488,8 @@ class ExtensionCSPEnforcer : public CSPEnforcer {
       : CSPEnforcer(std::move(manifest_key),
                     true,
                     base::BindRepeating(&GetSecureDirectiveValues, options)) {
-    secure_directives_.emplace_back(std::vector<std::string>({kScriptSrc}));
+    secure_directives_.emplace_back(std::vector<std::string>(
+        {kScriptSrc, kScriptSrcElem, kScriptSrcAttr, kWorkerSrc, kChildSrc}));
     if (!allow_insecure_object_src)
       secure_directives_.emplace_back(std::vector<std::string>({kObjectSrc}));
   }
@@ -496,20 +501,23 @@ class ExtensionCSPEnforcer : public CSPEnforcer {
   std::string GetDefaultCSPValue(const DirectiveStatus& status) override {
     if (status.Matches(kObjectSrc))
       return kObjectSrcDefaultDirective;
-    DCHECK(status.Matches(kScriptSrc));
+    DCHECK(status.Matches(kScriptSrc) || status.Matches(kScriptSrcElem) ||
+           status.Matches(kScriptSrcAttr) || status.Matches(kWorkerSrc) ||
+           status.Matches(kChildSrc));
     return kScriptSrcDefaultDirective;
   }
 };
 
 class AppSandboxPageCSPEnforcer : public CSPEnforcer {
  public:
-  AppSandboxPageCSPEnforcer(std::string manifest_key)
+  explicit AppSandboxPageCSPEnforcer(std::string manifest_key)
       : CSPEnforcer(std::move(manifest_key),
                     false,
                     base::BindRepeating(&GetAppSandboxSecureDirectiveValues)) {
     secure_directives_.emplace_back(
         std::vector<std::string>({kChildSrc, kFrameSrc}));
-    secure_directives_.emplace_back(std::vector<std::string>({kScriptSrc}));
+    secure_directives_.emplace_back(std::vector<std::string>(
+        {kScriptSrc, kScriptSrcElem, kScriptSrcAttr, kWorkerSrc}));
   }
 
   AppSandboxPageCSPEnforcer(const AppSandboxPageCSPEnforcer&) = delete;
@@ -520,7 +528,8 @@ class AppSandboxPageCSPEnforcer : public CSPEnforcer {
   std::string GetDefaultCSPValue(const DirectiveStatus& status) override {
     if (status.Matches(kChildSrc))
       return kAppSandboxSubframeSrcDefaultDirective;
-    DCHECK(status.Matches(kScriptSrc));
+    DCHECK(status.Matches(kScriptSrc) || status.Matches(kScriptSrcElem) ||
+           status.Matches(kScriptSrcAttr) || status.Matches(kWorkerSrc));
     return kAppSandboxScriptSrcDefaultDirective;
   }
 };
@@ -563,7 +572,7 @@ void CSPParser::Parse() {
            policy_, ";", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
     // Get whitespace separated tokens.
     std::vector<std::string_view> tokens = base::SplitStringPiece(
-        directive_str, kWhitespaceDelimiters, base::TRIM_WHITESPACE,
+        directive_str, base::kWhitespaceASCII, base::TRIM_WHITESPACE,
         base::SPLIT_WANT_NONEMPTY);
 
     // |directive_str| is non-empty and has had whitespace trimmed. Hence, it
@@ -641,7 +650,8 @@ bool DoesCSPDisallowRemoteCode(const std::string& extension_id,
   DCHECK(error);
 
   struct DirectiveMapping {
-    DirectiveMapping(DirectiveStatus status) : status(std::move(status)) {}
+    explicit DirectiveMapping(DirectiveStatus status)
+        : status(std::move(status)) {}
 
     DirectiveStatus status;
     raw_ptr<const CSPParser::Directive, DanglingUntriaged> directive = nullptr;
@@ -722,11 +732,11 @@ bool DoesCSPDisallowRemoteCode(const std::string& extension_id,
           std::string source_lower = base::ToLowerASCII(source);
 
           if (source_lower == kChromeResourcesUrl &&
-              extension_id == extension_misc::kChromeVoxExtensionId &&
+              IsExtensionAllowedToUseChromeResources(extension_id) &&
               location == mojom::ManifestLocation::kComponent) {
-            // We explicitly allow ChromeVox to include scripts from
-            // chrome://resources. ChromeVox is built into the browser as a
-            // component extension, and chrome://resources aren't remote.
+            // We explicitly allow some component extensions to include scripts
+            // from chrome://resources. These extensions are built into the
+            // browser, and chrome://resources isn't really remote.
             return true;
           }
 
@@ -769,6 +779,9 @@ bool DoesCSPDisallowRemoteCode(const std::string& extension_id,
   return true;
 }
 
-}  // namespace csp_validator
+bool IsExtensionAllowedToUseChromeResources(const std::string& extension_id) {
+  return std::ranges::contains(kExtensionsAllowedToUseChromeResources,
+                               extension_id);
+}
 
-}  // namespace extensions
+}  // namespace extensions::csp_validator

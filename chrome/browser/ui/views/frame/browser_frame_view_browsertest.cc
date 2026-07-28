@@ -23,7 +23,6 @@
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/core/browser/form_import/form_data_importer.h"
-#include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/payments/credit_card_save_manager.h"
@@ -87,7 +86,6 @@ class BrowserFrameViewBrowserTest : public extensions::ExtensionBrowserTest {
     manifest.start_url = app_url.value_or(GetAppURL());
     manifest.id = app_url.value_or(GetAppURL());
     manifest.scope = manifest.start_url.GetWithoutFilename();
-    manifest.has_theme_color = true;
     manifest.theme_color = app_theme_color_;
 
     std::unique_ptr<web_app::WebAppInstallInfo> web_app_info =
@@ -181,7 +179,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest,
                        OpaqueFrameColorForTransparentWebAppThemeColor) {
   // Ensure we're not using the system theme on Linux.
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   theme_service->UseDefaultTheme();
 
   app_theme_color_ = SkColorSetA(SK_ColorBLUE, 0x88);
@@ -194,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest,
 IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest,
                        BookmarkAppFrameColorSystemTheme) {
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   // Should be using the system theme by default, but this assert was not true
   // on the bots. Explicitly set.
   theme_service->UseSystemTheme();
@@ -205,7 +203,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest,
   // On Linux, the system theme is the GTK theme and should change the frame
   // color to the system color (not the app theme color); otherwise the title
   // and border would clash horribly with the GTK title bar.
-  // (https://crbug.com/878636)
+  // (https://crbug.com/41410571)
   const ui::ColorProvider* color_provider =
       GetAppFrameView()->GetColorProvider();
   const SkColor frame_color = color_provider->GetColor(ui::kColorFrameActive);
@@ -223,7 +221,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest, IncognitoIsCorrectColor) {
   ui::MockOsSettingsProvider os_settings_provider;
   os_settings_provider.SetAccentColor(gfx::kGoogleBlue400);
 
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
 
   BrowserView* view = BrowserView::GetBrowserViewForBrowser(incognito_browser);
   BrowserWidget* widget = view->browser_widget();
@@ -235,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest, IncognitoIsCorrectColor) {
   // Ensure that the frame color is very dark in Incognito.
   EXPECT_LT(frame_color_hsl.l, 0.2);
 
-  incognito_browser->window()->Close();
+  incognito_browser->GetWindow()->Close();
 }
 
 // Checks that the title bar for hosted app windows is hidden when in fullscreen
@@ -276,7 +274,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFrameViewBrowserTest,
                        HTMLMetaThemeColorOverridesManifest) {
   // Ensure we're not using the system theme on Linux.
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   theme_service->UseDefaultTheme();
 
   InstallAndLaunchBookmarkApp();
@@ -391,7 +389,8 @@ class SaveCardOfferObserver
                    ->GetAutofillManager()
                    .client()
                    .GetFormDataImporter()
-                   ->GetCreditCardSaveManager();
+                   ->GetPaymentsFormDataImporter()
+                   .GetCreditCardSaveManager();
     manager_->SetEventObserverForTesting(this);
   }
 

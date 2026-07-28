@@ -95,7 +95,7 @@ preferred language on the current system. Every string shown in the UI is
 translated.
 
 ### Bundle Installer
-TODO(crbug.com/40664480): Implement bundle installers.
+TODO(crbug.com/40149046): Implement bundle installers.
 
 The bundle installer allows installation of more than one application. The
 bundle installer is typically used in software distribution scenarios.
@@ -542,6 +542,10 @@ the server indicating an installation failure.
 The user interface is localized in the same languages as the Chromium project.
 
 No UI will be shown if the `--silent` switch is specified on the command line.
+On Windows, if a silent installation requires UAC elevation and `--silent`
+does not have the `allow-uac` value parameter (i.e. `--silent=allow-uac`),
+the installation will abort immediately and fail silently to prevent showing
+any interactive UI prompts.
 
 The launch command provided by the application installer via the
 [installer result API](#installer-result-api)
@@ -901,6 +905,50 @@ the following parameters:
 --appargs=appguid={8237E44A-0054-442C-B6B6-EA0509993955}&
           installerdata=%7B%22distribution%22%3A%7B%22msi%22%3Atrue%7D%7D
 ```
+
+### PKG installers (macOS)
+
+Similar to MSI installers on Windows, macOS flat packages (.pkg) can be tagged
+to convey dynamic install parameters. Currently, .pkg tags only support the
+`brand` parameter.
+
+Chrome PKGs are built using the signing pipeline
+(`chrome/installer/mac/sign_chrome.py`). The signing script itself does not
+insert a tag.
+
+A PKG installer can be tagged using the `tag` tool (built from
+`chrome/updater/tools/tag_main.cc`) as follows:
+
+```
+out/Default/tag
+    "--set-tag=brand=GGLL"
+    product.pkg
+```
+
+The .pkg format is a XAR archive and uses XAR signing. XAR signatures cover each
+individual file in the archive in both its compressed and uncompressed form.
+Bytes inside the archive that are not referenced as part of any compressed file
+remain outside of the signature. Apple notarization refers to the code-signed
+applications inside the archive, so it is similarly indifferent to "stray bytes"
+on the archive.
+
+Apple relies on this property for "stapling" notarization "tickets" to a signed
+.pkg without breaking the signature; the notarization ticket is appended to the
+end of the file. Apple's notarization tools only recognize a stapled
+notarization if it is at the end of the file, so we insert the Omaha tag just
+before the stapled notarization record.
+
+When a tagged Chrome PKG is run, the `postinstall` script invokes
+`ksadmin --register` including the `--tagged-pkg-path <file>` flag, providing
+the path to the `.pkg` being installed (which macOS Installer provides both as
+a parameter and an environment variable to `postinstall` scripts). `ksadmin`
+attempts to extract the tag and uses its brand code to set up a brand file
+(as specified by `--write-brand-file ifneeded` and `--brand-file-path <path>`),
+for persistent recording of the brand across updates. (It does not overwrite an
+existing brand, so an overinstall remains credited to the original brand.) If
+`ksadmin` cannot find an Omaha tag, cannot parse the tag, or cannot find a brand
+in the tag, it uses the brand code provided in the `--brand-value` parameter,
+if present. If no brand is provided by either method, no brand is written.
 
 ### Enterprise Enrollment
 The machine updater may be enrolled with a particular enterprise. Enrollment is
@@ -1669,6 +1717,21 @@ On Windows, when the updater uninstalls itself, and there are no other versions
 of the updater in existence for the scope, the updater saves a copy of the final
 log file to `Windows\SystemTemp\updater.log` for system installs, and
 `%TMP%\updater.log` for user installs.
+
+### State Persistence
+The updater's internal state is persisted in `prefs.json`. There are two types
+of `prefs.json` files:
+
+1. **Global prefs**: Located in `{UPDATER_DATA_DIR}`. This file is shared among
+   all instances of the updater and contains global state such as the active
+   updater version.
+2. **Local prefs**: Located in the versioned installation directory (e.g.,
+   `{UPDATER_DATA_DIR}\{VERSION}`). This file contains state specific to a
+   particular version of the updater, such as its qualification status.
+
+For system-scoped installations, `prefs.json` files are made readable to all
+users on the system to facilitate the collection of diagnostics data by Chrome's
+support tool.
 
 ## Network
 

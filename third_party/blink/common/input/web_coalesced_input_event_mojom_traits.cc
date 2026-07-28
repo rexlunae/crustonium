@@ -46,6 +46,8 @@ void PointerPropertiesFromPointerData(
   pointer_properties->is_raw_movement_event =
       pointer_data->is_raw_movement_event;
   pointer_properties->device_id = pointer_data->device_id;
+  pointer_properties->SetPositionInWidget(pointer_data->widget_position);
+  pointer_properties->SetPositionInScreen(pointer_data->screen_position);
 }
 
 void TouchPointPropertiesFromPointerData(
@@ -56,23 +58,6 @@ void TouchPointPropertiesFromPointerData(
   touch_point->radius_x = mojo_touch_point->radius_x;
   touch_point->radius_y = mojo_touch_point->radius_y;
   touch_point->rotation_angle = mojo_touch_point->rotation_angle;
-  touch_point->SetPositionInWidget(
-      mojo_touch_point->pointer_data->widget_position.x(),
-      mojo_touch_point->pointer_data->widget_position.y());
-  touch_point->SetPositionInScreen(
-      mojo_touch_point->pointer_data->screen_position.x(),
-      mojo_touch_point->pointer_data->screen_position.y());
-}
-
-// TODO(dtapuska): Remove once SetPositionInXXX moves to WebPointerProperties.
-void MouseEventPropertiesFromPointerData(
-    const blink::mojom::PointerDataPtr& pointer_data,
-    blink::WebMouseEvent* mouse_event) {
-  PointerPropertiesFromPointerData(pointer_data, mouse_event);
-  mouse_event->SetPositionInWidget(pointer_data->widget_position.x(),
-                                   pointer_data->widget_position.y());
-  mouse_event->SetPositionInScreen(pointer_data->screen_position.x(),
-                                   pointer_data->screen_position.y());
 }
 
 }  // namespace
@@ -204,12 +189,20 @@ bool StructTraits<blink::mojom::EventDataView,
               gesture_data->scroll_data->inertial_phase;
           gesture_event->data.scroll_end.synthetic =
               gesture_data->scroll_data->synthetic;
+          gesture_event->data.scroll_end.delta_x_compensated =
+              gesture_data->scroll_data->delta_x;
+          gesture_event->data.scroll_end.delta_y_compensated =
+              gesture_data->scroll_data->delta_y;
           break;
         case blink::WebInputEvent::Type::kGestureScrollUpdate:
           gesture_event->data.scroll_update.delta_x =
               gesture_data->scroll_data->delta_x;
           gesture_event->data.scroll_update.delta_y =
               gesture_data->scroll_data->delta_y;
+          gesture_event->data.scroll_update.delta_x_unconstrained =
+              gesture_data->scroll_data->delta_x_unconstrained;
+          gesture_event->data.scroll_update.delta_y_unconstrained =
+              gesture_data->scroll_data->delta_y_unconstrained;
           gesture_event->data.scroll_update.delta_units =
               gesture_data->scroll_data->delta_units;
           gesture_event->data.scroll_update.inertial_phase =
@@ -325,7 +318,7 @@ bool StructTraits<blink::mojom::EventDataView,
     blink::WebMouseEvent* mouse_event =
         static_cast<blink::WebMouseEvent*>(input_event.get());
 
-    MouseEventPropertiesFromPointerData(pointer_data, mouse_event);
+    PointerPropertiesFromPointerData(pointer_data, mouse_event);
     if (pointer_data->mouse_data) {
       mouse_event->click_count = pointer_data->mouse_data->click_count;
 
@@ -352,6 +345,7 @@ bool StructTraits<blink::mojom::EventDataView,
                 wheel_data->event_action);
         wheel_event->delta_units =
             static_cast<ui::ScrollGranularity>(wheel_data->delta_units);
+        wheel_event->rails_mode = wheel_data->rails_mode;
       }
     }
 
@@ -420,7 +414,8 @@ StructTraits<blink::mojom::EventDataView,
         wheel_event->acceleration_ratio_y, wheel_event->phase,
         wheel_event->momentum_phase, wheel_event->dispatch_type,
         static_cast<uint8_t>(wheel_event->event_action),
-        static_cast<uint8_t>(wheel_event->delta_units));
+        static_cast<uint8_t>(wheel_event->delta_units),
+        wheel_event->rails_mode);
   }
 
   return PointerDataFromPointerProperties(
@@ -493,20 +488,32 @@ StructTraits<blink::mojom::EventDataView,
           gesture_event->data.scroll_begin.inertial_phase,
           gesture_event->data.scroll_begin.synthetic,
           gesture_event->data.scroll_begin.pointer_count,
-          gesture_event->data.scroll_begin.cursor_control);
+          gesture_event->data.scroll_begin.cursor_control,
+          // NOTE(crbug.com/479472367): ScrollBegin does not use unconstrained
+          // values.
+          gesture_event->data.scroll_begin.delta_x_hint,
+          gesture_event->data.scroll_begin.delta_y_hint);
       break;
     case blink::WebInputEvent::Type::kGestureScrollEnd:
       gesture_data->scroll_data = blink::mojom::ScrollData::New(
-          0, 0, gesture_event->data.scroll_end.delta_units, false,
+          gesture_event->data.scroll_end.delta_x_compensated,
+          gesture_event->data.scroll_end.delta_y_compensated,
+          gesture_event->data.scroll_end.delta_units, false,
           gesture_event->data.scroll_end.inertial_phase,
-          gesture_event->data.scroll_end.synthetic, 0, false);
+          gesture_event->data.scroll_end.synthetic, 0, false,
+          // NOTE(crbug.com/479472367): ScrollEnd does not use unconstrained
+          // values.
+          gesture_event->data.scroll_end.delta_x_compensated,
+          gesture_event->data.scroll_end.delta_y_compensated);
       break;
     case blink::WebInputEvent::Type::kGestureScrollUpdate:
       gesture_data->scroll_data = blink::mojom::ScrollData::New(
           gesture_event->data.scroll_update.delta_x,
           gesture_event->data.scroll_update.delta_y,
           gesture_event->data.scroll_update.delta_units, false,
-          gesture_event->data.scroll_update.inertial_phase, false, 0, false);
+          gesture_event->data.scroll_update.inertial_phase, false, 0, false,
+          gesture_event->data.scroll_update.delta_x_unconstrained,
+          gesture_event->data.scroll_update.delta_y_unconstrained);
       break;
     case blink::WebInputEvent::Type::kGestureFlingStart:
       gesture_data->fling_data = blink::mojom::FlingData::New(

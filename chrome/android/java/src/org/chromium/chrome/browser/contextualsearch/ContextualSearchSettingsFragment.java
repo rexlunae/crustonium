@@ -12,11 +12,9 @@ import androidx.preference.Preference;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
-import org.chromium.build.NullUtil;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
@@ -24,8 +22,8 @@ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.SettingsFragment;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
-import org.chromium.components.browser_ui.settings.TextMessagePreference;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 
 /**
  * Fragment to manage the Contextual Search Settings in Chrome Settings, and to explain to the user
@@ -46,15 +44,6 @@ public class ContextualSearchSettingsFragment extends ChromeBaseSettingsFragment
         mPageTitle.set(getString(R.string.contextual_search_title));
         setHasOptionsMenu(true);
         initSwitches();
-
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            // TODO(crbug.com/439911511): Set the summary instead of the title in the layout file.
-            TextMessagePreference contextualSearchDescription =
-                    findPreference(PREF_CONTEXTUAL_SEARCH_DESCRIPTION);
-            NullUtil.assertNonNull(contextualSearchDescription)
-                    .setSummary(contextualSearchDescription.getTitle());
-            contextualSearchDescription.setTitle(null);
-        }
     }
 
     @Override
@@ -121,6 +110,11 @@ public class ContextualSearchSettingsFragment extends ChromeBaseSettingsFragment
                     if (ContextualSearchPolicy.isContextualSearchDisabled(profile)) {
                         indexData.removeEntry(getUniqueId(PREF_WAS_FULLY_ENABLED_SWITCH));
                     }
+                }
+
+                @Override
+                public boolean isSearchable() {
+                    return !OmniboxCapabilities.isDesktopPlatform();
                 }
             };
 

@@ -10,6 +10,7 @@ import org.junit.rules.TestRule;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.base.AccountInfo;
@@ -59,6 +60,11 @@ public class AccountManagerTestRule implements TestRule {
         AccountManagerFacadeProvider.setInstanceForTests(mFakeAccountManagerFacade);
     }
 
+    /** Returns the {@link FakeAccountManagerFacade} used by this test rule. */
+    public FakeAccountManagerFacade getAccountManagerFacade() {
+        return mFakeAccountManagerFacade;
+    }
+
     /** Returns the {@link FakeIdentityManager} used by this test rule. */
     public FakeIdentityManager getIdentityManager() {
         return mFakeIdentityManager;
@@ -66,8 +72,8 @@ public class AccountManagerTestRule implements TestRule {
 
     /** Adds an account to the {@link FakeAccountManagerFacade} and {@link FakeIdentityManager}. */
     public void addAccount(AccountInfo accountInfo) {
-        mFakeAccountManagerFacade.addAccount(accountInfo);
         mFakeIdentityManager.addOrUpdateExtendedAccountInfo(accountInfo);
+        mFakeAccountManagerFacade.addAccount(accountInfo);
     }
 
     /**
@@ -90,14 +96,48 @@ public class AccountManagerTestRule implements TestRule {
     /** Removes an account with the given {@link CoreAccountId}. */
     public void removeAccount(CoreAccountId accountId) {
         mFakeAccountManagerFacade.removeAccount(accountId);
+        mFakeIdentityManager.removeAccount(accountId);
+    }
+
+    /** Removes all accounts. */
+    public void removeAllAccounts() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mFakeAccountManagerFacade.removeAllAccounts();
+                    mFakeIdentityManager.removeAllAccounts();
+                });
     }
 
     public void setAccountFetchFailed() {
         mFakeAccountManagerFacade.setAccountFetchFailed();
     }
 
-    /** See {@link FakeAccountManagerFacade#blockGetAccounts(boolean)}. */
-    public FakeAccountManagerFacade.UpdateBlocker blockGetAccountsUpdate(boolean populateCache) {
-        return mFakeAccountManagerFacade.blockGetAccounts(populateCache);
+    /**
+     * Block updates from {@link FakeAccountManagerFacade}. See {@link
+     * FakeAccountManagerFacade#blockGetAccounts()}.
+     */
+    public FakeAccountManagerFacade.UpdateBlocker blockGetAccountsUpdate() {
+        mFakeIdentityManager.setAreRefreshTokensLoaded(false);
+        return mFakeAccountManagerFacade.blockGetAccounts(
+                () -> mFakeIdentityManager.setAreRefreshTokensLoaded(true));
+    }
+
+    /**
+     * Block updates from {@link FakeAccountManagerFacade} and populates the AccountManagerFacade
+     * with the currently available accounts. See {@link
+     * FakeAccountManagerFacade#blockGetAccountsAndPopulateCache()}.
+     */
+    public FakeAccountManagerFacade.UpdateBlocker blockGetAccountsUpdateAndPopulateCache() {
+        mFakeIdentityManager.setAreRefreshTokensLoaded(false);
+        return mFakeAccountManagerFacade.blockGetAccountsAndPopulateCache(
+                () -> mFakeIdentityManager.setAreRefreshTokensLoaded(true));
+    }
+
+    /**
+     * Block updates from {@link FakeIdentityManager}. See {@link
+     * FakeIdentityManager#blockExtendedAccountInfoUpdate(boolean)}.
+     */
+    public void blockExtendedAccountInfoUpdate() {
+        mFakeIdentityManager.blockExtendedAccountInfoUpdate();
     }
 }

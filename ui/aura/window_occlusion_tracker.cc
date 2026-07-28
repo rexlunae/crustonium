@@ -80,13 +80,14 @@ gfx::Transform GetWindowTransformRelativeToRoot(
   gfx::Transform translation;
   gfx::Transform transform_relative_to_root;
   if (use_target_values) {
-    translation.Translate(
-        static_cast<float>(window->layer()->GetTargetBounds().x()),
-        static_cast<float>(window->layer()->GetTargetBounds().y()));
+    // Use aura::Window API to get bounds which works even with
+    // `layer_managed_by_parent` is set to false.
+    translation.Translate(static_cast<float>(window->GetTargetBounds().x()),
+                          static_cast<float>(window->GetTargetBounds().y()));
     transform_relative_to_root = window->layer()->GetTargetTransform();
   } else {
-    translation.Translate(static_cast<float>(window->layer()->bounds().x()),
-                          static_cast<float>(window->layer()->bounds().y()));
+    translation.Translate(static_cast<float>(window->bounds().x()),
+                          static_cast<float>(window->bounds().y()));
     transform_relative_to_root = window->layer()->transform();
   }
   transform_relative_to_root.PostConcat(translation);
@@ -133,7 +134,7 @@ SkIRect GetWindowBoundsInRootWindow(
     bool use_target_values) {
   // Compute the unclipped bounds of |window|.
   const gfx::Rect src_bounds =
-      use_target_values ? window->layer()->GetTargetBounds() : window->bounds();
+      use_target_values ? window->GetTargetBounds() : window->bounds();
   const SkIRect transformed_bounds = ComputeTransformedBoundsEnclosed(
       gfx::Rect(src_bounds.size()), transform_relative_to_root);
   return ComputeClippedBounds(transformed_bounds, clipped_bounds);
@@ -352,12 +353,6 @@ WindowOcclusionTracker::~WindowOcclusionTracker() = default;
 bool WindowOcclusionTracker::OcclusionStatesMatch(
     const base::flat_map<Window*, OcclusionData>& tracked_windows) {
   for (const auto& tracked_window : tracked_windows) {
-#if BUILDFLAG(IS_CHROMEOS)
-    if (tracked_window.first->has_occlusion_state_override()) {
-      continue;
-    }
-#endif
-
     auto occlusion_state =
         tracked_window.second.locked_occlusion_state.value_or(
             tracked_window.second.occlusion_state);
@@ -573,10 +568,10 @@ bool WindowOcclusionTracker::VisibleWindowCanOccludeOtherWindows(
                                : window->layer()->GetCombinedOpacity();
   // Just check the alpha on this layer as an alpha on parent solid color layers
   // will not affect children's opacity.
-  if (window->layer()->type() == ui::LAYER_SOLID_COLOR) {
-    auto color = ShouldUseTargetValues() ? window->layer()->GetTargetColor()
-                                         : window->layer()->background_color();
-    combined_opacity *= SkColorGetA(color) / 255.f;
+  if (auto* layer = window->layer()->AsSolidColor()) {
+    auto color = ShouldUseTargetValues() ? layer->GetTargetColor()
+                                         : layer->background_color();
+    combined_opacity *= color.fA;
   }
   return (!window->GetTransparent() && WindowHasContent(window) &&
           combined_opacity == 1.0f &&

@@ -5,16 +5,19 @@
 #include "chrome/browser/enterprise/platform_auth/extensible_enterprise_sso_prefs_handler.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/apple/foundation_util.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "base/check_is_test.h"
 #include "base/check_op.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/bind_post_task.h"
@@ -26,6 +29,7 @@
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/common/content_switches.h"
 
 namespace enterprise_auth {
 
@@ -34,6 +38,13 @@ using ScopedPropList = base::apple::ScopedCFTypeRef<CFPropertyListRef>;
 namespace {
 
 const CFStringRef kExtensibleSSOPrefName(CFSTR("com.apple.extensiblesso"));
+base::RepeatingCallback<std::unique_ptr<CFPreferencesObserver>()>&
+GetCfPrefsOverrideForTesting() {
+  static base::NoDestructor<
+      base::RepeatingCallback<std::unique_ptr<CFPreferencesObserver>()>>
+      cf_prefs_observer_override_for_testing;
+  return *cf_prefs_observer_override_for_testing;
+}
 
 base::ListValue ParseConfiguration(CFPreferencesObserver::Config config) {
   if (!config.extension_id || !config.team_id || !config.hosts) {
@@ -88,6 +99,20 @@ base::ListValue ReadAndParseConfiguration(
 
 }  // namespace
 
+// Stub implementation for tests that don't explicitly use an override.
+class StubCFPreferencesObserver : public CFPreferencesObserver {
+ public:
+  StubCFPreferencesObserver() {}
+  void Subscribe(base::RepeatingClosure on_update) override {}
+  void Unsubscribe() override {}
+  base::OnceCallback<Config()> GetReadConfigCallback() override {
+    return base::BindOnce([]() {
+      return Config(ScopedPropList(nullptr), ScopedPropList(nullptr),
+                    ScopedPropList(nullptr));
+    });
+  }
+};
+
 CFPreferencesObserver::Config::Config(ScopedPropList extension_id,
                                       ScopedPropList team_id,
                                       ScopedPropList hosts)
@@ -104,6 +129,7 @@ CFPreferencesObserver::Config::~Config() = default;
 
 class CFPreferencesObserverImpl final : public CFPreferencesObserver {
  public:
+  CFPreferencesObserverImpl() { CHECK_IS_NOT_TEST(); }
   ~CFPreferencesObserverImpl() override { Unsubscribe(); }
 
   static void OnNotification(CFNotificationCenterRef center,
@@ -170,15 +196,26 @@ const CFStringRef ExtensibleEnterpriseSSOPrefsHandler::kOktaSSOTeamID(
 
 ExtensibleEnterpriseSSOPrefsHandler::ExtensibleEnterpriseSSOPrefsHandler(
     PrefService* local_state)
-    : ExtensibleEnterpriseSSOPrefsHandler(
-          local_state,
-          std::make_unique<CFPreferencesObserverImpl>()) {}
+    : local_state_(local_state) {
+  if (GetCfPrefsOverrideForTesting()) {
+    CHECK_IS_TEST();
+    cf_preferences_observer_ = GetCfPrefsOverrideForTesting().Run();  // IN-TEST
+  } else {
+    // This class is used to make an OS call on browser process's construction,
+    // which would cause the OS call to be made in browser tests that don't
+    // directly override the prefs handler.
+    const auto* command_line = base::CommandLine::ForCurrentProcess();
+    if (command_line->HasSwitch(switches::kBrowserTest) ||
+        command_line->HasSwitch(switches::kTestType) ||
+        command_line->GetProgram().BaseName().value().find(FILE_PATH_LITERAL(
+            "interactive_ui_tests")) != base::FilePath::StringType::npos) {
+      // Real implementation should never be used in tests.
+      cf_preferences_observer_ = std::make_unique<StubCFPreferencesObserver>();
+    } else {
+      cf_preferences_observer_ = std::make_unique<CFPreferencesObserverImpl>();
+    }
+  }
 
-ExtensibleEnterpriseSSOPrefsHandler::ExtensibleEnterpriseSSOPrefsHandler(
-    PrefService* local_state,
-    std::unique_ptr<CFPreferencesObserver> cf_preferences_observer)
-    : cf_preferences_observer_(std::move(cf_preferences_observer)),
-      local_state_(local_state) {
   DCHECK(cf_preferences_observer_);
   DCHECK(local_state_);
   auto callback =
@@ -217,6 +254,15 @@ void ExtensibleEnterpriseSSOPrefsHandler::RegisterPrefs(
     PrefRegistrySimple* pref_registry) {
   pref_registry->RegisterListPref(
       prefs::kExtensibleEnterpriseSSOConfiguredHosts);
+}
+
+// static
+void ExtensibleEnterpriseSSOPrefsHandler::
+    OverrideCFPreferenceObserverForTesting(
+        base::RepeatingCallback<std::unique_ptr<CFPreferencesObserver>()>
+            cf_prefs_observer_override) {
+  GetCfPrefsOverrideForTesting() =  // IN-TEST
+      std::move(cf_prefs_observer_override);
 }
 
 }  // namespace enterprise_auth

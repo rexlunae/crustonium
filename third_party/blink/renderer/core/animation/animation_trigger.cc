@@ -4,12 +4,16 @@
 
 #include "third_party/blink/renderer/core/animation/animation_trigger.h"
 
+#include "base/time/time.h"
 #include "cc/animation/animation_id_provider.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/animation/animation_timeline.h"
 #include "third_party/blink/renderer/core/animation/css/css_animation.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "ui/gfx/animation/keyframe/keyframe_model.h"
 
 namespace blink {
 
@@ -22,43 +26,108 @@ namespace {
 
 void PerformPlay(Animation& animation,
                  V8AnimationPlayState::Enum play_state,
+                 std::optional<base::TimeDelta> event_time,
                  ExceptionState& exception_state) {
-  animation.PlayInternal(Animation::AutoRewind::kEnabled, exception_state);
+  Animation::AutoRewind auto_rewind = Animation::AutoRewind::kDisabled;
+  // TODO(crbug.com/390314945): EventTriggers currently do not pause animations
+  // when added, possibly leaving the animation idle. This causes trigger play
+  // actions that do not auto-rewind to fail (be no-op). EventTriggers should
+  // pause animation when added.
+  if (play_state == V8AnimationPlayState::Enum::kIdle) {
+    auto_rewind = Animation::AutoRewind::kEnabled;
+  }
+  animation.PlayInternal(auto_rewind, exception_state);
+
+  bool notify = event_time && animation.PendingInternal();
+
+  V8AnimationPlayState::Enum new_play_state =
+      animation.CalculateAnimationPlayState();
+  DCHECK(animation.PendingInternal() ||
+         new_play_state == V8AnimationPlayState::Enum::kRunning ||
+         new_play_state == V8AnimationPlayState::Enum::kFinished);
+
+  if (notify) {
+    animation.NotifyAnimationStartedAsync(event_time.value(), auto_rewind);
+  }
 }
 
 void PerformPause(Animation& animation,
                   V8AnimationPlayState::Enum play_state,
+                  std::optional<base::TimeDelta> event_time,
                   ExceptionState& exception_state) {
   if (play_state == V8AnimationPlayState::Enum::kRunning) {
     animation.PauseInternal(ASSERT_NO_EXCEPTION);
+
+    if (event_time) {
+      animation.NotifyAnimationPausedAsync(event_time.value());
+    }
   }
 }
 
 void PerformPlayForwards(Animation& animation,
                          V8AnimationPlayState::Enum play_state,
+                         std::optional<base::TimeDelta> event_time,
                          ExceptionState& exception_state) {
-  double playback_rate = std::abs(animation.EffectivePlaybackRate());
+  Animation::AutoRewind auto_rewind = Animation::AutoRewind::kDisabled;
+  // See PerformPlay for why we use kEnabled for idle animations.
+  if (play_state == V8AnimationPlayState::Enum::kIdle) {
+    auto_rewind = Animation::AutoRewind::kEnabled;
+  }
+  if (animation.EffectivePlaybackRate() > 0) {
+    animation.PlayInternal(auto_rewind, exception_state);
+  } else {
+    animation.ReverseInternal(auto_rewind, exception_state);
+  }
+  DCHECK_GT(animation.EffectivePlaybackRate(), 0);
 
-  animation.updatePlaybackRate(playback_rate, exception_state);
+  bool notify = event_time && animation.PendingInternal();
 
-  animation.PlayInternal(Animation::AutoRewind::kEnabled, exception_state);
+  V8AnimationPlayState::Enum new_play_state =
+      animation.CalculateAnimationPlayState();
+  DCHECK(animation.PendingInternal() ||
+         new_play_state == V8AnimationPlayState::Enum::kRunning ||
+         new_play_state == V8AnimationPlayState::Enum::kFinished);
+
+  if (notify) {
+    animation.NotifyAnimationStartedAsync(event_time.value(), auto_rewind);
+  }
 }
 
 void PerformPlayBackwards(Animation& animation,
                           V8AnimationPlayState::Enum play_state,
+                          std::optional<base::TimeDelta> event_time,
                           ExceptionState& exception_state) {
-  double playback_rate = -std::abs(animation.EffectivePlaybackRate());
+  Animation::AutoRewind auto_rewind = Animation::AutoRewind::kDisabled;
+  // See PerformPlay for why we use kEnabled for idle animations.
+  if (play_state == V8AnimationPlayState::Enum::kIdle) {
+    auto_rewind = Animation::AutoRewind::kEnabled;
+  }
+  if (animation.EffectivePlaybackRate() < 0) {
+    animation.PlayInternal(auto_rewind, exception_state);
+  } else {
+    animation.ReverseInternal(auto_rewind, exception_state);
+  }
+  DCHECK_LT(animation.EffectivePlaybackRate(), 0);
 
-  animation.updatePlaybackRate(playback_rate, exception_state);
+  bool notify = event_time && animation.PendingInternal();
 
-  animation.PlayInternal(Animation::AutoRewind::kEnabled, exception_state);
+  V8AnimationPlayState::Enum new_play_state =
+      animation.CalculateAnimationPlayState();
+  DCHECK(animation.PendingInternal() ||
+         new_play_state == V8AnimationPlayState::Enum::kRunning ||
+         new_play_state == V8AnimationPlayState::Enum::kFinished);
+
+  if (notify) {
+    animation.NotifyAnimationStartedAsync(event_time.value(), auto_rewind);
+  }
 }
 
 void PerformPlayOnce(Animation& animation,
                      V8AnimationPlayState::Enum play_state,
+                     std::optional<base::TimeDelta> event_time,
                      ExceptionState& exception_state) {
   if (play_state != V8AnimationPlayState::Enum::kFinished) {
-    animation.PlayInternal(Animation::AutoRewind::kEnabled, exception_state);
+    PerformPlay(animation, play_state, event_time, exception_state);
   }
 }
 
@@ -69,42 +138,52 @@ void PerformReset(Animation& animation,
 }
 
 void PerformReplay(Animation& animation,
-                   V8AnimationPlayState::Enum play_state,
+                   std::optional<base::TimeDelta> event_time,
                    ExceptionState& exception_state) {
-  animation.ResetPlayback();
-
-  animation.PlayInternal(Animation::AutoRewind::kEnabled, exception_state);
+  animation.PlayInternal(Animation::AutoRewind::kForced, exception_state);
+  bool notify = event_time && animation.PendingInternal();
+  if (notify) {
+    animation.NotifyAnimationStartedAsync(event_time.value(),
+                                          Animation::AutoRewind::kForced);
+  }
 }
 
 }  // namespace
 
 // static
-void AnimationTrigger::PerformBehavior(Animation& animation,
-                                       Behavior behavior,
-                                       ExceptionState& exception_state) {
+void AnimationTrigger::PerformBehavior(
+    Animation& animation,
+    Behavior behavior,
+    std::optional<base::TimeDelta> async_event_time,
+    ExceptionState& exception_state) {
+  ScriptForbiddenScope forbid_script;
+  // TODO(crbug.com/451238244): Plumb the impl thread animation's start time,
+  // |async_event_time| through to the individual behaviors.
   V8AnimationPlayState::Enum play_state =
       animation.CalculateAnimationPlayState();
   switch (behavior) {
     case Behavior::kPlay:
-      PerformPlay(animation, play_state, exception_state);
+      PerformPlay(animation, play_state, async_event_time, exception_state);
       break;
     case Behavior::kPause:
-      PerformPause(animation, play_state, exception_state);
+      PerformPause(animation, play_state, async_event_time, exception_state);
       break;
     case Behavior::kPlayForwards:
-      PerformPlayForwards(animation, play_state, exception_state);
+      PerformPlayForwards(animation, play_state, async_event_time,
+                          exception_state);
       break;
     case Behavior::kPlayBackwards:
-      PerformPlayBackwards(animation, play_state, exception_state);
+      PerformPlayBackwards(animation, play_state, async_event_time,
+                           exception_state);
       break;
     case Behavior::kPlayOnce:
-      PerformPlayOnce(animation, play_state, exception_state);
+      PerformPlayOnce(animation, play_state, async_event_time, exception_state);
       break;
     case Behavior::kReset:
       PerformReset(animation, play_state, exception_state);
       break;
     case Behavior::kReplay:
-      PerformReplay(animation, play_state, exception_state);
+      PerformReplay(animation, async_event_time, exception_state);
       break;
     case Behavior::kNone:
       break;
@@ -152,6 +231,35 @@ cc::AnimationTrigger::Behavior AnimationTrigger::ToCcAnimationTriggerBehavior(
   NOTREACHED();
 }
 
+bool AnimationTrigger::CanCompositeBehavior(Behavior behavior) {
+  switch (behavior) {
+    case Behavior::kPlay:
+    case Behavior::kPause:
+    case Behavior::kNone:
+    case Behavior::kReplay:
+    case Behavior::kPlayOnce:
+    case Behavior::kPlayForwards:
+    case Behavior::kPlayBackwards:
+    case Behavior::kReset:
+      return true;
+  }
+  NOTREACHED();
+}
+
+void AnimationTrigger::DestroyCompositorTrigger() {
+  if (!compositor_trigger_) {
+    return;
+  }
+
+  compositor_trigger_->SetAnimationTriggerDelegate(nullptr);
+
+  if (cc::AnimationHost* host = compositor_trigger_->GetAnimationHost()) {
+    host->RemoveTrigger(compositor_trigger_);
+  }
+
+  compositor_trigger_ = nullptr;
+}
+
 void AnimationTrigger::Dispose() {
   DestroyCompositorTrigger();
 }
@@ -161,6 +269,8 @@ void AnimationTrigger::addAnimation(
     V8AnimationTriggerBehavior activate_behavior,
     V8AnimationTriggerBehavior deactivate_behavior,
     ExceptionState& exception_state) {
+  CHECK(!is_activating_or_deactivating_);
+
   if (!animation) {
     return;
   }
@@ -190,6 +300,8 @@ void AnimationTrigger::addAnimation(
 }
 
 void AnimationTrigger::removeAnimation(Animation* animation) {
+  CHECK(!is_activating_or_deactivating_);
+
   if (!animation) {
     return;
   }
@@ -234,23 +346,36 @@ void AnimationTrigger::UpdateBehaviorMap(Animation& animation,
       &animation, std::make_pair<>(activate_behavior, deactivate_behavior));
 }
 
-void AnimationTrigger::PerformActivate() {
+void AnimationTrigger::PerformActivate(
+    std::optional<base::TimeDelta> async_activate_time) {
+  base::AutoReset<bool> is_activating(&is_activating_or_deactivating_, true);
+
   for (auto [animation, behaviors] : animation_behavior_map_) {
-    if (HasPausedCSSPlayState(animation) ||
-        (compositor_trigger_ && IsTriggeredOnCompositor(animation))) {
+    if (HasPausedCSSPlayState(animation)) {
       continue;
     }
-    PerformBehavior(*animation, behaviors.first, ASSERT_NO_EXCEPTION);
+    std::optional<base::TimeDelta> time =
+        IsTriggeredOnCompositor(animation, behaviors) ? async_activate_time
+                                                      : std::nullopt;
+    DCHECK(!IsTriggeredOnCompositor(animation, behaviors) || time.has_value());
+    PerformBehavior(*animation, behaviors.first, time, ASSERT_NO_EXCEPTION);
   }
 }
 
-void AnimationTrigger::PerformDeactivate() {
+void AnimationTrigger::PerformDeactivate(
+    std::optional<base::TimeDelta> async_deactivate_time) {
+  base::AutoReset<bool> is_deactivating(&is_activating_or_deactivating_, true);
+
   for (auto [animation, behaviors] : animation_behavior_map_) {
-    if (HasPausedCSSPlayState(animation) ||
-        (compositor_trigger_ && IsTriggeredOnCompositor(animation))) {
+    if (HasPausedCSSPlayState(animation)) {
       continue;
     }
-    PerformBehavior(*animation, behaviors.second, ASSERT_NO_EXCEPTION);
+
+    std::optional<base::TimeDelta> time =
+        IsTriggeredOnCompositor(animation, behaviors) ? async_deactivate_time
+                                                      : std::nullopt;
+    DCHECK(!IsTriggeredOnCompositor(animation, behaviors) || time.has_value());
+    PerformBehavior(*animation, behaviors.second, time, ASSERT_NO_EXCEPTION);
   }
 }
 
@@ -260,10 +385,13 @@ void AnimationTrigger::UpdateCompositorTriggerAnimations(
 
   std::vector<cc::AnimationTrigger::AnimationData> animation_data;
   for (auto& [animation, behaviors] : animation_behavior_map_) {
-    bool pause_keyframe_models = false;
+    if (!CanCompositeBehavior(behaviors.first) ||
+        !CanCompositeBehavior(behaviors.second)) {
+      continue;
+    }
 
     if (!animation->StartTriggeredAnimationOnCompositor(
-            paint_artifact_compositor, pause_keyframe_models)) {
+            paint_artifact_compositor)) {
       // Check that the animation is compositable. If it is, create a
       // cc::Animation for it if necessary.
       continue;
@@ -288,14 +416,6 @@ void AnimationTrigger::UpdateCompositorTriggerAnimations(
     cc::AnimationTrigger::AnimationData data(
         cc_animation->id(), cc_timeline->id(), activate, deactivate);
     animation_data.push_back(data);
-
-    // Ensure that cc animations created because of the trigger remain
-    // paused until triggered. We only do this if we instantiated the cc
-    // animation so as not to interfere with an animation that was already
-    // playing.
-    if (pause_keyframe_models) {
-      cc_animation->PauseKeyframeModels(base::TimeDelta());
-    }
   }
 
   compositor_trigger_->SetAnimationData(animation_data);
@@ -326,12 +446,18 @@ void AnimationTrigger::UpdateCompositorTrigger(
   }
 
   if (compositor_trigger_) {
+    compositor_trigger_->SetAnimationTriggerDelegate(
+        static_cast<cc::AnimationTriggerDelegate*>(this));
     UpdateCompositorTriggerAnimations(paint_artifact_compositor);
   }
 }
 
-bool AnimationTrigger::IsTriggeredOnCompositor(Animation* animation) {
-  DCHECK(compositor_trigger_);
+bool AnimationTrigger::IsTriggeredOnCompositor(
+    Animation* animation,
+    const std::pair<Behavior, Behavior>& behaviors) {
+  if (!compositor_trigger_) {
+    return false;
+  }
 
   CompositorAnimation* compositor_anim = animation->GetCompositorAnimation();
   cc::Animation* cc_animation =
@@ -340,12 +466,12 @@ bool AnimationTrigger::IsTriggeredOnCompositor(Animation* animation) {
     return false;
   }
 
-  return true;
+  return CanCompositeBehavior(behaviors.first) &&
+         CanCompositeBehavior(behaviors.second);
 }
 
 void AnimationTrigger::Trace(Visitor* visitor) const {
   visitor->Trace(animation_behavior_map_);
-  visitor->Trace(owning_element_);
   ScriptWrappable::Trace(visitor);
 }
 

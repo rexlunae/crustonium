@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
 #include "cc/slim/layer.h"
 #include "cc/slim/solid_color_layer.h"
@@ -38,7 +39,7 @@ static int64_t JNI_CompositorViewImpl_Init(
   return reinterpret_cast<intptr_t>(compositor_view.release());
 }
 
-static jboolean JNI_CompositorViewImpl_ShouldUseSurfaceView(JNIEnv* env) {
+static bool JNI_CompositorViewImpl_ShouldUseSurfaceView(JNIEnv* env) {
   return base::FeatureList::IsEnabled(
       thin_webview::android::kUseSurfaceViewForThinWebView);
 }
@@ -112,6 +113,15 @@ void CompositorViewImpl::SurfaceChanged(JNIEnv* env,
 
 void CompositorViewImpl::SetNeedsComposite(JNIEnv* env) {
   compositor_->SetNeedsComposite();
+}
+
+void CompositorViewImpl::RunOnNextFrame(JNIEnv* env,
+                                        base::OnceClosure callback) {
+  compositor_->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+      [](base::OnceClosure cb, const viz::FrameTimingDetails& details) {
+        std::move(cb).Run();
+      },
+      std::move(callback)));
 }
 
 void CompositorViewImpl::SetRootLayer(scoped_refptr<cc::slim::Layer> layer) {

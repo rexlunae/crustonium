@@ -31,10 +31,6 @@ inline constexpr const uint8_t kNamespaceStorageKeySeparator = '-';
 // "map-<map_id>-<key from script>".
 inline constexpr const uint8_t kMapIdKeySeparator = '-';
 
-// The "next-map-id" key.
-inline constexpr const uint8_t kNextMapIdKey[] = {'n', 'e', 'x', 't', '-', 'm',
-                                                  'a', 'p', '-', 'i', 'd'};
-
 // The schema "version" key.
 inline constexpr const uint8_t kSessionStorageLevelDBVersionKey[] = {
     'v', 'e', 'r', 's', 'i', 'o', 'n'};
@@ -74,20 +70,16 @@ class SessionStorageLevelDB : public DomStorageDatabase {
  public:
   // Use `DomStorageDatabaseFactory::Open()` to construct a
   // `base::SequenceBound<DomStorageDatabase>`.
-  explicit SessionStorageLevelDB(PassKey);
+  SessionStorageLevelDB(PassKey, bool write_exp_tag);
   ~SessionStorageLevelDB() override;
-
-  // Opens an on-disk or in-memory LevelDB and returns the result. To create an
-  // in-memory database, provide an empty `directory`.
-  DbStatus Open(PassKey,
-                const base::FilePath& directory,
-                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
-                    memory_dump_id);
 
   SessionStorageLevelDB(const SessionStorageLevelDB&) = delete;
   SessionStorageLevelDB& operator=(const SessionStorageLevelDB&) = delete;
 
   // Implement the `DomStorageDatabase` interface:
+  DbStatus Open(const base::FilePath& directory,
+                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
+                    memory_dump_id) override;
   StatusOr<std::map<Key, Value>> ReadMapKeyValues(
       MapLocator map_locator) override;
   DbStatus UpdateMaps(std::vector<MapBatchUpdate> map_updates) override;
@@ -114,7 +106,7 @@ class SessionStorageLevelDB : public DomStorageDatabase {
                           std::vector<MapLocator> maps_to_delete) override;
 
   DbStatus PurgeOrigins(std::set<url::Origin> origins) override;
-  DbStatus RewriteDB() override;
+  DbStatus CleanUpStaleData() override;
 
   // Test-only functions.
   DbStatus PutVersionForTesting(int64_t version) override;
@@ -123,13 +115,6 @@ class SessionStorageLevelDB : public DomStorageDatabase {
   DomStorageDatabaseLevelDB& GetLevelDBForTesting();
 
  private:
-  // Parses the value from the next map ID key in the LevelDB.  Converts the
-  // value from a integer text string like "234" to an `int64_t`.  Returns 0
-  // as the default value to use when the next map key does not exist in the
-  // LevelDB.  The next map ID determines the next available ID for a new map to
-  // use.
-  StatusOr<int64_t> ReadNextMapId() const;
-
   // Parses all "namespace-" entries.  Each key contains a session ID and
   // storage key.  Each value contains the map ID integer text string.  Combines
   // these to create a `MapLocator` in a `MapMetadata` for each "namespace-"
@@ -138,6 +123,7 @@ class SessionStorageLevelDB : public DomStorageDatabase {
       const;
 
   std::unique_ptr<DomStorageDatabaseLevelDB> leveldb_;
+  bool write_exp_tag_ = false;
 };
 
 }  // namespace storage

@@ -26,6 +26,7 @@ import androidx.test.uiautomator.UiObject;
 import androidx.test.uiautomator.UiSelector;
 
 import org.hamcrest.Matchers;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -42,15 +43,17 @@ import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.ShortcutHelper;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeActivityTestRule;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
@@ -66,9 +69,11 @@ import org.chromium.components.webapps.AppDetailsDelegate;
 import org.chromium.components.webapps.bottomsheet.PwaInstallBottomSheetView;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.content_public.common.ContentUrlConstants;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modaldialog.ModalDialogProperties.ButtonType;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -77,6 +82,8 @@ import org.chromium.ui.widget.ButtonCompat;
 /** Tests the app banners. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+// TODO(http://crbug.com/495529795): Enable side panel and fix this test
+@DisableFeatures({ChromeFeatureList.ENABLE_ANDROID_SIDE_PANEL})
 public class AppBannerManagerTest {
     @Rule
     public FreshCtaTransitTestRule mTabbedActivityTestRule =
@@ -84,8 +91,6 @@ public class AppBannerManagerTest {
 
     @Rule
     public CustomTabActivityTestRule mCustomTabActivityTestRule = new CustomTabActivityTestRule();
-
-    @Rule public ChromeBrowserTestRule mChromeBrowserTestRule = new ChromeBrowserTestRule();
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
@@ -167,6 +172,7 @@ public class AppBannerManagerTest {
 
     @Before
     public void setUp() throws Exception {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         AppBannerManager.setIsSupported(true);
         ShortcutHelper.setDelegateForTests(
                 new ShortcutHelper.Delegate() {
@@ -202,6 +208,15 @@ public class AppBannerManagerTest {
                         .getActivity()
                         .getRootUiCoordinatorForTesting()
                         .getBottomSheetController();
+    }
+
+    @After
+    public void tearDown() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    AppBannerManager.setAppDetailsDelegate(null);
+                });
+        mDetailsDelegate = null;
     }
 
     private AppBannerManager getAppBannerManager(WebContents webContents) {
@@ -349,6 +364,9 @@ public class AppBannerManagerTest {
         clickButton(rule.getActivity(), ButtonType.NEGATIVE);
         waitUntilNoDialogsShowing(tab);
         tapAndWaitForModalBanner(tab);
+
+        clickButton(rule.getActivity(), ButtonType.NEGATIVE);
+        waitUntilNoDialogsShowing(tab);
     }
 
     private void triggerBottomSheet(
@@ -400,7 +418,8 @@ public class AppBannerManagerTest {
                     Assert.assertEquals(
                             1,
                             RecordHistogram.getHistogramValueCountForTesting(
-                                    "Webapp.Install.InstallEvent", 4 /* API_BROWSER_TAB */));
+                                    "Webapp.Install.InstallEvent",
+                                    /* sample= */ 4)); // API_BROWSER_TAB
 
                     Assert.assertEquals(
                             1,
@@ -435,7 +454,8 @@ public class AppBannerManagerTest {
                     Assert.assertEquals(
                             1,
                             RecordHistogram.getHistogramValueCountForTesting(
-                                    "Webapp.Install.InstallEvent", 5 /* API_CUSTOM_TAB */));
+                                    "Webapp.Install.InstallEvent",
+                                    /* sample= */ 5)); // API_CUSTOM_TAB
 
                     Assert.assertEquals(
                             1,
@@ -642,6 +662,10 @@ public class AppBannerManagerTest {
                         "call_stashed_prompt_on_click"),
                 false);
 
+        // Explicitly dismiss the banner before test completion.
+        clickButton(mTabbedActivityTestRule.getActivity(), ButtonType.NEGATIVE);
+        waitUntilNoDialogsShowing(mTabbedActivityTestRule.getActivityTab());
+
         Assert.assertEquals(
                 0, RecordHistogram.getHistogramTotalCountForTesting(INSTALL_PATH_HISTOGRAM_NAME));
     }
@@ -739,7 +763,8 @@ public class AppBannerManagerTest {
                     Assert.assertEquals(
                             1,
                             RecordHistogram.getHistogramValueCountForTesting(
-                                    "Webapp.Install.InstallEvent", 4 /* API_BROWSER_TAB */));
+                                    "Webapp.Install.InstallEvent",
+                                    /* sample= */ 4)); // API_BROWSER_TAB
 
                     Assert.assertEquals(
                             1,
@@ -858,6 +883,7 @@ public class AppBannerManagerTest {
     @Test
     @MediumTest
     @Feature({"AppBanners"})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511289039
     public void testAppBannerDismissedAfterNavigation() throws Exception {
         String url =
                 WebappTestPage.getTestUrlWithAction(mTestServer, "call_stashed_prompt_on_click");

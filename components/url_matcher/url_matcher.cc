@@ -526,10 +526,17 @@ URLMatcherCondition URLMatcherConditionFactory::CreateCondition(
 
 std::string URLMatcherConditionFactory::CanonicalizeHostSuffix(
     const std::string& suffix) const {
-  if (suffix.empty()) {
+  // Strip all trailing dots, then append exactly one. This collapses
+  // "host", "host." and "host.." (etc.) to the same canonical "host." so
+  // that multi-dot FQDN forms cannot bypass host-suffix filters. GURL
+  // accepts hosts with empty labels (see url/url_idna_icu.cc), so the
+  // URL side can otherwise present "host.." while the filter side stores
+  // "host.".
+  const size_t end = suffix.find_last_not_of('.');
+  if (end == std::string::npos) {
     return ".";
   }
-  return suffix.back() == '.' ? suffix : suffix + ".";
+  return suffix.substr(0, end + 1) + ".";
 }
 
 std::string URLMatcherConditionFactory::CanonicalizeHostPrefix(
@@ -876,16 +883,22 @@ URLMatcher::~URLMatcher() = default;
 
 void URLMatcher::AddConditionSets(
     const URLMatcherConditionSet::Vector& condition_sets) {
-  for (auto i = condition_sets.begin(); i != condition_sets.end(); ++i) {
-    DCHECK(url_matcher_condition_sets_.find((*i)->id()) ==
+  if (condition_sets.empty()) {
+    return;
+  }
+  for (const auto& condition_set : condition_sets) {
+    DCHECK(url_matcher_condition_sets_.find(condition_set->id()) ==
            url_matcher_condition_sets_.end());
-    url_matcher_condition_sets_[(*i)->id()] = *i;
+    url_matcher_condition_sets_[condition_set->id()] = condition_set;
   }
   UpdateInternalDatastructures();
 }
 
 void URLMatcher::RemoveConditionSets(
     const std::vector<base::MatcherStringPattern::ID>& condition_set_ids) {
+  if (condition_set_ids.empty()) {
+    return;
+  }
   for (auto id : condition_set_ids) {
     DCHECK(url_matcher_condition_sets_.find(id) !=
            url_matcher_condition_sets_.end());

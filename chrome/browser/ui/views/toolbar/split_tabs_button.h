@@ -16,12 +16,10 @@
 
 class Browser;
 class PinnedToolbarButtonStatusIndicator;
-
-namespace ui {
-class SimpleMenuModel;
-}
+class SplitTabMenuModel;
 
 namespace views {
+class MenuModelAdapter;
 class MenuRunner;
 }  // namespace views
 
@@ -64,7 +62,8 @@ class SplitTabsToolbarButton : public ToolbarButton,
   BooleanPrefMember pin_state_;
   raw_ptr<Browser> browser_;
   raw_ptr<PinnedToolbarButtonStatusIndicator> status_indicator_;
-  std::unique_ptr<ui::SimpleMenuModel> split_tab_menu_;
+  std::unique_ptr<SplitTabMenuModel> split_tab_menu_;
+  std::unique_ptr<views::MenuModelAdapter> menu_model_adapter_;
   std::unique_ptr<views::MenuRunner> menu_runner_;
 };
 

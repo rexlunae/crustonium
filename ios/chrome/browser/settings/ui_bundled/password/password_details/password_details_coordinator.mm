@@ -11,12 +11,12 @@
 #import "base/check.h"
 #import "base/memory/scoped_refptr.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/time/time.h"
 #import "components/password_manager/core/browser/password_manager_client.h"
 #import "components/password_manager/core/browser/ui/affiliated_group.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/prefs/pref_service.h"
 #import "components/strings/grit/components_strings.h"
-#import "ios/chrome/browser/passwords/coordinator/password_utils.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_password_check_manager.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_password_check_manager_factory.h"
 #import "ios/chrome/browser/passwords/model/metrics/ios_password_manager_metrics.h"
@@ -34,6 +34,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_sharing/password_sharing_first_run_coordinator.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_sharing/password_sharing_first_run_coordinator_delegate.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_sharing/password_sharing_metrics.h"
+#import "ios/chrome/browser/settings/ui_bundled/password/password_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/reauthentication/local_reauthentication_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
@@ -47,19 +48,18 @@
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
-#import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/web_state.h"
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
-const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
+constexpr base::TimeDelta kShareSpinnerMinTime = base::Seconds(0.5);
 }  // namespace
 
 @interface PasswordDetailsCoordinator () <
+    LocalReauthenticationCoordinatorDelegate,
     PasswordDetailsHandler,
     PasswordDetailsMediatorDelegate,
-    LocalReauthenticationCoordinatorDelegate,
     PasswordSharingCoordinatorDelegate,
     PasswordSharingFirstRunCoordinatorDelegate>
 
@@ -68,12 +68,6 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
 
 // Main mediator for this coordinator.
 @property(nonatomic, strong) PasswordDetailsMediator* mediator;
-
-// Module containing the reauthentication mechanism for viewing and copying
-// passwords.
-// Has to be strong for credential bottom sheet feature or else it becomes nil.
-@property(nonatomic, strong) id<ReauthenticationProtocol>
-    reauthenticationModule;
 
 // Modal alert for interactions with password.
 @property(nonatomic, strong) AlertCoordinator* alertCoordinator;
@@ -124,7 +118,6 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
                           credential:
                               (const password_manager::CredentialUIEntry&)
                                   credential
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
                              context:(DetailsContext)context {
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
@@ -133,7 +126,6 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
 
     _baseNavigationController = navigationController;
     _credential = credential;
-    _reauthenticationModule = reauthModule;
     _context = context;
   }
   return self;
@@ -145,7 +137,6 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
                              browser:(Browser*)browser
                      affiliatedGroup:(const password_manager::AffiliatedGroup&)
                                          affiliatedGroup
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
                              context:(DetailsContext)context {
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
@@ -154,7 +145,6 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
 
     _baseNavigationController = navigationController;
     _affiliatedGroup = affiliatedGroup;
-    _reauthenticationModule = reauthModule;
     _context = context;
   }
   return self;
@@ -532,7 +522,6 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
   _reauthCoordinator = [[LocalReauthenticationCoordinator alloc]
       initWithBaseNavigationController:_baseNavigationController
                                browser:self.browser
-                reauthenticationModule:_reauthenticationModule
                            authOnStart:[self shouldRequireAuthOnStart]];
   _reauthCoordinator.delegate = self;
   [_reauthCoordinator start];
@@ -545,7 +534,7 @@ const CGFloat kShareSpinnerMinTimeInSeconds = 0.5;
 - (void)startPasswordSharingCoordinator {
   [self.viewController showSpinnerOnRightNavigationBar];
   _shareSpinnerTimer =
-      [NSTimer scheduledTimerWithTimeInterval:kShareSpinnerMinTimeInSeconds
+      [NSTimer scheduledTimerWithTimeInterval:kShareSpinnerMinTime.InSecondsF()
                                        target:self
                                      selector:@selector(shareSpinnerTimerFired)
                                      userInfo:nil

@@ -21,7 +21,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarConstants;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
-import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.night_mode.NightModeMetrics.ThemeSettingsEntry;
 import org.chromium.chrome.browser.night_mode.NightModeUtils;
 import org.chromium.chrome.browser.night_mode.settings.ThemeSettingsFragment;
@@ -36,7 +36,6 @@ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.CustomDividerFragment;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
-import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.prefs.PrefChangeRegistrar;
 import org.chromium.components.prefs.PrefChangeRegistrar.PrefObserver;
 
@@ -46,6 +45,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
         implements CustomDividerFragment {
 
     public static final String PREF_BOOKMARK_BAR = "bookmark_bar";
+    public static final String PREF_BOOKMARK_BAR_SWITCH = "bookmark_bar_switch";
     public static final String PREF_TOOLBAR_SHORTCUT = "toolbar_shortcut";
     public static final String PREF_UI_THEME = "ui_theme";
 
@@ -71,6 +71,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
     }
 
     @Override
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
     public void onDestroy() {
         super.onDestroy();
 
@@ -91,9 +92,6 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
         super.onStart();
         updateBookmarkBarPref();
         updateUiThemePref();
-
-        TrackerFactory.getTrackerForProfile(getProfile())
-                .notifyEvent(EventConstants.SETTINGS_APPEARANCE_OPENED);
     }
 
     @Override
@@ -117,11 +115,18 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
     private void initBookmarkBarPref() {
         if (!shouldShowBookmarkPref(getContext())) {
             removePreference(PREF_BOOKMARK_BAR);
+            removePreference(PREF_BOOKMARK_BAR_SWITCH);
             return;
         }
 
-        // Find the switch preference and attach our policy logic to it.
-        ChromeSwitchPreference bookmarkBarSwitch = findPreference(PREF_BOOKMARK_BAR);
+        if (shouldShowSubpage()) {
+            removePreference(PREF_BOOKMARK_BAR_SWITCH);
+            return;
+        }
+
+        removePreference(PREF_BOOKMARK_BAR);
+        ChromeSwitchPreference bookmarkBarSwitch =
+                (ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR_SWITCH);
         assert bookmarkBarSwitch != null;
         bookmarkBarSwitch.setManagedPreferenceDelegate(
                 new ChromeManagedPreferenceDelegate(getProfile()) {
@@ -159,7 +164,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
         mPrefObserver =
                 () -> {
                     updateBookmarkBarPref();
-                    Preference bookmarkBarSwitch = findPreference(PREF_BOOKMARK_BAR);
+                    Preference bookmarkBarSwitch = findPreference(PREF_BOOKMARK_BAR_SWITCH);
                     if (bookmarkBarSwitch != null) {
                         // This is the trigger to showing/hiding the
                         // "recommended" icon & text.
@@ -178,7 +183,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
         // We register a pref change listener for a pref that would be changed on this page so that
         // we can account for users changing the pref using a different window in desktop mode.
         mPrefChangeRegistrar.addObserver(Pref.SHOW_BOOKMARK_BAR, mPrefObserver);
-        ((ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR))
+        ((ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR_SWITCH))
                 .setOnPreferenceChangeListener(
                         (pref, newValue) -> {
                             BookmarkBarUtils.setUserPrefsShowBookmarksBar(
@@ -189,6 +194,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
                         });
     }
 
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
     private void initBookmarkBarPrefForDevicePreference() {
         // Similar to UserPrefs above, we must have both an observer of changes to the device prefs,
         // as well as the ability to set the device prefs via the toggle, since the value can be
@@ -198,7 +204,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
                     if (key != null
                             && key.equals(BookmarkBarConstants.BOOKMARK_BAR_SHOW_BOOKMARK_BAR)) {
                         updateBookmarkBarPref();
-                        Preference bookmarkBarSwitch = findPreference(PREF_BOOKMARK_BAR);
+                        Preference bookmarkBarSwitch = findPreference(PREF_BOOKMARK_BAR_SWITCH);
                         if (bookmarkBarSwitch != null) {
                             // Forces a redraw, and methods in our setManagedPreferenceDelegate are
                             // called.
@@ -211,7 +217,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
 
         // setOnPreferenceChangeListener is the listener for the preference widget itself. It fires
         // immediately when the user taps the toggle.
-        ((ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR))
+        ((ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR_SWITCH))
                 .setOnPreferenceChangeListener(
                         (pref, newValue) -> {
                             BookmarkBarUtils.setDevicePrefShowBookmarksBar(
@@ -250,12 +256,16 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
             return;
         }
 
+        ChromeSwitchPreference bookmarkBarSwitch =
+                (ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR_SWITCH);
+        if (bookmarkBarSwitch == null) return;
+
         if (mUseProfileUserPrefs) {
-            ((ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR))
-                    .setChecked(BookmarkBarUtils.isUserPrefsShowBookmarksBarEnabled(getProfile()));
+            bookmarkBarSwitch.setChecked(
+                    BookmarkBarUtils.isUserPrefsShowBookmarksBarEnabled(getProfile()));
         } else {
-            ((ChromeSwitchPreference) findPreference(PREF_BOOKMARK_BAR))
-                    .setChecked(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(getProfile()));
+            bookmarkBarSwitch.setChecked(
+                    BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(getProfile()));
         }
     }
 
@@ -280,9 +290,12 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
         return mPrefObserver;
     }
 
-    private static boolean shouldShowBookmarkPref(Context context) {
-        // isDeviceBookmarkBarCompatible already checks the flag sAndroidBookmarkBar.
+    static boolean shouldShowBookmarkPref(Context context) {
         return BookmarkBarUtils.isDeviceBookmarkBarCompatible(context);
+    }
+
+    static boolean shouldShowSubpage() {
+        return ChromeFeatureList.sBookmarksBarNTP.isEnabled();
     }
 
     public static void shouldShowToolbarShortcutPrefAsync(
@@ -305,9 +318,16 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
                 public void updateDynamicPreferences(
                         Context context, SettingsIndexData indexData, Profile profile) {
                     String prefFragment = AppearanceSettingsFragment.class.getName();
+
                     if (!shouldShowBookmarkPref(context)) {
                         indexData.removeEntryForKey(prefFragment, PREF_BOOKMARK_BAR);
+                        indexData.removeEntryForKey(prefFragment, PREF_BOOKMARK_BAR_SWITCH);
+                    } else if (shouldShowSubpage()) {
+                        indexData.removeEntryForKey(prefFragment, PREF_BOOKMARK_BAR_SWITCH);
+                    } else {
+                        indexData.removeEntryForKey(prefFragment, PREF_BOOKMARK_BAR);
                     }
+
                     shouldShowToolbarShortcutPrefAsync(
                             context,
                             profile,

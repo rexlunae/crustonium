@@ -10,6 +10,8 @@ import pathlib
 import subprocess
 import shlex
 import os
+import pathlib
+import signal
 import sys
 import re
 
@@ -25,7 +27,8 @@ import action_helpers
 # * To enable use of .rsp files.
 # * To work around two gn bugs on Windows
 # * Saving `rustc` command-line flags and environment, so that it can be reused
-#   when invoking `cc_bindings_from_rs` or `clippy-driver`
+#   when invoking `cc_bindings_from_rs`, `clippy-driver`, or
+#   `build/rust/apply_fixes.py`.
 #
 # LDFLAGS ESCAPING
 #
@@ -103,6 +106,21 @@ FILE_RE = re.compile("^([^# ][^ ]*):( .+)?$")
 def remove_lib_suffix_from_l_args(text):
   if text.startswith("-l") and text.endswith(".lib"):
     return text[:-len(".lib")]
+  return text
+
+
+# Equivalent of python3.9 built-in
+def remove_lib_suffix_from_extern_args(text):
+  if text.endswith(".dll.lib"):
+    # Trimmed:
+    # * `--extern=foo=foo.dll.lib`    -> `text.startswith("--extern")`
+    # * `--extern`, `foo=foo.dll.lib` -> `"=" in text`
+    #
+    # Not trimmed:
+    # * `-Clink-arg=./atomic.dll.lib` -> `not text.startswith("-")`
+    if text.startswith("--extern=") or \
+        ("=" in text and not text.startswith("-")):
+      return text[:-len(".lib")]
   return text
 
 
@@ -193,14 +211,19 @@ def verify_inputs(depline, sources, abs_build_root):
   # config rules.
   for file_files_key in missing_files:
     gn_type = "sources" if file_files_key.endswith(".rs") else "inputs"
-    print(f'ERROR: file not in GN {gn_type}: {found_files[file_files_key]}',
+    print(f'ERROR: Rust source file or input not in GN {gn_type}: ' +
+          f'{found_files[file_files_key]}',
           file=sys.stderr)
+  print('NOTE: See `//docs/rust/build_errors_guide.md` for more information.',
+        file=sys.stderr)
   return False
 
 
-def ConvertPathsToAbsolute(env):
-  """Converts values stored in the `env` dictionary to absolute paths."""
-  for (k, v) in env.items():
+def PrepareRustEnvForExecution(env):
+  """Converts values stored in the `env` dictionary to absolute paths, and
+     merges in system environment variables (with target-specific variables
+     taking precedence)."""
+  for k, v in env.items():
     # Paths need to be relative at gn/ninja level (for compatibility with
     # distributed builds), but it's okay to use absolute paths below gn/ninja
     # level.  And because some paths need to be absolute, we make all of them
@@ -212,6 +235,10 @@ def ConvertPathsToAbsolute(env):
     # * `SDKROOT` - see https://crbug.com/442128549
     if v and os.path.exists(v):
       env[k] = os.path.abspath(v)
+
+  # Merge in os.environ. Keys already in env take precedence over os.environ.
+  for k, v in os.environ.items():
+    env.setdefault(k, v)
 
 
 def _SaveRustEnvAndFlags(path, rustenv, rustflags):
@@ -233,7 +260,56 @@ def LoadRustEnvAndFlags(path):
   return rustenv, rustflags
 
 
-def ExpandNestedRustStyleRspFiles(rsp_args):
+def HandleReturnCode(completed_process, rustc_env_and_flags=None):
+  """ Takes `completed_process` returned by `subprocess.run(..., check=False)`
+      and if `returncode` is non-zero, then prints some diagnostic info and
+      calls `sys.exit(...)`.  This routine helps to avoid confusing signal-based
+      and exit-code-based failure conditions - see https://crbug.com/493357693.
+
+      If the `returncode` is non-zero and the optional `rustc_env_and_flags`
+      argument is present, then `_RecommendApplyFixesScript` will be called to
+      suggest using a script to apply machine-applicable fixes.
+  """
+  if completed_process.returncode == 0:
+    return
+
+  process_path = completed_process.args[0]
+  process_name = os.path.basename(process_path)
+  return_code = completed_process.returncode
+  if return_code < 0:
+    signal_code = -return_code
+    try:
+      signal_name = signal.Signals(signal_code).name
+    except:
+      signal_name = "<unrecognized signal>"
+    print(f'ERROR: `{process_name}` was terminated by '\
+          f'signal {signal_code} ({signal_name})',
+          file=sys.stderr)
+    sys.exit(128 + signal_code)  # like `$?` in `bash`
+  else:
+    exit_code = return_code
+    print(f'ERROR: `{process_name}` exited with '\
+          f'a non-zero exit code: {exit_code}',
+          file=sys.stderr)
+    if rustc_env_and_flags:
+      _RecommendApplyFixesScript(process_path, rustc_env_and_flags)
+    sys.exit(exit_code)
+
+
+def _RecommendApplyFixesScript(tool, rustc_env_and_flags):
+  source_root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             os.pardir, os.pardir, os.pardir)
+  rel_build_dir = os.path.relpath(os.getcwd(), source_root)
+
+  print(f"NOTE: To apply machine-applicable fix suggestions (if any), run:",
+        file=sys.stderr,
+        end='')
+  print(f" build/rust/apply_fixes.py", file=sys.stderr, end='')
+  print(f" {rel_build_dir}", file=sys.stderr, end='')
+  print(f" {os.path.basename(tool)} {rustc_env_and_flags}", file=sys.stderr)
+
+
+def _ExpandNestedRustStyleRspFiles(rsp_args):
   # `rustc` doesn't support using `@<file.rsp>` from **inside** `@another.rsp`.
   # And things like `@cargo_flags.rs` (see build script handling inside
   # `cargo_crate.gni`) may end up in `rustflags`.  And since `rustflags` are
@@ -303,8 +379,12 @@ def main():
     # Full fix will come from https://gn-review.googlesource.com/c/gn/+/12480
     rsp_args = [remove_lib_suffix_from_l_args(arg) for arg in rsp_args]
     rustc_args = [remove_lib_suffix_from_l_args(arg) for arg in rustc_args]
+    # Work around for "--extern std=.../std_std.dll.lib`, where ".lib" suffix is
+    # undesirable.  See also https://crbug.com/498216362#comment9
+    rsp_args = [remove_lib_suffix_from_extern_args(arg) for arg in rsp_args]
+    rustc_args = [remove_lib_suffix_from_extern_args(arg) for arg in rustc_args]
   rsp_args = [remove_gn_escaping_from_rsp_args(arg) for arg in rsp_args]
-  rsp_args = ExpandNestedRustStyleRspFiles(rsp_args)
+  rsp_args = _ExpandNestedRustStyleRspFiles(rsp_args)
   out_rsp = str(args.rsp) + ".rust"
   with open(out_rsp, 'w') as rspfile:
     # rustc needs the rsp file to be separated by newlines. Note that GN
@@ -315,19 +395,17 @@ def main():
 
   rustenv = dict([item.split("=", 1) for item in rustenv])  # list to dict
   _SaveRustEnvAndFlags(args.dump_rustc_env_and_flags, rustenv, rustc_args)
-  ConvertPathsToAbsolute(rustenv)
-  env = os.environ.copy() | rustenv
+  PrepareRustEnvForExecution(rustenv)
 
   # Add `--emit` and `-o` flags into the `rustc` invocation
   # (but do this _after_ the `_SaveRustEnvAndFlags` call above).
   rustc_args += ["--emit", args.emit, "-o", args.o]
 
   if args.v:
-    print(' '.join(f'{k}={shlex.quote(v)}' for k, v in env.items()), args.rustc,
-          shlex.join(rustc_args))
-  r = subprocess.run([args.rustc, *rustc_args], env=env, check=False)
-  if r.returncode != 0:
-    sys.exit(r.returncode)
+    print(' '.join(f'{k}={shlex.quote(v)}' for k, v in rustenv.items()),
+          args.rustc, shlex.join(rustc_args))
+  r = subprocess.run([args.rustc, *rustc_args], env=rustenv, check=False)
+  HandleReturnCode(r, args.dump_rustc_env_and_flags)
 
   final_depfile_lines = []
   dirty = False

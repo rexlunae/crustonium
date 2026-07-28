@@ -147,4 +147,18 @@ void WebClient::RunOpenPanel(
                       "then it must override RunOpenPanel().";
 }
 
+JSErrorReportLoggingLevel WebClient::GetJSErrorReportLoggingLevel(
+    BrowserState* browser_state) const {
+  return JSErrorReportLoggingLevel::NONE;
+}
+
+CobaltController* WebClient::GetCobaltController(
+    BrowserState* browser_state) const {
+  return nullptr;
+}
+
+bool WebClient::IsSmoothScrollingSupported() const {
+  return false;
+}
+
 }  // namespace web

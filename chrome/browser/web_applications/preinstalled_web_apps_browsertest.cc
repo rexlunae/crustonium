@@ -74,7 +74,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppsBrowserTest, CheckInstalledFields) {
   base::AutoReset<bool> scope =
       SetPreinstalledAppInstallFeatureAlwaysEnabledForTesting();
 
-  auto& provider = *WebAppProvider::GetForTest(browser()->profile());
+  auto& provider = *WebAppProvider::GetForTest(browser()->GetProfile());
   struct OfflineOnlyExpectation {
     webapps::AppId app_id;
     std::string_view install_url;
@@ -98,6 +98,11 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppsBrowserTest, CheckInstalledFields) {
           ash::kNotebookLmAppId,
           "https://notebooklm.google.com/install",
           "https://notebooklm.google.com/",
+      },
+      {
+          ash::kVidsAppId,
+          "https://docs.google.com/videos/installwebapp?usp=chrome_default",
+          "https://docs.google.com/videos/?usp=installed_webapp",
       },
 #endif  // BUILDFLAG(IS_CHROMEOS)
       {
@@ -265,7 +270,7 @@ class PreinstalledChatWebAppBrowserTest
   }
 
   WebAppProvider& provider() const {
-    return *WebAppProvider::GetForTest(browser()->profile());
+    return *WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   const WebAppRegistrar& registrar() const {
@@ -273,10 +278,10 @@ class PreinstalledChatWebAppBrowserTest
   }
 
  protected:
-  const webapps::AppId old_app_id_ =
-      GenerateAppIdFromManifestId(GURL("https://mail.google.com/chat/"));
-  const webapps::AppId new_app_id_ =
-      GenerateAppIdFromManifestId(GURL("https://chat.google.com/"));
+  const webapps::AppId old_app_id_ = GenerateAppIdFromManifestId(
+      webapps::ManifestId(GURL("https://mail.google.com/chat/")));
+  const webapps::AppId new_app_id_ = GenerateAppIdFromManifestId(
+      webapps::ManifestId(GURL("https://chat.google.com/")));
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -324,7 +329,8 @@ class PreinstalledWebAppMigrationTest : public PreinstalledWebAppsBrowserTest {
               is_standalone ? DisplayMode::kStandalone : DisplayMode::kBrowser;
           return info;
         },
-        app_options.install_url, app_options.install_url, is_standalone);
+        webapps::ManifestId(app_options.install_url), app_options.install_url,
+        is_standalone);
     if (!install_old_app) {
       app_options.SetOnlyUninstallAndReplaceWhenCompatible(
           old_app_id_, ExternalInstallOptions::
@@ -346,7 +352,7 @@ class PreinstalledWebAppMigrationTest : public PreinstalledWebAppsBrowserTest {
   }
 
   WebAppProvider& provider() const {
-    return *WebAppProvider::GetForTest(browser()->profile());
+    return *WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   const WebAppRegistrar& registrar() const {
@@ -356,8 +362,10 @@ class PreinstalledWebAppMigrationTest : public PreinstalledWebAppsBrowserTest {
  protected:
   GURL old_app_url_ = GURL("https://old.example.com/index.html");
   GURL new_app_url_ = GURL("https://new.example.com/index.html");
-  webapps::AppId old_app_id_ = GenerateAppIdFromManifestId(old_app_url_);
-  webapps::AppId new_app_id_ = GenerateAppIdFromManifestId(new_app_url_);
+  webapps::AppId old_app_id_ =
+      GenerateAppIdFromManifestId(webapps::ManifestId(old_app_url_));
+  webapps::AppId new_app_id_ =
+      GenerateAppIdFromManifestId(webapps::ManifestId(new_app_url_));
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -406,7 +414,7 @@ IN_PROC_BROWSER_TEST_F(PreinstalledWebAppMigrationTest,
   // User install the same app.
   auto web_app_info =
       web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(old_app_url_);
-  EXPECT_EQ(old_app_id_, web_app::test::InstallWebApp(browser()->profile(),
+  EXPECT_EQ(old_app_id_, web_app::test::InstallWebApp(browser()->GetProfile(),
                                                       std::move(web_app_info)));
 
   ASSERT_TRUE(registrar().IsInstallState(

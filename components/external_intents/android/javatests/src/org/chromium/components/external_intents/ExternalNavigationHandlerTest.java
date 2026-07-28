@@ -50,13 +50,15 @@ import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.MaxAndroidSdkLevel;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.components.external_intents.ExternalNavigationHandler.IncognitoDialogDelegate;
+import org.chromium.components.external_intents.ExternalNavigationHandler.IncognitoDialogDelegateWithFallback;
 import org.chromium.components.external_intents.ExternalNavigationHandler.OverrideUrlLoadingResult;
 import org.chromium.components.external_intents.ExternalNavigationHandler.OverrideUrlLoadingResultType;
 import org.chromium.components.external_intents.ExternalNavigationParams.AsyncActionTakenParams;
 import org.chromium.components.external_intents.ExternalNavigationParams.AsyncActionTakenParams.AsyncActionTakenType;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
+import org.chromium.content_public.common.Referrer;
+import org.chromium.network.mojom.ReferrerPolicy;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
@@ -65,6 +67,7 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.modaldialog.FakeModalDialogManager;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -178,11 +181,15 @@ public class ExternalNavigationHandlerTest {
 
     private static final String SELF_SCHEME = "selfscheme";
     private static final String DIGITAL_CREDENTIALS_URL = "openid4vp-v1-unsigned://authorize";
+    private static final String HAIP_VP_URL = "haip-vp://authorize";
+    private static final String HAIP_VCI_URL = "haip-vci://authorize";
+    private static final String MDOC_URL = "mdoc://authorize";
+    private static final String OPENID4VCI_URL = "openid-credential-offer://authorize";
     private static final String DIGITAL_CREDENTIALS_PACKAGE_NAME = "pkg.dcc";
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    @Mock private IncognitoDialogDelegate mIncognitoDialogDelegateMock;
+    @Mock private IncognitoDialogDelegateWithFallback mIncognitoDialogDelegateMock;
     @Mock private WindowAndroid mWindowAndroidMock;
 
     private Context mContext;
@@ -1135,6 +1142,24 @@ public class ExternalNavigationHandlerTest {
 
     @Test
     @SmallTest
+    public void testFallbackUrl_WithReferrerPolicy() {
+        mDelegate.setCanResolveActivityForExternalSchemes(false);
+
+        // Use a non-default referrer policy.
+        int policy = ReferrerPolicy.ORIGIN;
+        checkUrl(INTENT_URL_WITH_FALLBACK_URL, redirectHandlerForLinkClick())
+                .withReferrer(SEARCH_RESULT_URL_FOR_TOM_HANKS, policy)
+                .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
+
+        Assert.assertNull(mUrlHandler.mStartActivityIntent);
+        Assert.assertEquals(IMDB_WEBPAGE_FOR_TOM_HANKS, mUrlHandler.mNewUrlAfterClobbering);
+        Assert.assertEquals(SEARCH_RESULT_URL_FOR_TOM_HANKS, mUrlHandler.mReferrerUrlForClobbering);
+        Assert.assertNotNull(mUrlHandler.mReferrerForClobbering);
+        Assert.assertEquals(policy, mUrlHandler.mReferrerForClobbering.getPolicy());
+    }
+
+    @Test
+    @SmallTest
     public void testFallbackUrl_FallbackToMarketApp() {
         mDelegate.setCanResolveActivityForExternalSchemes(false);
 
@@ -1575,7 +1600,8 @@ public class ExternalNavigationHandlerTest {
                         Assert.assertNull(mUrlHandler.mStartActivityIntent);
                         Assert.assertNull(mUrlHandler.mNewUrlAfterClobbering);
                     });
-            IncognitoDialogDelegate delegateSpy = mUrlHandler.spyIncognitoDialogDelegate();
+            IncognitoDialogDelegateWithFallback delegateSpy =
+                    mUrlHandler.spyIncognitoDialogDelegate();
             Mockito.doReturn(true).when(delegateSpy).isShowing();
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {
@@ -1680,6 +1706,65 @@ public class ExternalNavigationHandlerTest {
             activity.finish();
             InstrumentationRegistry.getInstrumentation().removeMonitor(monitor);
         }
+    }
+
+    private void checkDigitalCredentialsWarningDialogShow(String scheme, String url) {
+        mDelegate.add(new IntentActivity(scheme, DIGITAL_CREDENTIALS_PACKAGE_NAME));
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    checkUrl(url, redirectHandlerForLinkClick())
+                            .withHasUserGesture(true)
+                            .expecting(
+                                    OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION,
+                                    IGNORE);
+                    mUrlHandler.mDigitalCredentialsWarningDialogDelegate.onClick(
+                            null, ModalDialogProperties.ButtonType.NEGATIVE);
+                });
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_HaipVp() {
+        checkDigitalCredentialsWarningDialogShow("haip-vp", HAIP_VP_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_HaipVci() {
+        checkDigitalCredentialsWarningDialogShow("haip-vci", HAIP_VCI_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_Mdoc() {
+        checkDigitalCredentialsWarningDialogShow("mdoc", MDOC_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_OpenId4Vci() {
+        checkDigitalCredentialsWarningDialogShow("openid-credential-offer", OPENID4VCI_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_WrappedMdoc() {
+        String wrappedUrl = "intent://#Intent;scheme=mdoc;action=android.intent.action.VIEW;end";
+        checkDigitalCredentialsWarningDialogShow("mdoc", wrappedUrl);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_OpaqueOrigin() {
+        mDelegate.add(
+                new IntentActivity("openid4vp-v1-unsigned", DIGITAL_CREDENTIALS_PACKAGE_NAME));
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    checkUrl(DIGITAL_CREDENTIALS_URL, redirectHandlerForLinkClick())
+                            .withHasUserGesture(true)
+                            .withInitiatorOrigin(Origin.createOpaqueOrigin())
+                            .expecting(OverrideUrlLoadingResultType.NO_OVERRIDE, IGNORE);
+                });
     }
 
     @Test
@@ -2470,7 +2555,7 @@ public class ExternalNavigationHandlerTest {
 
     @Test
     @SmallTest
-    @MinAndroidSdkLevel(33) // TODO(twellington): Replace with version code when available.
+    @MinAndroidSdkLevel(Build.VERSION_CODES.TIRAMISU)
     public void testFileAccessHtml_AndroidT() {
         String fileUrl = "file:///sdcard/Downloads/test.html";
 
@@ -3330,6 +3415,7 @@ public class ExternalNavigationHandlerTest {
         public boolean mShouldRequestFileAccess;
         public String mNewUrlAfterClobbering;
         public String mReferrerUrlForClobbering;
+        public @Nullable Referrer mReferrerForClobbering;
         public boolean mRequestFilePermissionsCalled;
         public Intent mStartActivityInIncognitoIntent;
         public boolean mStartIncognitoIntentCalled;
@@ -3455,9 +3541,10 @@ public class ExternalNavigationHandlerTest {
             return OverrideUrlLoadingResult.forAsyncAction();
         }
 
-        public IncognitoDialogDelegate spyIncognitoDialogDelegate() {
-            mIncognitoDialogDelegate = Mockito.spy(mIncognitoDialogDelegate);
-            return mIncognitoDialogDelegate;
+        public IncognitoDialogDelegateWithFallback spyIncognitoDialogDelegate() {
+            mIncognitoDialogDelegate =
+                    Mockito.spy((IncognitoDialogDelegateWithFallback) mIncognitoDialogDelegate);
+            return (IncognitoDialogDelegateWithFallback) mIncognitoDialogDelegate;
         }
 
         public ExternalNavigationHandler.DigitalCredentialsWarningDialogDelegate
@@ -3648,9 +3735,6 @@ public class ExternalNavigationHandlerTest {
         public void returnAsActivityResult(GURL url) {}
 
         @Override
-        public void maybeRecordExternalNavigationSchemeHistogram(GURL url) {}
-
-        @Override
         public void notifyCctPasswordSavingRecorderOfExternalNavigation() {}
 
         @Override
@@ -3684,15 +3768,12 @@ public class ExternalNavigationHandlerTest {
         }
 
         @Override
-        public boolean shouldSetAppForCurrentPage() {
+        public void setExternalNavigationHelper(ExternalNavigationHelper helper) {}
+
+        @Override
+        public boolean allowExternalNavigationForHttpProtocols(GURL url) {
             return false;
         }
-
-        @Override
-        public void setAppForCurrentPage(@Nullable ResolveInfo resolveInfo, Runnable openInApp) {}
-
-        @Override
-        public void clearAppForCurrentPage() {}
 
         public void reset() {
             startIncognitoIntentCalled = false;
@@ -3820,6 +3901,7 @@ public class ExternalNavigationHandlerTest {
         private final String mUrl;
 
         private String mReferrerUrl;
+        private int mReferrerPolicy = ReferrerPolicy.DEFAULT;
         private boolean mIsIncognito;
         private int mPageTransition = PageTransition.LINK;
         private boolean mIsRedirect;
@@ -3831,6 +3913,7 @@ public class ExternalNavigationHandlerTest {
         private boolean mIsInitialNavigationInFrame;
         private boolean mIsHiddenCrossFrame;
         private long mNavigationId;
+        private Origin mInitiatorOrigin;
 
         private ExternalNavigationTestParams(String url, RedirectHandler handler) {
             mUrl = url;
@@ -3839,6 +3922,12 @@ public class ExternalNavigationHandlerTest {
 
         public ExternalNavigationTestParams withReferrer(String referrerUrl) {
             mReferrerUrl = referrerUrl;
+            return this;
+        }
+
+        public ExternalNavigationTestParams withReferrer(String referrerUrl, int policy) {
+            mReferrerUrl = referrerUrl;
+            mReferrerPolicy = policy;
             return this;
         }
 
@@ -3894,6 +3983,11 @@ public class ExternalNavigationHandlerTest {
             return this;
         }
 
+        public ExternalNavigationTestParams withInitiatorOrigin(Origin initiatorOrigin) {
+            mInitiatorOrigin = initiatorOrigin;
+            return this;
+        }
+
         public void expecting(
                 @OverrideUrlLoadingResultType int expectedOverrideResult, int otherExpectation) {
             boolean expectStartIncognito = (otherExpectation & START_INCOGNITO) != 0;
@@ -3917,6 +4011,8 @@ public class ExternalNavigationHandlerTest {
                                 mUrlHandler.mNewUrlAfterClobbering = params.targetUrl.getSpec();
                                 mUrlHandler.mReferrerUrlForClobbering =
                                         params.externalNavigationParams.getReferrerUrl().getSpec();
+                                mUrlHandler.mReferrerForClobbering =
+                                        params.externalNavigationParams.getReferrer();
                             }
                         }
                     };
@@ -3924,7 +4020,9 @@ public class ExternalNavigationHandlerTest {
                     new ExternalNavigationParams.Builder(
                                     new GURL(mUrl),
                                     mIsIncognito,
-                                    new GURL(mReferrerUrl),
+                                    mReferrerUrl == null
+                                            ? null
+                                            : new Referrer(mReferrerUrl, mReferrerPolicy),
                                     mPageTransition,
                                     mIsRedirect)
                             .setRedirectHandler(mRedirectHandler)
@@ -3937,6 +4035,7 @@ public class ExternalNavigationHandlerTest {
                             .setIsInitialNavigationInFrame(mIsInitialNavigationInFrame)
                             .setIsHiddenCrossFrameNavigation(mIsHiddenCrossFrame)
                             .setNavigationId(mNavigationId)
+                            .setInitiatorOrigin(mInitiatorOrigin)
                             .build();
             OverrideUrlLoadingResult result = mUrlHandler.shouldOverrideUrlLoading(params);
 
@@ -3944,6 +4043,7 @@ public class ExternalNavigationHandlerTest {
                 mUrlHandler.mNewUrlAfterClobbering = result.mTargetUrl.getSpec();
                 mUrlHandler.mReferrerUrlForClobbering =
                         result.mExternalNavigationParams.getReferrerUrl().getSpec();
+                mUrlHandler.mReferrerForClobbering = result.mExternalNavigationParams.getReferrer();
             }
             if (result.getResultType() == OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION) {
                 mUrlHandler.mAsyncActionCallback = params.getRequiredAsyncActionTakenCallback();

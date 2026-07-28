@@ -23,7 +23,7 @@
 #include "services/network/cors/preflight_controller.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
-#include "services/network/public/cpp/originating_process.h"
+#include "services/network/public/cpp/originating_process_id.h"
 #include "services/network/public/mojom/client_security_state.mojom-forward.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
@@ -66,7 +66,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
   // note: `url_loader_network_service_observer` must not be null.
   CorsURLLoader(
       mojo::PendingReceiver<mojom::URLLoader> loader_receiver,
-      OriginatingProcess process_id,
+      OriginatingProcessId process_id,
       int32_t request_id,
       uint32_t options,
       DeleteCallback delete_callback,
@@ -87,6 +87,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
       scoped_refptr<SharedDictionaryStorage> shared_dictionary_storage,
       raw_ptr<mojom::SharedDictionaryAccessObserver> shared_dictionary_observer,
       NetworkContext* context,
+      std::optional<base::UnguessableToken> network_restrictions_id,
       net::CookieSettingOverrides factory_cookie_setting_overrides,
       net::CookieSettingOverrides devtools_cookie_setting_overrides);
 
@@ -101,9 +102,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
 
   // mojom::URLLoader overrides:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int intra_priority_value) override;
@@ -121,11 +120,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
                         base::OnceCallback<void()> callback) override;
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override;
   void OnComplete(const URLLoaderCompletionStatus& status) override;
-
-  // Cancel the request because network revocation was triggered.
-  void CancelRequestIfNonceMatchesAndUrlNotExempted(
-      const base::UnguessableToken& nonce,
-      const std::set<GURL>& exemptions);
 
   static network::mojom::FetchResponseType CalculateResponseTaintingForTesting(
       const GURL& url,
@@ -236,7 +230,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
   mojo::Receiver<mojom::URLLoader> receiver_;
 
   // We need to save these for redirect, and DevTools.
-  const OriginatingProcess process_id_;
+  const OriginatingProcessId process_id_;
   const int32_t request_id_;
   const uint32_t options_;
 
@@ -331,6 +325,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
   net::NetLogWithSource net_log_;
 
   const raw_ptr<NetworkContext> context_;
+
+  const std::optional<base::UnguessableToken> network_restrictions_id_;
 
   scoped_refptr<SharedDictionaryStorage> shared_dictionary_storage_;
   scoped_refptr<net::SharedDictionary> shared_dictionary_;

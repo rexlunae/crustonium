@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "base/numerics/safe_conversions.h"
 #include "base/types/optional_util.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/mojom/cors.mojom-forward.h"
@@ -14,7 +15,6 @@
 #include "third_party/blink/renderer/core/core_probes_inl.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -153,9 +153,6 @@ void ResourceLoadObserverForFrame::WillSendRequest(
                                                 request.Priority());
   }
 
-  frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(
-      request, redirect_response);
-
   probe::WillSendRequest(
       document_->domWindow(), document_loader_,
       fetcher_properties_->GetFetchClientSettingsObject().GlobalObjectUrl(),
@@ -213,8 +210,8 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
                                                            response);
       frame->GetLocalFrameHostRemote().DidLoadResourceFromMemoryCache(
           resource_request.Url(),
-          String::FromUTF8(resource_request.HttpMethod().Utf8()),
-          String::FromUTF8(response.MimeType().Utf8()),
+          String::FromUtf8(resource_request.HttpMethod().Utf8()),
+          String::FromUtf8(response.MimeType().Utf8()),
           resource_request.GetRequestDestination(),
           response.RequestIncludeCredentials());
     }
@@ -251,7 +248,7 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
   // Count usage of Content-Disposition header in SVGUse resources.
   if (resource->Options().initiator_info.name ==
           fetch_initiator_type_names::kUse &&
-      request.Url().ProtocolIsInHTTPFamily() && response.IsAttachment()) {
+      request.Url().ProtocolIsInHttpFamily() && response.IsAttachment()) {
     CountUsage(WebFeature::kContentDispositionInSvgUse);
   }
 
@@ -272,9 +269,6 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
         document_loader_->GetContentSecurityNotifier());
   }
 
-  frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(request,
-                                                                    response);
-
   frame->Loader().Progress().IncrementProgress(identifier, response);
   probe::DidReceiveResourceResponse(GetProbe(), identifier, document_loader_,
                                     response, resource);
@@ -292,7 +286,8 @@ void ResourceLoadObserverForFrame::CheckGuardrailsPolicyForSizeLimit(
     metrics.accumulated_bytes += bytes;
 
     if (document_->GetExecutionContext()->CheckGuardrailsPolicyForAssetSize(
-            GuardrailPolicyAssetType::kImage, metrics.accumulated_bytes,
+            GuardrailPolicyAssetType::kImage,
+            base::saturated_cast<size_t>(metrics.accumulated_bytes),
             metrics.url)) {
       resource_metrics_by_identifier_.erase(identifier);
     }
@@ -378,10 +373,9 @@ void ResourceLoadObserverForFrame::DidFailLoading(
 void ResourceLoadObserverForFrame::DidChangeRenderBlockingBehavior(
     Resource* resource,
     const FetchParameters& params) {
-  TRACE_EVENT_INSTANT_WITH_TIMESTAMP1(
+  TRACE_EVENT_INSTANT(
       "devtools.timeline", "PreloadRenderBlockingStatusChange",
-      TRACE_EVENT_SCOPE_THREAD, base::TimeTicks::Now(), "data",
-      [&](perfetto::TracedValue ctx) {
+      base::TimeTicks::Now(), "data", [&](perfetto::TracedValue ctx) {
         inspector_change_render_blocking_behavior_event::Data(
             std::move(ctx), document_->Loader(),
             resource->GetResourceRequest().InspectorId(),

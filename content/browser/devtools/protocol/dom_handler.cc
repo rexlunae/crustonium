@@ -6,8 +6,8 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 
 namespace content {
 namespace protocol {
@@ -30,6 +30,13 @@ void DOMHandler::SetRenderer(int process_host_id,
 
 Response DOMHandler::Disable() {
   return Response::Success();
+}
+
+Response DOMHandler::GetFileInfo(const std::string& object_id,
+                                 std::string* path) {
+  if (!allow_file_access_)
+    return Response::ServerError("Not allowed");
+  return Response::FallThrough();
 }
 
 Response DOMHandler::SetFileInputFiles(

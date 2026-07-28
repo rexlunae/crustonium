@@ -23,6 +23,7 @@
 #include "base/logging.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/memory_pressure_listener_registry.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
@@ -33,6 +34,7 @@
 #include "base/threading/simple_thread.h"
 #include "base/trace_event/trace_event.h"
 #include "base/version_info/android/channel_getter.h"
+#include "build/build_config.h"
 #include "content/app/android/content_main_android.h"
 #include "content/common/shared_file_util.h"
 #include "content/public/app/content_main.h"
@@ -150,6 +152,9 @@ void ChildProcessService::Run() {
     parent_process = parent_process_;
   }
 
+  std::vector<std::string> command_line_copy = args->commandLine;
+  base::android::CommandLineInit(command_line_copy);
+
   base::android::LibraryProcessType process_type =
       static_cast<base::android::LibraryProcessType>(args->libraryProcessType);
   if (!NativeInitializationHook(process_type)) {
@@ -158,9 +163,8 @@ void ChildProcessService::Run() {
   SetBuildInfo(*args);
   InitChildProcessCommon(args->cpuCount, args->cpuFeatures);
 
-  std::vector<std::string> command_line_copy = args->commandLine;
-  base::android::CommandLineInit(command_line_copy);
   base::android::LibraryLoaded(process_type);
+  base::UmaHistogramBoolean("Android.ChildProcess.JavalessStarted", true);
 
   RegisterFileDescriptors(*args);
   StartContentMain(false);
@@ -171,8 +175,18 @@ void ChildProcessService::Run() {
 }
 
 void ChildProcessService::SpawnMainThread() {
-  thread_ =
-      std::make_unique<base::DelegateSimpleThread>(this, "CrRendererMain");
+  // LINT.IfChange
+#if defined(ARCH_CPU_64_BITS)
+  size_t stack_size = 8 * 1024 * 1024;
+#else
+  size_t stack_size = 4 * 1024 * 1024;
+#endif
+  // LINT.ThenChange(//base/android/java/src/org/chromium/base/process_launcher/ChildProcessService.java)
+  // Set up stack size to match Java.
+  base::SimpleThread::Options options;
+  options.stack_size = stack_size;
+  thread_ = std::make_unique<base::DelegateSimpleThread>(this, "CrRendererMain",
+                                                         options);
   thread_->StartAsync();
 }
 
@@ -329,4 +343,13 @@ EXPORT_TO_ANDROID void NativeChildProcessService_onCreate(
   ANativeService_setOnUnbindCallback(service, &content::onUnbind);
   ANativeService_setOnRebindCallback(service, &content::onRebind);
   ANativeService_setOnDestroyCallback(service, &content::onDestroy);
+}
+
+// This is a hook for libraries to use who might want something happening very
+// early on process start. Note that JNI_OnLoad does not work with javaless
+// renderers, so often things you might put there should go into a override of
+// this instead.
+__attribute__((weak)) bool NativeInitializationHook(
+    base::android::LibraryProcessType library_process_type) {
+  return false;
 }

@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.toolbar.top;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.content.Context;
 import android.graphics.Canvas;
 import android.util.AttributeSet;
@@ -20,8 +22,8 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.toolbar.R;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable.TabSwitcherDrawableLocation;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable.TabSwitcherDrawableLocation;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.listmenu.ListMenuButton;
 
@@ -102,7 +104,7 @@ public class ToggleTabStackButton extends ListMenuButton implements TabSwitcherD
                             .accessibility_toolbar_btn_tabswitcher_toggle_default_with_notification;
         }
 
-        int tabCount = mTabCountSupplier.get();
+        int tabCount = assertNonNull(mTabCountSupplier.get());
         String drawableText = getResources().getQuantityString(drawableDescRes, tabCount, tabCount);
         setContentDescription(drawableText);
         TooltipCompat.setTooltipText(this, drawableText);

@@ -121,6 +121,20 @@ s! {
         __unused8: Padding<*mut c_void>,
     }
 
+    pub struct tm {
+        pub tm_sec: c_int,
+        pub tm_min: c_int,
+        pub tm_hour: c_int,
+        pub tm_mday: c_int,
+        pub tm_mon: c_int,
+        pub tm_year: c_int,
+        pub tm_wday: c_int,
+        pub tm_yday: c_int,
+        pub tm_isdst: c_int,
+        pub tm_gmtoff: c_long,
+        pub tm_zone: *mut c_char,
+    }
+
     pub struct addrinfo {
         pub ai_flags: c_int,
         pub ai_family: c_int,
@@ -921,6 +935,7 @@ pub const IP_ADD_MEMBERSHIP: c_int = 12;
 pub const IP_DROP_MEMBERSHIP: c_int = 13;
 pub const IP_RECVIF: c_int = 20;
 pub const IP_RECVTTL: c_int = 65;
+pub const IP_MINTTL: c_int = 66;
 pub const IPV6_RECVHOPLIMIT: c_int = 37;
 pub const IPV6_JOIN_GROUP: c_int = 12;
 pub const IPV6_LEAVE_GROUP: c_int = 13;

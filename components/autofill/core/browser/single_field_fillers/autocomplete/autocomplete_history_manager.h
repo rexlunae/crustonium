@@ -5,21 +5,26 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_SINGLE_FIELD_FILLERS_AUTOCOMPLETE_AUTOCOMPLETE_HISTORY_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_SINGLE_FIELD_FILLERS_AUTOCOMPLETE_AUTOCOMPLETE_HISTORY_MANAGER_H_
 
+#include <memory>
+#include <string>
 #include <vector>
 
-#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/single_field_fillers/single_field_fill_router.h"
 #include "components/autofill/core/browser/suggestions/autocomplete_suggestion_generator.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
-#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/form_data.h"
-#include "components/autofill/core/common/unique_ids.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
+#include "components/webdata/common/web_data_results.h"
+#include "components/webdata/common/web_data_service_base.h"
 
 namespace autofill {
 
@@ -50,22 +55,24 @@ class AutocompleteHistoryManager : public KeyedService {
       const FormStructure* form_structure,
       const FormFieldData& trigger_field,
       const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
+      AutofillClient& client,
       SingleFieldFillRouter::OnSuggestionsReturnedCallback
           on_suggestions_returned);
 
-  // Saves the `fields` that are eligible to be saved as new or updated
-  // Autocomplete entries, which can then be served in the future as
+  // Saves the `fields` of `form` that are eligible to be saved as new or
+  // updated Autocomplete entries, which can then be served in the future as
   // suggestions. This update is dependent on whether we are running in
   // incognito and if Autocomplete is enabled or not. `fields` may be empty.
   virtual void OnWillSubmitFormWithFields(
       const std::vector<FormFieldData>& fields,
+      const FormStructure* form,
       bool is_autocomplete_enabled);
 
   virtual void CancelPendingQuery();
 
   virtual void OnRemoveCurrentSingleFieldSuggestion(
       const std::u16string& field_name,
+      const std::u16string& field_label,
       const std::u16string& value,
       SuggestionType type);
 
@@ -99,10 +106,6 @@ class AutocompleteHistoryManager : public KeyedService {
 
  private:
   friend class AutocompleteHistoryManagerTest;
-
-  // Returns true if the given |field| and its value are valid to be saved as a
-  // new or updated Autocomplete entry.
-  bool IsFieldValueSaveable(const FormFieldData& field);
 
   // Must outlive this object.
   scoped_refptr<AutofillWebDataService> profile_database_;

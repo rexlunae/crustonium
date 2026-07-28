@@ -35,19 +35,7 @@ using ::testing::Return;
 using ::testing::StrictMock;
 using ::testing::UnorderedElementsAre;
 
-class MockUnexportableKeysInternalsPage
-    : public unexportable_keys_internals::mojom::Page {
- public:
-  MockUnexportableKeysInternalsPage() = default;
-  ~MockUnexportableKeysInternalsPage() override = default;
 
-  mojo::PendingRemote<unexportable_keys_internals::mojom::Page>
-  BindAndGetRemote() {
-    return receiver_.BindNewPipeAndPassRemote();
-  }
-
-  mojo::Receiver<unexportable_keys_internals::mojom::Page> receiver_{this};
-};
 
 class UnexportableKeysInternalsHandlerTest : public testing::Test {
  public:
@@ -57,7 +45,7 @@ class UnexportableKeysInternalsHandlerTest : public testing::Test {
     mock_key_service_ = mock_key_service.get();
     handler_ = std::make_unique<UnexportableKeysInternalsHandler>(
         handler_remote_.BindNewPipeAndPassReceiver(),
-        mock_page_.BindAndGetRemote(), std::move(mock_key_service));
+        std::move(mock_key_service));
   }
 
  protected:
@@ -73,14 +61,12 @@ class UnexportableKeysInternalsHandlerTest : public testing::Test {
   std::unique_ptr<UnexportableKeysInternalsHandler> handler_;
   raw_ptr<StrictMock<unexportable_keys::MockUnexportableKeyService>>
       mock_key_service_;
-  StrictMock<MockUnexportableKeysInternalsPage> mock_page_;
   mojo::Remote<unexportable_keys_internals::mojom::PageHandler> handler_remote_;
 };
 
 TEST_F(UnexportableKeysInternalsHandlerTest,
        GetUnexportableKeysInfoFailsToGetKeys) {
-  EXPECT_CALL(mock_key_service(),
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(mock_key_service(), GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(base::unexpected(
           unexportable_keys::ServiceError::kOperationNotSupported)));
 
@@ -94,11 +80,10 @@ TEST_F(UnexportableKeysInternalsHandlerTest,
 
 TEST_F(UnexportableKeysInternalsHandlerTest,
        GetUnexportableKeysInfoSkipsKeyIfGetWrappedKeyFails) {
-  const unexportable_keys::UnexportableKeyId key_id_1;
-  const unexportable_keys::UnexportableKeyId key_id_2;
+  const unexportable_keys::UnexportableSigningKeyId key_id_1;
+  const unexportable_keys::UnexportableSigningKeyId key_id_2;
 
-  EXPECT_CALL(mock_key_service(),
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(mock_key_service(), GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(std::vector{
           key_id_1,
           key_id_2,
@@ -132,11 +117,10 @@ TEST_F(UnexportableKeysInternalsHandlerTest,
 
 TEST_F(UnexportableKeysInternalsHandlerTest,
        GetUnexportableKeysInfoSkipsKeyIfGetAlgorithmFails) {
-  const unexportable_keys::UnexportableKeyId key_id_1;
-  const unexportable_keys::UnexportableKeyId key_id_2;
+  const unexportable_keys::UnexportableSigningKeyId key_id_1;
+  const unexportable_keys::UnexportableSigningKeyId key_id_2;
 
-  EXPECT_CALL(mock_key_service(),
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(mock_key_service(), GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(std::vector{
           key_id_1,
           key_id_2,
@@ -172,11 +156,10 @@ TEST_F(UnexportableKeysInternalsHandlerTest,
 
 TEST_F(UnexportableKeysInternalsHandlerTest,
        GetUnexportableKeysInfoSkipsKeyIfGetKeyTagFails) {
-  const unexportable_keys::UnexportableKeyId key_id_1;
-  const unexportable_keys::UnexportableKeyId key_id_2;
+  const unexportable_keys::UnexportableSigningKeyId key_id_1;
+  const unexportable_keys::UnexportableSigningKeyId key_id_2;
 
-  EXPECT_CALL(mock_key_service(),
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(mock_key_service(), GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(std::vector{
           key_id_1,
           key_id_2,
@@ -215,11 +198,10 @@ TEST_F(UnexportableKeysInternalsHandlerTest,
 
 TEST_F(UnexportableKeysInternalsHandlerTest,
        GetUnexportableKeysInfoSkipsKeyIfGetCreationTimeFails) {
-  const unexportable_keys::UnexportableKeyId key_id_1;
-  const unexportable_keys::UnexportableKeyId key_id_2;
+  const unexportable_keys::UnexportableSigningKeyId key_id_1;
+  const unexportable_keys::UnexportableSigningKeyId key_id_2;
 
-  EXPECT_CALL(mock_key_service(),
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(mock_key_service(), GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(std::vector{
           key_id_1,
           key_id_2,
@@ -259,22 +241,21 @@ TEST_F(UnexportableKeysInternalsHandlerTest,
 }
 
 TEST_F(UnexportableKeysInternalsHandlerTest, GetUnexportableKeysInfoSucceeds) {
-  const unexportable_keys::UnexportableKeyId key_id_1;
+  const unexportable_keys::UnexportableSigningKeyId key_id_1;
   const std::vector<uint8_t> wrapped_key_1 = {9, 9, 7};
   const crypto::SignatureVerifier::SignatureAlgorithm algorithm_1 =
       crypto::SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256;
   const std::string key_tag_1 = "key_tag_1";
   const base::Time creation_time_1 = base::Time::Now();
 
-  const unexportable_keys::UnexportableKeyId key_id_2;
+  const unexportable_keys::UnexportableSigningKeyId key_id_2;
   const std::vector<uint8_t> wrapped_key_2 = {9, 9, 8};
   const crypto::SignatureVerifier::SignatureAlgorithm algorithm_2 =
       crypto::SignatureVerifier::SignatureAlgorithm::RSA_PSS_SHA256;
   const std::string key_tag_2 = "key_tag_2";
   const base::Time creation_time_2 = base::Time::Now();
 
-  EXPECT_CALL(mock_key_service(),
-              GetAllSigningKeysForGarbageCollectionSlowlyAsync)
+  EXPECT_CALL(mock_key_service(), GetAllKeysForGarbageCollectionSlowlyAsync)
       .WillOnce(RunOnceCallback<1>(std::vector{
           key_id_1,
           key_id_2,
@@ -343,7 +324,7 @@ TEST_F(UnexportableKeysInternalsHandlerTest, DeleteKeyFails) {
           base::unexpected(unexportable_keys::ServiceError::kKeyNotFound)));
 
   base::test::TestFuture<bool> delete_future;
-  handler().DeleteKey(unexportable_keys::UnexportableKeyId(),
+  handler().DeleteKey(unexportable_keys::UnexportableSigningKeyId(),
                       delete_future.GetCallback());
 
   EXPECT_FALSE(delete_future.Get());
@@ -354,7 +335,7 @@ TEST_F(UnexportableKeysInternalsHandlerTest, DeleteKeySucceeds) {
       .WillOnce(RunOnceCallback<2>(1));
 
   base::test::TestFuture<bool> delete_future;
-  handler().DeleteKey(unexportable_keys::UnexportableKeyId(),
+  handler().DeleteKey(unexportable_keys::UnexportableSigningKeyId(),
                       delete_future.GetCallback());
 
   EXPECT_TRUE(delete_future.Get());

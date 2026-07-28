@@ -33,8 +33,10 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/loader/form_submission.h"
 #include "third_party/blink/renderer/core/script_tools/model_context.h"
+#include "third_party/blink/renderer/core/script_tools/script_tool_types.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 
 namespace blink {
 
@@ -51,6 +53,12 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  // This method is called anytime a form control's association changes with
+  // regard to `this`, or when a control's attributes are changed. It will only
+  // queue a task to register a new tool if `this` already has an existing
+  // `active_webmcp_tool_`, and if the form control change impacts the tool's
+  // generated input schema.
+  void ScheduleWebMCPSchemaUpdateIfActive();
   enum RelAttribute {
     kNone = 0,
     kNoReferrer = 1 << 0,
@@ -61,6 +69,10 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   explicit HTMLFormElement(Document&);
   ~HTMLFormElement() override;
   void Trace(Visitor*) const override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLFormElement;
+  }
 
   HTMLFormControlsCollection* elements();
   void GetNamedElements(const AtomicString&, HeapVector<Member<Element>>&);
@@ -90,8 +102,10 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   void Disassociate(HTMLImageElement&);
   void DidAssociateByParser();
 
-  void PrepareForSubmission(const Event*,
-                            HTMLFormControlElement* submit_button);
+  // For native form controls, pass the submit button as submitter. For custom
+  // elements with `HTMLSubmitButtonBehavior`, pass the custom element as
+  // submitter.
+  void PrepareForSubmission(const Event* event, Element* submitter);
   void submitFromJavaScript();
   void requestSubmit(ExceptionState& exception_state);
   void requestSubmit(HTMLElement* submitter, ExceptionState& exception_state);
@@ -112,7 +126,9 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
 
   // Find the 'default button.'
   // https://html.spec.whatwg.org/C/#default-button
-  HTMLFormControlElement* FindDefaultButton() const;
+  // Returns either an HTMLFormControlElement or a custom element with
+  // HTMLSubmitButtonBehavior.
+  Element* FindDefaultButton() const;
 
   bool checkValidity();
   bool reportValidity();
@@ -132,6 +148,8 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
     return CollectAndCacheListedElements(/*collect_for_autofill*/ false);
   }
 
+  void NotifyEmailVerificationTokenFieldChanged();
+
   // Returns the contained form control elements associated with `this`, also
   // including descendants of `this` that are form control elements and inside
   // Shadow DOM. The result will contain the form control elements of <form>s
@@ -144,7 +162,8 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
 
   const HeapVector<Member<HTMLImageElement>>& ImageElements();
 
-  V8UnionElementOrRadioNodeList* AnonymousNamedGetter(const AtomicString& name);
+  bindings::OptimizedReturnProxy<V8UnionElementOrRadioNodeList>
+  AnonymousNamedGetter(ScriptState* script_state, const AtomicString& name);
   bool NamedPropertyQuery(const AtomicString& name, ExceptionState&);
   bool HasAnyNamedProperties() const;
 
@@ -153,15 +172,20 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   // 'construct the entry list'
   // https://html.spec.whatwg.org/C/#constructing-the-form-data-set
   // Returns nullptr if this form is already running this function.
-  FormData* ConstructEntryList(HTMLFormControlElement* submit_button,
+  // |submitter| may be an HTMLFormControlElement (native submit button) or a
+  // custom element with HTMLSubmitButtonBehavior.
+  FormData* ConstructEntryList(Element* submitter,
                                const TextEncoding& encoding);
 
   void InvalidateListedElementsForAutofill();
+  void InvalidateListedElements();
   void UseCountPropertyAccess(v8::Local<v8::Name>&,
                               const v8::PropertyCallbackInfo<v8::Value>&);
 
   bool IsActiveToolSubmitButton(const HTMLFormControlElement* element) const;
   bool MatchesToolFormActivePseudoClass() const;
+
+  std::optional<base::UnguessableToken> GetActiveWebMCPToolInvocationId() const;
 
  private:
   friend class HTMLFormMcpToolTest;
@@ -169,6 +193,7 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void RemovedFrom(ContainerNode&) override;
   void FinishParsingChildren() override;
+  void ChildrenChanged(const ChildrenChange&) override;
 
   void HandleLocalEvents(Event&) override;
 
@@ -182,8 +207,7 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   }
 
   void SubmitDialog(FormSubmission*);
-  void ScheduleFormSubmission(const Event*,
-                              HTMLFormControlElement* submit_button);
+  void ScheduleFormSubmission(const Event*, Element* submitter);
 
   void CollectListedElementsForReferenceTarget(
       const Node& root,
@@ -222,10 +246,10 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   void RemoveFromPastNamesMap(HTMLElement&);
   bool PastNamesEmpty() const;
 
-  bool IsValidWebMCPForm() const;
-  void UpdateMcpDefinitionsIfNeeded();
-  void ExecuteDeclarativeWebMCPFunction(String input_arguments);
-  String UpdateDeclarativeWebMCPInputSchema();
+  void ScheduleDeclarativeWebMCPToolRegistration();
+  void RegisterDeclarativeWebMCPTool();
+  void ReportInvalidMCPFormIssueIfNeeded(const String& name,
+                                         const String& description);
 
   using PastNamesMap = GCedHeapHashMap<AtomicString, Member<Element>>;
 
@@ -245,7 +269,7 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   base::OnceClosure cancel_last_submission_;
 
   using McpToolCallbackResult =
-      base::expected<blink::String, blink::WebDocument::ScriptToolError>;
+      base::expected<blink::String, blink::ScriptToolError>;
   class CORE_EXPORT HTMLFormMcpTool final
       : public GarbageCollected<HTMLFormMcpTool>,
         public DeclarativeWebMCPTool {
@@ -255,56 +279,81 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
     HTMLFormMcpTool& operator=(const HTMLFormMcpTool&) = delete;
     HTMLFormMcpTool(HTMLFormElement& form,
                     String tool_name,
-                    String tool_description)
+                    String tool_description,
+                    String tool_title,
+                    bool has_toolautosubmit)
         : tool_name_(tool_name),
           tool_description_(tool_description),
+          tool_title_(tool_title),
+          has_toolautosubmit_(has_toolautosubmit),
           form_(form) {
       CHECK(!tool_name.IsNull() && !tool_description.IsNull());
     }
+    String ToolName() const override { return tool_name_; }
+    String ToolDescription() const override { return tool_description_; }
+    String ToolTitle() const override { return tool_title_; }
     String ComputeInputSchema() override;
+    Element* FormElement() const override { return form_; }
     void ExecuteTool(
+        const base::UnguessableToken& invocation_id,
         String input_arguments,
         base::OnceCallback<void(McpToolCallbackResult)> done_callback) override;
     // Fill form controls with data as provided by `input_arguments`.
     //
-    // If 'true' is returned, then all specified tool parameters (form controls)
-    // were filled successfully. Otherwise, the state of all form controls
-    // are left unchanged.
-    bool FillFormControls(const String& input_arguments,
-                          HTMLFormControlElement** submit_button);
-    String ToolName() const { return tool_name_; }
-    String ToolDescription() const { return tool_description_; }
-    bool IsValidTool() const { return !tool_name_.IsNull(); }
-    bool CurrentlyRunning() const {
-      return IsValidTool() && is_currently_running_;
+    // If no error is returned, then all specified tool parameters (form
+    // controls) were filled successfully. Otherwise, the state of all form
+    // controls are left unchanged.
+    std::optional<ScriptToolError> FillFormControls(
+        const String& input_arguments,
+        bool require_submit_button,
+        HTMLFormControlElement** submit_button);
+    bool HasToolautosubmit() const { return has_toolautosubmit_; }
+    const String& LastComputedSchema() const { return last_computed_schema_; }
+    void SetLastComputedSchema(String schema) {
+      last_computed_schema_ = schema;
     }
+    std::optional<base::UnguessableToken> InvocationId() const {
+      return invocation_id_;
+    }
+    bool CurrentlyRunning() const { return is_currently_running_; }
     HTMLFormControlElement* ActiveToolSubmitButton() const {
       CHECK(is_currently_running_);
       return active_submit_button_;
     }
     void CallDoneCallback(McpToolCallbackResult result);
-    void Trace(Visitor* visitor) const;
-
-   private:
-    bool is_currently_running_ = false;
-    String tool_name_;
-    String tool_description_;
-    Member<HTMLFormElement> form_;
-    Member<HTMLFormControlElement> active_submit_button_;
-    base::OnceCallback<void(McpToolCallbackResult)> done_callback_;
-  };
-
-  class RespondWithHandler : public ThenCallable<IDLAny, RespondWithHandler> {
-   public:
-    RespondWithHandler(HTMLFormElement::HTMLFormMcpTool* tool, bool resolved)
-        : tool_(tool), resolved_(resolved) {}
-    void React(ScriptState* script_state, ScriptValue value);
+    bool IsHandlingSubmit() const { return is_handling_submit_; }
+    void SetIsHandlingSubmit(bool is_handling_submit) {
+      is_handling_submit_ = is_handling_submit;
+    }
     void Trace(Visitor* visitor) const override;
 
    private:
-    Member<HTMLFormMcpTool> tool_;
-    bool resolved_;
+    friend class HTMLFormElement;
+
+    bool is_currently_running_ = false;
+    bool is_handling_submit_ = false;
+    // Both `tool_name_` and `tool_description_` are guaranteed to be non-null
+    // (i.e., `blink::String::IsNull()`), since the `toolname` and
+    // `tooldescription` attributes must be present on `form_`, for it to
+    // represent a valid declarative tool.
+    //
+    // `tool_title_` on the other hand can be `IsNull()` if the `tooltitle`
+    // attribute is not present, which is valid.
+    String tool_name_;
+    String tool_description_;
+    String tool_title_;
+    const bool has_toolautosubmit_ = false;
+    String last_computed_schema_;
+    Member<HTMLFormElement> form_;
+    Member<HTMLFormControlElement> active_submit_button_;
+    base::OnceCallback<void(McpToolCallbackResult)> done_callback_;
+    std::optional<base::UnguessableToken> invocation_id_;
   };
+
+  void HandleWebMcpToolResponse(HTMLFormMcpTool* tool,
+                                bool resolved,
+                                ScriptState* script_state,
+                                ScriptValue value);
 
   // Used only for (experimental) declarative WebMCP.
   Member<HTMLFormMcpTool> active_webmcp_tool_;
@@ -320,6 +369,11 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   bool has_elements_associated_by_form_attribute_ : 1;
   bool did_finish_parsing_children_ : 1;
   bool is_in_reset_function_ : 1;
+  // Because forms undergo lots of synchronous mutations during construction,
+  // each of which affects the declarative WebMCP tool's input JSON schema, we
+  // batch all such changes and postpone tool registration behind the task
+  // below, which gets queued on each mutation.
+  TaskHandle mcp_registration_task_;
 
   Member<RelList> rel_list_;
   unsigned rel_attribute_ = 0;

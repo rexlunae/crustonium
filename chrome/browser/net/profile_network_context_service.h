@@ -237,15 +237,14 @@ class ProfileNetworkContextService
   // content_settings::CookieSettings::Observer:
   void OnThirdPartyCookieBlockingChanged(
       bool block_third_party_cookies) override;
-  void OnMitigationsEnabledFor3pcdChanged(bool enable) override;
 
 #if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
-  void SaveEncryptedCacheMasterKey(
-      const std::vector<uint8_t>& encrypted_master_key);
+  void SaveEncryptedCachePrimaryKey(
+      const std::vector<uint8_t>& encrypted_primary_key);
 
-  // Returns the encrypted cache master key stored in the profile prefs.
+  // Returns the encrypted cache primary key stored in the profile prefs.
   // Returns an empty vector if the key is not set or cannot be decoded.
-  std::vector<uint8_t> GetEncryptedCacheMasterKey();
+  std::vector<uint8_t> GetEncryptedCachePrimaryKey();
 #endif  // BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
 
   // KeyedService:

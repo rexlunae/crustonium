@@ -99,10 +99,10 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Basic) {
     RunFunctionAndExpectError(
         function, context, 0, nullptr,
         "Uncaught TypeError: " +
-            api_errors::InvocationError(
-                "idle.queryState",
-                "integer detectionIntervalInSeconds, function callback",
-                api_errors::NoMatchingSignature()));
+            api_errors::InvocationError("idle.queryState",
+                                        "integer detectionIntervalInSeconds, "
+                                        "optional function callback",
+                                        api_errors::NoMatchingSignature()));
   }
 
   {
@@ -1420,17 +1420,10 @@ class NativeExtensionBindingsSystemBrowserUnittest
 };
 
 // Tests that updating bindings does not crash if the global "browser" property
-// is defined but is not an object when the
-// `extensions_features::kExtensionBrowserNamespaceAlternative` feature is
-// enabled. Regression test for crbug.com/459049475.
+// is defined but is not an object. Regression test for crbug.com/459049475.
 TEST_F(NativeExtensionBindingsSystemBrowserUnittest,
        TestWindowBrowserCrashNonRestricted) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      extensions_features::kExtensionBrowserNamespaceAlternative);
-
-  scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").SetManifestVersion(3).Build();
+  scoped_refptr<const Extension> extension = ExtensionBuilder("foo").Build();
   Verify(extension);
 }
 
@@ -1445,10 +1438,8 @@ TEST_F(NativeExtensionBindingsSystemBrowserUnittest,
 TEST_F(NativeExtensionBindingsSystemBrowserUnittest,
        TestWindowBrowserCrashRestricted) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {extensions_features::kExtensionBrowserNamespaceAlternative,
-       extensions_features::kDebuggerAPIRestrictedToDevMode},
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      extensions_features::kDebuggerAPIRestrictedToDevMode);
 
   scoped_refptr<const Extension> extension = ExtensionBuilder("foo")
                                                  .SetManifestVersion(3)

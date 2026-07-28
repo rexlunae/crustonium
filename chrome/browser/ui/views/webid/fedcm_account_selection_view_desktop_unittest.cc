@@ -207,6 +207,7 @@ class FakeTabInterface : public tabs::MockTabInterface {
   void SetIsActivated(bool active);
   bool IsActivated() const override { return is_activated_; }
   bool CanShowModalUI() const override { return true; }
+  ui::UnownedUserDataHost& GetUnownedUserDataHost() override { return host_; }
 
  private:
   using DidActivateCallbackList =
@@ -219,6 +220,7 @@ class FakeTabInterface : public tabs::MockTabInterface {
 
   raw_ptr<content::WebContents> contents_;
   bool is_activated_ = true;
+  ui::UnownedUserDataHost host_;
 };
 
 void FakeTabInterface::SetIsActivated(bool active) {
@@ -391,6 +393,11 @@ class StubAccountSelectionViewDelegate : public AccountSelectionView::Delegate {
   gfx::NativeView GetNativeView() override { return gfx::NativeView(); }
 
   content::WebContents* GetWebContents() override { return web_contents_; }
+  content::IdentityRequestDialogController::PassiveDialogVolume
+  GetPassiveDialogVolume() const override {
+    return content::IdentityRequestDialogController::PassiveDialogVolume::
+        kDefault;
+  }
   std::optional<DismissReason> GetDismissReason() { return dismiss_reason_; }
 
   void SetOnDismissClosure(base::OnceClosure on_dismiss) {
@@ -553,7 +560,8 @@ class FedCmAccountSelectionViewDesktopTest : public ChromeViewsTestBase {
                          ? controller.GetPopupWindow()->show_popup_window_count_
                          : 0;
     controller.ShowModalDialog(GURL(u"https://example.com"),
-                               blink::mojom::RpMode::kPassive);
+                               blink::mojom::RpMode::kPassive,
+                               base::DoNothing());
     EXPECT_EQ(controller.GetPopupWindow()->show_popup_window_count_,
               show_count + 1);
   }
@@ -952,9 +960,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   histogram_tester_->ExpectUniqueSample(
       "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
-      static_cast<int>(FedCmAccountSelectionView::MismatchDialogResult::
-                           kDismissedByCloseIcon),
-      1);
+      static_cast<int>(MismatchDialogResult::kDismissedByCloseIcon), 1);
 }
 
 // Tests that when the mismatch dialog is closed through means other than the
@@ -972,9 +978,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   histogram_tester_->ExpectUniqueSample(
       "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
-      static_cast<int>(FedCmAccountSelectionView::MismatchDialogResult::
-                           kDismissedForOtherReasons),
-      1);
+      static_cast<int>(MismatchDialogResult::kDismissedForOtherReasons), 1);
 }
 
 // Tests that when FedCmAccountSelectionView is destroyed while the mismatch
@@ -989,9 +993,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest, MismatchDialogDestroyedMetric) {
 
   histogram_tester_->ExpectUniqueSample(
       "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
-      static_cast<int>(FedCmAccountSelectionView::MismatchDialogResult::
-                           kDismissedForOtherReasons),
-      1);
+      static_cast<int>(MismatchDialogResult::kDismissedForOtherReasons), 1);
 }
 
 // Tests that when the continue button on the mismatch dialog is clicked, the
@@ -1008,9 +1010,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   histogram_tester_->ExpectUniqueSample(
       "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
-      static_cast<int>(
-          FedCmAccountSelectionView::MismatchDialogResult::kContinued),
-      1);
+      static_cast<int>(MismatchDialogResult::kContinued), 1);
 }
 
 // Tests that when the continue button on the mismatch dialog is clicked and
@@ -1030,9 +1030,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   histogram_tester_->ExpectUniqueSample(
       "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
-      static_cast<int>(
-          FedCmAccountSelectionView::MismatchDialogResult::kContinued),
-      1);
+      static_cast<int>(MismatchDialogResult::kContinued), 1);
 }
 
 // Test transitioning from IdP sign-in status mismatch dialog to regular sign-in
@@ -1806,7 +1804,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   // Emulate user clicking on a button to sign in with an IDP via active mode.
   controller->ShowModalDialog(GURL(u"https://example.com"),
-                              blink::mojom::RpMode::kActive);
+                              blink::mojom::RpMode::kActive, base::DoNothing());
   EXPECT_EQ(controller->GetPopupWindow()->show_popup_window_count_, 1);
 
   // Emulate user closing the pop-up window.
@@ -2078,7 +2076,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   // Emulate user clicking on a button to sign in with an IDP via active mode.
   controller->ShowModalDialog(GURL(u"https://example.com"),
-                              blink::mojom::RpMode::kActive);
+                              blink::mojom::RpMode::kActive, base::DoNothing());
   EXPECT_EQ(controller->GetPopupWindow()->show_popup_window_count_, 1);
 
   EXPECT_TRUE(controller->IsDialogWidgetVisible());
@@ -2450,7 +2448,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   // Open loading state pop-up and expect it to call `SetCustomYPosition`.
   controller->ShowModalDialog(GURL(u"https://example.com"),
-                              blink::mojom::RpMode::kActive);
+                              blink::mojom::RpMode::kActive, base::DoNothing());
   EXPECT_EQ(controller->GetPopupWindow()->show_popup_window_count_, 1);
   EXPECT_EQ(controller->GetPopupWindow()->set_custom_y_position_count_, 1);
 
@@ -2469,7 +2467,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
   // Open use other account pop-up and expect it to not call
   // `SetCustomYPosition`.
   controller->ShowModalDialog(GURL(u"https://example.com"),
-                              blink::mojom::RpMode::kActive);
+                              blink::mojom::RpMode::kActive, base::DoNothing());
   EXPECT_EQ(controller->GetPopupWindow()->show_popup_window_count_, 1);
   EXPECT_EQ(controller->GetPopupWindow()->set_custom_y_position_count_, 0);
 
@@ -2486,7 +2484,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
 
   // Open loading state pop-up and expect it to call `SetActiveModeSheetType`.
   controller->ShowModalDialog(GURL(u"https://example.com"),
-                              blink::mojom::RpMode::kActive);
+                              blink::mojom::RpMode::kActive, base::DoNothing());
   EXPECT_EQ(controller->GetPopupWindow()->show_popup_window_count_, 1);
   EXPECT_EQ(controller->GetPopupWindow()->set_active_mode_sheet_type_count_, 1);
 
@@ -2505,7 +2503,7 @@ TEST_F(FedCmAccountSelectionViewDesktopTest,
   // Open use other account pop-up and expect it to call
   // `SetActiveModeSheetType`.
   controller->ShowModalDialog(GURL(u"https://example.com"),
-                              blink::mojom::RpMode::kActive);
+                              blink::mojom::RpMode::kActive, base::DoNothing());
   EXPECT_EQ(controller->GetPopupWindow()->show_popup_window_count_, 1);
   EXPECT_EQ(controller->GetPopupWindow()->set_active_mode_sheet_type_count_, 1);
 
@@ -2680,19 +2678,19 @@ TEST_F(FedCmAccountSelectionViewDesktopTest, DisclosureDialogResultMetric) {
   CheckForSampleAndReset(webid::DisclosureDialogResult::kDestroy);
 }
 
-TEST_F(FedCmAccountSelectionViewDesktopTest, CanShowWidget) {
+TEST_F(FedCmAccountSelectionViewDesktopTest, CanShowUi) {
   std::unique_ptr<TestFedCmAccountSelectionView> controller =
       CreateAndShow(accounts_);
   EXPECT_TRUE(controller->IsDialogWidgetVisible());
 
-  controller->SetCanShowWidget(false);
+  controller->SetCanShowUi(false);
   EXPECT_FALSE(controller->IsDialogWidgetVisible());
 
   // Resizing should not show it.
   controller->PrimaryMainFrameWasResized(/*width_changed=*/true);
   EXPECT_FALSE(controller->IsDialogWidgetVisible());
 
-  controller->SetCanShowWidget(true);
+  controller->SetCanShowUi(true);
   EXPECT_TRUE(controller->IsDialogWidgetVisible());
 }
 

@@ -189,16 +189,6 @@ export class SettingsPaymentsSectionElement extends
       },
 
       /**
-       * Checks if a card benefits feature flag is enabled.
-       */
-      cardBenefitsFlagEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('autofillCardBenefitsAvailable');
-        },
-      },
-
-      /**
        * Sublabel for the card benefits toggle. The sublabel text also includes
        * a link to learn about the card benefits.
        */
@@ -253,7 +243,7 @@ export class SettingsPaymentsSectionElement extends
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare creditCards: chrome.autofillPrivate.CreditCardEntry[];
   declare ibans: chrome.autofillPrivate.IbanEntry[];
   declare payOverTimeIssuers: chrome.autofillPrivate.PayOverTimeIssuerEntry[];
@@ -275,7 +265,6 @@ export class SettingsPaymentsSectionElement extends
   private paymentsManager_: PaymentsManagerProxy =
       PaymentsManagerImpl.getInstance();
   private setPersonalDataListener_: PersonalDataChangedListener|null = null;
-  declare private cardBenefitsFlagEnabled_: boolean;
   declare private cardBenefitsSublabel_: string;
   declare private shouldShowPayOverTimeSettings_: boolean;
   declare private payOverTimeSublabel_: string;
@@ -732,9 +721,9 @@ export class SettingsPaymentsSectionElement extends
    * hyperlink is returned else return the regular sublabel.
    * @returns Cvc storage toggle sublabel string.
    */
-  private getCvcStorageSublabel_(): TrustedHTML {
+  private getCvcStorageSublabel_(): string {
     const card = this.creditCards.find(cc => !!cc.cvc);
-    return this.i18nAdvanced(
+    return loadTimeData.getStringF(
         card === undefined ? 'enableCvcStorageSublabel' :
                              'enableCvcStorageDeleteDataSublabel');
   }

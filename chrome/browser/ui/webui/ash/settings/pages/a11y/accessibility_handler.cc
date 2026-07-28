@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
@@ -22,8 +23,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "components/language/core/browser/pref_names.h"
@@ -41,23 +40,12 @@
 namespace ash::settings {
 namespace {
 
-void RecordShowShelfNavigationButtonsValueChange(bool enabled) {
-  base::UmaHistogramBoolean(
-      "Accessibility.CrosShelfNavigationButtonsInTabletModeChanged."
-      "OsSettings",
-      enabled);
-}
-
 }  // namespace
 
 AccessibilityHandler::AccessibilityHandler(Profile* profile)
     : profile_(profile) {}
 
-AccessibilityHandler::~AccessibilityHandler() {
-  if (a11y_nav_buttons_toggle_metrics_reporter_timer_.IsRunning()) {
-    a11y_nav_buttons_toggle_metrics_reporter_timer_.FireNow();
-  }
-}
+AccessibilityHandler::~AccessibilityHandler() = default;
 
 void AccessibilityHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -69,13 +57,6 @@ void AccessibilityHandler::RegisterMessages() {
       "setStartupSoundEnabled",
       base::BindRepeating(&AccessibilityHandler::HandleSetStartupSoundEnabled,
                           base::Unretained(this)));
-
-  web_ui()->RegisterMessageCallback(
-      "recordSelectedShowShelfNavigationButtonValue",
-      base::BindRepeating(
-          &AccessibilityHandler::
-              HandleRecordSelectedShowShelfNavigationButtonsValue,
-          base::Unretained(this)));
 
   web_ui()->RegisterMessageCallback(
       "manageA11yPageReady",
@@ -103,7 +84,8 @@ void AccessibilityHandler::RegisterMessages() {
 void AccessibilityHandler::HandleShowBrowserAppearanceSettings(
     const base::ListValue& args) {
   ash::NewWindowDelegate::GetInstance()->OpenUrl(
-      GURL(chrome::kChromeUISettingsURL).Resolve(chrome::kAppearanceSubPage),
+      GURL(ash::chrome_urls::kChromeUISettingsURL)
+          .Resolve(ash::chrome_urls::kAppearanceSubPage),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }
@@ -118,19 +100,6 @@ void AccessibilityHandler::HandleSetStartupSoundEnabled(
   AccessibilityManager::Get()->SetStartupSoundEnabled(enabled);
   base::UmaHistogramBoolean(
       "ChromeOS.Settings.Accessibility.OOBEStartupSound.Enabled", enabled);
-}
-
-void AccessibilityHandler::HandleRecordSelectedShowShelfNavigationButtonsValue(
-    const base::ListValue& args) {
-  DCHECK_EQ(1U, args.size());
-  bool enabled = false;
-  if (args[0].is_bool()) {
-    enabled = args[0].GetBool();
-  }
-
-  a11y_nav_buttons_toggle_metrics_reporter_timer_.Start(
-      FROM_HERE, base::Seconds(10),
-      base::BindOnce(&RecordShowShelfNavigationButtonsValueChange, enabled));
 }
 
 void AccessibilityHandler::HandleManageA11yPageReady(

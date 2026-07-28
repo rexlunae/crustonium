@@ -13,6 +13,7 @@ cr-tooltip {
   --paper-tooltip-delay-out: 0ms;
   --paper-tooltip-opacity: 1.0;
   margin-top: -20px;
+  pointer-events: all;
 }
 
 cr-tooltip::part(tooltip) {
@@ -27,6 +28,12 @@ cr-tooltip::part(tooltip) {
   font-size: 12px;
   line-height: 16px;
   position: relative;
+}
+
+:host([is-coins-enabled]) cr-tooltip {
+  max-width: none;
+  padding-inline-start: 36px;
+  margin-top: -5px;
 }
 
 /* Add a caret to the tooltip. */

@@ -26,6 +26,7 @@
                 ],
                 "build_config": "Debug",
                 "config": "chromium",
+                "target_arch": "arm",
                 "target_bits": 64,
                 "target_platform": "ios"
               },
@@ -83,5 +84,5 @@
   "builder_group": "tryserver.chromium.mac",
   "cq": "required",
   "recipe": "chromium/orchestrator",
-  "xcode_build_version": "17a400"
+  "xcode_build_version": "17f42"
 }

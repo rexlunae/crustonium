@@ -46,7 +46,6 @@
 #include "components/search_engines/template_url_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_formatter.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -275,7 +274,7 @@ const std::u16string UpdateTimeToString(std::optional<int> time) {
 const TemplateURL* AdjustTemplateURL(AutocompleteInput* input,
                                      TemplateURLService* turl_service) {
   DCHECK(turl_service);
-  return input->InKeywordMode()
+  return input->in_keyword_mode()
              ? AutocompleteInput::GetSubstitutingTemplateURLForInput(
                    turl_service, input)
              : turl_service->GetEnterpriseSearchAggregatorEngine();
@@ -772,7 +771,7 @@ bool EnterpriseSearchAggregatorProvider::IsProviderAllowed(
 
   // Don't run provider in non-keyword mode if query length is less than
   // the minimum length.
-  if (!input.InKeywordMode() &&
+  if (!input.in_keyword_mode() &&
       static_cast<int>(input.text().length()) <
           omnibox_feature_configs::SearchAggregatorProvider::Get()
               .min_query_length) {
@@ -799,7 +798,7 @@ void EnterpriseSearchAggregatorProvider::Run() {
   std::vector<int> request_indexes = {};
   std::vector<std::vector<int>> backend_suggestion_types = {};
   for (size_t i = 0; i < requests_.size(); ++i) {
-    bool allowed = requests_[i].Allowed(adjusted_input_.InKeywordMode());
+    bool allowed = requests_[i].Allowed(adjusted_input_.in_keyword_mode());
     requests_[i].Reset(!allowed);
     if (allowed) {
       request_indexes.push_back(i);
@@ -839,34 +838,14 @@ void EnterpriseSearchAggregatorProvider::RequestCompleted(
   DCHECK_GE(requests_.size(), static_cast<size_t>(request_index));
 
   if (response_code == 200) {
-    // Parse `response_body` in utility process if feature param is true.
     std::string json_data = SearchSuggestionParser::ExtractJsonData(
         source, std::move(response_body));
-    if (omnibox_feature_configs::SearchAggregatorProvider::Get()
-            .parse_response_in_utility_process) {
-      data_decoder::DataDecoder::ParseJsonIsolated(
-          json_data,
-          base::BindOnce(
-              &EnterpriseSearchAggregatorProvider::OnJsonParsedIsolated,
-              base::Unretained(this), request_index));
-    } else {
-      std::optional<base::DictValue> value = base::JSONReader::ReadDict(
-          json_data, base::JSON_ALLOW_TRAILING_COMMAS);
-      HandleParsedJson(request_index, value);
-    }
+    std::optional<base::DictValue> value =
+        base::JSONReader::ReadDict(json_data, base::JSON_ALLOW_TRAILING_COMMAS);
+    HandleParsedJson(request_index, value);
   } else {
     HandleParsedJson(request_index, std::nullopt);
   }
-}
-
-void EnterpriseSearchAggregatorProvider::OnJsonParsedIsolated(
-    int request_index,
-    base::expected<base::Value, std::string> result) {
-  std::optional<base::DictValue> value = std::nullopt;
-  if (result.has_value() && result.value().is_dict()) {
-    value = std::move(result.value().GetDict());
-  }
-  HandleParsedJson(request_index, value);
 }
 
 void EnterpriseSearchAggregatorProvider::HandleParsedJson(
@@ -964,7 +943,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
     } else if (suggestion_type == SuggestionType::CONTENT) {
       icon_url = ptr_to_string(result.FindString("iconUri"));
     } else if (suggestion_type == SuggestionType::QUERY &&
-               !adjusted_input_.InKeywordMode()) {
+               !adjusted_input_.in_keyword_mode()) {
       icon_url = template_url_->favicon_url().spec();
     }
 
@@ -988,7 +967,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
     // use server scoring in scoped mode, and client scoring in unscoped mode.
     if (relevance_scoring_mode == "server" ||
         (relevance_scoring_mode != "client" &&
-         adjusted_input_.InKeywordMode())) {
+         adjusted_input_.in_keyword_mode())) {
       relevance_data = GetServerRelevanceData(result);
     } else {
       const std::vector<std::u16string> email_usernames =
@@ -997,7 +976,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
           result, suggestion_type, contents, description, email_usernames);
       auto weak_scoring_fields = GetWeakScoringFields(result, suggestion_type);
       relevance_data = CalculateRelevanceData(
-          input_words, adjusted_input_.InKeywordMode(), suggestion_type,
+          input_words, adjusted_input_.in_keyword_mode(), suggestion_type,
           strong_scoring_fields, weak_scoring_fields, email_usernames);
     }
     if (relevance_data.relevance) {
@@ -1008,7 +987,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
     }
 
     std::u16string fill_into_edit;
-    if (adjusted_input_.InKeywordMode()) {
+    if (adjusted_input_.in_keyword_mode()) {
       fill_into_edit.append(template_url_->keyword() + u' ');
     }
     fill_into_edit.append(base::UTF8ToUTF16(is_navigation ? url : contents));
@@ -1021,7 +1000,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
 
   // Limit # of matches added. See comment for
   // `kMaxScopedMatchesShownPerType`.
-  size_t matches_to_add = adjusted_input_.InKeywordMode()
+  size_t matches_to_add = adjusted_input_.in_keyword_mode()
                               ? kMaxScopedMatchesShownPerType()
                               : kMaxUnscopedMatchesShownPerType();
   if (matches_to_add < matches.size()) {
@@ -1041,6 +1020,10 @@ std::string EnterpriseSearchAggregatorProvider::GetMatchDestinationUrl(
       ptr_to_string(result.FindString("destinationUri"));
   if (suggestion_type == SuggestionType::CONTENT ||
       suggestion_type == SuggestionType::PEOPLE) {
+    GURL gurl(destination_uri);
+    if (!gurl.is_valid() || !gurl.SchemeIsHTTPOrHTTPS()) {
+      return "";
+    }
     return destination_uri;
   }
 
@@ -1228,11 +1211,11 @@ AutocompleteMatch EnterpriseSearchAggregatorProvider::CreateMatch(
   match.fill_into_edit = fill_into_edit;
 
   match.keyword = template_url_->keyword();
-  match.transition = adjusted_input_.InKeywordMode()
+  match.transition = adjusted_input_.in_keyword_mode()
                          ? ui::PAGE_TRANSITION_KEYWORD
                          : ui::PAGE_TRANSITION_GENERATED;
 
-  if (adjusted_input_.InKeywordMode()) {
+  if (adjusted_input_.in_keyword_mode()) {
     match.from_keyword = true;
   }
 
@@ -1260,7 +1243,7 @@ void EnterpriseSearchAggregatorProvider::AggregateMatches() {
   // `kScopedMaxLowQualityMatches`.
   std::ranges::sort(matches_, std::ranges::greater{},
                     &AutocompleteMatch::relevance);
-  size_t matches_to_keep = adjusted_input_.InKeywordMode()
+  size_t matches_to_keep = adjusted_input_.in_keyword_mode()
                                ? kScopedMaxLowQualityMatches()
                                : kUnscopedMaxLowQualityMatches();
   if (matches_.size() > matches_to_keep) {

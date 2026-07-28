@@ -218,6 +218,24 @@ DocumentSpeculationRules* DocumentSpeculationRules::FromIfExists(
   return Supplement::From<DocumentSpeculationRules>(document);
 }
 
+std::optional<ModerateViewportHeuristicsParams>
+DocumentSpeculationRules::GetModerateViewportHeuristicsParams() const {
+  // This is deliberately simplistic: the first rule set that carries a
+  // "moderate_viewport_heuristics" object wins, and any such objects on other
+  // rule sets are ignored. We intentionally do not attempt to merge or
+  // reconcile conflicting params across rule sets.
+  //
+  // This is acceptable because these controls exist only as an experimentation
+  // mechanism behind an origin trial (not a shipping web API), so the added
+  // complexity of well-defined multi-rule-set semantics isn't worth it.
+  for (const auto& rule_set : rule_sets_) {
+    if (rule_set->moderate_viewport_heuristics_params()) {
+      return rule_set->moderate_viewport_heuristics_params();
+    }
+  }
+  return std::nullopt;
+}
+
 DocumentSpeculationRules::DocumentSpeculationRules(Document& document)
     : Supplement(document), host_(document.GetExecutionContext()) {
   if (!base::FeatureList::IsEnabled(features::kLCPTimingPredictorPrerender2)) {
@@ -573,15 +591,6 @@ void DocumentSpeculationRules::DocumentRestoredFromBFCache() {
   QueueUpdateSpeculationCandidates();
 }
 
-void DocumentSpeculationRules::InitiatePreview(const KURL& url) {
-  CHECK(base::FeatureList::IsEnabled(features::kLinkPreview));
-
-  auto* host = GetHost();
-  if (host) {
-    host->InitiatePreview(url);
-  }
-}
-
 void DocumentSpeculationRules::QueueUpdateSpeculationCandidates(
     bool force_style_update) {
   const bool microtask_already_queued = IsMicrotaskQueued();
@@ -617,6 +626,7 @@ void DocumentSpeculationRules::Trace(Visitor* visitor) const {
   visitor->Trace(stale_links_);
   visitor->Trace(elements_blocking_child_style_recalc_);
   visitor->Trace(selectors_);
+  visitor->Trace(sent_candidates_);
 }
 
 mojom::blink::SpeculationHost* DocumentSpeculationRules::GetHost() {
@@ -629,6 +639,34 @@ mojom::blink::SpeculationHost* DocumentSpeculationRules::GetHost() {
             execution_context->GetTaskRunner(TaskType::kInternalDefault)));
   }
   return host_.get();
+}
+
+void DocumentSpeculationRules::OnPointerDownHeuristic(const KURL& url) {
+  if (!base::FeatureList::IsEnabled(
+          features::kSpeculationRulesRendererSideHeuristics)) {
+    return;
+  }
+  mojom::blink::SpeculationHost* host = GetHost();
+  if (!host) {
+    return;
+  }
+  // Pointerdown is the highest-confidence pointer signal and may enact any
+  // non-immediate candidate for `url`. (Immediate-eagerness candidates were
+  // already enacted at rule-parse time via UpdateSpeculationCandidates.)
+  //
+  // TODO(crbug.com/532860179): Fold in the browser-side eagerness mapping
+  // (BehaviorConfig) so different predictors enact different eagerness sets,
+  // and add No-Vary-Search matching (currently exact-URL only).
+  for (SpeculationCandidate* candidate : sent_candidates_) {
+    if (candidate->eagerness() ==
+        mojom::blink::SpeculationEagerness::kImmediate) {
+      continue;
+    }
+    if (candidate->url() != url) {
+      continue;
+    }
+    host->EnactCandidate(candidate->ToMojom());
+  }
 }
 
 void DocumentSpeculationRules::UpdateSpeculationCandidatesMicrotask() {
@@ -756,10 +794,20 @@ void DocumentSpeculationRules::UpdateSpeculationCandidates() {
 
   probe::SpeculationCandidatesUpdated(document, candidates);
 
+  // Accumulate candidates for the SpeculationMeasurement API.
+  // Candidates are never removed.
+  for (SpeculationCandidate* candidate : candidates) {
+    bool already_tracked =
+        std::ranges::any_of(sent_candidates_, [&](const auto& existing) {
+          return existing->IsSimilarFromAuthorPerspective(*candidate);
+        });
+    if (!already_tracked) {
+      sent_candidates_.push_back(candidate);
+    }
+  }
+
   using SpeculationEagerness = blink::mojom::SpeculationEagerness;
-  base::EnumSet<SpeculationEagerness, SpeculationEagerness::kMinValue,
-                SpeculationEagerness::kMaxValue>
-      eagerness_set;
+  base::EnumSet<SpeculationEagerness> eagerness_set;
 
   Vector<mojom::blink::SpeculationCandidatePtr> mojom_candidates;
   mojom_candidates.ReserveInitialCapacity(candidates.size());
@@ -816,7 +864,7 @@ void DocumentSpeculationRules::AddLinkBasedSpeculationCandidates(
             mojom::blink::SpeculationAction action,
             SpeculationRuleSet* rule_set,
             const HeapVector<Member<SpeculationRule>>& speculation_rules) {
-          if (!link->HrefURL().ProtocolIsInHTTPFamily()) {
+          if (!link->HrefURL().ProtocolIsInHttpFamily()) {
             return;
           }
 
@@ -917,7 +965,7 @@ void DocumentSpeculationRules::AddLinkBasedSpeculationCandidates(
   }
 
   for (auto& it : matched_links_) {
-    candidates.AppendVector(*(it.value));
+    candidates.append_range(*(it.value));
   }
 }
 
@@ -1021,7 +1069,7 @@ void DocumentSpeculationRules::InvalidateAllLinks() {
 void DocumentSpeculationRules::UpdateSelectors() {
   HeapVector<Member<StyleRule>> selectors;
   for (SpeculationRuleSet* rule_set : rule_sets_) {
-    selectors.AppendVector(rule_set->selectors());
+    selectors.append_range(rule_set->selectors());
   }
 
   selectors_ = std::move(selectors);

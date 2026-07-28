@@ -4,17 +4,28 @@
 
 #include "components/autofill/core/browser/webdata/addresses/contact_info_sync_util.h"
 
+#include <stdint.h>
+
+#include <memory>
+#include <string>
+
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/hash/hash.h"
 #include "base/memory/raw_ref.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/country_names.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/sync/protocol/contact_info_specifics.pb.h"
+#include "components/sync/protocol/entity_data.h"
 
 namespace autofill {
 
@@ -233,22 +244,15 @@ sync_pb::ContactInfoSpecifics ContactInfoSpecificsFromAutofillProfile(
   s.Set(specifics.mutable_name_first(), NAME_FIRST);
   s.Set(specifics.mutable_name_middle(), NAME_MIDDLE);
   s.Set(specifics.mutable_name_last(), NAME_LAST);
-  if (base::FeatureList::IsEnabled(features::kAutofillSupportLastNamePrefix)) {
-    s.Set(specifics.mutable_name_last_prefix(), NAME_LAST_PREFIX);
-    s.Set(specifics.mutable_name_last_core(), NAME_LAST_CORE);
-  }
   s.Set(specifics.mutable_name_last_first(), NAME_LAST_FIRST);
   s.Set(specifics.mutable_name_last_conjunction(), NAME_LAST_CONJUNCTION);
   s.Set(specifics.mutable_name_last_second(), NAME_LAST_SECOND);
   s.Set(specifics.mutable_name_full(), NAME_FULL);
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillSupportPhoneticNameForJP)) {
-    // Set alternative name related values and statues.
-    s.Set(specifics.mutable_alternative_family_name(), ALTERNATIVE_FAMILY_NAME);
-    s.Set(specifics.mutable_alternative_given_name(), ALTERNATIVE_GIVEN_NAME);
-    s.Set(specifics.mutable_alternative_full_name(), ALTERNATIVE_FULL_NAME);
-  }
+  // Set alternative name related values and statuses.
+  s.Set(specifics.mutable_alternative_family_name(), ALTERNATIVE_FAMILY_NAME);
+  s.Set(specifics.mutable_alternative_given_name(), ALTERNATIVE_GIVEN_NAME);
+  s.Set(specifics.mutable_alternative_full_name(), ALTERNATIVE_FULL_NAME);
 
   // Set address-related values and statuses.
   s.Set(specifics.mutable_address_city(), ADDRESS_HOME_CITY);
@@ -364,22 +368,15 @@ AutofillProfile CreateAutofillProfileFromContactInfoSpecifics(
   s.Set(specifics.name_first(), NAME_FIRST);
   s.Set(specifics.name_middle(), NAME_MIDDLE);
   s.Set(specifics.name_last(), NAME_LAST);
-  if (base::FeatureList::IsEnabled(features::kAutofillSupportLastNamePrefix)) {
-    s.Set(specifics.name_last_prefix(), NAME_LAST_PREFIX);
-    s.Set(specifics.name_last_core(), NAME_LAST_CORE);
-  }
   s.Set(specifics.name_last_first(), NAME_LAST_FIRST);
   s.Set(specifics.name_last_conjunction(), NAME_LAST_CONJUNCTION);
   s.Set(specifics.name_last_second(), NAME_LAST_SECOND);
   s.Set(specifics.name_full(), NAME_FULL);
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillSupportPhoneticNameForJP)) {
-    // Set alternative name related values and statues.
-    s.Set(specifics.alternative_family_name(), ALTERNATIVE_FAMILY_NAME);
-    s.Set(specifics.alternative_given_name(), ALTERNATIVE_GIVEN_NAME);
-    s.Set(specifics.alternative_full_name(), ALTERNATIVE_FULL_NAME);
-  }
+  // Set alternative name related values and statues.
+  s.Set(specifics.alternative_family_name(), ALTERNATIVE_FAMILY_NAME);
+  s.Set(specifics.alternative_given_name(), ALTERNATIVE_GIVEN_NAME);
+  s.Set(specifics.alternative_full_name(), ALTERNATIVE_FULL_NAME);
 
   // Set address-related values and statuses.
   s.Set(specifics.address_city(), ADDRESS_HOME_CITY);
@@ -462,14 +459,6 @@ sync_pb::ContactInfoSpecifics TrimContactInfoSpecificsDataForCaching(
   if (d.Delete(trimmed_specifics.mutable_name_last())) {
     trimmed_specifics.clear_name_last();
   }
-  if (base::FeatureList::IsEnabled(features::kAutofillSupportLastNamePrefix)) {
-    if (d.Delete(trimmed_specifics.mutable_name_last_prefix())) {
-      trimmed_specifics.clear_name_last_prefix();
-    }
-    if (d.Delete(trimmed_specifics.mutable_name_last_core())) {
-      trimmed_specifics.clear_name_last_core();
-    }
-  }
   if (d.Delete(trimmed_specifics.mutable_name_last_first())) {
     trimmed_specifics.clear_name_last_first();
   }
@@ -483,18 +472,15 @@ sync_pb::ContactInfoSpecifics TrimContactInfoSpecificsDataForCaching(
     trimmed_specifics.clear_name_full();
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillSupportPhoneticNameForJP)) {
-    // Delete alternative name related values and statues.
-    if (d.Delete(trimmed_specifics.mutable_alternative_family_name())) {
-      trimmed_specifics.clear_alternative_family_name();
-    }
-    if (d.Delete(trimmed_specifics.mutable_alternative_given_name())) {
-      trimmed_specifics.clear_alternative_given_name();
-    }
-    if (d.Delete(trimmed_specifics.mutable_alternative_full_name())) {
-      trimmed_specifics.clear_alternative_full_name();
-    }
+  // Delete alternative name related values and statues.
+  if (d.Delete(trimmed_specifics.mutable_alternative_family_name())) {
+    trimmed_specifics.clear_alternative_family_name();
+  }
+  if (d.Delete(trimmed_specifics.mutable_alternative_given_name())) {
+    trimmed_specifics.clear_alternative_given_name();
+  }
+  if (d.Delete(trimmed_specifics.mutable_alternative_full_name())) {
+    trimmed_specifics.clear_alternative_full_name();
   }
 
   // Delete address-related values and statuses.;

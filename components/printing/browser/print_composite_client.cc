@@ -29,7 +29,7 @@
 
 #if BUILDFLAG(ENTERPRISE_WATERMARK)
 #include "components/enterprise/watermarking/content/watermark_text_container.h"  // nogncheck
-#include "components/enterprise/watermarking/mojom/watermark.mojom.h"
+#include "components/enterprise/watermarking/mojom/watermark.mojom.h"  // nogncheck
 #endif
 
 namespace printing {
@@ -233,17 +233,14 @@ void PrintCompositeClient::CompositePage(
 
 void PrintCompositeClient::PrepareToCompositeDocument(
     int document_cookie,
-    content::RenderFrameHost* render_frame_host,
-    mojom::PrintCompositor::DocumentType document_type,
+    content::RenderFrameHost& render_frame_host,
     mojom::PrintCompositor::PrepareToCompositeDocumentCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(!GetIsDocumentConcurrentlyComposited(document_cookie));
 
-  auto* compositor =
-      CreateCompositeRequest(document_cookie, render_frame_host, document_type);
+  auto* compositor = CreateCompositeRequest(document_cookie, render_frame_host);
   is_doc_concurrently_composited_ = true;
   compositor->PrepareToCompositeDocument(
-      document_type,
       base::BindOnce(&PrintCompositeClient::OnDidPrepareToCompositeDocument,
                      std::move(callback)));
 }
@@ -272,17 +269,15 @@ void PrintCompositeClient::FinishDocumentComposition(
 
 void PrintCompositeClient::CompositeDocument(
     int document_cookie,
-    content::RenderFrameHost* render_frame_host,
+    content::RenderFrameHost& render_frame_host,
     const mojom::DidPrintContentParams& content,
     const ui::AXTreeUpdate& accessibility_tree,
     mojom::GenerateDocumentOutline generate_document_outline,
-    mojom::PrintCompositor::DocumentType document_type,
     mojom::PrintCompositor::CompositeDocumentCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(!GetIsDocumentConcurrentlyComposited(document_cookie));
 
-  auto* compositor =
-      CreateCompositeRequest(document_cookie, render_frame_host, document_type);
+  auto* compositor = CreateCompositeRequest(document_cookie, render_frame_host);
   compositor->SetAccessibilityTree(accessibility_tree);
   compositor->SetGenerateDocumentOutline(generate_document_outline);
 
@@ -305,9 +300,8 @@ void PrintCompositeClient::CompositeDocument(
   // is destructed. Mojo won't call its callback in that case so it is safe to
   // use unretained |this| pointer here.
   compositor->CompositeDocument(
-      GenerateFrameGuid(render_frame_host), std::move(region),
-      ConvertContentInfoMap(render_frame_host, content.subframe_content_info),
-      document_type,
+      GenerateFrameGuid(&render_frame_host), std::move(region),
+      ConvertContentInfoMap(&render_frame_host, content.subframe_content_info),
       base::BindOnce(&PrintCompositeClient::OnDidCompositeDocument,
                      base::Unretained(this), document_cookie,
                      std::move(callback)));
@@ -353,10 +347,7 @@ bool PrintCompositeClient::GetIsDocumentConcurrentlyComposited(
 
 mojom::PrintCompositor* PrintCompositeClient::CreateCompositeRequest(
     int cookie,
-    content::RenderFrameHost* initiator_frame,
-    mojom::PrintCompositor::DocumentType document_type) {
-  DCHECK(initiator_frame);
-
+    content::RenderFrameHost& initiator_frame) {
   if (document_cookie_ != 0) {
     DCHECK_NE(document_cookie_, cookie);
     RemoveCompositeRequest(document_cookie_);
@@ -364,7 +355,7 @@ mojom::PrintCompositor* PrintCompositeClient::CreateCompositeRequest(
   document_cookie_ = cookie;
 
   // Track which frame kicked off the composite request.
-  initiator_frame_ = initiator_frame;
+  initiator_frame_ = &initiator_frame;
 
   compositor_ = content::ServiceProcessHost::Launch<mojom::PrintCompositor>(
       content::ServiceProcessHost::Options()

@@ -8,7 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <array>
+#include <ostream>
 
 #include "base/containers/span.h"
 #include "base/memory/raw_span.h"
@@ -149,18 +151,15 @@ struct JpegParseResult {
   size_t image_size;
 };
 
+MEDIA_EXPORT std::ostream& operator<<(std::ostream& os,
+                                      const JpegParseResult& result);
+
 // Parses JPEG picture in |buffer| with |length|.  Returns true iff header is
 // valid and JPEG baseline sequential process is present. If parsed
 // successfully, |result| is the parsed result.
 MEDIA_EXPORT
 bool ParseJpegPicture(base::span<const uint8_t> buffer,
                       JpegParseResult* result);
-
-// Parses the first image of JPEG stream in |buffer| with |length|.  Returns
-// true iff header is valid and JPEG baseline sequential process is present.
-// If parsed successfully, |result| is the parsed result.
-MEDIA_EXPORT
-bool ParseJpegStream(base::span<const uint8_t> buffer, JpegParseResult* result);
 
 }  // namespace media
 

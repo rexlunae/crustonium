@@ -78,6 +78,7 @@ ts_files = [
   "promise_resolver.js",
   "smb_shares/smb_browser_proxy.js",
   "util.js",
+  "util_deprecated.js",
   "web_ui_listener_behavior.js",
 ]
 
@@ -127,6 +128,7 @@ web_component_files_ts = [
 ]
 
 ts_files_ts = [
+  "accessibility/braille_table.ts",
   "accessibility/macro_names.ts",
   "accessibility/facial_gestures.ts",
   "bluetooth/bluetooth_metrics_utils.ts",
@@ -137,7 +139,6 @@ ts_files_ts = [
   "connectivity/mojo_connectivity_provider.ts",
   "hotspot/cros_hotspot_config.ts",
   "hotspot/fake_hotspot_config.ts",
-  "metrics/structured_metrics_service.ts",
   "network_health/mojo_interface_provider.ts",
   "network_health/network_diagnostics_types.ts",
   "quick_unlock/lock_screen_constants.ts",
@@ -152,7 +153,6 @@ ts_files_ts = [
 
 mojo_files_ts = [
   "bluetooth/hid_preserving_bluetooth_state_controller.mojom-webui.ts",
-  "metrics/structured_metrics_service.mojom-webui.ts",
   "metrics/event.mojom-webui.ts",
   "connectivity/passpoint.mojom-webui.ts",
   "hotspot/cros_hotspot_config.mojom-webui.ts",
@@ -734,7 +734,7 @@ js_library("web_ui_listener_behavior") {
 }
 
 js_library("webui_resource_test") {
-  externs_list = [ "//ui/webui/resources/js/dom_automation_controller.js" ]
+  externs_list = [ "dom_automation_controller.js" ]
 }
 
 js_library("util") {

@@ -14,6 +14,14 @@ bool IsClientCertificateProvisioningOnAndroidEnabled() {
       kEnableClientCertificateProvisioningOnAndroid);
 }
 
+BASE_FEATURE(kEnableClientCertificateProvisioningOnIOS,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsClientCertificateProvisioningOnIOSEnabled() {
+  return base::FeatureList::IsEnabled(
+      kEnableClientCertificateProvisioningOnIOS);
+}
+
 BASE_FEATURE(kManagedUserClientCertificateInPrefs,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -26,6 +34,12 @@ BASE_FEATURE(kWindowsSoftwareKeysEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool AreWindowsSoftwareKeysEnabled() {
   return base::FeatureList::IsEnabled(kWindowsSoftwareKeysEnabled);
+}
+
+BASE_FEATURE(kWindowsTpmTls13Check, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsWindowsTpmTls13CheckEnabled() {
+  return base::FeatureList::IsEnabled(kWindowsTpmTls13Check);
 }
 #endif  // BUILDFLAG(IS_WIN)
 

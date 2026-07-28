@@ -9,11 +9,9 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/cpp/request_mode.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "services/network/public/mojom/ip_address_space.mojom-blink.h"
 #include "services/network/public/mojom/trust_tokens.mojom-blink.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
@@ -36,7 +34,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_url_search_params.h"
 #include "third_party/blink/renderer/core/dom/abort_signal.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/fetch/attribution_reporting_to_mojom.h"
 #include "third_party/blink/renderer/core/fetch/blob_bytes_consumer.h"
 #include "third_party/blink/renderer/core/fetch/body_stream_buffer.h"
 #include "third_party/blink/renderer/core/fetch/fetch_manager.h"
@@ -110,6 +107,8 @@ V8RequestDestination::Enum DestinationToV8Enum(
       return V8RequestDestination::Enum::kSharedworker;
     case network::mojom::RequestDestination::kStyle:
       return V8RequestDestination::Enum::kStyle;
+    case network::mojom::RequestDestination::kText:
+      return V8RequestDestination::Enum::kText;
     case network::mojom::RequestDestination::kTrack:
       return V8RequestDestination::Enum::kTrack;
     case network::mojom::RequestDestination::kVideo:
@@ -120,8 +119,8 @@ V8RequestDestination::Enum DestinationToV8Enum(
       return V8RequestDestination::Enum::kXslt;
     case network::mojom::RequestDestination::kFencedframe:
       return V8RequestDestination::Enum::kFencedframe;
-    case network::mojom::RequestDestination::kDictionary:
-      return V8RequestDestination::Enum::kDictionary;
+    case network::mojom::RequestDestination::kCompressionDictionary:
+      return V8RequestDestination::Enum::kCompressionDictionary;
     case network::mojom::RequestDestination::kSpeculationRules:
       return V8RequestDestination::Enum::kSpeculationrules;
     case network::mojom::RequestDestination::kJson:
@@ -172,10 +171,9 @@ FetchRequestData* CreateCopyOfFetchRequestDataForFetch(
   request->SetFetchPriorityHint(original->FetchPriorityHint());
   request->SetPriority(original->Priority());
   request->SetKeepalive(original->Keepalive());
-  request->SetBrowsingTopics(original->BrowsingTopics());
-  request->SetAdAuctionHeaders(original->AdAuctionHeaders());
   request->SetSharedStorageWritable(original->SharedStorageWritable());
   request->SetIsHistoryNavigation(original->IsHistoryNavigation());
+  request->SetIsReloadNavigation(original->IsReloadNavigation());
   if (original->URLLoaderFactory()) {
     mojo::PendingRemote<network::mojom::blink::URLLoaderFactory> factory_clone;
     original->URLLoaderFactory()->Clone(
@@ -184,9 +182,6 @@ FetchRequestData* CreateCopyOfFetchRequestDataForFetch(
   }
   request->SetWindowId(original->WindowId());
   request->SetTrustTokenParams(original->TrustTokenParams());
-  request->SetAttributionReportingEligibility(
-      original->AttributionReportingEligibility());
-  request->SetAttributionReportingSupport(original->AttributionSupport());
   request->SetServiceWorkerRaceNetworkRequestToken(
       original->ServiceWorkerRaceNetworkRequestToken());
   if (RuntimeEnabledFeatures::FetchRetryEnabled(context) &&
@@ -213,10 +208,9 @@ static bool AreAnyMembersPresent(const RequestInit* init) {
          init->hasReferrer() || init->hasReferrerPolicy() || init->hasMode() ||
          init->hasTargetAddressSpace() || init->hasCredentials() ||
          init->hasCache() || init->hasRedirect() || init->hasIntegrity() ||
-         init->hasKeepalive() || init->hasBrowsingTopics() ||
-         init->hasAdAuctionHeaders() || init->hasSharedStorageWritable() ||
-         init->hasPriority() || init->hasSignal() || init->hasDuplex() ||
-         init->hasPrivateToken() || init->hasAttributionReporting() ||
+         init->hasKeepalive() || init->hasAdAuctionHeaders() ||
+         init->hasSharedStorageWritable() || init->hasPriority() ||
+         init->hasSignal() || init->hasDuplex() || init->hasPrivateToken() ||
          init->hasRetryOptions();
 }
 
@@ -442,8 +436,8 @@ Request* Request::CreateRequestWithRequestOrString(
     if (request->Mode() == network::mojom::RequestMode::kNavigate)
       request->SetMode(network::mojom::RequestMode::kSameOrigin);
 
-    // TODO(yhirano): Implement the following substep:
     // "Unset |request|'s reload-navigation flag."
+    request->SetIsReloadNavigation(false);
 
     // "Unset |request|'s history-navigation flag."
     request->SetIsHistoryNavigation(false);
@@ -698,24 +692,6 @@ Request* Request::CreateRequestWithRequestOrString(
     request->SetRetryOptions(options);
   }
 
-  if (init->hasBrowsingTopics()) {
-    if (!execution_context->IsSecureContext()) {
-      exception_state.ThrowTypeError(
-          "browsingTopics: Topics operations are only available in secure "
-          "contexts.");
-      return nullptr;
-    }
-
-    request->SetBrowsingTopics(init->browsingTopics());
-
-    if (init->browsingTopics()) {
-      UseCounter::Count(execution_context,
-                        mojom::blink::WebFeature::kTopicsAPIFetch);
-      Deprecation::CountDeprecation(execution_context,
-                                    mojom::blink::WebFeature::kTopicsAPIAll);
-    }
-  }
-
   if (init->hasAdAuctionHeaders()) {
     if (!execution_context->IsSecureContext()) {
       exception_state.ThrowDOMException(
@@ -724,8 +700,6 @@ Request* Request::CreateRequestWithRequestOrString(
           "secure contexts.");
       return nullptr;
     }
-
-    request->SetAdAuctionHeaders(init->adAuctionHeaders());
   }
 
   if (init->hasSharedStorageWritable()) {
@@ -799,20 +773,6 @@ Request* Request::CreateRequestWithRequestOrString(
     }
 
     request->SetTrustTokenParams(std::move(params));
-  }
-
-  if (init->hasAttributionReporting()) {
-    if (!execution_context->IsSecureContext()) {
-      exception_state.ThrowTypeError(
-          "attributionReporting: Attribution Reporting operations are only "
-          "available in secure contexts.");
-      return nullptr;
-    }
-
-    request->SetAttributionReportingEligibility(
-        ConvertAttributionReportingRequestOptionsToMojom(
-            *init->attributionReporting(), *execution_context,
-            exception_state));
   }
 
   // "Let  signals  be [|signal|] if  signal  is non-null; otherwise []."
@@ -1087,8 +1047,7 @@ Request::Request(ScriptState* script_state,
   // extension
   // (https://www.chromium.org/developers/design-documents/extensions/) script
   // contexts are an example of a context depending on their configuration.
-  if (base::FeatureList::IsEnabled(
-          features::kBypassRequestForbiddenHeadersCheck)) {
+  if (cors::IsBypassRequestForbiddenHeadersCheckEnabled()) {
     bool bypass_forbidden_fetch_request_headers =
         SecurityPolicy::IsOriginAccessToURLAllowed(
             ExecutionContext::From(script_state)->GetSecurityOrigin(),
@@ -1245,6 +1204,10 @@ bool Request::isHistoryNavigation() const {
   return request_->IsHistoryNavigation();
 }
 
+bool Request::isReloadNavigation() const {
+  return request_->IsReloadNavigation();
+}
+
 Request* Request::clone(ScriptState* script_state,
                         ExceptionState& exception_state) {
   if (IsBodyLocked() || IsBodyUsed()) {
@@ -1276,14 +1239,15 @@ RetryOptions* Request::getRetryOptions() const {
   RetryOptions* options = RetryOptions::Create();
   options->setMaxAttempts(network_options.max_attempts);
   if (network_options.initial_delay.has_value()) {
-    options->setInitialDelay(
-        network_options.initial_delay.value().InMilliseconds());
+    options->setInitialDelay(static_cast<uint32_t>(
+        network_options.initial_delay.value().InMilliseconds()));
   }
   if (network_options.backoff_factor.has_value()) {
     options->setBackoffFactor(network_options.backoff_factor.value());
   }
   if (network_options.max_age.has_value()) {
-    options->setMaxAge(network_options.max_age->InMilliseconds());
+    options->setMaxAge(
+        static_cast<uint32_t>(network_options.max_age->InMilliseconds()));
   }
   options->setRetryAfterUnload(network_options.retry_after_unload);
   options->setRetryNonIdempotent(network_options.retry_non_idempotent);
@@ -1315,14 +1279,16 @@ mojom::blink::FetchAPIRequestPtr Request::CreateFetchAPIRequest() const {
   fetch_api_request->redirect_mode = request_->Redirect();
   fetch_api_request->integrity = request_->Integrity();
   fetch_api_request->is_history_navigation = request_->IsHistoryNavigation();
+  fetch_api_request->is_reload = request_->IsReloadNavigation();
   fetch_api_request->destination = request_->Destination();
   fetch_api_request->request_initiator = request_->Origin();
   fetch_api_request->url = KURL(request_->Url());
 
   HTTPHeaderMap headers;
   for (const auto& header : headers_->HeaderList()->List()) {
-    if (EqualIgnoringASCIICase(header.first, "referer"))
+    if (EqualIgnoringAsciiCase(header.first, "referer")) {
       continue;
+    }
     AtomicString key(header.first);
     AtomicString value(header.second);
     HTTPHeaderMap::AddResult result = headers.Add(key, value);
@@ -1336,7 +1302,7 @@ mojom::blink::FetchAPIRequestPtr Request::CreateFetchAPIRequest() const {
 
   if (!request_->ReferrerString().empty()) {
     fetch_api_request->referrer =
-        mojom::blink::Referrer::New(KURL(NullURL(), request_->ReferrerString()),
+        mojom::blink::Referrer::New(KURL(NullUrl(), request_->ReferrerString()),
                                     request_->GetReferrerPolicy());
     DCHECK(fetch_api_request->referrer->url.IsValid());
   }

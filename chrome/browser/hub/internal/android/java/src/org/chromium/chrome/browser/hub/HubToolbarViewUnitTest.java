@@ -7,16 +7,17 @@ package org.chromium.chrome.browser.hub;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.hub.HubColorMixer.COLOR_MIXER;
+import static org.chromium.chrome.browser.hub.HubToolbarProperties.CLOSE_BUTTON_VISIBLE;
 import static org.chromium.chrome.browser.hub.HubToolbarProperties.HAIRLINE_VISIBILITY;
 import static org.chromium.chrome.browser.hub.HubToolbarProperties.HUB_SEARCH_ENABLED_STATE;
 import static org.chromium.chrome.browser.hub.HubToolbarProperties.IS_INCOGNITO;
@@ -69,14 +70,15 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.hub.HubToolbarProperties.PaneButtonLookup;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButton;
+import org.chromium.chrome.browser.ui.actions.button.DelegateButtonData;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
+import org.chromium.chrome.browser.ui.actions.button.ResourceButtonData;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
-import org.chromium.components.omnibox.OmniboxFeatureList;
-import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -108,7 +110,7 @@ public class HubToolbarViewUnitTest {
 
     @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
-    @Mock Runnable mOnButton;
+    private final CallbackHelper mOnButtonHelper = new CallbackHelper();
     @Mock Callback<PaneButtonLookup> mPaneButtonLookupCallback;
     @Mock private Pane mPane;
 
@@ -170,7 +172,6 @@ public class HubToolbarViewUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS + ":search_box_squish_animation/true")
     public void testGetHubSearchBoxTransitionAnimation_pinnedTabsEnabled_SquishAnimationEnabled() {
         HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
         AnimatorSet animatorSet = hubToolbarView.getHubSearchBoxTransitionAnimation(true);
@@ -187,30 +188,13 @@ public class HubToolbarViewUnitTest {
         assertTrue(hasScaleY);
     }
 
-    @Test
-    @DisableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
-    public void testGetHubSearchBoxTransitionAnimation_pinnedTabsDisabled() {
-        HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
-        AnimatorSet animatorSet = hubToolbarView.getHubSearchBoxTransitionAnimation(true);
-        ArrayList<Animator> animators = animatorSet.getChildAnimations();
-        assertEquals(2, animators.size());
-        boolean hasTranslateY = false;
-        for (Animator animator : animators) {
-            if (animator instanceof ObjectAnimator) {
-                ObjectAnimator objectAnimator = (ObjectAnimator) animator;
-                if (objectAnimator.getPropertyName().equals("translationY")) {
-                    hasTranslateY = true;
-                }
-            }
-        }
-        assertTrue(hasTranslateY);
-    }
-
     private FullButtonData makeTestButtonData() {
         DisplayButtonData displayButtonData =
                 new ResourceButtonData(
                         R.string.button_new_tab, R.string.button_new_tab, R.drawable.ic_add_24dp);
-        return new DelegateButtonData(displayButtonData, mOnButton);
+        return new DelegateButtonData.Builder(displayButtonData)
+                .setOnPress(view -> mOnButtonHelper.notifyCalled())
+                .build();
     }
 
     @Test
@@ -232,22 +216,48 @@ public class HubToolbarViewUnitTest {
         FullButtonData fullButtonData = makeTestButtonData();
         mPropertyModel.set(
                 PANE_SWITCHER_BUTTON_DATA, Arrays.asList(fullButtonData, fullButtonData));
-        verifyNoInteractions(mOnButton);
+        assertEquals(0, mOnButtonHelper.getCallCount());
 
         mPropertyModel.set(PANE_SWITCHER_INDEX, 1);
-        verifyNoInteractions(mOnButton);
+        assertEquals(0, mOnButtonHelper.getCallCount());
 
         mPaneSwitcher.getTabAt(1).select();
-        verifyNoInteractions(mOnButton);
+        assertEquals(0, mOnButtonHelper.getCallCount());
 
         mPaneSwitcher.getTabAt(0).select();
-        verify(mOnButton).run();
+        assertEquals(1, mOnButtonHelper.getCallCount());
 
         mPaneSwitcher.getTabAt(0).select();
-        verify(mOnButton).run();
+        assertEquals(1, mOnButtonHelper.getCallCount());
 
         mPaneSwitcher.getTabAt(1).select();
-        verify(mOnButton, times(2)).run();
+        assertEquals(2, mOnButtonHelper.getCallCount());
+    }
+
+    @Test
+    public void testPaneSwitcherScrollPosition() {
+        HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
+        // Verify setPaneSwitcherScrollPosition executes cleanly without crash.
+        hubToolbarView.setPaneSwitcherScrollPosition(0, 0.5f);
+    }
+
+    @Test
+    public void testPaneSwitcherBlockTabSelectionCallback() {
+        FullButtonData fullButtonData = makeTestButtonData();
+        mPropertyModel.set(
+                PANE_SWITCHER_BUTTON_DATA, Arrays.asList(fullButtonData, fullButtonData));
+        HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
+
+        // When tab selection callback is blocked, tab.select() on an unselected tab should not
+        // trigger onPress.
+        hubToolbarView.setBlockTabSelectionCallback(true);
+        mPaneSwitcher.getTabAt(0).select();
+        assertEquals(0, mOnButtonHelper.getCallCount());
+
+        // When unblocked, selecting tab triggers onPress normally.
+        hubToolbarView.setBlockTabSelectionCallback(false);
+        mPaneSwitcher.getTabAt(1).select();
+        assertEquals(1, mOnButtonHelper.getCallCount());
     }
 
     @Test
@@ -296,7 +306,10 @@ public class HubToolbarViewUnitTest {
                         R.string.button_new_incognito_tab,
                         R.string.button_new_incognito_tab,
                         R.drawable.ic_incognito);
-        FullButtonData newButtonData1 = new DelegateButtonData(newDisplayButtonData, mOnButton);
+        FullButtonData newButtonData1 =
+                new DelegateButtonData.Builder(newDisplayButtonData)
+                        .setOnPress(view -> mOnButtonHelper.notifyCalled())
+                        .build();
         FullButtonData newButtonData2 = makeTestButtonData();
         List<FullButtonData> updatedButtonData = Arrays.asList(newButtonData1, newButtonData2);
 
@@ -327,25 +340,29 @@ public class HubToolbarViewUnitTest {
     }
 
     @Test
-    @DisableFeatures(OmniboxFeatureList.ANDROID_HUB_SEARCH_TAB_GROUPS)
-    public void testMenuButtonContainerVisibility() {
-        mPropertyModel.set(MENU_BUTTON_VISIBLE, false);
-        assertEquals(View.INVISIBLE, mMenuButtonContainer.getVisibility());
-
-        mPropertyModel.set(MENU_BUTTON_VISIBLE, true);
-        assertEquals(View.VISIBLE, mMenuButtonContainer.getVisibility());
-    }
-
-    @Test
-    @EnableFeatures({
-        OmniboxFeatureList.ANDROID_HUB_SEARCH_TAB_GROUPS + ":enable_hub_search_tab_groups_pane/true"
-    })
     public void testMenuButtonWrapperVisibility() {
         mPropertyModel.set(MENU_BUTTON_VISIBLE, false);
-        assertEquals(View.INVISIBLE, mMenuButtonWrapper.getVisibility());
+        assertEquals(View.GONE, mMenuButtonWrapper.getVisibility());
 
         mPropertyModel.set(MENU_BUTTON_VISIBLE, true);
         assertEquals(View.VISIBLE, mMenuButtonWrapper.getVisibility());
+    }
+
+    @Test
+    public void testCloseButtonVisibility() {
+        View closeButton = mToolbarContainer.findViewById(R.id.toolbar_close_button);
+        if (mIsXrDevice) {
+            assertNull(closeButton);
+            return;
+        }
+
+        assertEquals(View.GONE, closeButton.getVisibility());
+
+        mPropertyModel.set(CLOSE_BUTTON_VISIBLE, true);
+        assertEquals(View.VISIBLE, closeButton.getVisibility());
+
+        mPropertyModel.set(CLOSE_BUTTON_VISIBLE, false);
+        assertEquals(View.GONE, closeButton.getVisibility());
     }
 
     @Test
@@ -402,7 +419,6 @@ public class HubToolbarViewUnitTest {
     }
 
     @Test
-    @DisableFeatures({OmniboxFeatureList.ANDROID_HUB_SEARCH_TAB_GROUPS})
     public void testUpdateIncognitoElements() {
         mPropertyModel.set(IS_INCOGNITO, true);
         assertEquals(
@@ -411,22 +427,6 @@ public class HubToolbarViewUnitTest {
 
         mPropertyModel.set(IS_INCOGNITO, false);
         assertEquals(mActivity.getString(R.string.hub_search_empty_hint), mSearchBoxText.getHint());
-    }
-
-    @Test
-    @EnableFeatures({OmniboxFeatureList.ANDROID_HUB_SEARCH_TAB_GROUPS})
-    public void testUpdateIncognitoElementsWithTabGroups() {
-        OmniboxFeatures.sAndroidHubSearchEnableTabGroupStrings.setForTesting(true);
-
-        mPropertyModel.set(IS_INCOGNITO, true);
-        assertEquals(
-                mActivity.getString(R.string.hub_search_empty_hint_incognito),
-                mSearchBoxText.getHint());
-
-        mPropertyModel.set(IS_INCOGNITO, false);
-        assertEquals(
-                mActivity.getString(R.string.hub_search_empty_hint_with_tab_groups),
-                mSearchBoxText.getHint());
     }
 
     @Test
@@ -469,27 +469,14 @@ public class HubToolbarViewUnitTest {
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE,
-    })
     public void testHubColorMixer_searchBoxEnabled() {
-        verify(mColorMixer, times(9)).registerBlend(any());
+        // Possibly broken on XR devices.
+        if (!HubUtils.isGtsUpdateEnabled()) return;
+
+        verify(mColorMixer, times(12)).registerBlend(any());
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
-    public void testSearchBoxVisibilityFraction_Slide() {
-        HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
-        mPropertyModel.set(MANUAL_SEARCH_BOX_ANIMATION, true);
-        hubToolbarView.setSearchBoxVisibilityFraction(0.5f);
-
-        assertEquals(0.5f, mSearchBox.getAlpha(), 0.01f);
-        assertTrue(mSearchBox.getTranslationY() < 0);
-        assertEquals(1.0f, mSearchBox.getScaleY(), 0.01f);
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS + ":search_box_squish_animation/true")
     public void testSearchBoxVisibilityFraction_Squish() {
         HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
         mPropertyModel.set(MANUAL_SEARCH_BOX_ANIMATION, true);

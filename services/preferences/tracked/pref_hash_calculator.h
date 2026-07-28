@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "components/os_crypt/async/common/encryptor.h"
 
@@ -18,6 +19,7 @@ class PrefHashCalculator {
     VALID,
     VALID_ENCRYPTED,
     INVALID_ENCRYPTED,
+    WEAK_HASH_ENCRYPTED,
   };
 
   // Constructs a PrefHashCalculator using |seed_|, |device_id_|.

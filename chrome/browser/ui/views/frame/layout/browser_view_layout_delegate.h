@@ -24,14 +24,18 @@ class BrowserViewLayoutDelegate {
 
   // The state the window is in. We do not lay out when minimized/hidden, so
   // that isn't included here.
-  enum class WindowState { kNormal, kMaximized, kFullscreen };
+  enum class WindowState {
+    kNormal,
+    kMaximized,
+    kFullscreen,
+    kFullscreenWithToolbar
+  };
 
   virtual bool ShouldDrawTabStrip() const = 0;
-  virtual bool ShouldUseTouchableTabstrip() const = 0;
   virtual bool ShouldDrawVerticalTabStrip() const = 0;
   virtual bool IsVerticalTabStripCollapsed() const = 0;
   virtual bool ShouldDrawWebAppFrameToolbar() const = 0;
-  virtual bool GetBorderlessModeEnabled() const = 0;
+  virtual bool GetUnframedModeEnabled() const = 0;
   virtual BrowserLayoutParams GetBrowserLayoutParams(
       bool use_browser_bounds) const = 0;
   virtual WindowState GetBrowserWindowState() const = 0;
@@ -54,6 +58,7 @@ class BrowserViewLayoutDelegate {
       const gfx::Rect& available_titlebar_area) = 0;
   virtual bool ShouldLayoutTabStrip() const = 0;
   virtual int GetExtraInfobarOffset() const = 0;
+  virtual bool IsOrganizerPanelVisible() const = 0;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_LAYOUT_DELEGATE_H_

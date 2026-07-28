@@ -18,6 +18,14 @@ namespace enterprise_reporting {
 
 class SaasUsageReportingController : public KeyedService {
  public:
+  // Delegate class that is used to collect navigation information.
+  class NavigationDataDelegate {
+   public:
+    virtual ~NavigationDataDelegate() = default;
+    virtual GURL GetUrl() const = 0;
+    virtual std::string GetEncryptionProtocol() const = 0;
+  };
+
   SaasUsageReportingController(
       PrefService* local_state_pref_service,
       PrefService* profile_pref_service,
@@ -25,10 +33,16 @@ class SaasUsageReportingController : public KeyedService {
       std::unique_ptr<PrefURLListMatcher> profile_matcher);
   ~SaasUsageReportingController() override;
 
-  void RecordNavigation(const GURL& url,
-                        const std::string_view encryption_protocol) const;
+  virtual void RecordNavigation(const NavigationDataDelegate& delegate) const;
+
+  // Records a single usage of a "Gemini in Chrome" feature.
+  // This method is intended for tracking usage of Gemini integrated directly
+  // into the browser, not the Gemini web application.
+  virtual void RecordGeminiInChromeUsage() const;
 
  private:
+  void RecordUsage(const GURL& url, std::string_view encryption_protocol) const;
+
   const raw_ref<PrefService> local_state_pref_service_;
   const raw_ref<PrefService> profile_pref_service_;
   std::unique_ptr<PrefURLListMatcher> browser_matcher_;

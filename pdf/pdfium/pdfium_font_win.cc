@@ -13,6 +13,7 @@
 #include "base/check_op.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
@@ -21,6 +22,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
+#include "pdf/pdf_features.h"
 #include "pdf/pdfium/pdfium_engine.h"
 #include "pdf/pdfium/pdfium_font_helpers.h"
 #include "skia/ext/font_utils.h"
@@ -150,6 +152,9 @@ class SkiaFontMapper {
     // naturally fail.
     if (table_tag == 0) {
       std::unique_ptr<SkStreamAsset> stream = typeface->openStream(nullptr);
+      if (!stream) {
+        return 0;
+      }
       if (!buffer || buf_size < stream->getLength()) {
         return stream->getLength();
       }
@@ -186,7 +191,7 @@ class SkiaFontMapper {
 
     // Try pdf->blink mappings, which does its own substitution.
     std::optional<blink::WebFontDescription> desc =
-        PdfFontToBlinkFontMapping(weight, italic, charset, pitch, face);
+        PdfFontToBlinkFontMapping(weight, italic, pitch, face);
     if (desc) {
       typeface = manager_->matchFamilyStyle(desc->family.Utf8().c_str(), style);
       if (typeface) {
@@ -399,6 +404,16 @@ FPDF_SYSFONTINFO g_font_info = {.version = 1,
 }  // namespace
 
 void InitializeWindowsFontMapper() {
+  // Set version based on feature flag. Version 2 uses per-request font
+  // matching (MapFont called directly) instead of upfront enumeration
+  // (EnumFonts).
+  if (base::FeatureList::IsEnabled(
+          features::kPdfiumPerRequestFontMatchingWin)) {
+    g_font_info.version = 2;
+  } else {
+    g_font_info.version = 1;
+  }
+
   FPDF_SetSystemFontInfo(&g_font_info);
 }
 

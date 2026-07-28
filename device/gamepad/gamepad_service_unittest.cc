@@ -45,7 +45,6 @@ class MockGamepadConsumer : public GamepadConsumer {
     // Expect no connections or disconnections by default.
     EXPECT_CALL(*this, OnGamepadConnected).Times(0);
     EXPECT_CALL(*this, OnGamepadDisconnected).Times(0);
-    EXPECT_CALL(*this, OnGamepadRawInputChanged).Times(0);
   }
 
   MockGamepadConsumer(MockGamepadConsumer&) = delete;
@@ -339,8 +338,7 @@ TEST_F(GamepadServiceTest, ConnectWhileInactiveTest) {
   }
 }
 
-// https://crbug.com/1405460: Flaky on Android.
-TEST_F(GamepadServiceTest, DISABLED_ConnectAndDisconnectWhileInactiveTest) {
+TEST_F(GamepadServiceTest, ConnectAndDisconnectWhileInactiveTest) {
   // Create two active consumers.
   auto* consumer1 = CreateConsumer();
   auto* consumer2 = CreateConsumer();
@@ -375,6 +373,7 @@ TEST_F(GamepadServiceTest, DISABLED_ConnectAndDisconnectWhileInactiveTest) {
     SetPadsConnected(/*connected_count=*/0);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer inactive.
   EXPECT_TRUE(service()->ConsumerBecameInactive(consumer2));
@@ -401,16 +400,20 @@ TEST_F(GamepadServiceTest, DISABLED_ConnectAndDisconnectWhileInactiveTest) {
     SetPadsConnected(/*connected_count=*/0);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer active again. The second consumer is not notified
   // because the connected gamepads were disconnected while the consumer was
   // still inactive.
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer2));
   WaitForData();
+
+  // Cleanup: disconnect gamepads before exiting.
+  SetPadsConnected(0);
+  WaitForData();
 }
 
-// https://crbug.com/1346527 Flaky on Android and Linux.
-TEST_F(GamepadServiceTest, DISABLED_DisconnectWhileInactiveTest) {
+TEST_F(GamepadServiceTest, DisconnectWhileInactiveTest) {
   // Create two active consumers.
   auto* consumer1 = CreateConsumer();
   auto* consumer2 = CreateConsumer();
@@ -432,6 +435,7 @@ TEST_F(GamepadServiceTest, DISABLED_DisconnectWhileInactiveTest) {
     SimulateUserGesture(/*has_gesture=*/true);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer inactive.
   EXPECT_TRUE(service()->ConsumerBecameInactive(consumer2));
@@ -447,6 +451,7 @@ TEST_F(GamepadServiceTest, DISABLED_DisconnectWhileInactiveTest) {
     SetPadsConnected(/*connected_count=*/0);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer active again. The second consumer is notified for
   // gamepads that were disconnected while it was inactive.
@@ -758,6 +763,43 @@ TEST_F(GamepadServiceSimulationTest, SimulateButtonInput) {
   EXPECT_FALSE(disconnected_gamepad.buttons[0].touched);
 }
 
+TEST_F(GamepadServiceSimulationTest, SimulatedButtonTypes) {
+  // Mark `consumer` active.
+  auto* consumer = CreateConsumer();
+  EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
+
+  // Add a simulated gamepad with three buttons and configured types for the
+  // first two buttons. The missing third entry should default to non-standard.
+  SimulatedGamepadParams params;
+  params.name = "3 buttons";
+  params.button_bounds = {std::nullopt, std::nullopt, std::nullopt};
+  params.button_types = {GamepadButtonType::kTrackpad,
+                         GamepadButtonType::kStandard};
+  auto token = service()->AddSimulatedGamepad(std::move(params));
+
+  TestFuture<uint32_t, const Gamepad&> connected_future;
+  EXPECT_CALL(*consumer, OnGamepadConnected)
+      .WillOnce(InvokeFuture(connected_future));
+  service()->SimulateButtonInput(token, /*index=*/0, /*logical_value=*/1.0,
+                                 /*pressed=*/std::nullopt,
+                                 /*touched=*/std::nullopt);
+  service()->SimulateInputFrame(token);
+
+  EXPECT_EQ(connected_future.Get<0>(), 0u);
+  const Gamepad& connected_gamepad = connected_future.Get<1>();
+  EXPECT_EQ(connected_gamepad.buttons_length, 3u);
+  EXPECT_EQ(connected_gamepad.buttons[0].type, GamepadButtonType::kTrackpad);
+  EXPECT_EQ(connected_gamepad.buttons[1].type, GamepadButtonType::kStandard);
+  EXPECT_EQ(connected_gamepad.buttons[2].type, GamepadButtonType::kNonStandard);
+
+  // Remove the simulated gamepad.
+  TestFuture<uint32_t, const Gamepad&> disconnected_future;
+  EXPECT_CALL(*consumer, OnGamepadDisconnected)
+      .WillOnce(InvokeFuture(disconnected_future));
+  service()->RemoveSimulatedGamepad(token);
+  EXPECT_EQ(disconnected_future.Get<0>(), 0u);
+}
+
 TEST_F(GamepadServiceSimulationTest, SimulateAxisInput) {
   // Mark `consumer` active.
   auto* consumer = CreateConsumer();
@@ -1003,7 +1045,14 @@ TEST_F(GamepadServiceSimulationTest, Vibration) {
   EXPECT_EQ(disconnected_future.Get<0>(), 0u);
 }
 
-TEST_F(GamepadServiceSimulationTest, TokenNotFound) {
+// TODO(crbug.com/499019944): Re-enable this test.
+#if BUILDFLAG(IS_LINUX)
+// Flaky on linux TSAN.
+#define MAYBE_TokenNotFound DISABLED_TokenNotFound
+#else
+#define MAYBE_TokenNotFound TokenNotFound
+#endif
+TEST_F(GamepadServiceSimulationTest, MAYBE_TokenNotFound) {
   // Mark `consumer` active.
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));

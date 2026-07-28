@@ -25,8 +25,8 @@ import 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.js';
 import './secure_dns_input.js';
 
 import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
-import type {PrivacyPageBrowserProxy, ResolverOption, SecureDnsSetting} from '/shared/settings/privacy_page/privacy_page_browser_proxy.js';
-import {PrivacyPageBrowserProxyImpl, SecureDnsMode, SecureDnsUiManagementMode} from '/shared/settings/privacy_page/privacy_page_browser_proxy.js';
+import type {ResolverOption, SecureDnsSetting, SecurityPageBrowserProxy} from '/shared/settings/security_page/security_page_browser_proxy.js';
+import {SecureDnsMode, SecureDnsUiManagementMode, SecurityPageBrowserProxyImpl} from '/shared/settings/security_page/security_page_browser_proxy.js';
 import type {CrRadioGroupElement} from 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
@@ -204,8 +204,8 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
   declare private computedStateKey_: string;
 
   private lastSelected_: SecureDnsV2ResolverType|undefined;
-  private browserProxy_: PrivacyPageBrowserProxy =
-      PrivacyPageBrowserProxyImpl.getInstance();
+  private browserProxy_: SecurityPageBrowserProxy =
+      SecurityPageBrowserProxyImpl.getInstance();
 
   override connectedCallback() {
     super.connectedCallback();
@@ -266,10 +266,13 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
         this.updateConfigRepresentation_(setting.mode, setting.config);
         break;
       case SecureDnsMode.OFF:
+        this.selectedMode_ = SecureDnsV2ResolverType.AUTOMATIC;
         this.set('secureDnsTogglePref_.value', false);
         break;
       default:
-        assertNotReachedCase(setting.mode);
+        assertNotReachedCase(
+            setting.mode,
+            'Secure DNS pref contains unknown mode: ' + setting.mode);
     }
 
     // Update `lastSelected_` here to help filter out the
@@ -285,7 +288,8 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
    * Because of 'no-set-pref', we manually trigger the backend update.
    */
   private onRadioGroupChange_(event: CustomEvent<{value: string}>) {
-    // Ignore events that were triggered by changes to the underlying prefs.
+    // Ignore events that were triggered by changes to the toggle or underlying
+    // prefs.
     if (this.lastSelected_ === event.detail.value) {
       return;
     }
@@ -314,6 +318,8 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
    */
   private onToggleButtonChange_() {
     if (!this.secureDnsTogglePref_.value) {
+      this.lastSelected_ = SecureDnsV2ResolverType.AUTOMATIC;
+      this.selectedMode_ = SecureDnsV2ResolverType.AUTOMATIC;
       this.updateDnsPrefs_(SecureDnsMode.OFF);
       return;
     }
@@ -347,7 +353,8 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
         this.onResolverSelectChange_();
         break;
       default:
-        assertNotReachedCase(selected);
+        assertNotReachedCase(
+            selected, 'Unknown secure DNS selection made: ' + selected);
     }
   }
 
@@ -491,7 +498,7 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
       return;
     }
 
-    const enforced = this.getPref('dns_over_https.mode').enforcement ===
+    const enforced = this.secureDnsTogglePref_.enforcement ===
         chrome.settingsPrivate.Enforcement.ENFORCED;
 
     this.$.automaticRadioButton.disabled = enforced;
@@ -501,7 +508,6 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
     this.isSecureDnsWarningIconVisible_ =
         !this.secureDnsTogglePref_.value && !enforced;
   }
-
 
   /**
    * Updates the UI to match the provided configuration parameters.
@@ -534,7 +540,8 @@ export class SettingsSecureDnsV2Element extends SettingsSecureDnsV2ElementBase {
       case SecureDnsMode.OFF:
         break;
       default:
-        assertNotReachedCase(mode);
+        assertNotReachedCase(
+            mode, 'Configuration has unknown secure DNS mode: ' + mode);
     }
 
     this.updatePrivacyPolicyLine_(privacyPolicy);

@@ -356,7 +356,7 @@ TEST_F(FillJsTest, GetUniqueIDReturnsNotSetWhenInvalidIDInDOM) {
     SCOPED_TRACE(testing::Message() << "invalid_id = " << invalid_id);
     NSString* set_invalid_id_script = [NSString
         stringWithFormat:@"var form = document.getElementById('form');"
-                          "form.setAttribute('__gChrome_uniqueID', %@);",
+                          "form.setAttribute('__gCrUniqueID', %@);",
                          invalid_id];
 
     // Make the renderer ID invalid. The DOM is shared across content
@@ -377,6 +377,25 @@ TEST_F(FillJsTest, GetUniqueIDReturnsNotSetWhenInvalidIDInDOM) {
         GetUniqueID(@"form", web::ContentWorld::kPageContentWorld);
     EXPECT_NSEQ(page_form_id, @"0");
   }
+}
+
+// Tests sanitizeValueForInputElement TS function.
+TEST_F(FillJsTest, SanitizeValueForInputElement) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kAutofillSupportDateInput);
+  LoadHtml(@"<input id='input' type='date'/>");
+
+  id result = ExecuteJavaScript(
+      @"__gCrWeb.getRegisteredApi('fill_test_api')."
+      @"getFunction('sanitizeValueForInputElement')('2023-10-31', "
+      @"document.getElementById('input'));");
+  EXPECT_NSEQ(result, @"2023-10-31");
+
+  id result_invalid = ExecuteJavaScript(
+      @"__gCrWeb.getRegisteredApi('fill_test_api')."
+      @"getFunction('sanitizeValueForInputElement')('not-a-date', "
+      @"document.getElementById('input'));");
+  EXPECT_NSEQ(result_invalid, @"");
 }
 
 // Tests stringify TS function.

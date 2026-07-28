@@ -4,14 +4,14 @@
 
 package org.chromium.chrome.browser.ntp_customization.theme;
 
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.CHROME_COLOR;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.COLOR_FROM_HEX;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.DEFAULT;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.IMAGE_FROM_DISK;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.THEME_COLLECTION;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.CHROME_COLOR;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.COLOR_FROM_HEX;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.DEFAULT;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.IMAGE_FROM_DISK;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.launchUriActivity;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.BACK_PRESS_HANDLER;
-import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.IS_SECTION_TRAILING_ICON_VISIBLE;
+import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.IS_SECTION_SELECTED;
 import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.LEADING_ICON_FOR_THEME_COLLECTIONS;
 import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.LEARN_MORE_BUTTON_CLICK_LISTENER;
 import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.SECTION_ON_CLICK_LISTENER;
@@ -38,11 +38,11 @@ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManag
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationMetricsUtils;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
-import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.OnImageLoadedCallback;
 import org.chromium.chrome.browser.ntp_customization.theme.theme_collections.BackgroundCollection;
 import org.chromium.chrome.browser.ntp_customization.theme.theme_collections.NtpThemeCollectionManager;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.components.browser_ui.share.ShareImageFileUtils;
 import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
@@ -64,7 +64,7 @@ public class NtpThemeMediator {
     private final BottomSheetDelegate mBottomSheetDelegate;
     private final Context mContext;
     private final NtpCustomizationConfigManager mNtpCustomizationConfigManager;
-    private final Callback<@Nullable Bitmap> mOnImageSelectedCallback;
+    private final OnImageLoadedCallback mOnImageSelectedCallback;
     private final NtpThemeDelegate mNtpThemeDelegate;
     private final NtpThemeCollectionManager mNtpThemeCollectionManager;
     private final Profile mProfile;
@@ -80,7 +80,7 @@ public class NtpThemeMediator {
             BottomSheetDelegate delegate,
             NtpCustomizationConfigManager ntpCustomizationConfigManager,
             @Nullable ActivityResultRegistry activityResultRegistry,
-            Callback<@Nullable Bitmap> onImageSelectedCallback,
+            OnImageLoadedCallback onImageSelectedCallback,
             NtpThemeDelegate ntpThemeDelegate,
             NtpThemeCollectionManager ntpThemeCollectionManager) {
         mContext = context;
@@ -124,14 +124,6 @@ public class NtpThemeMediator {
     /** Sets the on click listener for each theme bottom sheet section. */
     @VisibleForTesting
     void setOnClickListenerForAllSection() {
-        if (mActivityResultRegistry != null) {
-            mActivityResultLauncher =
-                    mActivityResultRegistry.register(
-                            UPLOAD_IMAGE_KEY,
-                            new ActivityResultContracts.GetContent(),
-                            this::onUploadImageResult);
-        }
-
         mThemePropertyModel.set(
                 SECTION_ON_CLICK_LISTENER,
                 new Pair<>(DEFAULT, this::handleChromeDefaultSectionClick));
@@ -150,15 +142,11 @@ public class NtpThemeMediator {
      * Updates the visibility of the trailing icon for each theme section. The icon is made visible
      * for the section that matches {@code sectionType}, and hidden for all other sections.
      *
-     * @param sectionType The {@link NtpBackgroundImageType} to show the trailing icon for.
+     * @param sectionType The {@link NtpBackgroundType} to show the trailing icon for.
      */
     @VisibleForTesting
-    void updateTrailingIconVisibilityForSectionType(@NtpBackgroundImageType int sectionType) {
-        for (int i = 0; i < NtpBackgroundImageType.NUM_ENTRIES; i++) {
-            if (i == THEME_COLLECTION) {
-                continue;
-            }
-
+    void updateTrailingIconVisibilityForSectionType(@NtpBackgroundType int sectionType) {
+        for (int i = 0; i < NtpBackgroundType.NUM_ENTRIES; i++) {
             if (i == COLOR_FROM_HEX && sectionType == CHROME_COLOR) {
                 // Prevents overriding the visibility from visible to invisible if the user chooses
                 // a customized color theme. This is because both types share the same bottom sheet
@@ -167,9 +155,9 @@ public class NtpThemeMediator {
             }
 
             if (i == sectionType) {
-                mThemePropertyModel.set(IS_SECTION_TRAILING_ICON_VISIBLE, new Pair<>(i, true));
+                mThemePropertyModel.set(IS_SECTION_SELECTED, new Pair<>(i, true));
             } else {
-                mThemePropertyModel.set(IS_SECTION_TRAILING_ICON_VISIBLE, new Pair<>(i, false));
+                mThemePropertyModel.set(IS_SECTION_SELECTED, new Pair<>(i, false));
             }
         }
     }
@@ -186,7 +174,7 @@ public class NtpThemeMediator {
         if (uri != null) {
             // When a new image is selected, store it and reset any existing crop settings from a
             // previous image.
-            ShareImageFileUtils.getBitmapFromUriAsync(mContext, uri, mOnImageSelectedCallback);
+            NtpCustomizationUtils.getBitmapFromUriAsync(mContext, uri, mOnImageSelectedCallback);
             mNtpThemeCollectionManager.selectLocalBackgroundImage();
         }
 
@@ -196,6 +184,7 @@ public class NtpThemeMediator {
     @VisibleForTesting
     void handleChromeDefaultSectionClick(View view) {
         resetCustomizedTheme();
+        mNtpThemeDelegate.onChromeDefaultClicked();
 
         NtpCustomizationMetricsUtils.recordBottomSheetShown(BottomSheetType.CHROME_DEFAULT);
     }
@@ -207,17 +196,26 @@ public class NtpThemeMediator {
     private void resetCustomizedTheme() {
         updateForChoosingDefaultOrChromeColorOption(DEFAULT);
 
-        @NtpBackgroundImageType
-        int currentBackgroundType = mNtpCustomizationConfigManager.getBackgroundImageType();
+        @NtpBackgroundType
+        int currentBackgroundType = mNtpCustomizationConfigManager.getBackgroundType();
         if (currentBackgroundType != DEFAULT) {
             // We need to update the app's theme when a customized background color is removed.
             mBottomSheetDelegate.onNewColorSelected(/* isDifferentColor= */ true);
         }
-        mNtpCustomizationConfigManager.onBackgroundReset();
+        mNtpCustomizationConfigManager.onBackgroundDataChanged(
+                mContext, /* backgroundData= */ null);
     }
 
     @VisibleForTesting
     void handleUploadAnImageSectionClick(View view) {
+        if (mActivityResultRegistry == null) return;
+
+        mActivityResultLauncher =
+                mActivityResultRegistry.register(
+                        UPLOAD_IMAGE_KEY,
+                        new ActivityResultContracts.GetContent(),
+                        this::onUploadImageResult);
+
         if (mActivityResultLauncher != null) {
             mActivityResultLauncher.launch("image/*");
         }
@@ -241,8 +239,8 @@ public class NtpThemeMediator {
 
     /** Sets the initial visibility of the trailing icon based on the current theme settings. */
     private void initTrailingIcon() {
-        @NtpBackgroundImageType
-        int imageType = NtpCustomizationUtils.getNtpBackgroundImageTypeFromSharedPreference();
+        @NtpBackgroundType
+        int imageType = NtpCustomizationUtils.getNtpBackgroundTypeFromSharedPreference();
         updateTrailingIconVisibilityForSectionType(imageType);
     }
 
@@ -251,7 +249,7 @@ public class NtpThemeMediator {
      * default background or a Chrome color.
      */
     @VisibleForTesting
-    void updateForChoosingDefaultOrChromeColorOption(@NtpBackgroundImageType int sectionType) {
+    void updateForChoosingDefaultOrChromeColorOption(@NtpBackgroundType int sectionType) {
         updateTrailingIconVisibilityForSectionType(sectionType);
         mNtpThemeCollectionManager.resetCustomBackground();
     }

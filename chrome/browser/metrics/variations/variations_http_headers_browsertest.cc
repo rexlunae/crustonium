@@ -35,17 +35,19 @@
 #include "chrome/browser/predictors/predictors_switches.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/platform_browser_test.h"
+#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/features.h"
 #include "components/variations/pref_names.h"
@@ -77,6 +79,15 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/zlib/google/compression_utils.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "chrome/test/base/android/android_ui_test_utils.h"
+#else
+#include "chrome/test/base/ui_test_utils.h"
+#endif
 
 namespace variations {
 namespace {
@@ -148,6 +159,7 @@ VariationsSeed CreateTestSeedWithLimitedEntropyLayer(
   filter->add_platform(Study::PLATFORM_MAC);
   filter->add_platform(Study::PLATFORM_LINUX);
   filter->add_platform(Study::PLATFORM_CHROMEOS);
+  filter->add_platform(Study::PLATFORM_ANDROID);
 
   Study some_study = base_study;
   some_study.set_name(kSomeStudyName);
@@ -170,6 +182,160 @@ VariationsSeed CreateTestSeedWithLimitedEntropyLayer(
   return seed;
 }
 
+#if BUILDFLAG(IS_ANDROID)
+TabModel* FindTabModelForProfile(content::BrowserContext* context) {
+  for (TabModel* model : TabModelList::models()) {
+    if (model->GetProfile() == context) {
+      return model;
+    }
+  }
+  return nullptr;
+}
+
+void OpenUrlInNewTab(content::BrowserContext* context,
+                     content::WebContents* parent,
+                     const GURL& url) {
+  CHECK(parent);
+  CHECK(context);
+  TabModel* tab_model = TabModelList::GetTabModelForWebContents(parent);
+
+  std::unique_ptr<content::WebContents> contents =
+      content::WebContents::Create(content::WebContents::CreateParams(context));
+  content::WebContents* raw_web_contents = contents.get();
+  auto* new_tab =
+      tab_model->CreateTab(TabAndroid::FromWebContents(parent),
+                           std::move(contents), TabModel::kInvalidIndex,
+                           TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
+                           /*should_pin=*/false);
+
+  content::NavigateToURLBlockUntilNavigationsComplete(
+      raw_web_contents, url, /*number_of_navigations=*/1,
+      /*ignore_uncommitted_navigations=*/false);
+
+  TabModel* new_tab_model = FindTabModelForProfile(context);
+  ASSERT_NE(new_tab_model, nullptr);
+  ASSERT_TRUE(new_tab_model->IsOffTheRecord());
+
+  tabs::TabHandle new_tab_handle = new_tab->GetHandle();
+  ASSERT_NE(new_tab_handle.raw_value(), 0);
+  new_tab_model->ActivateTab(new_tab_handle);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+GURL GetGoogleUrlWithPath(const std::string& path,
+                          net::EmbeddedTestServer* server) {
+  return server->GetURL("www.google.com", path);
+}
+
+GURL GetGoogleUrl(net::EmbeddedTestServer* server) {
+  return GetGoogleUrlWithPath("/landing.html", server);
+}
+
+GURL GetGoogleIframeUrl(net::EmbeddedTestServer* server) {
+  return GetGoogleUrlWithPath("/iframe.html", server);
+}
+
+GURL GetGoogleSubresourceFetchingWorkerUrl(net::EmbeddedTestServer* server) {
+  return GetGoogleUrlWithPath("/subresource_fetch_worker.js", server);
+}
+
+GURL GetGoogleRedirectUrl1(net::EmbeddedTestServer* server) {
+  return GetGoogleUrlWithPath("/redirect", server);
+}
+
+GURL GetGoogleRedirectUrl2(net::EmbeddedTestServer* server) {
+  return GetGoogleUrlWithPath("/redirect2", server);
+}
+
+GURL GetGoogleSubresourceUrl(net::EmbeddedTestServer* server) {
+  return GetGoogleUrlWithPath("/logo.png", server);
+}
+
+GURL GetExampleUrlWithPath(const std::string& path,
+                           net::EmbeddedTestServer* server) {
+  return server->GetURL("www.example.com", path);
+}
+
+GURL GetExampleUrl(net::EmbeddedTestServer* server) {
+  return GetExampleUrlWithPath("/landing.html", server);
+}
+
+// Custom request handler that record request headers and simulates a redirect
+// from google.com to example.com. It's expected to run on the IO thread.
+std::unique_ptr<net::test_server::HttpResponse> RequestHandler(
+    net::EmbeddedTestServer* server,
+    base::RepeatingCallback<void(GURL url,
+                                 net::test_server::HttpRequest::HeaderMap)>
+        record_header_callback,
+    const net::test_server::HttpRequest& request) {
+  // Retrieve the host name (without port) from the request headers.
+  std::string host;
+  if (request.headers.find("Host") != request.headers.end()) {
+    host = request.headers.find("Host")->second;
+  }
+  if (host.find(':') != std::string::npos) {
+    host = host.substr(0, host.find(':'));
+  }
+
+  // Recover the original URL of the request by replacing the host name in
+  // request.GetURL() (which is 127.0.0.1) with the host name from the request
+  // headers.
+  GURL::Replacements replacements;
+  replacements.SetHostStr(host);
+  GURL original_url = request.GetURL().ReplaceComponents(replacements);
+
+  // Memorize the request headers for this URL for later verification.
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce(std::move(record_header_callback), original_url,
+                                request.headers));
+
+  // Set up a test server that redirects according to the
+  // following redirect chain:
+  // https://www.google.com:<port>/redirect
+  // --> https://www.google.com:<port>/redirect2
+  // --> https://www.example.com:<port>/
+  auto http_response = std::make_unique<net::test_server::BasicHttpResponse>();
+  http_response->AddCustomHeader("Access-Control-Allow-Origin", "*");
+  if (request.relative_url == GetGoogleRedirectUrl1(server).GetPath()) {
+    http_response->set_code(net::HTTP_MOVED_PERMANENTLY);
+    http_response->AddCustomHeader("Location",
+                                   GetGoogleRedirectUrl2(server).spec());
+  } else if (request.relative_url == GetGoogleRedirectUrl2(server).GetPath()) {
+    http_response->set_code(net::HTTP_MOVED_PERMANENTLY);
+    http_response->AddCustomHeader("Location", GetExampleUrl(server).spec());
+  } else if (request.relative_url == GetExampleUrl(server).GetPath()) {
+    http_response->set_code(net::HTTP_OK);
+    http_response->set_content("hello");
+    http_response->set_content_type("text/html");
+  } else if (request.relative_url == GetGoogleIframeUrl(server).GetPath()) {
+    http_response->set_code(net::HTTP_OK);
+    http_response->set_content("hello");
+    http_response->set_content_type("text/html");
+  } else if (request.relative_url ==
+             GetGoogleSubresourceUrl(server).GetPath()) {
+    http_response->set_code(net::HTTP_OK);
+    http_response->set_content("");
+    http_response->set_content_type("image/png");
+  } else if (request.relative_url ==
+             GetGoogleSubresourceFetchingWorkerUrl(server).GetPath()) {
+    http_response->set_code(net::HTTP_OK);
+    http_response->set_content(R"(
+      self.addEventListener('message', async (e) => {
+        try {
+          await fetch(e.data);
+          self.postMessage(true);
+        } catch {
+          self.postMessage(false);
+        }
+      });
+    )");
+    http_response->set_content_type("text/html");
+  } else {
+    return nullptr;
+  }
+  return http_response;
+}
+
 class VariationHeaderSetter : public ChromeBrowserMainExtraParts {
  public:
   VariationHeaderSetter() = default;
@@ -190,8 +356,7 @@ class VariationHeaderSetter : public ChromeBrowserMainExtraParts {
   }
 };
 
-class VariationsHttpHeadersBrowserTest
-    : public InProcessBrowserTest {
+class VariationsHttpHeadersBrowserTest : public PlatformBrowserTest {
  public:
   VariationsHttpHeadersBrowserTest()
       : https_server_(net::test_server::EmbeddedTestServer::TYPE_HTTPS) {}
@@ -203,24 +368,84 @@ class VariationsHttpHeadersBrowserTest
 
   ~VariationsHttpHeadersBrowserTest() override = default;
 
+  void TearDownOnMainThread() override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/480962318): Remove this workaround when fixed.
+    // On Android there seems to be a race between deinitialization of the
+    // FeatureList through the browsertest and Android actual UI thread.
+    // This results in rare crash in
+    // BluetoothNotificationManager.clearBluetoothNotifications().
+    // The workaround is to drain the RunLoop before allowing the test
+    // to tear down.
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, run_loop.QuitClosure());
+    run_loop.Run();
+    sync();
+#endif
+    PlatformBrowserTest::TearDownOnMainThread();
+  }
+
+  // TODO(crbug.com/452922329): Share the helpers around Android Incognito in
+  // more general helper library if it actually doesn't flake for a while.
+  void CreateIncognitoTab() {
+    CHECK(!chrome_test_utils::GetProfile(this)->IsIncognitoProfile());
+    const GURL url("about:blank");
+
+#if BUILDFLAG(IS_ANDROID)
+    Profile* otr_profile =
+        chrome_test_utils::GetProfile(this)->GetPrimaryOTRProfile(
+            /*create_if_needed=*/true);
+    OpenUrlInNewTab(otr_profile, GetWebContents(), url);
+#else
+    Browser* incognito =
+        CreateIncognitoBrowser(chrome_test_utils::GetProfile(this));
+    SetBrowser(incognito);
+    NavigateToURL(url);
+#endif
+    ASSERT_TRUE(chrome_test_utils::GetProfile(this)->IsIncognitoProfile());
+  }
+
+  bool NavigateToURL(const GURL& url) {
+    return chrome_test_utils::NavigateToURL(GetWebContents(), url);
+  }
+
   void CreatedBrowserMainParts(content::BrowserMainParts* parts) override {
-    InProcessBrowserTest::CreatedBrowserMainParts(parts);
+    PlatformBrowserTest::CreatedBrowserMainParts(parts);
     static_cast<ChromeBrowserMainParts*>(parts)->AddParts(
         std::make_unique<VariationHeaderSetter>());
+  }
+
+  void SetUpInProcessBrowserTestFixture() override {
+    create_services_subscription_ =
+        BrowserContextDependencyManager::GetInstance()
+            ->RegisterCreateServicesCallbackForTesting(
+                base::BindRepeating(&VariationsHttpHeadersBrowserTest::
+                                        OnWillCreateBrowserContextServices,
+                                    base::Unretained(this)));
+    PlatformBrowserTest::SetUpInProcessBrowserTestFixture();
+  }
+
+  void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    IdentityTestEnvironmentProfileAdaptor::
+        SetIdentityTestEnvironmentFactoriesOnBrowserContext(context);
   }
 
   void SetUp() override {
     server()->SetCertHostnames(
         {"www.google.com", "www.example.com", "test.com"});
     ASSERT_TRUE(server()->InitializeAndListen());
-    InProcessBrowserTest::SetUp();
+    PlatformBrowserTest::SetUp();
   }
 
   void SetUpOnMainThread() override {
-    InProcessBrowserTest::SetUpOnMainThread();
+    PlatformBrowserTest::SetUpOnMainThread();
 
     content::NetworkConnectionChangeSimulator().SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_ETHERNET);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
 
     host_resolver()->AddRule("*", "127.0.0.1");
 
@@ -228,9 +453,11 @@ class VariationsHttpHeadersBrowserTest
     ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
     server()->ServeFilesFromDirectory(test_data_dir);
 
-    server()->RegisterRequestHandler(
-        base::BindRepeating(&VariationsHttpHeadersBrowserTest::RequestHandler,
-                            base::Unretained(this)));
+    server()->RegisterRequestHandler(base::BindRepeating(
+        RequestHandler, server(),
+        base::BindRepeating(
+            &VariationsHttpHeadersBrowserTest::RecordHeadersForURL,
+            base::Unretained(this))));
 
     server()->StartAcceptingConnections();
   }
@@ -238,37 +465,6 @@ class VariationsHttpHeadersBrowserTest
   const net::EmbeddedTestServer* server() const { return &https_server_; }
   net::EmbeddedTestServer* server() { return &https_server_; }
 
-  GURL GetGoogleUrlWithPath(const std::string& path) const {
-    return server()->GetURL("www.google.com", path);
-  }
-
-  GURL GetGoogleUrl() const { return GetGoogleUrlWithPath("/landing.html"); }
-
-  GURL GetGoogleIframeUrl() const {
-    return GetGoogleUrlWithPath("/iframe.html");
-  }
-
-  GURL GetGoogleSubresourceFetchingWorkerUrl() const {
-    return GetGoogleUrlWithPath("/subresource_fetch_worker.js");
-  }
-
-  GURL GetGoogleRedirectUrl1() const {
-    return GetGoogleUrlWithPath("/redirect");
-  }
-
-  GURL GetGoogleRedirectUrl2() const {
-    return GetGoogleUrlWithPath("/redirect2");
-  }
-
-  GURL GetGoogleSubresourceUrl() const {
-    return GetGoogleUrlWithPath("/logo.png");
-  }
-
-  GURL GetExampleUrlWithPath(const std::string& path) const {
-    return server()->GetURL("www.example.com", path);
-  }
-
-  GURL GetExampleUrl() const { return GetExampleUrlWithPath("/landing.html"); }
   void WaitForRequest(const GURL& url) {
     auto it = received_headers_.find(url);
     if (it != received_headers_.end())
@@ -363,19 +559,17 @@ class VariationsHttpHeadersBrowserTest
         .ExtractBool();
   }
 
-  content::WebContents* GetWebContents() { return GetWebContents(browser()); }
-
-  content::WebContents* GetWebContents(Browser* browser) {
-    return browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* GetWebContents() {
+    return chrome_test_utils::GetActiveWebContents(this);
   }
 
   void GoogleWebVisibilityTopFrameTest(bool top_frame_is_first_party);
 
   // Registers a service worker for google.com root scope.
   void RegisterServiceWorker(const std::string& worker_path) {
-    GURL url =
-        GetGoogleUrlWithPath("/service_worker/create_service_worker.html");
-    EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+    GURL url = GetGoogleUrlWithPath(
+        "/service_worker/create_service_worker.html", server());
+    EXPECT_TRUE(NavigateToURL(url));
     EXPECT_EQ("DONE", EvalJs(GetWebContents(),
                              base::StringPrintf("register('%s', '/');",
                                                 worker_path.c_str())));
@@ -389,8 +583,8 @@ class VariationsHttpHeadersBrowserTest
 
     // Navigate to a Google URL.
     GURL page_url =
-        GetGoogleUrlWithPath("/service_worker/fetch_from_page.html");
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+        GetGoogleUrlWithPath("/service_worker/fetch_from_page.html", server());
+    ASSERT_TRUE(NavigateToURL(page_url));
     EXPECT_TRUE(HasReceivedHeader(page_url, "X-Client-Data"));
     // Check that there is a controller to check that the test is really testing
     // service worker.
@@ -398,29 +592,32 @@ class VariationsHttpHeadersBrowserTest
               EvalJs(GetWebContents(), "!!navigator.serviceWorker.controller"));
 
     // Verify subresource requests from the page also have X-Client-Data.
-    EXPECT_EQ("hello", EvalJs(GetWebContents(),
-                              base::StrCat({"fetch_from_page('",
-                                            GetGoogleUrl().spec(), "');"})));
-    EXPECT_TRUE(HasReceivedHeader(GetGoogleUrl(), "X-Client-Data"));
+    EXPECT_EQ("hello",
+              EvalJs(GetWebContents(),
+                     base::StrCat({"fetch_from_page('",
+                                   GetGoogleUrl(server()).spec(), "');"})));
+    EXPECT_TRUE(HasReceivedHeader(GetGoogleUrl(server()), "X-Client-Data"));
 
     // But not if they are to non-Google domains.
-    EXPECT_EQ("hello", EvalJs(GetWebContents(),
-                              base::StrCat({"fetch_from_page('",
-                                            GetExampleUrl().spec(), "');"})));
-    EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(), "X-Client-Data"));
+    EXPECT_EQ("hello",
+              EvalJs(GetWebContents(),
+                     base::StrCat({"fetch_from_page('",
+                                   GetExampleUrl(server()).spec(), "');"})));
+    EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(server()), "X-Client-Data"));
 
     // Navigate to a Google URL which causes redirects.
-    ASSERT_TRUE(
-        ui_test_utils::NavigateToURL(browser(), GetGoogleRedirectUrl1()));
+    ASSERT_TRUE(NavigateToURL(GetGoogleRedirectUrl1(server())));
 
     // Verify redirect requests from google domains.
     // Redirect to google domains.
-    EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl1(), "X-Client-Data"));
-    EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl2(), "X-Client-Data"));
+    EXPECT_TRUE(
+        HasReceivedHeader(GetGoogleRedirectUrl1(server()), "X-Client-Data"));
+    EXPECT_TRUE(
+        HasReceivedHeader(GetGoogleRedirectUrl2(server()), "X-Client-Data"));
 
     // Redirect to non-google domains.
-    EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(), "Host"));
-    EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(), "X-Client-Data"));
+    EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(server()), "Host"));
+    EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(server()), "X-Client-Data"));
   }
 
   // Creates a worker and tests that the main script and import scripts have
@@ -433,38 +630,36 @@ class VariationsHttpHeadersBrowserTest
   void WorkerScriptTest(const std::string& page, const std::string& worker) {
     // Build a worker URL for a google.com worker that imports
     // an example.com script.
-    GURL absolute_import = GetExampleUrlWithPath("/workers/empty.js");
+    GURL absolute_import = GetExampleUrlWithPath("/workers/empty.js", server());
     const std::string worker_path = base::StrCat(
         {worker, "?import=",
          base::EscapeQueryParamValue(absolute_import.spec(), false)});
-    GURL worker_url = GetGoogleUrlWithPath(worker_path);
+    GURL worker_url = GetGoogleUrlWithPath(worker_path, server());
 
     // Build the page URL that tells the page to create the worker.
     const std::string page_path =
         base::StrCat({page, "?worker_url=",
                       base::EscapeQueryParamValue(worker_url.spec(), false)});
-    GURL page_url = GetGoogleUrlWithPath(page_path);
+    GURL page_url = GetGoogleUrlWithPath(page_path, server());
 
     // Navigate and test.
-    EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+    EXPECT_TRUE(NavigateToURL(page_url));
     EXPECT_EQ("DONE", EvalJs(GetWebContents(), "waitForMessage();"));
 
     // The header should be on the main script request.
     EXPECT_TRUE(HasReceivedHeader(worker_url, "X-Client-Data"));
 
     // And on import script requests to Google.
-    EXPECT_TRUE(HasReceivedHeader(GetGoogleUrlWithPath("/workers/empty.js"),
-                                  "X-Client-Data"));
+    EXPECT_TRUE(HasReceivedHeader(
+        GetGoogleUrlWithPath("/workers/empty.js", server()), "X-Client-Data"));
 
     // But not on requests not to Google.
     EXPECT_FALSE(HasReceivedHeader(absolute_import, "X-Client-Data"));
   }
 
  private:
-  // Custom request handler that record request headers and simulates a redirect
-  // from google.com to example.com.
-  std::unique_ptr<net::test_server::HttpResponse> RequestHandler(
-      const net::test_server::HttpRequest& request);
+  void RecordHeadersForURL(GURL url,
+                           net::test_server::HttpRequest::HeaderMap headers);
 
   net::EmbeddedTestServer https_server_;
 
@@ -473,77 +668,26 @@ class VariationsHttpHeadersBrowserTest
 
   // For waiting for requests.
   std::map<GURL, base::OnceClosure> done_callbacks_;
+
+  // Holds the subscription to ensure the callback remains active during setup.
+  base::CallbackListSubscription create_services_subscription_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
-std::unique_ptr<net::test_server::HttpResponse>
-VariationsHttpHeadersBrowserTest::RequestHandler(
-    const net::test_server::HttpRequest& request) {
-  // Retrieve the host name (without port) from the request headers.
-  std::string host;
-  if (request.headers.find("Host") != request.headers.end())
-    host = request.headers.find("Host")->second;
-  if (host.find(':') != std::string::npos)
-    host = host.substr(0, host.find(':'));
+void VariationsHttpHeadersBrowserTest::RecordHeadersForURL(
+    GURL url,
+    net::test_server::HttpRequest::HeaderMap headers) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  received_headers_[url] = headers;
 
-  // Recover the original URL of the request by replacing the host name in
-  // request.GetURL() (which is 127.0.0.1) with the host name from the request
-  // headers.
-  GURL::Replacements replacements;
-  replacements.SetHostStr(host);
-  GURL original_url = request.GetURL().ReplaceComponents(replacements);
-
-  // Memorize the request headers for this URL for later verification.
-  received_headers_[original_url] = request.headers;
-  auto iter = done_callbacks_.find(original_url);
+  // Trigger the callback if we were waiting for this URL
+  auto iter = done_callbacks_.find(url);
   if (iter != done_callbacks_.end()) {
     std::move(iter->second).Run();
+    done_callbacks_.erase(iter);
   }
-
-  // Set up a test server that redirects according to the
-  // following redirect chain:
-  // https://www.google.com:<port>/redirect
-  // --> https://www.google.com:<port>/redirect2
-  // --> https://www.example.com:<port>/
-  auto http_response = std::make_unique<net::test_server::BasicHttpResponse>();
-  http_response->AddCustomHeader("Access-Control-Allow-Origin", "*");
-  if (request.relative_url == GetGoogleRedirectUrl1().GetPath()) {
-    http_response->set_code(net::HTTP_MOVED_PERMANENTLY);
-    http_response->AddCustomHeader("Location", GetGoogleRedirectUrl2().spec());
-  } else if (request.relative_url == GetGoogleRedirectUrl2().GetPath()) {
-    http_response->set_code(net::HTTP_MOVED_PERMANENTLY);
-    http_response->AddCustomHeader("Location", GetExampleUrl().spec());
-  } else if (request.relative_url == GetExampleUrl().GetPath()) {
-    http_response->set_code(net::HTTP_OK);
-    http_response->set_content("hello");
-    http_response->set_content_type("text/html");
-  } else if (request.relative_url == GetGoogleIframeUrl().GetPath()) {
-    http_response->set_code(net::HTTP_OK);
-    http_response->set_content("hello");
-    http_response->set_content_type("text/html");
-  } else if (request.relative_url == GetGoogleSubresourceUrl().GetPath()) {
-    http_response->set_code(net::HTTP_OK);
-    http_response->set_content("");
-    http_response->set_content_type("image/png");
-  } else if (request.relative_url ==
-             GetGoogleSubresourceFetchingWorkerUrl().GetPath()) {
-    http_response->set_code(net::HTTP_OK);
-    http_response->set_content(R"(
-      self.addEventListener('message', async (e) => {
-        try {
-          await fetch(e.data);
-          self.postMessage(true);
-        } catch {
-          self.postMessage(false);
-        }
-      });
-    )");
-    http_response->set_content_type("text/html");
-  } else {
-    return nullptr;
-  }
-  return http_response;
 }
-
 struct LimitedLayerTestParams {
   std::string test_name;
   Study::Experiment group;
@@ -603,7 +747,7 @@ class VariationsHttpHeadersBrowserTestWithActiveLimitedLayer
   ~VariationsHttpHeadersBrowserTestWithActiveLimitedLayer() override = default;
 
  protected:
-  // InProcessBrowserTest:
+  // PlatformBrowserTest:
   bool SetUpUserDataDirectory() override {
     return VariationsHttpHeadersBrowserTestWithLimitedLayerBase::
         SetUpUserDataDirectoryWithGroup(/*group=*/GetParam().group);
@@ -618,10 +762,57 @@ class VariationsHttpHeadersBrowserTestWithInactiveLimitedLayer
       default;
 
  protected:
-  // InProcessBrowserTest:
+  // PlatformBrowserTest:
   bool SetUpUserDataDirectory() override {
     return VariationsHttpHeadersBrowserTestWithLimitedLayerBase::
         SetUpUserDataDirectoryWithGroup(/*group=*/std::nullopt);
+  }
+};
+
+class VariationsHttpHeadersBrowserTestWithSetLowEntropyRandomizationSource
+    : public VariationsHttpHeadersBrowserTest {
+ public:
+  VariationsHttpHeadersBrowserTestWithSetLowEntropyRandomizationSource() =
+      default;
+  ~VariationsHttpHeadersBrowserTestWithSetLowEntropyRandomizationSource()
+      override = default;
+
+ protected:
+  // PlatformBrowserTest:
+  bool SetUpUserDataDirectory() override {
+    const base::FilePath user_data_dir =
+        base::PathService::CheckedGet(chrome::DIR_USER_DATA);
+    const base::FilePath local_state_path =
+        user_data_dir.Append(chrome::kLocalStateFilename);
+
+    base::DictValue local_state;
+    local_state.SetByDottedPath(
+        metrics::prefs::kMetricsLimitedEntropyRandomizationSource,
+        "00000000000000000000000000000001");
+    CHECK(JSONFileValueSerializer(local_state_path).Serialize(local_state));
+    return true;
+  }
+};
+
+class VariationsHttpHeadersBrowserTestWithSetLowEntropySource
+    : public VariationsHttpHeadersBrowserTest {
+ public:
+  VariationsHttpHeadersBrowserTestWithSetLowEntropySource() = default;
+  ~VariationsHttpHeadersBrowserTestWithSetLowEntropySource() override = default;
+
+ protected:
+  // PlatformBrowserTest:
+  bool SetUpUserDataDirectory() override {
+    const base::FilePath user_data_dir =
+        base::PathService::CheckedGet(chrome::DIR_USER_DATA);
+    const base::FilePath local_state_path =
+        user_data_dir.Append(chrome::kLocalStateFilename);
+
+    // Write the seed for the seed file experiment's control-group clients.
+    base::DictValue local_state;
+    local_state.SetByDottedPath(metrics::prefs::kMetricsLowEntropySource, 5);
+    CHECK(JSONFileValueSerializer(local_state_path).Serialize(local_state));
+    return true;
   }
 };
 
@@ -674,15 +865,6 @@ void CreateFieldTrialsWithDifferentVisibilities() {
                 mojom::GoogleWebVisibility::FIRST_PARTY));
 }
 
-// Sets the limited entropy randomization source to a custom value so that we
-// can have an expectation about a specific group being chosen.
-void SetUpLimitedEntropyRandomizationSource() {
-  PrefService* local_state = g_browser_process->local_state();
-  local_state->SetString(
-      metrics::prefs::kMetricsLimitedEntropyRandomizationSource,
-      "00000000000000000000000000000001");
-}
-
 // Creates a trial named "t1" with 100 groups. If
 // `with_google_web_experiment_ids` is true, each group will be associated with
 // a variation ID.
@@ -711,12 +893,14 @@ void CreateFieldTrial(const base::FieldTrial::EntropyProvider& entropy_provider,
 // attached to network requests to Google but stripped on redirects.
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
                        TestStrippingHeadersFromResourceRequest) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleRedirectUrl1()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleRedirectUrl1(server())));
 
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl1(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl2(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(), "Host"));
-  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl1(server()), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl2(server()), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(server()), "Host"));
+  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(server()), "X-Client-Data"));
 }
 
 // Verify in an integration that that the variations header (X-Client-Data) is
@@ -724,24 +908,27 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
                        TestStrippingHeadersFromSubresourceRequest) {
   GURL url = server()->GetURL("/simple_page.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  NavigateToURL(url);
+  EXPECT_TRUE(FetchResource(GetWebContents(), GetGoogleRedirectUrl1(server())));
   EXPECT_TRUE(
-      FetchResource(GetWebContents(browser()), GetGoogleRedirectUrl1()));
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl1(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl2(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(), "Host"));
-  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(), "X-Client-Data"));
+      HasReceivedHeader(GetGoogleRedirectUrl1(server()), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl2(server()), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(server()), "Host"));
+  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(server()), "X-Client-Data"));
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, Incognito) {
-  Browser* incognito = CreateIncognitoBrowser();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, GetGoogleUrl()));
+  CreateIncognitoTab();
+  ASSERT_TRUE(chrome_test_utils::GetProfile(this)->IsIncognitoProfile());
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
 
-  EXPECT_FALSE(HasReceivedHeader(GetGoogleUrl(), "X-Client-Data"));
+  EXPECT_FALSE(HasReceivedHeader(GetGoogleUrl(server()), "X-Client-Data"));
 
   EXPECT_TRUE(
-      FetchResource(GetWebContents(incognito), GetGoogleSubresourceUrl()));
-  EXPECT_FALSE(HasReceivedHeader(GetGoogleSubresourceUrl(), "X-Client-Data"));
+      FetchResource(GetWebContents(), GetGoogleSubresourceUrl(server())));
+  EXPECT_FALSE(
+      HasReceivedHeader(GetGoogleSubresourceUrl(server()), "X-Client-Data"));
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, UserSignedIn) {
@@ -750,18 +937,19 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, UserSignedIn) {
   VariationID signed_in_id = 8;
   CreateGoogleSignedInFieldTrial(signed_in_id);
 
-  // Sign the user in.
-  signin::MakePrimaryAccountAvailable(
-      IdentityManagerFactory::GetForProfile(browser()->profile()),
+  IdentityTestEnvironmentProfileAdaptor adaptor(
+      chrome_test_utils::GetProfile(this));
+
+  adaptor.identity_test_env()->MakePrimaryAccountAvailable(
       "main_email@gmail.com",
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
           ? signin::ConsentLevel::kSignin
           : signin::ConsentLevel::kSync);
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
 
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_TRUE(header);
 
   // Verify that the received header contains the ID.
@@ -802,10 +990,10 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, UserNotSignedIn) {
   CreateGoogleSignedInFieldTrial(signed_in_id);
 
   // By default the user is not signed in.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
 
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_TRUE(header);
 
   // Verify that the received header does not contain the ID.
@@ -840,18 +1028,7 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, UserNotSignedIn) {
   EXPECT_FALSE(ids_any_context.contains(signed_in_id));
 }
 
-IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
-                       PRE_CheckLowEntropySourceValue) {
-  // We use the PRE_ prefix mechanism to ensure that this test always runs
-  // before CheckLowEntropyValue(). None of the subclasses in the
-  // InProcessBrowserTest class allow us to set this pref early enough to be
-  // read by the variations code, which runs very early during the browser
-  // startup.
-  PrefService* local_state = g_browser_process->local_state();
-  local_state->SetInteger(metrics::prefs::kMetricsLowEntropySource, 5);
-}
-
-IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
+IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTestWithSetLowEntropySource,
                        CheckLowEntropySourceValue) {
   auto entropy_providers = g_browser_process->GetMetricsServicesManager()
                                ->CreateEntropyProvidersForTesting();
@@ -860,9 +1037,9 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
   CreateFieldTrial(entropy_providers->low_entropy(),
                    /*with_google_web_experiment_ids=*/true);
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_TRUE(header);
 
   std::set<VariationID> variation_ids;
@@ -918,9 +1095,9 @@ IN_PROC_BROWSER_TEST_P(VariationsHttpHeadersBrowserTestWithActiveLimitedLayer,
   base::FieldTrialList::Find(kLimitedLayerStudyName)->Activate();
 
   // Make a request and get its VariationIDs.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_FALSE(header == std::nullopt);
   std::set<VariationID> ids;
   std::set<VariationID> trigger_ids;
@@ -972,9 +1149,9 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTestWithInactiveLimitedLayer,
   ASSERT_FALSE(base::FieldTrialList::TrialExists(kLimitedLayerStudyName));
 
   // Make a request and get its VariationIDs.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_FALSE(header == std::nullopt);
   std::set<VariationID> ids;
   std::set<VariationID> trigger_ids;
@@ -992,15 +1169,9 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTestWithInactiveLimitedLayer,
                                {kGenericExperimentGroupTriggerId}));
 }
 
-// The PRE_ prefix ensures this runs before
-// LimitedEntropyRandomization_ExperimentLogging.
-IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
-                       PRE_LimitedEntropyRandomization_ExperimentLogging) {
-  SetUpLimitedEntropyRandomizationSource();
-}
-
-IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
-                       LimitedEntropyRandomization_ExperimentLogging) {
+IN_PROC_BROWSER_TEST_F(
+    VariationsHttpHeadersBrowserTestWithSetLowEntropyRandomizationSource,
+    LimitedEntropyRandomization_ExperimentLogging) {
   // CreateEntropyProvidersForTesting() ensures a limited entropy provider is
   // created.
   auto entropy_providers = g_browser_process->GetMetricsServicesManager()
@@ -1011,9 +1182,9 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
   CreateFieldTrial(entropy_providers->limited_entropy(),
                    /*with_google_web_experiment_ids=*/true);
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_TRUE(header);
 
   std::set<VariationID> variation_ids;
@@ -1029,16 +1200,8 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
   EXPECT_TRUE(variation_ids.contains(56));
 }
 
-// The PRE_ prefix ensures this runs before
-// LimitedEntropyRandomization_ExperimentLoggingWithoutGoogleWebExperimentationId.
 IN_PROC_BROWSER_TEST_F(
-    VariationsHttpHeadersBrowserTest,
-    PRE_LimitedEntropyRandomization_ExperimentLoggingWithoutGoogleWebExperimentationId) {
-  SetUpLimitedEntropyRandomizationSource();
-}
-
-IN_PROC_BROWSER_TEST_F(
-    VariationsHttpHeadersBrowserTest,
+    VariationsHttpHeadersBrowserTestWithSetLowEntropyRandomizationSource,
     LimitedEntropyRandomization_ExperimentLoggingWithoutGoogleWebExperimentationId) {
   // CreateEntropyProvidersForTesting() ensures a limited entropy provider is
   // created.
@@ -1048,9 +1211,9 @@ IN_PROC_BROWSER_TEST_F(
   CreateFieldTrial(entropy_providers->limited_entropy(),
                    /*with_google_web_experiment_ids=*/false);
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
   std::optional<std::string> header =
-      GetReceivedHeader(GetGoogleUrl(), "X-Client-Data");
+      GetReceivedHeader(GetGoogleUrl(server()), "X-Client-Data");
   ASSERT_TRUE(header);
 
   std::set<VariationID> variation_ids;
@@ -1058,8 +1221,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(
       ExtractVariationIds(header.value(), &variation_ids, &trigger_ids));
 
-  // 56 is the group that is derived from the setup in
-  // `PRE_CheckGoogleWebExperimentIdUnderLimitedEntropyRandomization`.
+  // 56 is the group that is derived from the setup in initial local state.
   EXPECT_EQ("56", base::FieldTrialList::FindFullName(kTrialName));
   // The experiment does not have a google_web_experiment_id and thus should
   // NOT appear in the header.
@@ -1081,9 +1243,9 @@ void VariationsHttpHeadersBrowserTest::GoogleWebVisibilityTopFrameTest(
           : signed_out_headers->headers_map.at(mojom::GoogleWebVisibility::ANY);
 
   // Load a top frame.
-  const GURL top_frame_url =
-      top_frame_is_first_party ? GetGoogleUrl() : GetExampleUrl();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), top_frame_url));
+  const GURL top_frame_url = top_frame_is_first_party ? GetGoogleUrl(server())
+                                                      : GetExampleUrl(server());
+  ASSERT_TRUE(NavigateToURL(top_frame_url));
   if (top_frame_is_first_party) {
     EXPECT_EQ(GetReceivedHeader(top_frame_url, "X-Client-Data"),
               expected_header_value);
@@ -1092,15 +1254,16 @@ void VariationsHttpHeadersBrowserTest::GoogleWebVisibilityTopFrameTest(
   }
 
   // Load Google iframe.
-  EXPECT_TRUE(LoadIframe(GetWebContents(browser()), GetGoogleIframeUrl()));
-  EXPECT_EQ(GetReceivedHeader(GetGoogleIframeUrl(), "X-Client-Data"),
+  EXPECT_TRUE(LoadIframe(GetWebContents(), GetGoogleIframeUrl(server())));
+  EXPECT_EQ(GetReceivedHeader(GetGoogleIframeUrl(server()), "X-Client-Data"),
             expected_header_value);
 
   // Fetch Google subresource.
-  EXPECT_TRUE(FetchResource(ChildFrameAt(GetWebContents(browser()), 0),
-                            GetGoogleSubresourceUrl()));
-  EXPECT_EQ(GetReceivedHeader(GetGoogleSubresourceUrl(), "X-Client-Data"),
-            expected_header_value);
+  EXPECT_TRUE(FetchResource(ChildFrameAt(GetWebContents(), 0),
+                            GetGoogleSubresourceUrl(server())));
+  EXPECT_EQ(
+      GetReceivedHeader(GetGoogleSubresourceUrl(server()), "X-Client-Data"),
+      expected_header_value);
 
   // Prepare for loading Google subresource from a dedicated worker. The same
   // URL subresource was loaded above. So need to clear `received_headers_`.
@@ -1108,13 +1271,15 @@ void VariationsHttpHeadersBrowserTest::GoogleWebVisibilityTopFrameTest(
 
   // Start Google worker and fetch Google subresource from the worker.
   EXPECT_TRUE(RunSubresourceFetchingWorker(
-      ChildFrameAt(GetWebContents(browser()), 0),
-      GetGoogleSubresourceFetchingWorkerUrl(), GetGoogleSubresourceUrl()));
-  EXPECT_EQ(GetReceivedHeader(GetGoogleSubresourceFetchingWorkerUrl(),
+      ChildFrameAt(GetWebContents(), 0),
+      GetGoogleSubresourceFetchingWorkerUrl(server()),
+      GetGoogleSubresourceUrl(server())));
+  EXPECT_EQ(GetReceivedHeader(GetGoogleSubresourceFetchingWorkerUrl(server()),
                               "X-Client-Data"),
             expected_header_value);
-  EXPECT_EQ(GetReceivedHeader(GetGoogleSubresourceUrl(), "X-Client-Data"),
-            expected_header_value);
+  EXPECT_EQ(
+      GetReceivedHeader(GetGoogleSubresourceUrl(server()), "X-Client-Data"),
+      expected_header_value);
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
@@ -1130,7 +1295,7 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
 IN_PROC_BROWSER_TEST_F(
     VariationsHttpHeadersBrowserTest,
     TestStrippingHeadersFromRequestUsingSimpleURLLoaderWithProfileNetworkContext) {
-  GURL url = GetGoogleRedirectUrl1();
+  GURL url = GetGoogleRedirectUrl1(server());
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url;
@@ -1142,7 +1307,7 @@ IN_PROC_BROWSER_TEST_F(
           TRAFFIC_ANNOTATION_FOR_TESTS);
 
   content::StoragePartition* partition =
-      browser()->profile()->GetDefaultStoragePartition();
+      chrome_test_utils::GetProfile(this)->GetDefaultStoragePartition();
   network::SharedURLLoaderFactory* loader_factory =
       partition->GetURLLoaderFactoryForBrowserProcess().get();
   content::SimpleURLLoaderTestHelper loader_helper;
@@ -1154,16 +1319,18 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(net::OK, loader->NetError());
   EXPECT_TRUE(loader_helper.response_body());
 
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl1(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl2(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(), "Host"));
-  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl1(server()), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl2(server()), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(server()), "Host"));
+  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(server()), "X-Client-Data"));
 }
 
 IN_PROC_BROWSER_TEST_F(
     VariationsHttpHeadersBrowserTest,
     TestStrippingHeadersFromRequestUsingSimpleURLLoaderWithGlobalSystemNetworkContext) {
-  GURL url = GetGoogleRedirectUrl1();
+  GURL url = GetGoogleRedirectUrl1(server());
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url;
@@ -1186,15 +1353,17 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(net::OK, loader->NetError());
   EXPECT_TRUE(loader_helper.response_body());
 
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl1(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleRedirectUrl2(), "X-Client-Data"));
-  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(), "Host"));
-  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl1(server()), "X-Client-Data"));
+  EXPECT_TRUE(
+      HasReceivedHeader(GetGoogleRedirectUrl2(server()), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetExampleUrl(server()), "Host"));
+  EXPECT_FALSE(HasReceivedHeader(GetExampleUrl(server()), "X-Client-Data"));
 }
 
 // Verify in an integration test that the variations header (X-Client-Data) is
 // attached to service worker navigation preload requests. Regression test
-// for https://crbug.com/873061.
+// for https://crbug.com/40588908.
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
                        ServiceWorkerNavigationPreload) {
   // Register a service worker that uses navigation preload.
@@ -1203,10 +1372,10 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
   // Verify "X-Client-Data" is present on the navigation to Google.
   // Also test that "Service-Worker-Navigation-Preload" is present to verify
   // we are really testing the navigation preload request.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleUrl()));
-  EXPECT_TRUE(HasReceivedHeader(GetGoogleUrl(), "X-Client-Data"));
-  EXPECT_TRUE(
-      HasReceivedHeader(GetGoogleUrl(), "Service-Worker-Navigation-Preload"));
+  ASSERT_TRUE(NavigateToURL(GetGoogleUrl(server())));
+  EXPECT_TRUE(HasReceivedHeader(GetGoogleUrl(server()), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetGoogleUrl(server()),
+                                "Service-Worker-Navigation-Preload"));
 }
 
 // Verify in an integration test that the variations header (X-Client-Data) is
@@ -1235,19 +1404,21 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest,
 // attached to requests for service worker scripts when installing and updating.
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, ServiceWorkerScript) {
   // Register a service worker that imports scripts.
-  GURL absolute_import = GetExampleUrlWithPath("/service_worker/empty.js");
+  GURL absolute_import =
+      GetExampleUrlWithPath("/service_worker/empty.js", server());
   const std::string worker_path =
       "/service_worker/import_scripts_worker.js?import=" +
       base::EscapeQueryParamValue(absolute_import.spec(), false);
   RegisterServiceWorker(worker_path);
 
   // Test that the header is present on the main script request.
-  EXPECT_TRUE(
-      HasReceivedHeader(GetGoogleUrlWithPath(worker_path), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetGoogleUrlWithPath(worker_path, server()),
+                                "X-Client-Data"));
 
   // And on import script requests to Google.
   EXPECT_TRUE(HasReceivedHeader(
-      GetGoogleUrlWithPath("/service_worker/empty.js"), "X-Client-Data"));
+      GetGoogleUrlWithPath("/service_worker/empty.js", server()),
+      "X-Client-Data"));
 
   // But not on requests not to Google.
   EXPECT_FALSE(HasReceivedHeader(absolute_import, "X-Client-Data"));
@@ -1259,12 +1430,13 @@ IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTest, ServiceWorkerScript) {
   EXPECT_EQ("DONE", EvalJs(GetWebContents(), "update();"));
 
   // Test that the header is present on the main script request.
-  EXPECT_TRUE(
-      HasReceivedHeader(GetGoogleUrlWithPath(worker_path), "X-Client-Data"));
+  EXPECT_TRUE(HasReceivedHeader(GetGoogleUrlWithPath(worker_path, server()),
+                                "X-Client-Data"));
 
   // And on import script requests to Google.
   EXPECT_TRUE(HasReceivedHeader(
-      GetGoogleUrlWithPath("/service_worker/empty.js"), "X-Client-Data"));
+      GetGoogleUrlWithPath("/service_worker/empty.js", server()),
+      "X-Client-Data"));
   // But not on requests not to Google.
   EXPECT_FALSE(HasReceivedHeader(absolute_import, "X-Client-Data"));
 }
@@ -1307,9 +1479,7 @@ class VariationsHttpHeadersBrowserTestWithOptimizationGuide
 
   std::unique_ptr<content::TestNavigationManager> NavigateToURLAsync(
       const GURL& url) {
-    chrome::NewTab(browser());
-    content::WebContents* tab =
-        browser()->tab_strip_model()->GetActiveWebContents();
+    content::WebContents* tab = GetWebContents();
     DCHECK(tab);
     auto observer = std::make_unique<content::TestNavigationManager>(tab, url);
     tab->GetController().LoadURL(url, content::Referrer(),
@@ -1322,7 +1492,7 @@ class VariationsHttpHeadersBrowserTestWithOptimizationGuide
       const std::vector<std::string>& predicted_subresource_urls) {
     auto* optimization_guide_keyed_service =
         OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile());
+            chrome_test_utils::GetProfile(this));
     ASSERT_TRUE(optimization_guide_keyed_service);
 
     optimization_guide::proto::LoadingPredictorMetadata
@@ -1348,8 +1518,8 @@ class VariationsHttpHeadersBrowserTestWithOptimizationGuide
 IN_PROC_BROWSER_TEST_F(VariationsHttpHeadersBrowserTestWithOptimizationGuide,
                        Prefetch) {
   GURL url = server()->GetURL("test.com", "/simple_page.html");
-  GURL google_url = GetGoogleSubresourceUrl();
-  GURL non_google_url = GetExampleUrl();
+  GURL google_url = GetGoogleSubresourceUrl(server());
+  GURL non_google_url = GetExampleUrl(server());
 
   // Set up optimization hints.
   std::vector<std::string> hints = {google_url.spec(), non_google_url.spec()};

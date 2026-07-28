@@ -81,6 +81,7 @@
 #include "third_party/blink/renderer/core/layout/transform_utils.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scrolling/sticky_position_scrolling_constraints.h"
+#include "third_party/blink/renderer/core/paint/border_shape_utils.h"
 #include "third_party/blink/renderer/core/paint/box_fragment_painter.h"
 #include "third_party/blink/renderer/core/paint/box_reflection_utils.h"
 #include "third_party/blink/renderer/core/paint/clip_path_clipper.h"
@@ -314,7 +315,7 @@ void PaintLayer::UpdateTransformAfterStyleChange(
   bool had_transform = Transform();
   bool has_transform = GetLayoutObject().HasTransform();
   if (had_transform == has_transform && old_style &&
-      !diff.TransformDataChanged()) {
+      !diff.transform_data_changed) {
     return;
   }
   bool had_3d_transform = Has3DTransform();
@@ -629,11 +630,12 @@ PaintLayer* PaintLayer::ContainingLayer() const {
 }
 
 PaintLayer::PaintingContainerType PaintLayer::GetPaintingContainerType() const {
-  // TODO(crbug.com/40208685): Remove this condition after we make IsStacked()
-  // correct (returning false) for IsReplacedNormalFlowStacking().
-  if (IsReplacedNormalFlowStacking()) {
-    return PaintingContainerType::kParent;
+  if (!RuntimeEnabledFeatures::StackingContextIsNotStackedEnabled()) {
+    if (IsReplacedNormalFlowStackingContext()) {
+      return PaintingContainerType::kParent;
+    }
   }
+
   if (GetLayoutObject().IsStacked()) {
     return PaintingContainerType::kStackingContext;
   }
@@ -763,11 +765,9 @@ void PaintLayer::RemoveChild(PaintLayer* old_child) {
   if (last_ == old_child)
     last_ = old_child->PreviousSibling();
 
-  if (!GetLayoutObject().DocumentBeingDestroyed()) {
-    // Dirty the z-order list in which we are contained.
-    old_child->DirtyStackingContextZOrderLists();
-    MarkAncestorChainForFlagsUpdate();
-  }
+  // Dirty the z-order list in which we are contained.
+  old_child->DirtyStackingContextZOrderLists();
+  MarkAncestorChainForFlagsUpdate();
 
   if (GetLayoutObject().StyleRef().Visibility() != EVisibility::kVisible) {
     DirtyVisibleContentStatus();
@@ -881,8 +881,7 @@ bool PaintLayer::RequiresScrollableArea() const {
   if (!box) {
     return false;
   }
-  if (box->Style()->IsInternalOverscrollAreaAuto() ||
-      box->IsScrollContainer()) {
+  if (box->IsScrollContainer() || box->IsOverscrollContainer()) {
     return true;
   }
   // Iframes with the resize property can be resized. This requires
@@ -1047,7 +1046,7 @@ bool PaintLayer::HitTest(const HitTestLocation& hit_test_location,
 
   HitTestRecursionData recursion_data(hit_test_area, hit_test_location,
                                       hit_test_location);
-  PaintLayer* inside_layer = HitTestLayer(*this, /*container_fragment*/ nullptr,
+  PaintLayer* inside_layer = HitTestLayer(*this, /*container_fragment=*/nullptr,
                                           result, recursion_data);
   if (!inside_layer && IsRootLayer()) {
     bool fallback = false;
@@ -1087,6 +1086,28 @@ bool PaintLayer::HitTest(const HitTestLocation& hit_test_location,
   // Now return whether we were inside this layer (this will always be true for
   // the root layer).
   return inside_layer;
+}
+
+bool PaintLayer::HitTestReplacedNormalFlowInline(
+    HitTestResult& result,
+    const HitTestLocation& hit_test_location) {
+  DCHECK(ShouldPaintReplacedNormalFlowInline());
+
+  PaintLayer* transform_container = Parent();
+  while (transform_container && (!transform_container->GetLayoutObject()
+                                      .CanContainFixedPositionObjects() ||
+                                 !transform_container->GetLayoutObject()
+                                      .CanContainAbsolutePositionObjects())) {
+    transform_container = transform_container->Parent();
+  }
+  if (!transform_container) {
+    return false;
+  }
+
+  HitTestRecursionData recursion_data(hit_test_location.BoundingBox(),
+                                      hit_test_location, hit_test_location);
+  return HitTestLayer(*transform_container, /*container_fragment=*/nullptr,
+                      result, recursion_data) != nullptr;
 }
 
 Node* PaintLayer::EnclosingNode() const {
@@ -1170,10 +1191,9 @@ HitTestingTransformState PaintLayer::CreateLocalTransformState(
   transform_state.Translate(gfx::Vector2dF(local_fragment.PaintOffset()));
 
   if (const auto* properties = local_fragment.PaintProperties()) {
-    for (const TransformPaintPropertyNode* transform :
-         properties->AllCSSTransformPropertiesOutsideToInside()) {
-      if (transform)
-        transform_state.ApplyTransform(*transform);
+    for (const auto* transform :
+         properties->CSSTransformPropertiesOutsideToInside()) {
+      transform_state.ApplyTransform(*transform);
     }
   }
 
@@ -1184,7 +1204,8 @@ static bool IsHitCandidateForDepthOrder(
     const PaintLayer* hit_layer,
     bool can_depth_sort,
     double* z_offset,
-    const HitTestingTransformState* transform_state) {
+    const HitTestingTransformState* transform_state,
+    bool occlusion_hit_test) {
   if (!hit_layer)
     return false;
 
@@ -1201,9 +1222,35 @@ static bool IsHitCandidateForDepthOrder(
   DCHECK(!z_offset || transform_state ||
          hit_layer->GetLayoutObject().IsSVGForeignObject());
   if (z_offset && transform_state) {
-    // This is actually computing our z, but that's OK because the hitLayer is
-    // coplanar with us.
-    double child_z_offset = ComputeZOffset(*transform_state);
+    double child_z_offset;
+    // When performing a hit test for occlusion, we consider a layer to be
+    // occluding if any part of it has a z-axis position greater than or equal
+    // to the z-axis position of the occlusion target. The occlusion target is
+    // assumed not to have a 3D projection, so its z-axis position is uniformly
+    // zero (see the call to target->HasDistortingVisualEffects() in
+    // intersection_geometry.cc). For the layer under test, we compute the
+    // z-axis position at all four corners to find the max.
+    if (occlusion_hit_test && hit_layer->Has3DTransform()) {
+      child_z_offset = -std::numeric_limits<double>::infinity();
+      PhysicalRect rect = hit_layer->GetLayoutObject().VisualOverflowRect();
+      gfx::QuadF local_quad{gfx::RectF(rect)};
+      gfx::PointF pts[4] = {local_quad.p1(), local_quad.p2(), local_quad.p3(),
+                            local_quad.p4()};
+      for (const auto& pt : pts) {
+        gfx::Point3F pt3(pt.x(), pt.y(), 0);
+        pt3 = transform_state->AccumulatedTransform().MapPoint(pt3);
+        if (pt3.z() > child_z_offset) {
+          child_z_offset = pt3.z();
+        }
+      }
+      if (child_z_offset < 0) {
+        return false;
+      }
+    } else {
+      // This is actually computing our z, but that's OK because the hitLayer is
+      // coplanar with us.
+      child_z_offset = ComputeZOffset(*transform_state);
+    }
     if (child_z_offset > *z_offset) {
       *z_offset = child_z_offset;
       return true;
@@ -1291,7 +1338,7 @@ PaintLayer* PaintLayer::HitTestLayer(
   // there is an ongoing transition, since this may be too heavy of a check for
   // each hit test.
   if (auto* transition =
-          ViewTransitionUtils::TransitionForTaggedElement(layout_object)) {
+          ViewTransitionUtils::TransitionForParticipantOrScope(layout_object)) {
     // This means that the contents of the object are drawn elsewhere.
     if (transition->IsRepresentedViaPseudoElements(layout_object)) {
       return nullptr;
@@ -1299,8 +1346,11 @@ PaintLayer* PaintLayer::HitTestLayer(
   }
 
   ShouldRespectOverflowClipType clip_behavior = kRespectOverflowClip;
-  if (result.GetHitTestRequest().IgnoreClipping())
+  if (result.GetHitTestRequest().IgnoreClipping() ||
+      (RuntimeEnabledFeatures::UnboundedElementEnabled() &&
+       layout_object.IsInclusiveDescendantOfUnboundedElement())) {
     clip_behavior = kIgnoreOverflowClip;
+  }
 
   // For the global root scroller, hit test the layout viewport scrollbars
   // first, as they are visually presented on top of the content.
@@ -1323,7 +1373,7 @@ PaintLayer* PaintLayer::HitTestLayer(
 
   // We can only reach an SVG foreign object's PaintLayer from
   // LayoutSVGForeignObject::NodeAtFloatPoint (because
-  // IsReplacedNormalFlowStacking() true for LayoutSVGForeignObject),
+  // IsReplacedNormalFlowStackingContext() true for LayoutSVGForeignObject),
   // where the hit_test_rect has already been transformed to local coordinates.
   bool use_transform = false;
   if (!layout_object.IsSVGForeignObject() &&
@@ -1357,6 +1407,13 @@ PaintLayer* PaintLayer::HitTestLayer(
   if (!is_occlusion_test && layout_object.HasClipPath() &&
       HitTestClippedOutByClipPath(transform_container,
                                   recursion_data.location)) {
+    return nullptr;
+  }
+
+  if (!is_occlusion_test && layout_object.StyleRef().HasBorderShape() &&
+      layout_object.ShouldClipOverflowAlongBothAxis() &&
+      HitTestClippedOutByBorderShape(transform_container,
+                                     recursion_data.location)) {
     return nullptr;
   }
 
@@ -1475,10 +1532,12 @@ PaintLayer* PaintLayer::HitTestLayer(
             recursion_data.location) &&
         GetLayoutBox()->HitTestOverflowControl(
             result, recursion_data.location, layer_fragments[0].layer_offset)) {
-      if (z_offset && local_transform_state) {
-        *z_offset = ComputeZOffset(*local_transform_state);
+      if (!z_offset || !local_transform_state ||
+          IsHitCandidateForDepthOrder(
+              this, false, z_offset, local_transform_state,
+              result.GetHitTestRequest().IsHitTestVisualOverflow())) {
+        return this;
       }
-      return this;
     }
   }
 
@@ -1524,13 +1583,19 @@ PaintLayer* PaintLayer::HitTestLayer(
                                         layer_fragments, temp_result,
                                         recursion_data.location,
                                         inside_fragment_foreground_rect) &&
-          IsHitCandidateForDepthOrder(this, false, z_offset_for_contents_ptr,
-                                      local_transform_state) &&
+          IsHitCandidateForDepthOrder(
+              this, false, z_offset_for_contents_ptr,
+              RuntimeEnabledFeatures::
+                      HitTestContainerTransformStateForPreserve3dEnabled()
+                  ? container_transform_state
+                  : local_transform_state,
+              temp_result.GetHitTestRequest().IsHitTestVisualOverflow()) &&
           IsHitCandidateForStopNode(GetLayoutObject(), stop_node)) {
-        if (result.GetHitTestRequest().ListBased())
+        if (result.GetHitTestRequest().ListBased()) {
           result.Append(temp_result);
-        else
+        } else {
           result = temp_result;
+        }
         if (!depth_sort_descendants)
           return this;
         // Foreground can depth-sort with descendant layers, so keep this as a
@@ -1564,13 +1629,19 @@ PaintLayer* PaintLayer::HitTestLayer(
                                   recursion_data.location,
                                   HitTestPhase::kSelfBlockBackground,
                                   inside_fragment_background_rect) &&
-        IsHitCandidateForDepthOrder(this, false, z_offset_for_contents_ptr,
-                                    local_transform_state) &&
+        IsHitCandidateForDepthOrder(
+            this, false, z_offset_for_contents_ptr,
+            RuntimeEnabledFeatures::
+                    HitTestContainerTransformStateForPreserve3dEnabled()
+                ? container_transform_state
+                : local_transform_state,
+            temp_result.GetHitTestRequest().IsHitTestVisualOverflow()) &&
         IsHitCandidateForStopNode(GetLayoutObject(), stop_node)) {
-      if (result.GetHitTestRequest().ListBased())
+      if (result.GetHitTestRequest().ListBased()) {
         result.Append(temp_result);
-      else
+      } else {
         result = temp_result;
+      }
       return this;
     }
     if (inside_fragment_background_rect &&
@@ -1636,7 +1707,9 @@ bool PaintLayer::HitTestFragmentsWithPhase(
         bounds.HasRadius() &&
         HitTestClippedOutByBorderRadius(transform_container, container_fragment,
                                         hit_test_location, bounds)) {
-      continue;
+      if (!result.GetHitTestRequest().IsHitTestVisualOverflow()) {
+        continue;
+      }
     }
 
     inside_clip_rect = true;
@@ -1695,7 +1768,9 @@ PaintLayer* PaintLayer::HitTestTransformedLayerInFragments(
         HitTestClippedOutByBorderRadius(transform_container, container_fragment,
                                         recursion_data.location,
                                         fragment.background_rect)) {
-      continue;
+      if (!result.GetHitTestRequest().IsHitTestVisualOverflow()) {
+        continue;
+      }
     }
 
     PaintLayer* hit_layer = HitTestLayerByApplyingTransform(
@@ -1806,8 +1881,23 @@ bool PaintLayer::HitTestFragmentWithPhase(
   return true;
 }
 
-bool PaintLayer::IsReplacedNormalFlowStacking() const {
-  return GetLayoutObject().IsSVGForeignObject();
+bool PaintLayer::IsReplacedNormalFlowStackingContext() const {
+  if (!RuntimeEnabledFeatures::StackingContextIsNotStackedEnabled()) {
+    return GetLayoutObject().IsSVGForeignObject();
+  }
+
+  return GetLayoutObject().IsReplacedNormalFlowStackingContext(
+      GetLayoutObject().StyleRef());
+}
+
+bool PaintLayer::ShouldPaintReplacedNormalFlowInline() const {
+  if (!GetLayoutObject().IsSVGForeignObject() &&
+      !RuntimeEnabledFeatures::ReplacedNormalFlowStackingInlinePaintEnabled()) {
+    return false;
+  }
+
+  return IsReplacedNormalFlowStackingContext() &&
+         !GetLayoutObject().IsFloating() && !GetLayoutObject().IsFragmented();
 }
 
 PaintLayer* PaintLayer::HitTestChildren(
@@ -1831,7 +1921,8 @@ PaintLayer* PaintLayer::HitTestChildren(
   }
 
   if (GetLayoutObject().IsCanvas()) {
-    if (!RuntimeEnabledFeatures::CanvasDrawElementEnabled()) {
+    if (!RuntimeEnabledFeatures::CanvasDrawElementEnabled(
+            GetLayoutObject().GetDocument().GetExecutionContext())) {
       return nullptr;
     }
     if (!To<HTMLCanvasElement>(GetLayoutObject().GetNode())->layoutSubtree()) {
@@ -1849,8 +1940,11 @@ PaintLayer* PaintLayer::HitTestChildren(
   auto hit_test_child =
       [&](PaintLayer* child_layer, bool overflow_controls_only,
           const HitTestRecursionData& recursion_data) -> bool {
-    if (child_layer->IsReplacedNormalFlowStacking())
+    // Replaced normal flow stacking contexts are hit-tested inline by their
+    // respective layout painters to keep hit testing in sync with paint order.
+    if (child_layer->ShouldPaintReplacedNormalFlowInline()) {
       return false;
+    }
 
     bool is_scoped_transition_pseudo =
         !GetLayoutObject().IsViewTransitionRoot() &&
@@ -1881,8 +1975,9 @@ PaintLayer* PaintLayer::HitTestChildren(
       result.Append(temp_result);
     }
 
-    if (IsHitCandidateForDepthOrder(hit_layer, depth_sort_descendants, z_offset,
-                                    local_transform_state)) {
+    if (IsHitCandidateForDepthOrder(
+            hit_layer, depth_sort_descendants, z_offset, local_transform_state,
+            result.GetHitTestRequest().IsHitTestVisualOverflow())) {
       result_layer = hit_layer;
       if (!result.GetHitTestRequest().ListBased())
         result = temp_result;
@@ -1969,12 +2064,7 @@ std::optional<gfx::SizeF> PaintLayer::FilterViewport() const {
 
 gfx::RectF PaintLayer::BackdropFilterReferenceBox() const {
   if (const auto* layout_inline = DynamicTo<LayoutInline>(GetLayoutObject())) {
-    if (RuntimeEnabledFeatures::
-            PaintOffsetTranslationForBackdropFilterWithInlineElementEnabled()) {
-      return gfx::RectF(layout_inline->PhysicalLinesBoundingBox());
-    }
-    return gfx::RectF(
-        gfx::SizeF(layout_inline->PhysicalLinesBoundingBox().size));
+    return gfx::RectF(layout_inline->PhysicalLinesBoundingBox());
   }
   return gfx::RectF(GetLayoutBox()->PhysicalBorderBoxRect());
 }
@@ -2001,6 +2091,39 @@ bool PaintLayer::HitTestClippedOutByClipPath(
   return !ClipPathClipper::HitTest(GetLayoutObject(), location_in_layer);
 }
 
+bool PaintLayer::HitTestClippedOutByBorderShape(
+    const PaintLayer& transform_container,
+    const HitTestLocation& hit_test_location) const {
+  DCHECK(GetLayoutObject().StyleRef().HasBorderShape());
+  DCHECK(GetLayoutObject().ShouldClipOverflowAlongBothAxis());
+
+  const LayoutBox* layout_box = GetLayoutBox();
+  if (!layout_box) {
+    return false;
+  }
+
+  PhysicalOffset origin = GetLayoutObject().LocalToAncestorPoint(
+      PhysicalOffset(), &transform_container.GetLayoutObject());
+  const HitTestLocation location_in_layer(hit_test_location, -origin);
+
+  // Use the border-box rect as the reference, expanding by the
+  // overflow-clip-margin if applicable so that children that overflow into
+  // the margin area remain hittable.
+  PhysicalRect border_rect = layout_box->PhysicalBorderBoxRect();
+  if (layout_box->ShouldApplyOverflowClipMargin()) {
+    border_rect.Expand(layout_box->BorderOutsetsForClipping());
+  }
+  std::optional<BorderShapeReferenceRects> border_shape_rects =
+      ComputeBorderShapeReferenceRects(border_rect, layout_box->StyleRef(),
+                                       *layout_box);
+  if (!border_shape_rects) {
+    return false;
+  }
+  const Path outer_path = BorderShapePainter::OuterPath(
+      layout_box->StyleRef(), border_shape_rects->outer);
+  return !location_in_layer.Intersects(outer_path);
+}
+
 // Checks if `hit_test_location` is clipped out by any ancestor `border-radius`
 // up to `transform_container`.
 bool PaintLayer::HitTestClippedOutByBorderRadius(
@@ -2014,12 +2137,11 @@ bool PaintLayer::HitTestClippedOutByBorderRadius(
           ? *container_fragment->fragment_data
           : transform_container.GetLayoutObject().FirstFragment();
   // `hit_test_location` is relative to `transform_container`.
-  const auto& current_transform =
+  const auto& container_transform =
       container_fragment_data.LocalBorderBoxProperties().Transform();
-
-  for (const LayoutObject* current = GetLayoutObject().Container();
-       current &&
-       current->IsDescendantOf(&transform_container.GetLayoutObject());
+  const LayoutObject* container_layout_object =
+      &transform_container.GetLayoutObject();
+  for (const LayoutObject* current = GetLayoutObject().Container(); current;
        current = current->Container()) {
     const auto* properties = current->FirstFragment().PaintProperties();
     if (!properties) {
@@ -2031,11 +2153,17 @@ bool PaintLayer::HitTestClippedOutByBorderRadius(
       continue;
     }
 
-    gfx::RectF mapped_location(hit_test_location.BoundingBox());
-    GeometryMapper::SourceToDestinationRect(
-        current_transform, clip->LocalTransformSpace(), mapped_location);
-    if (!clip->PaintClipRect().IntersectsQuad(gfx::QuadF(mapped_location))) {
+    gfx::RectF hit_rect(hit_test_location.BoundingBox());
+    hit_rect.Offset(gfx::Vector2dF(container_fragment_data.PaintOffset()));
+    const gfx::Transform projection =
+        GeometryMapper::SourceToDestinationProjection(
+            container_transform, clip->LocalTransformSpace());
+    gfx::QuadF mapped_quad = projection.MapQuad(gfx::QuadF(hit_rect));
+    if (!clip->PaintClipRect().IntersectsQuad(mapped_quad)) {
       return true;
+    }
+    if (current == container_layout_object) {
+      break;
     }
   }
   return false;
@@ -2187,9 +2315,8 @@ void PaintLayer::UpdateFilters(StyleDifference diff,
                                const ComputedStyle* old_style,
                                const ComputedStyle& new_style) {
   if (!filter_on_effect_node_dirty_) {
-    filter_on_effect_node_dirty_ = old_style
-                                       ? diff.FilterChanged()
-                                       : new_style.HasFilterInducingProperty();
+    filter_on_effect_node_dirty_ =
+        old_style ? diff.filter_changed : new_style.HasFilterInducingProperty();
   }
 
   if (!new_style.HasFilterInducingProperty() &&
@@ -2266,13 +2393,18 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
                                 const ComputedStyle* old_style) {
   UpdateScrollableArea();
 
+  // The compositor cannot easily track the filters applied within a layer
+  // (i.e. composited filters) and is unable to expand the damage rect.
+  // See `CompositorMayHaveIncorrectDamageRect`.
   bool had_filter_that_moves_pixels = has_filter_that_moves_pixels_;
   has_filter_that_moves_pixels_ = ComputeHasFilterThatMovesPixels();
-  if (had_filter_that_moves_pixels != has_filter_that_moves_pixels_) {
-    // The compositor cannot easily track the filters applied within a layer
-    // (i.e. composited filters) and is unable to expand the damage rect.
+  // To ensure proper tracking of reference filters, we must also note if one is
+  // added or all are removed for later action within `LayoutEmbeddedContent`.
+  bool had_reference_filter = has_reference_filter_;
+  has_reference_filter_ = ComputeHasReferenceFilter();
+  if (had_filter_that_moves_pixels != has_filter_that_moves_pixels_ ||
+      had_reference_filter != has_reference_filter_) {
     // Force paint invalidation to update any potentially affected animations.
-    // See |CompositorMayHaveIncorrectDamageRect|.
     GetLayoutObject().SetSubtreeShouldDoFullPaintInvalidation();
   }
 
@@ -2304,11 +2436,11 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
     MarkAncestorChainForFlagsUpdate();
   }
 
-  bool needs_full_transform_update = diff.TransformChanged();
+  bool needs_full_transform_update = diff.transform_changed;
   if (needs_full_transform_update) {
     // If only the transform property changed, without other related properties
     // changing, try to schedule a deferred transform node update.
-    if (!diff.OtherTransformPropertyChanged() &&
+    if (diff.only_transform_property_changed &&
         PaintPropertyTreeBuilder::ScheduleDeferredTransformNodeUpdate(
             GetLayoutObject())) {
       needs_full_transform_update = false;
@@ -2316,7 +2448,7 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
     }
   }
 
-  bool needs_full_opacity_update = diff.OpacityChanged();
+  bool needs_full_opacity_update = diff.opacity_changed;
   if (needs_full_opacity_update) {
     if (PaintPropertyTreeBuilder::ScheduleDeferredOpacityNodeUpdate(
             GetLayoutObject())) {
@@ -2328,9 +2460,9 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
   // See also |LayoutObject::SetStyle| which handles these invalidations if a
   // PaintLayer is not present.
   if (needs_full_transform_update || needs_full_opacity_update ||
-      diff.ZIndexChanged() || diff.FilterChanged() || diff.CssClipChanged() ||
-      diff.BlendModeChanged() || diff.MaskChanged() ||
-      diff.CompositingReasonsChanged()) {
+      diff.z_index_changed || diff.filter_changed ||
+      diff.clip_property_changed || diff.blend_mode_changed ||
+      diff.mask_changed || diff.compositing_reasons_changed) {
     GetLayoutObject().SetNeedsPaintPropertyUpdate();
     MarkAncestorChainForFlagsUpdate();
   }
@@ -2353,7 +2485,7 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
     DirtyStackingContextZOrderLists();
   }
 
-  if (diff.ZIndexChanged()) {
+  if (diff.z_index_changed) {
     // We don't need to invalidate paint of objects when paint order
     // changes. However, we do need to repaint the containing stacking
     // context, in order to generate new paint chunks in the correct order.
@@ -2382,12 +2514,6 @@ void PaintLayer::StyleDidChange(StyleDifference diff,
   }
 }
 
-gfx::Vector2d PaintLayer::PixelSnappedScrolledContentOffset() const {
-  if (GetLayoutObject().IsScrollContainer())
-    return GetLayoutBox()->PixelSnappedScrolledContentOffset();
-  return gfx::Vector2d();
-}
-
 PaintLayerClipper PaintLayer::Clipper() const {
   return PaintLayerClipper(this);
 }
@@ -2397,6 +2523,22 @@ FilterOperations PaintLayer::FilterOperationsIncludingReflection() const {
   FilterOperations filter_operations = style.Filter();
   if (GetLayoutObject().HasReflection() && GetLayoutObject().IsBox()) {
     BoxReflection reflection = BoxReflectionForPaintLayer(*this, style);
+
+    if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(
+            GetLayoutObject().GetDocument().GetExecutionContext()) &&
+        GetLayoutObject().IsInCanvasSubtree()) {
+      if (const auto* reflect_style = style.BoxReflect()) {
+        if (auto* style_image = reflect_style->Mask().GetImage()) {
+          // Strip the mask image if it is being rendered into a canvas and it
+          // is cross-origin.
+          if (!style_image->IsCorsSameOrigin()) {
+            reflection =
+                BoxReflection(reflection.Direction(), reflection.Offset());
+          }
+        }
+      }
+    }
+
     filter_operations.Operations().push_back(
         MakeGarbageCollected<BoxReflectFilterOperation>(reflection));
   }
@@ -2459,7 +2601,7 @@ void PaintLayer::UpdateCompositorFilterOperationsForBackdropFilter(
   // To get around that, we add the "regular" filters to the backdrop filters to
   // approximate.
   FilterOperations filter_operations = style.BackdropFilter();
-  filter_operations.Operations().AppendVector(style.Filter().Operations());
+  filter_operations.Operations().append_range(style.Filter().Operations());
   // NOTE: Backdrop filters will have their input cropped to the their layer
   // bounds with a mirror edge mode, but this is the responsibility of the
   // compositor to apply, regardless of the actual filter operations added here.
@@ -2509,6 +2651,14 @@ bool PaintLayer::ComputeHasFilterThatMovesPixels() const {
   if (GetLayoutObject().HasReflection())
     return true;
   return false;
+}
+
+bool PaintLayer::ComputeHasReferenceFilter() const {
+  if (!HasFilterInducingProperty()) {
+    return false;
+  }
+  const ComputedStyle& style = GetLayoutObject().StyleRef();
+  return style.HasFilter() && style.Filter().HasReferenceFilter();
 }
 
 void PaintLayer::SetNeedsRepaint() {

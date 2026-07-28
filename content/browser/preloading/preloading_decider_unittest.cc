@@ -29,8 +29,8 @@
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_renderer_host.h"
-#include "content/test/test_content_browser_client.h"
 #include "content/test/test_web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
@@ -612,7 +612,7 @@ TEST_F(PreloadingDeciderTest,
   const auto& prefetches = GetPrefetchService()->prefetches_;
   preloading_decider->OnPointerDown(url);
 
-  EXPECT_TRUE(prefetches[0]->request().speculation_rules_tags());
+  ASSERT_TRUE(prefetches[0]->request().speculation_rules_tags());
   EXPECT_EQ(prefetches[0]
                 ->request()
                 .speculation_rules_tags()
@@ -657,7 +657,7 @@ TEST_F(PreloadingDeciderTest,
           /*mouse_acceleration=*/0.0),
       blink::mojom::SpeculationEagerness::kModerate);
 
-  EXPECT_TRUE(prefetches[0]->request().speculation_rules_tags());
+  ASSERT_TRUE(prefetches[0]->request().speculation_rules_tags());
   EXPECT_EQ(prefetches[0]
                 ->request()
                 .speculation_rules_tags()
@@ -691,7 +691,7 @@ TEST_F(PreloadingDeciderTest, SpeculationRulesTagsMergingForImmediatePrefetch) {
   preloading_decider->UpdateSpeculationCandidates(candidates);
   const auto& prefetches = GetPrefetchService()->prefetches_;
 
-  EXPECT_TRUE(prefetches[0]->request().speculation_rules_tags());
+  ASSERT_TRUE(prefetches[0]->request().speculation_rules_tags());
   EXPECT_EQ(prefetches[0]
                 ->request()
                 .speculation_rules_tags()

@@ -34,7 +34,7 @@ TEST_F(BluetoothSocketApiUnittest, Permission) {
 }
 
 // Tests bluetoothSocket.create() and bluetoothSocket.close().
-// Regression test for https://crbug.com/831651.
+// Regression test for https://crbug.com/40571201.
 TEST_F(BluetoothSocketApiUnittest, CreateThenClose) {
   scoped_refptr<const Extension> extension_with_socket_permitted =
       ExtensionBuilder()
@@ -57,7 +57,7 @@ TEST_F(BluetoothSocketApiUnittest, CreateThenClose) {
   auto create_function =
       base::MakeRefCounted<api::BluetoothSocketCreateFunction>();
   std::optional<base::Value> result =
-      RunFunctionAndReturnValue(create_function.get(), "[]");
+      RunFunctionAndReturnValue(create_function, "[]");
   ASSERT_TRUE(result);
   ASSERT_TRUE(result->is_dict());
 
@@ -68,7 +68,7 @@ TEST_F(BluetoothSocketApiUnittest, CreateThenClose) {
   const int socket_id = create_info->socket_id;
   auto close_function =
       base::MakeRefCounted<api::BluetoothSocketCloseFunction>();
-  RunFunction(close_function.get(), base::StringPrintf("[%d]", socket_id));
+  RunFunction(close_function, base::StringPrintf("[%d]", socket_id));
 }
 
 }  // namespace extensions

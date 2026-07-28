@@ -205,7 +205,7 @@ IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsImportBookmarksFile,
 }
 
 // Test an import with all import options disabled. This is a regression test
-// for http://crbug.com/169984 where this would cause the import process to
+// for http://crbug.com/40959863 where this would cause the import process to
 // stay running, and the NTP to be loaded with no apps.
 const char kImportNothing[] =
     "{\n"
@@ -222,7 +222,7 @@ IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsImportNothing,
                        ImportNothingAndShowNewTabPage) {
   EXPECT_EQ(AUTO_IMPORT_CALLED, auto_import_state());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
-                                           GURL(chrome::kChromeUINewTabURL)));
+                                           chrome::ChromeUINewTabURLAsGURL()));
   content::WebContents* tab = browser()->tab_strip_model()->GetWebContentsAt(0);
   EXPECT_TRUE(WaitForLoadStop(tab));
 }
@@ -249,7 +249,7 @@ class FirstRunMasterPrefsWithTrackedPreferences
 
 IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsWithTrackedPreferences,
                        TrackedPreferencesSurviveFirstRun) {
-  const PrefService* user_prefs = browser()->profile()->GetPrefs();
+  const PrefService* user_prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_EQ("example.com", user_prefs->GetString(prefs::kHomePage));
   EXPECT_FALSE(user_prefs->GetBoolean(prefs::kHomePageIsNewTabPage));
 
@@ -445,7 +445,7 @@ class FirstRunMasterPrefsImportBookmarkFaviconBrowserTest
 
 IN_PROC_BROWSER_TEST_P(FirstRunMasterPrefsImportBookmarkFaviconBrowserTest,
                        ImportBookmarksDict) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   bookmarks::BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForBrowserContext(profile);
 

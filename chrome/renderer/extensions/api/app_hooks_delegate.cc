@@ -34,7 +34,7 @@ namespace {
 
 void EmptySetterCallback(v8::Local<v8::Name> name,
                          v8::Local<v8::Value> value,
-                         const v8::PropertyCallbackInfo<void>& info) {
+                         const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   // Empty setter is required to keep the native data property in "accessor"
   // state even in case the value is updated by user code.
 }
@@ -47,7 +47,7 @@ void AppHooksDelegate::IsInstalledGetterCallback(
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   v8::HandleScope handle_scope(info.GetIsolate());
   v8::Local<v8::Context> context =
-      info.HolderV2()->GetCreationContextChecked(info.GetIsolate());
+      info.Holder()->GetCreationContextChecked(info.GetIsolate());
   ScriptContext* script_context =
       ScriptContextSet::GetContextByV8Context(context);
 

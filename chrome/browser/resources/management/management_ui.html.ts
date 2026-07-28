@@ -5,27 +5,32 @@
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {ManagementUiElement} from './management_ui.js';
-import {getPromotionBannerHtml} from './promotion_banner.html.js';
 
 export function getHtml(this: ManagementUiElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
+<if expr="not is_android">
 <cr-toolbar page-name="$i18n{toolbarTitle}" role="banner" autofocus
     @search-changed="${this.onSearchChanged_}" clear-label="$i18n{clearSearch}"
     search-prompt="$i18n{searchPrompt}">
 </cr-toolbar>
-<div id="cr-container-shadow-top"
-    class="cr-container-shadow has-shadow"></div>
-<main id="mainContent">
-   <div class="cr-centered-card-container">
+</if>
+<main id="mainContent" class="cr-scrollable">
+  <div class="cr-scrollable-top-shadow"></div>
+  <div class="cr-centered-card-container">
     <div class="card">
       <section ?hidden="${!this.managed_}" class="page-subtitle">
+<if expr="not is_android">
         <cr-icon-button class="icon-arrow-back" id="closeButton"
-            @click="${this.onTapBack_}" aria-label="$i18n{backButton}">
+            @click="${this.onBackClick_}" aria-label="$i18n{backButton}">
         </cr-icon-button>
+</if>
         <h2 class="cr-title-text">${this.subtitle_}</h2>
       </section>
-      ${getPromotionBannerHtml.call(this)}
+      ${this.shouldShowPromotion_ ? html`
+        <promotion-banner @promotion-dismissed="${this.onPromotionDismissed_}">
+        </promotion-banner>
+      ` : ''}
 <if expr="is_chromeos">
       <section class="eol-section" ?hidden="${!this.eolMessage_}">
         <div class="eol-warning-icon">
@@ -198,7 +203,7 @@ export function getHtml(this: ManagementUiElement) {
               <tr>
                 <td class="extension-name">
                   <div .title="${item.name}" role="presentation">
-                    <img .src="${item.icon}" alt="" aria-hidden="true">
+                    <img .src="${item.icon || ''}" alt="" aria-hidden="true">
                     <span>${item.name}</span>
                   </div>
                 </td>
@@ -242,7 +247,7 @@ export function getHtml(this: ManagementUiElement) {
               <tr>
                 <td class="application-name">
                   <div .title="${item.name}" role="presentation">
-                    <img .src="${item.icon}" alt="" aria-hidden="true">
+                    <img .src="${item.icon || ''}" alt="" aria-hidden="true">
                     <span>${item.name}</span>
                   </div>
                 </td>

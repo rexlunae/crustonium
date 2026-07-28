@@ -203,8 +203,8 @@ class CreditCardFidoAuthenticatorTest
   }
 
   void SetUserOptInPreference(bool user_is_opted_in) {
-    ::autofill::prefs::SetCreditCardFIDOAuthEnabled(
-        autofill_client().GetPrefs(), user_is_opted_in);
+    prefs::SetCreditCardFIDOAuthEnabled(autofill_client().GetPrefs(),
+                                        user_is_opted_in);
     fido_authenticator().user_is_opted_in_ =
         fido_authenticator().IsUserOptedIn();
   }
@@ -307,7 +307,7 @@ TEST_F(CreditCardFidoAuthenticatorTest, ParseRequestOptions) {
 
   blink::mojom::PublicKeyCredentialRequestOptionsPtr request_options_ptr =
       fido_authenticator().ParseRequestOptions(std::move(request_options_json));
-  EXPECT_EQ(kTestChallenge, BytesToBase64(*request_options_ptr->challenge));
+  EXPECT_EQ(kTestChallenge, BytesToBase64(request_options_ptr->challenge));
   EXPECT_EQ(kTestRelyingPartyId, request_options_ptr->relying_party_id);
   EXPECT_EQ(kTestCredentialId,
             BytesToBase64(request_options_ptr->allow_credentials.front().id));

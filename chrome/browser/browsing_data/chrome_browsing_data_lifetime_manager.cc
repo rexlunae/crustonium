@@ -19,12 +19,10 @@
 #include "base/task/task_traits.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -36,6 +34,7 @@
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -67,7 +66,7 @@ using ScheduledRemovalSettings =
     ChromeBrowsingDataLifetimeManager::ScheduledRemovalSettings;
 
 // An observer of all the browsing data removal tasks that are started by the
-// ChromeBrowsingDataLifetimeManager that records the the tasks starts and
+// ChromeBrowsingDataLifetimeManager that records the tasks starts and
 // completed states as well as their durations.
 class BrowsingDataRemoverObserver
     : public content::BrowsingDataRemover::Observer {
@@ -229,7 +228,7 @@ std::vector<ScheduledRemovalSettings> ConvertToScheduledRemovalSettings(
 
 std::set<GURL> GetOpenedUrlsAndOngoingDownloads(Profile* profile) {
   std::set<GURL> result;
-  // TODO (crbug/1288416): Enable this for android.
+  // TODO (crbug.com/40211511): Enable this for android.
 #if !BUILDFLAG(IS_ANDROID)
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [profile, &result](BrowserWindowInterface* browser) {
@@ -237,8 +236,8 @@ std::set<GURL> GetOpenedUrlsAndOngoingDownloads(Profile* profile) {
           return true;
         }
         TabStripModel* const tab_strip_model = browser->GetTabStripModel();
-        for (int i = 0; i < tab_strip_model->count(); ++i) {
-          result.insert(tab_strip_model->GetWebContentsAt(i)->GetURL());
+        for (tabs::TabInterface* tab: *tab_strip_model) {
+          result.insert(tab->GetContents()->GetURL());
         }
         return true;
       });

@@ -25,11 +25,11 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
 import org.chromium.chrome.browser.compositor.overlays.strip.TestTabModel;
@@ -76,7 +76,9 @@ public class UndoRefocusHelperTest {
         when(mTabModelSelector.getCurrentModel()).thenReturn(mTabModel);
         when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
         when(mTabModelSelector.getModels()).thenReturn(List.of(mTabModel));
-        when(mLayoutManagerImpl.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(true);
+        when(mTabModelSelector.getCurrentTabModelSupplier())
+                .thenReturn(ObservableSuppliers.createMonotonic(mTabModel));
+        when(mLayoutManagerImpl.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
         mLayoutManagerObservableSupplier.set(mLayoutManagerImpl);
 
         mTab0 = getMockedTab(0);
@@ -89,11 +91,11 @@ public class UndoRefocusHelperTest {
         mUndoRefocusHelper =
                 new UndoRefocusHelper(mTabModelSelector, mLayoutManagerObservableSupplier, true);
         verify(mTabModel).addObserver(mTabModelObserverCaptor.capture());
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mLayoutManagerImpl).addObserver(mLayoutStateObserverCaptor.capture());
 
-        when(mLayoutManagerImpl.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(false);
-        mLayoutStateObserverCaptor.getValue().onFinishedHiding(LayoutType.TAB_SWITCHER);
+        when(mLayoutManagerImpl.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
+        mLayoutStateObserverCaptor.getValue().onFinishedHiding(LayoutType.HUB);
     }
 
     private void initializeTabModel(int selectedIndex) {
@@ -260,7 +262,7 @@ public class UndoRefocusHelperTest {
         initializeTabModel(3);
         TabModelObserver tabModelObserver = mTabModelObserverCaptor.getValue();
         Tab tab = getMockedTab(3);
-        mLayoutStateObserverCaptor.getValue().onFinishedShowing(LayoutType.TAB_SWITCHER);
+        mLayoutStateObserverCaptor.getValue().onFinishedShowing(LayoutType.HUB);
 
         // Act: Close tab and undo closed tab.
         tabModelObserver.willCloseTab(tab, true);
@@ -280,9 +282,9 @@ public class UndoRefocusHelperTest {
 
         // Act: Close 2 tabs and undo, one with tab switcher open.
         LayoutStateObserver layoutStateObserver = mLayoutStateObserverCaptor.getValue();
-        layoutStateObserver.onFinishedShowing(LayoutType.TAB_SWITCHER);
+        layoutStateObserver.onFinishedShowing(LayoutType.HUB);
         tabModelObserver.willCloseTab(tab, true);
-        layoutStateObserver.onFinishedHiding(LayoutType.TAB_SWITCHER);
+        layoutStateObserver.onFinishedHiding(LayoutType.HUB);
         tabModelObserver.willCloseTab(secondTab, true);
 
         tabModelObserver.tabClosureUndone(secondTab);

@@ -41,7 +41,6 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
-import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryAction;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryTabType;
@@ -59,9 +58,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Controller tests for the password accessory sheet. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {CustomShadowAsyncTask.class})
+@Config(manifest = Config.NONE)
 public class PasswordAccessorySheetControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -130,7 +127,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ ""));
         verify(mMockItemListObserver).onItemRangeInserted(mSheetDataPieces, 0, 1);
         assertThat(mSheetDataPieces.size(), is(1));
@@ -140,7 +136,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Other Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ ""));
         verify(mMockItemListObserver).onItemRangeChanged(mSheetDataPieces, 0, 1, null);
         assertThat(mSheetDataPieces.size(), is(1));
@@ -163,7 +158,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "", // Backend sends no title if a password exists.
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
         mCoordinator.registerDataProvider(testProvider);
 
@@ -185,7 +179,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "No passwords for this domain",
-                        /* plusAddressTitle= */ "No plus addresses for this domain",
                         /* warning= */ "");
         mCoordinator.registerDataProvider(testProvider);
 
@@ -193,17 +186,13 @@ public class PasswordAccessorySheetControllerTest {
         testData.getFooterCommands().add(new FooterCommand("Manage passwords", result -> {}));
         testProvider.set(testData);
 
-        assertThat(mSheetDataPieces.size(), is(4));
+        assertThat(mSheetDataPieces.size(), is(3));
         assertThat(getType(mSheetDataPieces.get(0)), is(TITLE));
         assertThat(
                 mSheetDataPieces.get(0).getDataPiece(),
                 is(equalTo("No passwords for this domain")));
-        assertThat(getType(mSheetDataPieces.get(1)), is(TITLE));
-        assertThat(
-                mSheetDataPieces.get(1).getDataPiece(),
-                is(equalTo("No plus addresses for this domain")));
-        assertThat(getType(mSheetDataPieces.get(2)), is(DIVIDER));
-        assertThat(getType(mSheetDataPieces.get(3)), is(FOOTER_COMMAND));
+        assertThat(getType(mSheetDataPieces.get(1)), is(DIVIDER));
+        assertThat(getType(mSheetDataPieces.get(2)), is(FOOTER_COMMAND));
     }
 
     @Test
@@ -214,7 +203,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
         AtomicReference<Boolean> toggleEnabled = new AtomicReference<>();
         testData.setOptionToggle(
@@ -342,7 +330,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
         testData.setOptionToggle(
                 new OptionToggle(

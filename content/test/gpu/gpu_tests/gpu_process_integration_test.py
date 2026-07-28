@@ -19,6 +19,8 @@ from gpu_tests.util import host_information
 import gpu_path_util
 
 _GPU_PAGE_TIMEOUT = 30
+_GPU_VISIBILITY_POLL_DURATION_SEC = 5
+_GPU_VISIBILITY_POLL_DELAY_SEC = 0.1
 
 data_path = os.path.join(gpu_path_util.CHROMIUM_SRC_DIR, 'content', 'test',
                          'data')
@@ -54,6 +56,7 @@ def _GetBrowserBridgeProperty(tab: ct.Tab, path: str) -> dict:
 
 
 class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
+
   @classmethod
   def Name(cls) -> str:
     """The name by which this test is invoked on the command line."""
@@ -125,7 +128,11 @@ class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
         ('GpuProcess_webgl_disabled_extension',
          'gpu/functional_webgl_disabled_extension.html'),
         ('GpuProcess_webgpu_iframe_removed', 'gpu/webgpu-iframe-removed.html'),
+        ('GpuProcess_vulkan_vma_race', 'gpu/vulkan_vma_race.html'),
         ('GpuProcess_visibility', 'about:blank'),
+        ('GpuProcess_webgl_y16_uploads', 'gpu/webgl_y16_uploads.html'),
+        ('GpuProcess_webgl_background_clear',
+         'gpu/webgl-background-clear.html'),
     )
 
     for t in tests:
@@ -149,7 +156,8 @@ class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
   def _WaitForTestCompletion(self, tab: ct.Tab) -> None:
     tab.action_runner.WaitForJavaScriptCondition(
-        'window.domAutomationController._finished', timeout=10)
+        'window.domAutomationController._finished',
+        timeout=(20 if self.browser.platform.GetOSName() == 'fuchsia' else 10))
     if not tab.EvaluateJavaScript('window.domAutomationController._succeeded'):
       self.fail('Test reported that it failed')
 
@@ -422,6 +430,19 @@ class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
       self.fail('GPU process not detected')
 
   def _GpuProcess_visibility(self, test_path: str) -> None:
+
+    def _PollUntilVisibilityCallbackCount(target_count: int) -> None:
+      start_time = time.monotonic()
+      while time.monotonic() - start_time < _GPU_VISIBILITY_POLL_DURATION_SEC:
+        system_info = self.browser.GetSystemInfo()
+        callback_count = system_info.gpu.aux_attributes[
+            'visibility_callback_call_count']
+        if callback_count == target_count:
+          return
+        time.sleep(_GPU_VISIBILITY_POLL_DELAY_SEC)
+      self.fail(f'Visibility callback call count expected {target_count}, got '
+                f'{callback_count}')
+
     os_name = self.browser.platform.GetOSName()
     if os_name != 'android':
       logging.info('Skipping test because not running on Android')
@@ -443,33 +464,29 @@ class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
     self.RestartBrowserIfNecessaryWithArgs([])
     self._Navigate(test_path)
-    system_info = self.browser.GetSystemInfo()
-    callback_count = system_info.gpu.aux_attributes[
-        'visibility_callback_call_count']
-    # initial callback count should be 1 since the app became visible
-    if callback_count != 1:
-      self.fail(
-          f'Visibility callback call count expected 1, got {callback_count}')
+
+    self.tab.WaitForJavaScriptCondition('document.visibilityState == "visible"',
+                                        timeout=_GPU_PAGE_TIMEOUT)
+    _PollUntilVisibilityCallbackCount(1)
 
     self.browser.platform.android_action_runner.TurnScreenOff()
     self.tab.WaitForJavaScriptCondition('document.visibilityState == "hidden"',
                                         timeout=_GPU_PAGE_TIMEOUT)
-    system_info = self.browser.GetSystemInfo()
-    callback_count = system_info.gpu.aux_attributes[
-        'visibility_callback_call_count']
-    if callback_count != 2:
-      self.fail(
-          f'Visibility callback call count expected 2, got {callback_count}')
+    _PollUntilVisibilityCallbackCount(2)
 
     self.browser.platform.android_action_runner.TurnScreenOn()
     self.tab.WaitForJavaScriptCondition('document.visibilityState == "visible"',
                                         timeout=_GPU_PAGE_TIMEOUT)
-    system_info = self.browser.GetSystemInfo()
-    callback_count = system_info.gpu.aux_attributes[
-        'visibility_callback_call_count']
-    if callback_count != 3:
-      self.fail(
-          f'Visibility callback call count expected 3, got {callback_count}')
+    _PollUntilVisibilityCallbackCount(3)
+
+  def _GpuProcess_webgl_y16_uploads(self, test_path: str) -> None:
+    self.RestartBrowserIfNecessaryWithArgs([
+        '--use-fake-device-for-media-stream=device-count=2',
+        '--use-fake-ui-for-media-stream',
+        '--autoplay-policy=no-user-gesture-required',
+        '--use-angle=swiftshader',
+    ])
+    self._NavigateAndWait(test_path)
 
   def _GpuProcess_disable_gpu_and_swiftshader(self, test_path: str) -> None:
     # Disable SwiftShader, GPU process should launch for display compositing.
@@ -727,8 +744,8 @@ class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
       self.fail('High-performance WebGL context did not activate the '
                 'high-performance GPU')
 
-  def _GpuProcess_mac_webgl_backgrounded_high_performance(self, test_path: str
-                                                          ) -> None:
+  def _GpuProcess_mac_webgl_backgrounded_high_performance(
+      self, test_path: str) -> None:
     # Ensures that high-performance WebGL content in a background tab releases
     # the hold on the discrete GPU after 10 seconds.
     if not self.IsDualGPUMacLaptop():
@@ -804,12 +821,27 @@ class GpuProcessIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     self.RestartBrowserIfNecessaryWithArgs([])
     self._NavigateAndWait(test_path)
 
+  def _GpuProcess_vulkan_vma_race(self, test_path: str) -> None:
+    self.RestartBrowserIfNecessaryWithArgs([])
+    self._NavigateAndWait(test_path)
+    self._VerifyGpuProcessPresent()
+
+  def _GpuProcess_webgl_background_clear(self, test_path: str) -> None:
+    self.RestartBrowserWithArgs([])
+    self._Navigate(test_path)
+    webgl_tab = self.tab
+    if not webgl_tab.browser.supports_tab_control:
+      self.fail('Browser must support tab control')
+    webgl_tab.WaitForJavaScriptCondition('window.setupFinished', timeout=10)
+    blank_tab = self.browser.tabs.New()
+    blank_tab.Activate()
+    self._WaitForTestCompletion(webgl_tab)
+
   @classmethod
   def ExpectationsFiles(cls) -> list[str]:
     return [
-        os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'test_expectations',
-            'gpu_process_expectations.txt')
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     'test_expectations', 'gpu_process_expectations.txt')
     ]
 
 

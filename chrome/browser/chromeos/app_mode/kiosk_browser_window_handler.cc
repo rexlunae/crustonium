@@ -24,10 +24,10 @@
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -222,7 +222,7 @@ bool KioskBrowserWindowHandler::PreTriageNewBrowserWindowWithoutUrl(
   }
 
   if (IsDevToolsAllowedBrowser(browser)) {
-    MakeWindowResizable(browser->window());
+    MakeWindowResizable(BrowserWindow::FromBrowser(browser));
     base::UmaHistogramEnumeration(
         kKioskNewBrowserWindowHistogram,
         KioskBrowserWindowType::kOpenedDevToolsBrowser);
@@ -231,7 +231,7 @@ bool KioskBrowserWindowHandler::PreTriageNewBrowserWindowWithoutUrl(
   }
 
   if (IsNormalTroubleshootingBrowserAllowed(browser)) {
-    MakeWindowResizable(browser->window());
+    MakeWindowResizable(BrowserWindow::FromBrowser(browser));
     base::UmaHistogramEnumeration(
         kKioskNewBrowserWindowHistogram,
         KioskBrowserWindowType::kOpenedTroubleshootingNormalBrowser);
@@ -258,8 +258,9 @@ void KioskBrowserWindowHandler::HandleNewSettingsWindow(
     return;
   }
 
-  bool app_browser = browser->is_type_app() || browser->is_type_app_popup() ||
-                     browser->is_type_popup();
+  bool app_browser =
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+      browser->is_type_app_popup() || browser->is_type_popup();
   if (!app_browser) {
     // If this browser is not an app browser, create a new app browser if none
     // yet exists.
@@ -281,8 +282,8 @@ void KioskBrowserWindowHandler::HandleNewSettingsWindow(
   // We have to first call Restore() because the window was created as a
   // fullscreen window, having no prior bounds.
   // TODO(crbug.com/40103687): Figure out how to do it more cleanly.
-  browser->window()->Restore();
-  browser->window()->Maximize();
+  browser->GetWindow()->Restore();
+  browser->GetWindow()->Maximize();
 }
 
 void KioskBrowserWindowHandler::CloseAllUnexpectedBrowserWindows() {
@@ -318,7 +319,7 @@ void KioskBrowserWindowHandler::OnCompleteBrowserAdded(Browser* browser) {
   }
 
   // Hide the window until it is triaged.
-  browser->window()->Hide();
+  browser->GetWindow()->Hide();
 
   // At this point the URL being opened might still be unknown.
   // This URL is required for our triaging, so we'll wait for it.
@@ -331,7 +332,7 @@ void KioskBrowserWindowHandler::OnCompleteBrowserAdded(Browser* browser) {
 void KioskBrowserWindowHandler::OnBrowserNavigationWatchEnded(
     Browser* browser) {
   if (TriageNewSettingsBrowserWindow(browser)) {
-    browser->window()->Show();
+    browser->GetWindow()->Show();
   }
 }
 

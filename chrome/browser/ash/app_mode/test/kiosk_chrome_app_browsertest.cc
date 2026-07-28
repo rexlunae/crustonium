@@ -19,7 +19,6 @@
 #include "chrome/browser/ash/app_mode/test/kiosk_test_utils.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_web_app_install_util.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
@@ -83,7 +82,7 @@ IN_PROC_BROWSER_TEST_F(KioskChromeAppTest, InstallsAppFromPolicy) {
                                TheKioskChromeApp().id().app_id.value()));
 }
 
-// Covers crbug.com/1235334.
+// Covers crbug.com/40782012.
 IN_PROC_BROWSER_TEST_F(KioskChromeAppTest, AppWindowIsFullScreen) {
   auto& registry =
       CHECK_DEREF(extensions::AppWindowRegistry::Get(&CurrentProfile()));

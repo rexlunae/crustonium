@@ -32,6 +32,7 @@
 #include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_constraints.h"
+#include "components/content_settings/core/common/content_settings_enums.mojom-shared.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
@@ -75,6 +76,7 @@
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
 #include "net/ssl/ssl_connection_status_flags.h"
+#include "services/device/public/cpp/device_features.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
@@ -165,7 +167,6 @@ ContentSettingsType kPermissionType[] = {
 #if BUILDFLAG(IS_CHROMEOS)
     ContentSettingsType::WEB_PRINTING,
 #endif  // BUILDFLAG(IS_CHROMEOS)
-    ContentSettingsType::LOCAL_NETWORK_ACCESS,
     ContentSettingsType::LOCAL_NETWORK,
     ContentSettingsType::LOOPBACK_NETWORK,
 };
@@ -281,6 +282,36 @@ ContentSetting ToContentSettingForMetrics(
 void LogTimeOpenHistogram(const std::string& name, base::TimeTicks start_time) {
   base::UmaHistogramCustomTimes(name, base::TimeTicks::Now() - start_time,
                                 base::Milliseconds(1), base::Hours(1), 100);
+}
+
+bool HasSiteSpecificDecision(const PageInfo::PermissionInfo& permission,
+                             bool is_incognito) {
+  auto* info = content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+      permission.type);
+
+  const PermissionSetting factory_default_setting =
+      content_settings::PermissionSettingsRegistry::GetInstance()
+          ->Get(permission.type)
+          ->GetInitialDefaultSetting();
+
+  // Settings that are granted in regular mode get reduced to ASK in incognito
+  // mode. In this case, the site should trigger a permission prompt if/when
+  // appropriate to change the setting, and until then, the capability cannot be
+  // used, so no need to show it in page info.
+  const bool is_incognito_default =
+      is_incognito && permission.setting &&
+      info->delegate().IsUndecided(*permission.setting) &&
+      info->delegate().IsUndecided(factory_default_setting);
+
+  return permission.setting && !is_incognito_default;
+}
+
+bool IsDefaultSameAsFactoryDefault(const PageInfo::PermissionInfo& permission) {
+  const PermissionSetting factory_default_setting =
+      content_settings::PermissionSettingsRegistry::GetInstance()
+          ->Get(permission.type)
+          ->GetInitialDefaultSetting();
+  return factory_default_setting == permission.default_setting;
 }
 
 // Time open histogram prefixes.
@@ -414,29 +445,6 @@ void PageInfo::OnThirdPartyToggleClicked(bool block_third_party_cookies) {
                            : page_info::PAGE_INFO_COOKIES_ALLOWED_FOR_SITE);
   cookie_controller_->OnCookieBlockingEnabledForSite(block_third_party_cookies);
   show_info_bar_ = true;
-}
-
-// static
-bool PageInfo::IsPermissionFactoryDefault(const PermissionInfo& permission,
-                                          bool is_incognito) {
-  auto* info = content_settings::PermissionSettingsRegistry::GetInstance()->Get(
-      permission.type);
-
-  const PermissionSetting factory_default_setting =
-      content_settings::PermissionSettingsRegistry::GetInstance()
-          ->Get(permission.type)
-          ->GetInitialDefaultSetting();
-
-  // Settings that are granted in regular mode get reduced to ASK in incognito
-  // mode. These settings should not be displayed either.
-  const bool is_incognito_default =
-      is_incognito && permission.setting &&
-      info->delegate().IsUndecided(*permission.setting) &&
-      info->delegate().IsUndecided(factory_default_setting);
-
-  return permission.source == content_settings::SettingSource::kUser &&
-         factory_default_setting == permission.default_setting &&
-         (!permission.setting || is_incognito_default);
 }
 
 // static
@@ -707,8 +715,8 @@ void PageInfo::OnSitePermissionChanged(
 
   auto primary_url =
       requesting_origin.has_value() ? requesting_origin->GetURL() : site_url_;
-  ContentSetting setting_old =
-      map->GetContentSetting(primary_url, site_url_, type);
+  PermissionSetting setting_old =
+      map->GetPermissionSetting(primary_url, site_url_, type);
 
   permissions::PermissionUmaUtil::ScopedRevocationReporter
       scoped_revocation_reporter(web_contents_->GetBrowserContext(),
@@ -716,8 +724,9 @@ void PageInfo::OnSitePermissionChanged(
                                  permissions::PermissionSourceUI::OIB);
 
   // The permission may have been blocked due to being under embargo, so if it
-  // was changed away from BLOCK, clear embargo status if it exists.
-  if (setting && !info->delegate().IsBlocked(*setting)) {
+  // was changed away from BLOCK (or reset to default), clear embargo status if
+  // it exists.
+  if (!setting || !info->delegate().IsBlocked(*setting)) {
     delegate_->GetPermissionDecisionAutoblocker()->RemoveEmbargoAndResetCounts(
         site_url_, type);
   }
@@ -740,6 +749,7 @@ void PageInfo::OnSitePermissionChanged(
     if (content_settings::ShouldTypeExpireActively(type)) {
       constraints.set_lifetime(permissions::kOneTimePermissionMaximumLifetime);
     }
+    constraints.set_ephemeral_clears_persistent_grant(true);
   }
   if (type == ContentSettingsType::STORAGE_ACCESS) {
     constraints.set_lifetime(
@@ -752,15 +762,15 @@ void PageInfo::OnSitePermissionChanged(
           permissions::features::
               kSafetyHubUnusedPermissionRevocationForAllSurfaces) &&
       setting &&
-      content_settings::CanBeAutoRevokedAsUnusedPermission(
-          type, info->delegate().ToValue(*setting), is_one_time)) {
+      content_settings::CanBeAutoRevokedAsUnusedPermission(type, *setting,
+                                                           is_one_time)) {
     constraints.set_track_last_visit_for_autoexpiration(true);
   }
 
   // If notification permission changes from allowed to not allowed, log the
   // histogram.
   if (type == ContentSettingsType::NOTIFICATIONS &&
-      setting_old == CONTENT_SETTING_ALLOW &&
+      setting_old == PermissionSetting(CONTENT_SETTING_ALLOW) &&
       (!setting ||
        ToContentSettingForMetrics(info, setting) == CONTENT_SETTING_ASK ||
        ToContentSettingForMetrics(info, setting) == CONTENT_SETTING_BLOCK)) {
@@ -792,6 +802,20 @@ void PageInfo::OnSitePermissionChanged(
             permission_type, web_contents_->GetPrimaryMainFrame()) ||
         is_subscribed_to_permission_change_for_testing;
 
+    CHECK(std::holds_alternative<ContentSetting>(setting_old));
+    permissions::PermissionUmaUtil::RecordPageInfoCameraMicPermissionChange(
+        type, std::get<ContentSetting>(setting_old),
+        ToContentSettingForMetrics(info, setting),
+        is_subscribed_to_permission_change_event);
+
+    permissions::PermissionUmaUtil::RecordPageInfoPermissionChange(
+        type, std::get<ContentSetting>(setting_old),
+        ToContentSettingForMetrics(info, setting),
+        is_subscribed_to_permission_change_event);
+  }
+
+  if (type == ContentSettingsType::NOTIFICATIONS ||
+      type == ContentSettingsType::GEOLOCATION) {
     permissions::PermissionUmaUtil::RecordPageInfoPermissionChange(
         type, setting_old, ToContentSettingForMetrics(info, setting),
         is_subscribed_to_permission_change_event);
@@ -1264,10 +1288,7 @@ void PageInfo::ComputeUIInputs(const GURL& url) {
   // without the user proceeding through a warning. Only show a warning decision
   // revocation button for HTTP allowlist entries added because HTTPS was
   // enforced by HTTPS-First Mode.
-  bool is_https_enforced =
-      delegate->IsHttpsEnforcedForUrl(
-          url, web_contents_->GetPrimaryMainFrame()->GetStoragePartition()) ||
-      delegate_->IsHttpsFirstModeEnabled();
+  bool is_https_enforced = delegate_->IsHttpsFirstModeEnabledForUrl(url);
 
   bool has_warning_bypass_exception =
       has_cert_allow_exception ||
@@ -1354,37 +1375,54 @@ void PageInfo::PopulatePermissionInfo(PermissionInfo& permission_info,
             : CONTENT_SETTING_ALLOW;
     permission_info.default_setting = effective_default_setting;
   }
+  if (base::FeatureList::IsEnabled(
+          permissions::features::kPermanentNotificationSubscribeInPageInfo) &&
+      permission_info.type == ContentSettingsType::NOTIFICATIONS &&
+      web_contents_) {
+    if (permissions::PermissionRequestManager* manager =
+            permissions::PermissionRequestManager::FromWebContents(
+                web_contents_.get())) {
+      if (manager->has_requested_notifications()) {
+        permission_info.is_requested = true;
+      }
+    }
+  }
 #endif  // BUILDFLAG(IS_ANDROID)
 }
 
 // Determines whether to show permission |type| in the Page Info UI. Only
 // applies to permissions listed in |kPermissionType|.
-// By default permissions are shown if they have a non-default value that is
-// verified via `IsPermissionFactoryDefault`. `IsPermissionFactoryDefault`
-// should be kept as the last check in this function. Additionally, permissions
-// can be shown if a user changed the permission via Page Info, it is verified
-// via `HasContentSettingChangedViaPageInfo(type)`.
+//
+// In the first section of this method are some type-specific exceptions, in the
+// second section, the default behavior used when no per-type exception applies.
 bool PageInfo::ShouldShowPermission(
     const PageInfo::PermissionInfo& info) const {
-  // For the Clapper experiment Chrome should display NOTIFICATIONS
-  // permission while it is being requested.
 #if BUILDFLAG(IS_ANDROID)
-  if (info.type == ContentSettingsType::NOTIFICATIONS &&
-      (base::FeatureList::IsEnabled(
-           permissions::kPermissionsAndroidClapperLoud) ||
-       base::FeatureList::IsEnabled(
-           permissions::kPermissionsAndroidClapperQuiet)
-
-           ) &&
-      web_contents_) {
-    permissions::PermissionRequestManager* manager =
-        permissions::PermissionRequestManager::FromWebContents(
-            web_contents_.get());
-    if (manager && manager->IsRequestInProgress()) {
-      for (const auto& request : manager->Requests()) {
-        if (request->GetContentSettingsType() ==
-            ContentSettingsType::NOTIFICATIONS) {
-          return true;
+  if (info.type == ContentSettingsType::NOTIFICATIONS) {
+    // `is_requested` is only populated if
+    // `kPermanentNotificationSubscribeInPageInfo` is enabled: in that case, we
+    // should show the notification entry in Page Info.
+    if (info.is_requested) {
+      CHECK(base::FeatureList::IsEnabled(
+          permissions::features::kPermanentNotificationSubscribeInPageInfo));
+      return true;
+    }
+    // For the Clapper experiment Chrome should display NOTIFICATIONS
+    // permission while it is being requested.
+    if ((base::FeatureList::IsEnabled(
+             permissions::kPermissionsAndroidClapperLoud) ||
+         base::FeatureList::IsEnabled(
+             permissions::kPermissionsAndroidClapperQuiet)) &&
+        web_contents_) {
+      permissions::PermissionRequestManager* manager =
+          permissions::PermissionRequestManager::FromWebContents(
+              web_contents_.get());
+      if (manager && manager->IsRequestInProgress()) {
+        for (const auto& request : manager->Requests()) {
+          if (request->GetContentSettingsType() ==
+              ContentSettingsType::NOTIFICATIONS) {
+            return true;
+          }
         }
       }
     }
@@ -1414,6 +1452,13 @@ bool PageInfo::ShouldShowPermission(
             content_settings::features::kApproximateGeolocationPermission)) {
       return false;
     }
+  }
+
+  // Filter Local Network Access permissions.
+  // Show LOCAL_NETWORK and LOOPBACK_NETWORK.
+  // Hide the legacy LOCAL_NETWORK_ACCESS permission.
+  if (info.type == ContentSettingsType::LOCAL_NETWORK_ACCESS) {
+    return false;
   }
 
   if (info.type == ContentSettingsType::SOUND) {
@@ -1482,6 +1527,10 @@ bool PageInfo::ShouldShowPermission(
   // TODO(crbug.com/40064079): Filter out FPS related STORAGE_ACCESS
   // permissions.
 
+  // ---
+  // Note: Put type-specific extra checks above this line.
+  // ---
+
   // Show the content setting if it has been changed by the user since the last
   // page load. E.g. if the user has reset the permission via Page Info, the
   // permission should still be shown despite its state is default.
@@ -1489,19 +1538,24 @@ bool PageInfo::ShouldShowPermission(
     return true;
   }
 
-  // Show the Bluetooth guard permission if the new permissions backend is
-  // enabled.
-  if (info.type == ContentSettingsType::BLUETOOTH_GUARD &&
-      base::FeatureList::IsEnabled(
-          features::kWebBluetoothNewPermissionsBackend) &&
-      !PageInfo::IsPermissionFactoryDefault(info, is_incognito)) {
+  // Show the page info entry for a type if the effective setting is different
+  // from the factory default, specifically, in the follow three cases:
+  //   (1) There is a site-specific ALLOW/BLOCK setting.
+  //   (2) The setting is non-user controlled (e.g. policy or extension).
+  //   (3) The default setting for this type is changed away from the factory
+  //   default to a setting that prevents sites from prompting, so users must
+  //   resort to making per-site decisions using page info.
+
+  if (HasSiteSpecificDecision(info, is_incognito)) {
     return true;
   }
 
-  // Attention: Keep this check at the end of the function!
-  //
-  // Show the content setting when it has a non-default value.
-  if (!PageInfo::IsPermissionFactoryDefault(info, is_incognito)) {
+  if (info.source != content_settings::SettingSource::kUser) {
+    return true;
+  }
+
+  if (!IsDefaultSameAsFactoryDefault(info) &&
+      info.default_setting != PermissionSetting(CONTENT_SETTING_ASK)) {
     return true;
   }
 
@@ -1695,6 +1749,12 @@ void PageInfo::PresentPageFeatureInfo() {
 }
 
 void PageInfo::PresentAdPersonalizationData() {
+  // If the Ad Privacy UX Deprecation feature is enabled, do not set or show the
+  // ad personalization data.
+  if (base::FeatureList::IsEnabled(
+          privacy_sandbox::kPrivacySandboxAdPrivacyUxDeprecation)) {
+    return;
+  }
   PageInfoUI::AdPersonalizationInfo info;
   auto* settings = GetPageSpecificContentSettings();
   if (!settings) {

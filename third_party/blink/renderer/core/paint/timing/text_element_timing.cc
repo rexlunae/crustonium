@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/paint/timing/text_element_timing.h"
 
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
@@ -25,12 +26,11 @@ TextElementTiming::TextElementTiming(LocalDOMWindow& window)
 gfx::RectF TextElementTiming::ComputeIntersectionRect(
     const LayoutObject& object,
     const gfx::Rect& aggregated_visual_rect,
-    const PropertyTreeStateOrAlias& property_tree_state,
-    const LocalFrameView* frame_view) {
+    const PropertyTreeStateOrAlias& property_tree_state) {
   Node* node = object.GetNode();
   DCHECK(node);
   return ElementTimingUtils::ComputeIntersectionRect(
-      &frame_view->GetFrame(), aggregated_visual_rect, property_tree_state);
+      object.GetFrame(), aggregated_visual_rect, property_tree_state);
 }
 
 bool TextElementTiming::CanReportToElementTiming() const {
@@ -41,7 +41,7 @@ bool TextElementTiming::CanReportToElementTiming() const {
 
 bool TextElementTiming::CanReportToContainerTiming() {
   DCHECK(performance_);
-  if (!RuntimeEnabledFeatures::ContainerTimingEnabled()) {
+  if (!performance_->IsContainerTimingEnabled()) {
     return false;
   }
   EnsureContainerTiming();
@@ -52,10 +52,28 @@ bool TextElementTiming::CanReportElements() {
   return CanReportToElementTiming() || CanReportToContainerTiming();
 }
 
-void TextElementTiming::OnTextObjectPainted(
-    const TextRecord& record,
-    const DOMPaintTimingInfo& paint_timing_info) {
-  DCHECK(record.IsNeededForElementTiming());
+void TextElementTiming::OnFramePresented(
+    const HeapVector<Member<ImageRecord>>& image_records,
+    const HeapVector<Member<TextRecord>>& text_records) {
+  if (!CanReportElements()) {
+    return;
+  }
+  for (auto& record : text_records) {
+    if (record->IsNeededForElementTiming()) {
+      OnTextNodePresented(*record.Get());
+    }
+  }
+}
+
+void TextElementTiming::OnTextNodePresented(const TextRecord& record) {
+  CHECK(record.IsNeededForElementTiming());
+
+  // TODO(crbug.com/454082773): we should consider reporting these to
+  // ElementTiming independently of LCP.
+  if (record.WasNodeRemoved()) {
+    return;
+  }
+
   Node* node = record.GetNode();
 
   // Text aggregators need to be Elements. This will not be the case if the
@@ -77,13 +95,30 @@ void TextElementTiming::OnTextObjectPainted(
     const AtomicString& id = element->GetIdAttribute();
     performance_->AddElementTiming(
         kTextPaint, g_empty_string, record.ElementTimingRect(),
-        paint_timing_info, base::TimeTicks(),
+        record.PaintTimingInfo(), base::TimeTicks(),
         element->FastGetAttribute(html_names::kElementtimingAttr), gfx::Size(),
         id, element);
   }
   if (CanReportToContainerTiming()) {
-    container_timing_->OnElementPainted(paint_timing_info, element,
+    container_timing_->OnElementPainted(record.PaintTimingInfo(), element,
                                         record.ElementTimingRect());
+  }
+}
+
+void TextElementTiming::OnElementLastContentfulPaint(
+    TextRecord* record,
+    ElementPaintStatus status) {
+  CHECK(!record->IsNeededForElementTiming());
+  if (status == ElementPaintStatus::kRepaint) {
+    return;
+  }
+  Node* node = record->GetNode();
+  CHECK(node);
+  auto* element = DynamicTo<Element>(node);
+  if (!node->IsInShadowTree() && element &&
+      (element->FastHasAttribute(html_names::kElementtimingAttr) ||
+       element->SelfOrAncestorHasContainerTiming())) {
+    record->SetIsNeededForElementTiming(true);
   }
 }
 

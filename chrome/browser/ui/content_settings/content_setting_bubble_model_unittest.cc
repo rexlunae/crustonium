@@ -51,6 +51,7 @@
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_recovery_success_rate_tracker.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
@@ -210,7 +211,13 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK),
         std::make_tuple(CONTENT_SETTING_BLOCK, CONTENT_SETTING_ALLOW)));
 
-TEST_F(ContentSettingBubbleModelTest, MediastreamMicAndCamera) {
+// TODO(crbug.com/522276380): Re-enable this test
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_MediastreamMicAndCamera DISABLED_MediastreamMicAndCamera
+#else
+#define MAYBE_MediastreamMicAndCamera MediastreamMicAndCamera
+#endif
+TEST_F(ContentSettingBubbleModelTest, MAYBE_MediastreamMicAndCamera) {
   WebContentsTester::For(web_contents())
       ->NavigateAndCommit(GURL("https://www.example.com"));
   // Required to break dependency on BrowserMainLoop.
@@ -390,7 +397,13 @@ TEST_F(ContentSettingBubbleModelTest, MediastreamContentBubble) {
   }
 }
 
-TEST_F(ContentSettingBubbleModelTest, MediastreamMic) {
+// TODO(crbug.com/514291799): Re-enable when not flakey on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_MediastreamMic DISABLED_MediastreamMic
+#else
+#define MAYBE_MediastreamMic MediastreamMic
+#endif
+TEST_F(ContentSettingBubbleModelTest, MAYBE_MediastreamMic) {
   // Keep `kLeftHandSideActivityIndicators` disabled to test camera/mic content
   // setting bubble.
   base::test::ScopedFeatureList scoped_list;
@@ -459,7 +472,13 @@ TEST_F(ContentSettingBubbleModelTest, MediastreamMic) {
   EXPECT_FALSE(new_bubble_content.manage_text.empty());
 }
 
-TEST_F(ContentSettingBubbleModelTest, MediastreamCamera) {
+// TODO(crbug.com/522276380): Re-enable this test
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_MediastreamCamera DISABLED_MediastreamCamera
+#else
+#define MAYBE_MediastreamCamera MediastreamCamera
+#endif
+TEST_F(ContentSettingBubbleModelTest, MAYBE_MediastreamCamera) {
   // Keep `kLeftHandSideActivityIndicators` disabled to test camera/mic content
   // setting bubble.
   base::test::ScopedFeatureList scoped_list;
@@ -529,7 +548,15 @@ TEST_F(ContentSettingBubbleModelTest, MediastreamCamera) {
   EXPECT_FALSE(new_bubble_content.manage_text.empty());
 }
 
-TEST_F(ContentSettingBubbleModelTest, AccumulateMediastreamMicAndCamera) {
+// TODO(crbug.com/514291799): Re-enable when not flakey on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_AccumulateMediastreamMicAndCamera \
+  DISABLED_AccumulateMediastreamMicAndCamera
+#else
+#define MAYBE_AccumulateMediastreamMicAndCamera \
+  AccumulateMediastreamMicAndCamera
+#endif
+TEST_F(ContentSettingBubbleModelTest, MAYBE_AccumulateMediastreamMicAndCamera) {
   // Keep `kLeftHandSideActivityIndicators` disabled to test camera/mic content
   // setting bubble.
   base::test::ScopedFeatureList scoped_list;
@@ -1113,6 +1140,43 @@ TEST_F(ContentSettingBubbleModelTest, SubresourceFilter) {
             l10n_util::GetStringUTF16(IDS_ALWAYS_ALLOW_ADS));
 }
 
+TEST_F(ContentSettingBubbleModelTest, SubresourceFilterNavigated) {
+  base::HistogramTester histogram_tester;
+  GURL page_url("https://www.example.com");
+  HostContentSettingsMap* settings_map =
+      HostContentSettingsMapFactory::GetForProfile(profile());
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            settings_map->GetContentSetting(page_url, GURL(),
+                                            ContentSettingsType::ADS));
+  WebContentsTester::For(web_contents())->NavigateAndCommit(page_url);
+
+  std::unique_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
+      new ContentSettingSubresourceFilterBubbleModel(nullptr, web_contents()));
+
+  content_setting_bubble_model->OnManageCheckboxChecked(true);
+
+  // Simulate navigation.
+  GURL new_page_url("https://new.example.com");
+  WebContentsTester::For(web_contents())->NavigateAndCommit(new_page_url);
+
+  // This should not crash or apply settings to the new page.
+  content_setting_bubble_model->CommitChanges();
+
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            settings_map->GetContentSetting(page_url, GURL(),
+                                            ContentSettingsType::ADS));
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            settings_map->GetContentSetting(new_page_url, GURL(),
+                                            ContentSettingsType::ADS));
+
+  histogram_tester.ExpectBucketCount(
+      "SubresourceFilter.Actions2",
+      subresource_filter::SubresourceFilterAction::kDetailsShown, 1);
+  histogram_tester.ExpectBucketCount(
+      "SubresourceFilter.Actions2",
+      subresource_filter::SubresourceFilterAction::kAllowlistedSite, 1);
+}
+
 class GenericSensorContentSettingBubbleModelTest
     : public ContentSettingBubbleModelTest {
  public:
@@ -1127,7 +1191,7 @@ class GenericSensorContentSettingBubbleModelTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// Regression test for https://crbug.com/955408
+// Regression test for https://crbug.com/41454392
 // See also: ContentSettingImageModelTest.SensorAccessPermissionsChanged
 TEST_F(GenericSensorContentSettingBubbleModelTest,
        SensorAccessPermissionsChanged) {
@@ -1391,6 +1455,44 @@ TEST_F(ContentSettingBubbleModelTest, PopupBubbleModelListItems) {
   }
 }
 
+TEST_F(ContentSettingBubbleModelTest, PopupBubbleModelListItemsSpoofing) {
+  const GURL url("https://www.example.test/");
+  WebContentsTester::For(web_contents())->NavigateAndCommit(url);
+  blocked_content::PopupBlockerTabHelper::CreateForWebContents(web_contents());
+
+  // Malicious URL
+  GURL spoof_url("http://google.com:VeryLongString@evil.com");
+
+  BlockedWindowParams params(spoof_url, url::Origin(), nullptr,
+                             content::Referrer(), std::string(),
+                             WindowOpenDisposition::NEW_POPUP,
+                             blink::mojom::WindowFeatures(), false, true);
+
+  NavigateParams navigate_params =
+      params.CreateNavigateParams(process(), web_contents());
+  blocked_content::MaybeBlockPopup(
+      web_contents(), &url,
+      std::make_unique<ChromePopupNavigationDelegate>(
+          std::move(navigate_params)),
+      nullptr, params.features(),
+      HostContentSettingsMapFactory::GetForProfile(profile()));
+
+  std::unique_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
+      ContentSettingBubbleModel::CreateContentSettingBubbleModel(
+          nullptr, web_contents(), ContentSettingsType::POPUPS));
+
+  const auto& list_items =
+      content_setting_bubble_model->bubble_content().list_items;
+  ASSERT_EQ(1U, list_items.size());
+
+  // Check the title
+  std::u16string title = list_items[0].title;
+  // It should NOT contain "google.com" if it's formatted correctly for
+  // security.
+  EXPECT_EQ(std::u16string::npos, title.find(u"google.com"));
+  EXPECT_NE(std::u16string::npos, title.find(u"evil.com"));
+}
+
 TEST_F(ContentSettingBubbleModelTest, ValidUrl) {
   WebContentsTester::For(web_contents())
       ->NavigateAndCommit(GURL("https://www.example.com"));
@@ -1466,6 +1568,49 @@ TEST_F(ContentSettingBubbleModelTest, StorageAccess) {
   content_setting_bubble_model->CommitChanges();
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             map->GetContentSetting(site.GetURL(), web_contents()->GetURL(),
+                                   ContentSettingsType::STORAGE_ACCESS));
+}
+
+TEST_F(ContentSettingBubbleModelTest,
+       StorageAccessCommittedWhenNavigatingAway) {
+  const GURL page_url("https://not-example.test");
+  WebContentsTester::For(web_contents())->NavigateAndCommit(page_url);
+  auto* content_settings = PageSpecificContentSettings::GetForFrame(
+      web_contents()->GetPrimaryMainFrame());
+
+  net::SchemefulSite site(GURL("https://example.com"));
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+  map->SetContentSettingDefaultScope(site.GetURL(), page_url,
+                                     ContentSettingsType::STORAGE_ACCESS,
+                                     CONTENT_SETTING_BLOCK);
+
+  content_settings->OnTwoSitePermissionChanged(
+      ContentSettingsType::STORAGE_ACCESS, site, CONTENT_SETTING_BLOCK);
+
+  std::unique_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
+      ContentSettingBubbleModel::CreateContentSettingBubbleModel(
+          nullptr, web_contents(), ContentSettingsType::STORAGE_ACCESS));
+  const ContentSettingBubbleModel::BubbleContent& bubble_content =
+      content_setting_bubble_model->bubble_content();
+
+  EXPECT_EQ(bubble_content.subtitle,
+            url_formatter::FormatUrlForSecurityDisplay(
+                page_url, url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC));
+  EXPECT_EQ(0U, bubble_content.radio_group.radio_items.size());
+  EXPECT_THAT(bubble_content.site_list,
+              UnorderedElementsAre(Pair(site, false)));
+
+  content_setting_bubble_model->OnSiteRowClicked(site, true);
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            map->GetContentSetting(site.GetURL(), page_url,
+                                   ContentSettingsType::STORAGE_ACCESS));
+  WebContentsTester::For(web_contents())
+      ->NavigateAndCommit(GURL("https://another-example.test"));
+  // Simulate a CommitChanges call, which in the real implementation is called
+  // during the widget's WindowClosing as a result of PrimaryPageChanged().
+  content_setting_bubble_model->CommitChanges();
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            map->GetContentSetting(site.GetURL(), page_url,
                                    ContentSettingsType::STORAGE_ACCESS));
 }
 

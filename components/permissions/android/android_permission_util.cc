@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "base/android/jni_array.h"
+#include "base/android/jni_string.h"
 #include "base/auto_reset.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
@@ -18,7 +19,11 @@
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/default_conversions.h"
 #include "ui/android/window_android.h"
+#include "url/android/gurl_android.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/permissions/android/jni_headers/AndroidPermissionRequester_jni.h"
@@ -45,22 +50,22 @@ void AppendRequiredAndroidPermissionsForContentSetting(
     ContentSettingsType content_settings_type,
     std::vector<std::string>* out) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::AppendJavaStringArrayToStringVector(
-      env,
+  std::vector<std::string> result =
       Java_PermissionUtil_getRequiredAndroidPermissionsForContentSetting(
-          env, static_cast<int>(content_settings_type)),
-      out);
+          env, static_cast<int>(content_settings_type));
+  out->insert(out->end(), std::make_move_iterator(result.begin()),
+              std::make_move_iterator(result.end()));
 }
 
 void AppendOptionalAndroidPermissionsForContentSetting(
     ContentSettingsType content_settings_type,
     std::vector<std::string>* out) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::AppendJavaStringArrayToStringVector(
-      env,
+  std::vector<std::string> result =
       Java_PermissionUtil_getOptionalAndroidPermissionsForContentSetting(
-          env, static_cast<int>(content_settings_type)),
-      out);
+          env, static_cast<int>(content_settings_type));
+  out->insert(out->end(), std::make_move_iterator(result.begin()),
+              std::make_move_iterator(result.end()));
 }
 
 bool HasRequiredAndroidPermissionsForContentSetting(
@@ -68,8 +73,7 @@ bool HasRequiredAndroidPermissionsForContentSetting(
     ContentSettingsType content_settings_type) {
   JNIEnv* env = base::android::AttachCurrentThread();
   return Java_AndroidPermissionRequester_hasRequiredAndroidPermissionsForContentSetting(
-      env, window_android->GetJavaObject(),
-      static_cast<int>(content_settings_type));
+      env, window_android, static_cast<int>(content_settings_type));
 }
 
 PermissionRepromptState ShouldRepromptUserForPermissions(
@@ -139,7 +143,7 @@ bool NeedsLocationPermissionForBluetooth(content::WebContents* web_contents) {
   auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
   DCHECK(window_android);
   return Java_PermissionUtil_needsLocationPermissionForBluetooth(
-      env, window_android->GetJavaObject());
+      env, window_android);
 }
 
 bool NeedsNearbyDevicesPermissionForBluetooth(
@@ -148,7 +152,7 @@ bool NeedsNearbyDevicesPermissionForBluetooth(
   auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
   DCHECK(window_android);
   return Java_PermissionUtil_needsNearbyDevicesPermissionForBluetooth(
-      env, window_android->GetJavaObject());
+      env, window_android);
 }
 
 bool NeedsLocationServicesForBluetooth() {
@@ -162,7 +166,7 @@ bool CanRequestSystemPermissionsForBluetooth(
   auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
   DCHECK(window_android);
   return Java_PermissionUtil_canRequestSystemPermissionsForBluetooth(
-      env, window_android->GetJavaObject());
+      env, window_android);
 }
 
 bool HasSystemPermission(ContentSettingsType type,
@@ -193,7 +197,7 @@ bool CanRequestSystemPermission(ContentSettingsType type,
   auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
   DCHECK(window_android);
   return Java_PermissionUtil_canRequestSystemPermission(
-      env, static_cast<int>(type), window_android->GetJavaObject());
+      env, static_cast<int>(type), window_android);
 }
 
 void RequestSystemPermissionsForBluetooth(content::WebContents* web_contents) {
@@ -201,16 +205,15 @@ void RequestSystemPermissionsForBluetooth(content::WebContents* web_contents) {
   auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
   DCHECK(window_android);
   // TODO(crbug.com/40255210): Pass the callback from native layer.
-  return Java_PermissionUtil_requestSystemPermissionsForBluetooth(
-      env, window_android->GetJavaObject(), nullptr);
+  Java_PermissionUtil_requestSystemPermissionsForBluetooth(env, window_android,
+                                                           nullptr);
 }
 
 void RequestLocationServices(content::WebContents* web_contents) {
   JNIEnv* env = base::android::AttachCurrentThread();
   auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
   DCHECK(window_android);
-  return Java_PermissionUtil_requestLocationServices(
-      env, window_android->GetJavaObject());
+  Java_PermissionUtil_requestLocationServices(env, window_android);
 }
 
 base::AutoReset<bool> EnableSystemLocationSettingForTesting() {
@@ -218,57 +221,81 @@ base::AutoReset<bool> EnableSystemLocationSettingForTesting() {
                                true);
 }
 
-namespace internal {
+void ResolvePermissionWithOSPrompt(content::WebContents* web_contents,
+                                   ContentSettingsType content_settings_type,
+                                   const GURL& requesting_origin) {
+  DCHECK(web_contents);
+  auto* window_android = web_contents->GetNativeView()->GetWindowAndroid();
+  DCHECK(window_android);
 
-void ResolveNotificationsPermissionRequest(content::WebContents* web_contents,
-                                           ContentSetting setting) {
-  if (!web_contents) {
-    return;
-  }
-  permissions::PermissionRequestManager* permission_request_manager =
-      permissions::PermissionRequestManager::FromWebContents(web_contents);
-
-  if (!permission_request_manager) {
-    return;
-  }
-  if (permission_request_manager->IsRequestInProgress() &&
-      permission_request_manager->Requests().size() > 0 &&
-      permission_request_manager->Requests()[0]->GetContentSettingsType() ==
-          ContentSettingsType::NOTIFICATIONS) {
-    if (setting == CONTENT_SETTING_ALLOW) {
-      if (!permission_request_manager->ShouldCurrentRequestUseQuietUI()) {
-        base::UmaHistogramBoolean("Permissions.ClapperLoud.PageInfo.Subscribed",
-                                  true);
-      }
-      permission_request_manager->Accept(/*prompt_options=*/std::monostate());
-    } else if (setting == CONTENT_SETTING_BLOCK) {
-      // There are multiple ways to deny the permission request. This histogram
-      // will track the number of times the user denied the permission request
-      // by closing the PageInfo.
-      if (!permission_request_manager->ShouldCurrentRequestUseQuietUI()) {
-        base::UmaHistogramBoolean("Permissions.ClapperLoud.PageInfo.Closed",
-                                  true);
-      }
-      permission_request_manager->Deny(/*prompt_options=*/std::monostate());
-    } else if (setting == CONTENT_SETTING_DEFAULT) {
-      if (!permission_request_manager->ShouldCurrentRequestUseQuietUI()) {
-        base::UmaHistogramBoolean("Permissions.ClapperLoud.PageInfo.Reset",
-                                  true);
-      }
-      // After the user interacts with the reset permission button in PageInfo,
-      // all previously decided permissions are reset by setting them to
-      // DEFAULT. There is no a default action or a state for permission
-      // requests, so we need to explicitly dismiss the request.
-      permission_request_manager->Dismiss(/*prompt_options=*/std::monostate());
-    } else {
-      // Currently, only ALLOW and BLOCK are supported. In case other actions
-      // are added in the future, this should be updated.
-      NOTREACHED();
-    }
-  }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_PermissionUtil_handlePermissionPromptAllow(
+      env, window_android, web_contents, requesting_origin,
+      static_cast<int>(content_settings_type));
 }
 
-void DismissNotificationsPermissionRequest(content::WebContents* web_contents) {
+namespace internal {
+
+bool ResolveNotificationsPermissionRequest(content::WebContents* web_contents,
+                                           const GURL& requesting_origin,
+                                           ContentSetting setting) {
+  if (!web_contents) {
+    return false;
+  }
+  permissions::PermissionRequestManager* permission_request_manager =
+      permissions::PermissionRequestManager::FromWebContents(web_contents);
+
+  if (!permission_request_manager) {
+    return false;
+  }
+  if (permission_request_manager->IsRequestInProgress() &&
+      !permission_request_manager->Requests().empty() &&
+      permission_request_manager->Requests()[0]->GetContentSettingsType() ==
+          ContentSettingsType::NOTIFICATIONS &&
+      url::Origin::Create(
+          permission_request_manager->Requests()[0]->requesting_origin()) ==
+          url::Origin::Create(requesting_origin)) {
+    switch (setting) {
+      case CONTENT_SETTING_ALLOW:
+        if (!permission_request_manager->ShouldCurrentRequestUseQuietUI()) {
+          base::UmaHistogramBoolean(
+              "Permissions.ClapperLoud.PageInfo.Subscribed", true);
+        }
+        permission_request_manager->Accept(/*prompt_options=*/std::monostate());
+        return true;
+      case CONTENT_SETTING_BLOCK:
+        // There are multiple ways to deny the permission request. This
+        // histogram will track the number of times the user denied the
+        // permission request by closing the PageInfo.
+        if (!permission_request_manager->ShouldCurrentRequestUseQuietUI()) {
+          base::UmaHistogramBoolean("Permissions.ClapperLoud.PageInfo.Closed",
+                                    true);
+        }
+        permission_request_manager->Deny(/*prompt_options=*/std::monostate());
+        return true;
+      case CONTENT_SETTING_DEFAULT:
+        if (!permission_request_manager->ShouldCurrentRequestUseQuietUI()) {
+          base::UmaHistogramBoolean("Permissions.ClapperLoud.PageInfo.Reset",
+                                    true);
+        }
+        // After the user interacts with the reset permission button in
+        // PageInfo, all previously decided permissions are reset by setting
+        // them to DEFAULT. There is no a default action or a state for
+        // permission requests, so we need to explicitly dismiss the request.
+        permission_request_manager->Dismiss(
+            /*prompt_options=*/std::monostate());
+        return true;
+      default:
+        // Currently, only ALLOW and BLOCK are supported. In case other actions
+        // are added in the future, this should be updated.
+        NOTREACHED();
+    }
+  }
+  return false;
+}
+
+void DismissNotificationsPermissionRequest(content::WebContents* web_contents,
+                                           const GURL& requesting_origin) {
   if (!web_contents) {
     return;
   }
@@ -279,9 +306,12 @@ void DismissNotificationsPermissionRequest(content::WebContents* web_contents) {
     return;
   }
   if (permission_request_manager->IsRequestInProgress() &&
-      permission_request_manager->Requests().size() > 0 &&
+      !permission_request_manager->Requests().empty() &&
       permission_request_manager->Requests()[0]->GetContentSettingsType() ==
-          ContentSettingsType::NOTIFICATIONS) {
+          ContentSettingsType::NOTIFICATIONS &&
+      url::Origin::Create(
+          permission_request_manager->Requests()[0]->requesting_origin()) ==
+          url::Origin::Create(requesting_origin)) {
     permission_request_manager->Dismiss(/*prompt_options=*/std::monostate());
   }
 }
@@ -298,21 +328,20 @@ void DismissNotificationsPermissionRequest(content::WebContents* web_contents) {
 // valid.
 static void JNI_PermissionUtil_DismissNotificationsPermissionRequest(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jweb_contents) {
-  content::WebContents* web_contents =
-      content::WebContents::FromJavaWebContents(jweb_contents);
-  permissions::internal::DismissNotificationsPermissionRequest(web_contents);
+    content::WebContents* web_contents,
+    const GURL& requesting_origin) {
+  permissions::internal::DismissNotificationsPermissionRequest(
+      web_contents, requesting_origin);
 }
 
-static void JNI_PermissionUtil_ResolveNotificationsPermissionRequest(
+static bool JNI_PermissionUtil_ResolveNotificationsPermissionRequest(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jweb_contents,
+    content::WebContents* web_contents,
+    const GURL& requesting_origin,
     int32_t content_setting) {
-  content::WebContents* web_contents =
-      content::WebContents::FromJavaWebContents(jweb_contents);
   ContentSetting setting = static_cast<ContentSetting>(content_setting);
-  permissions::internal::ResolveNotificationsPermissionRequest(web_contents,
-                                                               setting);
+  return permissions::internal::ResolveNotificationsPermissionRequest(
+      web_contents, requesting_origin, setting);
 }
 // TODO(crbug.com/463333225): Clean this provisional function name up if
 // Clapper is launched or removed.
@@ -321,9 +350,7 @@ static void JNI_PermissionUtil_ResolveNotificationsPermissionRequest(
 // omnibox.
 static void JNI_PermissionUtil_NotifyQuietIconDismissed(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jweb_contents) {
-  content::WebContents* web_contents =
-      content::WebContents::FromJavaWebContents(jweb_contents);
+    content::WebContents* web_contents) {
   if (!web_contents) {
     return;
   }
@@ -335,7 +362,7 @@ static void JNI_PermissionUtil_NotifyQuietIconDismissed(
     auto* prompt = permission_request_manager->GetCurrentPrompt();
     if (prompt && prompt->GetPromptDisposition() ==
                       permissions::PermissionPromptDisposition::
-                          LOCATION_BAR_LEFT_CLAPPER_QUIET_ICON) {
+                          LOCATION_BAR_LEFT_QUIET_ICON) {
       permission_request_manager->Ignore(/*prompt_options=*/std::monostate());
     }
   }

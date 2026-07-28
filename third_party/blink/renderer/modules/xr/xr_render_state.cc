@@ -27,8 +27,9 @@ constexpr double kDefaultFieldOfView = M_PI * 0.5;
 }  // namespace
 
 XRRenderState::XRRenderState(bool immersive) : immersive_(immersive) {
-  if (!immersive_)
+  if (!immersive_) {
     inline_vertical_fov_ = kDefaultFieldOfView;
+  }
 }
 
 void XRRenderState::Update(const XRRenderStateInit* init) {
@@ -103,8 +104,9 @@ HTMLCanvasElement* XRRenderState::output_canvas() const {
 }
 
 std::optional<double> XRRenderState::inlineVerticalFieldOfView() const {
-  if (immersive_)
+  if (immersive_) {
     return std::nullopt;
+  }
   return inline_vertical_fov_;
 }
 
@@ -205,6 +207,21 @@ void XRRenderState::MaybeDispatchRedrawEvents() {
   if (layers_) {
     for (XRLayer* layer : *layers_) {
       layer->MaybeDispatchRedrawEvent();
+    }
+  }
+}
+
+void XRRenderState::OnTransferComplete(
+    const Vector<device::LayerId>& layer_ids) {
+  if (base_layer_) {
+    base_layer_->SetNeedsRedraw(false);
+  }
+
+  if (layers_) {
+    for (XRLayer* layer : *layers_) {
+      if (layer_ids.Contains(layer->layer_id())) {
+        layer->SetNeedsRedraw(false);
+      }
     }
   }
 }

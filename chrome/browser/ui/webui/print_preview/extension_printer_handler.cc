@@ -72,11 +72,15 @@ void UpdateJobFileInfo(std::unique_ptr<extensions::PrinterProviderPrintJob> job,
 }
 
 bool HasUsbPrinterProviderPermissions(const Extension* extension) {
+#if BUILDFLAG(IS_CHROMEOS)
   return extension->permissions_data() &&
          extension->permissions_data()->HasAPIPermission(
              extensions::mojom::APIPermissionID::kPrinterProvider) &&
          extension->permissions_data()->HasAPIPermission(
              extensions::mojom::APIPermissionID::kUsb);
+#else
+  return false;
+#endif
 }
 
 std::string GenerateProvisionalUsbPrinterId(
@@ -156,7 +160,7 @@ void ExtensionPrinterHandler::Reset() {
 void ExtensionPrinterHandler::StartGetPrinters(
     AddedPrintersCallback callback,
     GetPrintersDoneCallback done_callback) {
-  // Assume that there can only be one printer enumeration occuring at once.
+  // Assume that there can only be one printer enumeration occurring at once.
   DCHECK_EQ(pending_enumeration_count_, 0);
   pending_enumeration_count_ = 1;
   done_callback_ = std::move(done_callback);

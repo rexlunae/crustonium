@@ -55,19 +55,6 @@ class PrivacySandboxSettingsImpl : public PrivacySandboxSettings {
   bool IsTopicPrioritized(const CanonicalTopic& topic) override;
   void ClearTopicSettings(base::Time start_time, base::Time end_time) override;
   base::Time TopicsDataAccessibleSince() const override;
-  bool IsAttributionReportingEverAllowed() const override;
-  bool IsAttributionReportingAllowed(
-      const url::Origin& top_frame_origin,
-      const url::Origin& reporting_origin,
-      content::RenderFrameHost* console_frame = nullptr) const override;
-  bool MaySendAttributionReport(
-      const url::Origin& source_origin,
-      const url::Origin& destination_origin,
-      const url::Origin& reporting_origin,
-      content::RenderFrameHost* console_frame = nullptr) const override;
-  bool IsAttributionReportingTransitionalDebuggingAllowed(
-      const url::Origin& top_frame_origin,
-      const url::Origin& reporting_origin) const override;
   void SetFledgeJoiningAllowed(const std::string& top_frame_etld_plus1,
                                bool allowed) override;
   void ClearFledgeJoiningAllowedSettings(base::Time start_time,
@@ -75,7 +62,7 @@ class PrivacySandboxSettingsImpl : public PrivacySandboxSettings {
   bool IsFledgeAllowed(
       const url::Origin& top_frame_origin,
       const url::Origin& auction_party,
-      content::InterestGroupApiOperation interest_group_api_operation,
+      InterestGroupApiOperation interest_group_api_operation,
       content::RenderFrameHost* console_frame = nullptr) const override;
   bool IsEventReportingDestinationAttested(
       const url::Origin& destination_origin,
@@ -92,10 +79,6 @@ class PrivacySandboxSettingsImpl : public PrivacySandboxSettings {
       const url::Origin& accessing_origin,
       std::string* out_debug_message,
       bool* out_block_is_site_setting_specific) const override;
-  bool IsFencedStorageReadAllowed(
-      const url::Origin& top_frame_origin,
-      const url::Origin& accessing_origin,
-      content::RenderFrameHost* console_frame) const override;
   bool IsPrivateAggregationAllowed(
       const url::Origin& top_frame_origin,
       const url::Origin& reporting_origin,
@@ -151,7 +134,7 @@ class PrivacySandboxSettingsImpl : public PrivacySandboxSettings {
 
   static void JoinHistogram(const char* name, Status status);
   static void JoinFledgeHistogram(
-      content::InterestGroupApiOperation interest_group_api_operation,
+      InterestGroupApiOperation interest_group_api_operation,
       Status status);
 
   // Get the Topics that are disabled by Finch.
@@ -194,9 +177,6 @@ class PrivacySandboxSettingsImpl : public PrivacySandboxSettings {
   // Internal helper for `IsFledgeAllowed`. Used only when
   // `interest_group_api_operation` is `kJoin`.
   bool IsFledgeJoiningAllowed(const url::Origin& top_frame_origin) const;
-
-  // Whether fenced frame local unpartitioned data access is enabled.
-  Status GetFencedStorageReadEnabledStatus() const;
 
   // Sets the out parameter `out_block_is_site_setting_specific` if it is
   // non-null, based on the given `status`.

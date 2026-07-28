@@ -6,9 +6,11 @@
 
 #include <limits>
 
+#include "base/debug/dump_without_crashing.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
 #include "content/browser/preloading/prerender/prerender_host.h"
 #include "content/browser/preloading/prerender/prerender_host_registry.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/preloading_data.h"
 #include "content/public/browser/preloading_trigger_type.h"
 #include "url/gurl.h"
@@ -16,12 +18,6 @@
 namespace content {
 
 namespace {
-
-int32_t GetNextHandleId() {
-  static int32_t next_handle_id = 1;
-  CHECK_LT(next_handle_id, std::numeric_limits<int32_t>::max());
-  return next_handle_id++;
-}
 
 // Returns true when the error callback should be fired. The callback does not
 // need to be fired when prerendering succeed but is never activated, or it is
@@ -145,6 +141,25 @@ bool ShouldFireErrorCallback(PrerenderFinalStatus status) {
     // The PrerenderHost is reused by another prerender request.
     case PrerenderFinalStatus::kPrerenderHostReused:
       return false;
+    case PrerenderFinalStatus::kFormSubmitWhenPrerendering:
+    case PrerenderFinalStatus::kCrossDocumentRestart:
+      return false;
+  }
+}
+
+PrerenderLifecycleStatus ToPrerenderLifecycleStatus(
+    PrerenderFinalStatus status) {
+  if (!ShouldFireErrorCallback(status)) {
+    return PrerenderLifecycleStatus::kCancelled;
+  }
+
+  switch (status) {
+    case PrerenderFinalStatus::kNavigationBadHttpStatus:
+      return PrerenderLifecycleStatus::kHttpBadResponse;
+    case PrerenderFinalStatus::kStop:
+      return PrerenderLifecycleStatus::kStop;
+    default:
+      return PrerenderLifecycleStatus::kOtherFailure;
   }
 }
 
@@ -155,8 +170,7 @@ PrerenderHandleImpl::PrerenderHandleImpl(
     PrerenderHostId prerender_host_id,
     const GURL& prerendering_url,
     std::optional<net::HttpNoVarySearchData> no_vary_search_hint)
-    : handle_id_(GetNextHandleId()),
-      prerender_host_id_(prerender_host_id),
+    : prerender_host_id_(prerender_host_id),
       prerender_host_registry_(std::move(prerender_host_registry)),
       prerendering_url_(prerendering_url),
       no_vary_search_hint_(std::move(no_vary_search_hint)) {
@@ -177,8 +191,8 @@ PrerenderHandleImpl::~PrerenderHandleImpl() {
   }
 }
 
-int32_t PrerenderHandleImpl::GetHandleId() const {
-  return handle_id_;
+PrerenderHostId PrerenderHandleImpl::GetPrerenderHostId() const {
+  return prerender_host_id_;
 }
 
 const GURL& PrerenderHandleImpl::GetInitialPrerenderingUrl() const {
@@ -203,22 +217,18 @@ void PrerenderHandleImpl::SetPreloadingAttemptFailureReason(
   prerender_host->preloading_attempt()->SetFailureReason(reason);
 }
 
-void PrerenderHandleImpl::AddActivationCallback(
-    base::OnceClosure activation_callback) {
-  CHECK_EQ(State::kValid, state_);
-  CHECK(activation_callback);
-  activation_callbacks_.push_back(std::move(activation_callback));
+void PrerenderHandleImpl::AddObserver(PrerenderHandle::Observer* observer) {
+  observers_.AddObserver(observer);
 }
 
-void PrerenderHandleImpl::AddErrorCallback(base::OnceClosure error_callback) {
-  CHECK_EQ(State::kValid, state_);
-  CHECK(error_callback);
-  error_callbacks_.push_back(std::move(error_callback));
+void PrerenderHandleImpl::RemoveObserver(PrerenderHandle::Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 bool PrerenderHandleImpl::IsValid() const {
   switch (state_) {
-    case State::kValid:
+    case State::kLoading:
+    case State::kReady:
       return true;
     case State::kActivated:
     case State::kCanceled:
@@ -226,47 +236,51 @@ bool PrerenderHandleImpl::IsValid() const {
   }
 }
 
+bool PrerenderHandleImpl::IsWaitingForResponseHeaders() const {
+  CHECK(IsValid());
+  return state_ == State::kLoading;
+}
+
 void PrerenderHandleImpl::OnActivated() {
-  CHECK_EQ(State::kValid, state_);
+  CHECK_EQ(State::kReady, state_);
   state_ = State::kActivated;
 
-  // An error should not be reported after activation.
-  error_callbacks_.clear();
-
-  std::vector<base::OnceClosure> callbacks;
-  callbacks.swap(activation_callbacks_);
-  // Don't touch `this` after this line, as a callback could destroy `this`.
-  for (auto& callback : callbacks) {
-    std::move(callback).Run();
+  for (auto& observer : observers_) {
+    observer.OnLifecycleStateChanged(PrerenderLifecycleStatus::kActivated);
   }
 }
 
 void PrerenderHandleImpl::OnFailed(PrerenderFinalStatus status) {
-  CHECK_EQ(State::kValid, state_);
+  CHECK(IsValid());
   state_ = State::kCanceled;
 
-  // An activation never happen after cancellation.
-  activation_callbacks_.clear();
+  PrerenderLifecycleStatus result = ToPrerenderLifecycleStatus(status);
 
-  if (!ShouldFireErrorCallback(status)) {
-    error_callbacks_.clear();
-    return;
-  }
-
-  // TODO(crbug.com/41490450): Pass a cancellation reason to the callback.
-  // Note that we should not expose detailed reasons to prevent embedders from
-  // depending on them. Such an implicit contract with embedders would impair
-  // flexibility of internal implementation.
-  std::vector<base::OnceClosure> callbacks;
-  callbacks.swap(error_callbacks_);
-  // Don't touch `this` after this line, as a callback could destroy `this`.
-  for (auto& callback : callbacks) {
-    std::move(callback).Run();
+  // Notify observers to unthrottle other requests anyway.
+  for (auto& observer : observers_) {
+    observer.OnLifecycleStateChanged(result);
   }
 }
 
 void PrerenderHandleImpl::OnHostDestroyed(PrerenderFinalStatus status) {
   obs_.Reset();
+}
+
+void PrerenderHandleImpl::OnHeadersReceived(
+    NavigationHandle& navigation_handle) {
+  // There is a small chance that the headers received callback
+  // will be called for a cancelled prerender host because the
+  // deferred destruction of the PrerenderHost.
+  if (state_ == State::kCanceled) {
+    return;
+  }
+  CHECK_EQ(state_, State::kLoading);
+  state_ = State::kReady;
+
+  for (auto& observer : observers_) {
+    observer.OnLifecycleStateChanged(
+        PrerenderLifecycleStatus::kHTTPSuccessResponse);
+  }
 }
 
 }  // namespace content

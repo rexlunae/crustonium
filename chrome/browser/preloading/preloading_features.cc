@@ -6,17 +6,20 @@
 
 namespace features {
 
-BASE_FEATURE(kPrewarm, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPrewarm, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kPrewarmZeroSuggestTrigger, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPrewarmDisableOnStartup, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(std::string, kPrewarmUrl, &kPrewarm, "url", "");
+BASE_FEATURE_PARAM(bool, kPrewarmRevalidate, &kPrewarm, "revalidate", false);
 BASE_FEATURE_PARAM(bool,
-                   kPrewarmZeroSuggestTrigger,
+                   kPrewarmThrottlePrefetch,
                    &kPrewarm,
-                   "zero_suggest_trigger",
+                   "throttle_prefetch",
                    false);
 BASE_FEATURE_PARAM(bool,
-                   kPrewarmUserInteractionTrigger,
+                   kPrewarmThrottleUserNavigation,
                    &kPrewarm,
-                   "user_interaction_trigger",
+                   "throttle_user_navigation",
                    false);
 BASE_FEATURE_PARAM(bool,
                    kForceEnableWithDevTools,
@@ -40,9 +43,17 @@ BASE_FEATURE_PARAM(int,
                    "min_memory_threshold_mb",
                    kDSEPrearmDefaultMemoryThresholdMb);
 
+BASE_FEATURE_PARAM(int,
+                   kMaxBlackoutDurationSeconds,
+                   &kPrewarm,
+                   "max_blackout_duration_seconds",
+                   86400);
+
 BASE_FEATURE(kPrerender2WarmUpCompositorForBookmarkBar,
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kPrerender2WarmUpCompositorForNewTabPage,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOmniboxDuiPrerendering, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace features

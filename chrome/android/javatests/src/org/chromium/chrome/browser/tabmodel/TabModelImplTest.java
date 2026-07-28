@@ -15,11 +15,9 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.tabmodel.TabModelOrderControllerImpl.willOpenInForeground;
 import static org.chromium.chrome.test.util.ChromeTabUtils.getIndexOnUiThread;
@@ -44,17 +42,15 @@ import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.RequiresRestart;
+import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.media.MediaCaptureDevicesDispatcherAndroid;
-import org.chromium.chrome.browser.media.MediaCaptureDevicesDispatcherAndroidJni;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.tab.InterceptNavigationDelegateClientImpl;
@@ -63,7 +59,6 @@ import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.Journeys;
@@ -103,9 +98,6 @@ public class TabModelImplTest {
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-
-    @Mock
-    private MediaCaptureDevicesDispatcherAndroid.Natives mMediaCaptureDevicesDispatcherAndroidJni;
 
     @Mock private TabModelObserver mTabModelObserver;
 
@@ -161,7 +153,7 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1448777")
+    @DisabledTest(message = "https://crbug.com/40914476")
     public void validIndexAfterRestored_FromPreviousActivity() {
         mActivityTestRule.recreateActivity();
         ChromeTabbedActivity newActivity = mActivityTestRule.getActivity();
@@ -180,7 +172,6 @@ public class TabModelImplTest {
     @SmallTest
     // TODO(crbug.com/457847264): Change to @Restriction(DeviceFormFactor.PHONE) after launch
     @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
     public void validIndexAfterRestored_FromPreviousActivity_WithIncognitoTabs() {
         mPage = Journeys.createIncognitoTabsWithWebPages(mPage, List.of(mTestUrl));
 
@@ -258,7 +249,7 @@ public class TabModelImplTest {
                     assertEquals(1, mTabModelJni.getCount());
 
                     GURL url = new GURL("https://www.chromium.org");
-                    Tab tab = mTabModelJni.openTabProgrammatically(url, 0);
+                    Tab tab = mTabModelJni.openTabProgrammatically(url, 0, true);
                     assertNotNull(tab);
                     assertEquals(url, tab.getUrl());
                     assertEquals(2, mTabModelJni.getCount());
@@ -281,7 +272,35 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
+    public void testOpenTabProgrammatically_Background() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(1, mTabModelJni.getCount());
+
+                    GURL url = new GURL("https://www.chromium.org");
+                    Tab tab = mTabModelJni.openTabProgrammatically(url, 0, false);
+                    assertNotNull(tab);
+                    assertEquals(url, tab.getUrl());
+                    assertEquals(2, mTabModelJni.getCount());
+
+                    Tab foundTab = mTabModelJni.getTabAt(0);
+                    assertNotNull(foundTab);
+                    assertEquals(tab, foundTab);
+                    assertEquals(url, foundTab.getUrl());
+                    assertEquals(
+                            TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND,
+                            tab.getTabLaunchTypeAtCreation());
+
+                    assertFalse(
+                            willOpenInForeground(
+                                    TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND,
+                                    tab.isIncognitoBranded(),
+                                    mTabModelJni.isIncognitoBranded()));
+                });
+    }
+
+    @Test
+    @SmallTest
     public void testDuplicateTab() {
         // 0:Tab0 | 1:Tab1 (tabToDuplicate) | 2:Tab2
         GURL url = new GURL(mTestUrl);
@@ -334,9 +353,9 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     public void testDuplicateTab_InsideTabGroup() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
+        TabModel tabModel = mPage.getTabModel();
         // 0:Tab0 | Group0: 1:Tab1 (tabToDuplicate), 2:Tab2, 3:Tab3
-        createTabGroup(3, filter);
+        createTabGroup(3, tabModel);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -410,7 +429,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testDuplicateTab_PinnedTab() {
         mPage.openNewTabFast();
         // 0:Tab0 | 1:Tab1 (tabToDuplicate)
@@ -467,7 +485,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testPinUnpinTab() {
         createTabs(2);
 
@@ -528,14 +545,12 @@ public class TabModelImplTest {
                 });
 
         // Group tabs and add another tab.
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
+        TabModel tabModel = mPage.getTabModel();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     List<Tab> group0 = mTabModelJni.getAllTabs();
-                    filter.mergeListOfTabsToGroup(
-                            group0,
-                            group0.get(0),
-                            TabGroupModelFilter.MergeNotificationType.DONT_NOTIFY);
+                    tabModel.mergeListOfTabsToGroup(
+                            group0, group0.get(0), TabGroupMergeNotificationType.DONT_NOTIFY);
                 });
         createTab();
         // Group0: 0:Tab1, 1:Tab0, 2:Tab2 | 3:Tab3
@@ -561,7 +576,7 @@ public class TabModelImplTest {
                 });
 
         // Add a group with 2 tabs.
-        createTabGroup(2, filter);
+        createTabGroup(2, tabModel);
         // 0:Tab3 | Group0: 1:Tab1, 2:Tab0, 3:Tab2 | Group1: 4:Tab4, 5:Tab5
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -611,8 +626,8 @@ public class TabModelImplTest {
     @SmallTest
     public void testMoveTabToIndex_InsideTabGroup() {
         // Programmatically set up the tab state (PT is flaky)
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(3, filter);
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(3, tabModel);
         createTab();
         // 0:Tab0 | Group0: 1:Tab1, 2:Tab2, 3:Tab3 | 4:Tab4
 
@@ -652,9 +667,9 @@ public class TabModelImplTest {
     @SmallTest
     public void testMoveTabToIndex_TabGroupOf1() {
         // Programmatically set up the tab state (PT is flaky)
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(1, filter);
-        createTabGroup(1, filter);
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(1, tabModel);
+        createTabGroup(1, tabModel);
         createTab();
 
         // 0:Tab0 | Group0: 1:Tab1 | Group1: 2:Tab2 | 3:Tab3
@@ -701,10 +716,10 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     public void testMoveGroupToIndex() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        List<Tab> g0 = createTabGroup(3, filter); // 1 2 3
+        TabModel tabModel = mPage.getTabModel();
+        List<Tab> g0 = createTabGroup(3, tabModel); // 1 2 3
         createTab(); // 4
-        List<Tab> g1 = createTabGroup(2, filter); // 5 6
+        List<Tab> g1 = createTabGroup(2, tabModel); // 5 6
         // 0:Tab0 | G0(1:Tab1, 2:Tab2, 3:Tab3) | 4:Tab4 | G1(5:Tab5, 6:Tab6)
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -757,10 +772,10 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     public void testMoveGroupToIndex_TabGroupOf1() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        List<Tab> g0 = createTabGroup(1, filter); // 1
+        TabModel tabModel = mPage.getTabModel();
+        List<Tab> g0 = createTabGroup(1, tabModel); // 1
         createTab(); // 2
-        List<Tab> g1 = createTabGroup(3, filter); // 3 4 5
+        List<Tab> g1 = createTabGroup(3, tabModel); // 3 4 5
         // 0:Tab0 | G0(1:Tab1) | 2:Tab2 | G1(3:Tab3, 4:Tab4, 5:Tab5)
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -818,7 +833,6 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     @DisabledTest(message = "crbug.com/447152102")
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testAddTab_CurrentTabPinned() {
         createTabs(4);
 
@@ -882,8 +896,8 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     public void testAddTabsToGroup_existingGroup() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(2, filter);
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(2, tabModel);
         Tab tab3 = createTab();
         // 0:Tab0 | Group0: 1:Tab1, 2:Tab2 | 3:Tab3
 
@@ -911,8 +925,8 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     public void testAddTabsToGroup_existingGroup_someTabsAlreadyInGroup() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(2, filter);
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(2, tabModel);
         Tab tab3 = createTab();
         // 0:Tab0 | Group0: 1:Tab1, 2:Tab2 | 3:Tab3
 
@@ -934,16 +948,16 @@ public class TabModelImplTest {
                     assertEquals(groupId, tab1.getTabGroupId());
                     assertEquals(groupId, tab2.getTabGroupId());
                     assertEquals(groupId, tab3.getTabGroupId());
-                    assertEquals(3, filter.getTabCountForGroup(groupId));
+                    assertEquals(3, tabModel.getTabCountForGroup(groupId));
                 });
     }
 
     @Test
     @SmallTest
     public void testAddTabsToGroup_existingGroup_someTabsInAnotherGroup() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(2, filter); // Group A: Tab1, Tab2
-        createTabGroup(2, filter); // Group B: Tab3, Tab4
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(2, tabModel); // Group A: Tab1, Tab2
+        createTabGroup(2, tabModel); // Group B: Tab3, Tab4
         // 0:Tab0 | GroupA: 1:Tab1, 2:Tab2 | GroupB: 3:Tab3, 4:Tab4
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -966,8 +980,8 @@ public class TabModelImplTest {
 
                     assertEquals(groupAId, tab3.getTabGroupId());
                     assertEquals(groupBId, tab4.getTabGroupId());
-                    assertEquals(3, filter.getTabCountForGroup(groupAId));
-                    assertEquals(1, filter.getTabCountForGroup(groupBId));
+                    assertEquals(3, tabModel.getTabCountForGroup(groupAId));
+                    assertEquals(1, tabModel.getTabCountForGroup(groupBId));
                 });
     }
 
@@ -1000,8 +1014,8 @@ public class TabModelImplTest {
     @Test
     @SmallTest
     public void testUngroup() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(2, filter);
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(2, tabModel);
         // 0:Tab0 | Group0: 1:Tab1, 2:Tab2
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -1056,35 +1070,8 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @DisableFeatures(ChromeFeatureList.TAB_FREEZING_USES_DISCARD)
-    public void testFreezeTabOnCloseIfCapturingForMedia() {
-        MediaCaptureDevicesDispatcherAndroidJni.setInstanceForTesting(
-                mMediaCaptureDevicesDispatcherAndroidJni);
-        when(mMediaCaptureDevicesDispatcherAndroidJni.isCapturingAudio(any())).thenReturn(true);
-
-        mPage = Journeys.createRegularTabsWithWebPages(mPage, List.of(mTestUrl));
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    TabModel tabModel =
-                            mActivityTestRule.getActivity().getTabModelSelector().getModel(false);
-                    assertEquals(2, tabModel.getCount());
-                    Tab tab = tabModel.getTabAt(1);
-                    assertFalse(tab.isFrozen());
-                    tabModel.getTabRemover()
-                            .closeTabs(
-                                    TabClosureParams.closeTab(tab).build(),
-                                    /* allowDialog= */ false);
-
-                    // Tab should be frozen as a result.
-                    assertTrue(tab.isFrozen());
-                });
-    }
-
-    @Test
-    @SmallTest
     // TODO(crbug.com/457847264): Change to @Restriction(DeviceFormFactor.PHONE) after launch
     @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
     public void testCloseIncognitoTabSwitchesToNormalModelAndUpdatesIncognitoIndex() {
         TabModel incognitoTabModel =
                 mActivityTestRule.getActivity().getTabModelSelector().getModel(true);
@@ -1140,7 +1127,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void pinTab_NoExistingPinnedTabs_PinSingleTab() {
         createTabs(3);
 
@@ -1161,7 +1147,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void pinTab_PinMultipleTabs() {
         createTabs(3);
 
@@ -1192,7 +1177,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void unpinTab_NoExistingUnpinnedTabs_UnpinSingleTab() {
         createTabs(3);
 
@@ -1228,7 +1212,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void unpinTab_ExistingUnpinnedTabs_UnpinSingleTab() {
         createTabs(3);
 
@@ -1267,7 +1250,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void pinTab_thenUnpinTab_verifyObserverCalls() {
         createTabs(3);
 
@@ -1310,7 +1292,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_TAB_HIGHLIGHTING)
     public void testHighlightTabs() {
         createTabs(2);
 
@@ -1587,7 +1568,6 @@ public class TabModelImplTest {
     @SmallTest
     // TODO(crbug.com/457847264): Change to @Restriction(DeviceFormFactor.PHONE) after launch
     @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
     public void testSetMuteSetting_Incognito() {
         WebPageStation page = mPage.loadWebPageProgrammatically(mTestUrl);
         Journeys.createIncognitoTabsWithWebPages(page, List.of(mTestUrl));
@@ -1691,9 +1671,7 @@ public class TabModelImplTest {
                 });
         if (expectReparent) {
             CriteriaHelper.pollUiThread(
-                    () ->
-                            MultiWindowUtils.getInstanceCountWithFallback(PersistedInstanceType.ANY)
-                                    == 2,
+                    () -> MultiWindowUtils.getInstanceCount(PersistedInstanceType.ANY) == 2,
                     "Expected new window to be created");
         } else {
             assertEquals(
@@ -1705,7 +1683,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testPinTab_TryPinningExistingPinnedTab() {
         createTabs(2);
 
@@ -1741,7 +1718,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testUnpinTab_AlreadyUnpinned() {
         createTabs(2);
 
@@ -1765,36 +1741,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ChromeFeatureList.ANDROID_PINNED_TABS,
-        ChromeFeatureList.ANDROID_PINNED_TABS_TABLET_TAB_STRIP
-    })
-    public void removePinState_WhenFeatureDisabled() {
-        createTabs(2);
-
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    TabModel tabModel =
-                            mActivityTestRule.getActivity().getTabModelSelector().getModel(false);
-                    assertEquals(3, tabModel.getCount());
-
-                    Tab tab1 = tabModel.getTabAt(/* index= */ 1);
-                    tab1.setIsPinned(true);
-                    tabModel.getTabRemover().removeTab(tab1, /* allowDialog= */ false);
-                    assertEquals(2, tabModel.getCount());
-
-                    tabModel.addTab(
-                            tab1,
-                            -1,
-                            TabLaunchType.FROM_RESTORE,
-                            TabCreationState.FROZEN_ON_RESTORE);
-                    assertFalse(tab1.getIsPinned());
-                });
-    }
-
-    @Test
-    @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testGetPinnedTabsCount() {
         createTabs(3);
 
@@ -1823,7 +1769,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void restoreMultiplePinnedTabs_OrderIsPreserved() {
         createTabs(4); // Creates 5 tabs in total (including the initial one)
 
@@ -1948,15 +1893,13 @@ public class TabModelImplTest {
         }
     }
 
-    private List<Tab> createTabGroup(int numberOfTabs, TabGroupModelFilter filter) {
+    private List<Tab> createTabGroup(int numberOfTabs, TabModel tabModel) {
         List<Tab> tabs = new ArrayList<>();
         for (int i = 0; i < numberOfTabs; i++) tabs.add(createTab());
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
-                        filter.mergeListOfTabsToGroup(
-                                tabs,
-                                tabs.get(0),
-                                TabGroupModelFilter.MergeNotificationType.DONT_NOTIFY));
+                        tabModel.mergeListOfTabsToGroup(
+                                tabs, tabs.get(0), TabGroupMergeNotificationType.DONT_NOTIFY));
         return tabs;
     }
 
@@ -2016,10 +1959,6 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_PINNED_TABS,
-        ChromeFeatureList.ANDROID_PINNED_TABS_TABLET_TAB_STRIP
-    })
     public void testPinUnpinTab_RecordsHistogram() {
         createTabs(2);
 
@@ -2045,10 +1984,9 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
     public void testPinTabInGroup_ActionListener_Accept() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(1, filter); // Group with 1 tab.
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(1, tabModel); // Group with 1 tab.
         // 0:Tab0 | Group0: 1:Tab1
 
         Tab tab1 = ThreadUtils.runOnUiThreadBlocking(() -> mTabModelJni.getTabAt(1));
@@ -2060,8 +1998,7 @@ public class TabModelImplTest {
                     mTabModelJni.pinTab(
                             tab1.getId(), /* showUngroupDialog= */ true, mTabModelActionListener);
                 });
-        onViewWaiting(withText(R.string.delete_tab_group_action), /* checkRootDialog= */ true)
-                .perform(click());
+        onViewWaiting(withText(R.string.delete_tab_group_action)).perform(click());
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -2082,10 +2019,10 @@ public class TabModelImplTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
+    @Restriction(DeviceFormFactor.PHONE_OR_TABLET) // crbug.com/503008051
     public void testPinTabInGroup_ActionListener_Reject() {
-        TabGroupModelFilter filter = mPage.getTabGroupModelFilter();
-        createTabGroup(1, filter); // Group with 1 tab.
+        TabModel tabModel = mPage.getTabModel();
+        createTabGroup(1, tabModel); // Group with 1 tab.
         // 0:Tab0 | Group0: 1:Tab1
 
         Tab tab1 = ThreadUtils.runOnUiThreadBlocking(() -> mTabModelJni.getTabAt(1));
@@ -2097,12 +2034,10 @@ public class TabModelImplTest {
                     mTabModelJni.pinTab(
                             tab1.getId(), /* showUngroupDialog= */ true, mTabModelActionListener);
                 });
-        onViewWaiting(withText(R.string.cancel), /* checkRootDialog= */ true).perform(click());
+        onViewWaiting(withText(R.string.cancel)).perform(click());
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    TabModel tabModel =
-                            mActivityTestRule.getActivity().getTabModelSelector().getModel(false);
                     verify(mTabModelActionListener)
                             .onConfirmationDialogResult(
                                     eq(TabModelActionListener.DialogType.SYNC),

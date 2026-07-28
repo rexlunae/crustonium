@@ -98,8 +98,10 @@ class SafeBrowsingMetricsCollector : public KeyedService {
     ANDROID_SAFEBROWSING_INTERSTITIAL_BYPASS = 15,
     // The user started a download deep scan
     DOWNLOAD_DEEP_SCAN = 16,
+    // The user bypasses an interstitial triggered by Glic Counter Abuse.
+    GLIC_COUNTER_ABUSE_INTERSTITIAL_BYPASS = 17,
 
-    kMaxValue = DOWNLOAD_DEEP_SCAN
+    kMaxValue = GLIC_COUNTER_ABUSE_INTERSTITIAL_BYPASS
   };
 
   using EventTypeFilter = base::RepeatingCallback<bool(const EventType&)>;
@@ -177,7 +179,7 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   static bool IsBypassEventType(const EventType& type);
   static bool IsSecuritySensitiveEventType(const EventType& type);
-  static std::string GetUserStateMetricSuffix(const UserState& user_state);
+  static std::string_view GetUserStateMetricSuffix(const UserState& user_state);
 
   // For daily metrics.
   void LogMetricsAndScheduleNextLogging();

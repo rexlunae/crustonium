@@ -13,7 +13,6 @@
 #include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/accessibility/accessibility_feature_browsertest.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/accessibility_test_utils.h"
@@ -126,11 +125,6 @@ class FaceGazeIntegrationTest : public AccessibilityFeatureBrowserTest {
 
  protected:
   // InProcessBrowserTest:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    scoped_feature_list_.InitWithFeatureStates(
-        {{::features::kAccessibilityManifestV3AccessibilityCommon, true}});
-    AccessibilityFeatureBrowserTest::SetUpCommandLine(command_line);
-  }
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
@@ -162,7 +156,6 @@ class FaceGazeIntegrationTest : public AccessibilityFeatureBrowserTest {
   std::unique_ptr<FaceGazeTestUtils> utils_;
   std::unique_ptr<FaceGazeBubbleTestHelper> bubble_helper_;
   MockEventHandler event_handler_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, UpdateCursorLocation) {
@@ -299,7 +292,13 @@ IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, SpaceKeyEvents) {
 // separate facial gestures (BROW_DOWN_LEFT and BROW_DOWN_RIGHT). This test
 // ensures that the associated action is performed if either of the gestures is
 // detected.
-IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, BrowsDownGesture) {
+// TODO(crbug.com/486105659): Test is flaky crashing on ChromeOS
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_BrowsDownGesture DISABLED_BrowsDownGesture
+#else
+#define MAYBE_BrowsDownGesture BrowsDownGesture
+#endif
+IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, MAYBE_BrowsDownGesture) {
   const base::flat_map<FaceGazeGesture, MacroName> gestures_to_macros = {
       {FaceGazeGesture::BROWS_DOWN, MacroName::RESET_CURSOR}};
   const base::flat_map<FaceGazeGesture, int> gestures_to_confidences = {
@@ -645,7 +644,13 @@ IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, CancelDialog) {
       prefs::kAccessibilityFaceGazeAcceleratorDialogHasBeenAccepted));
 }
 
-IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, ScrollMode) {
+// TODO(crbug.com/486105659): Test is flaky crashing on ChromeOS
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_ScrollMode DISABLED_ScrollMode
+#else
+#define MAYBE_ScrollMode ScrollMode
+#endif
+IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, MAYBE_ScrollMode) {
   const base::flat_map<FaceGazeGesture, MacroName> gestures_to_macros = {
       {FaceGazeGesture::JAW_LEFT, MacroName::TOGGLE_SCROLL_MODE}};
   const base::flat_map<FaceGazeGesture, int> gestures_to_confidences = {
@@ -939,7 +944,14 @@ IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, DisableActionsDialogAccept) {
       prefs->GetBoolean(prefs::kAccessibilityFaceGazeActionsEnabledSentinel));
 }
 
-IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest, DisableActionsDialogCancel) {
+// TODO(crbug.com/486105659): Test is flaky crashing on ChromeOS
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_DisableActionsDialogCancel DISABLED_DisableActionsDialogCancel
+#else
+#define MAYBE_DisableActionsDialogCancel DisableActionsDialogCancel
+#endif
+IN_PROC_BROWSER_TEST_F(FaceGazeIntegrationTest,
+                       MAYBE_DisableActionsDialogCancel) {
   auto* controller = ash::Shell::Get()->accessibility_controller();
   auto* prefs = GetPrefs();
 

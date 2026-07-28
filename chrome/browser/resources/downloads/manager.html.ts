@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {CrInfiniteListElement} from '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
+import type {MojomData} from './data.js';
 import type {DownloadsManagerElement} from './manager.js';
+
+export interface TemplatizedDomNodes {
+  downloadsList: CrInfiniteListElement<MojomData>;
+}
 
 export function getHtml(this: DownloadsManagerElement) {
   // clang-format off
@@ -15,14 +21,14 @@ export function getHtml(this: DownloadsManagerElement) {
     @spinner-active-changed="${this.onSpinnerActiveChanged_}"
     @search-changed="${this.onSearchChanged_}">
 </downloads-toolbar>
-<div id="drop-shadow" class="cr-container-shadow"></div>
-<div id="mainContainer" @scroll="${this.onScroll_}"
+<div id="mainContainer" class="cr-scrollable" @scroll="${this.onScroll_}"
     @save-dangerous-click="${this.onSaveDangerousClick_}">
+  <div class="cr-scrollable-top-shadow"></div>
   <managed-footnote ?hidden="${this.inSearchMode_}"></managed-footnote>
   <cr-infinite-list id="downloadsList" .items="${this.items_}"
       role="grid" aria-rowcount="${this.items_.length}"
       ?hidden="${!this.hasDownloads_}" .scrollTarget="${this.listScrollTarget_}"
-      .template="${(item: any, index: number, tabindex: number) => html`
+      .template="${(item: MojomData, index: number, tabindex: number) => html`
   <if expr="_google_chrome">
         <downloads-item .data="${item}" tabindex="${tabindex}"
             .listTabIndex="${tabindex}" .lastFocused="${this.lastFocused_}"

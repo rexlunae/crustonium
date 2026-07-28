@@ -18,16 +18,17 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/updater/branded_constants.h"
 #include "chrome/updater/test/http_request.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "chrome/updater/update_service.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "url/gurl.h"
 
@@ -48,7 +49,8 @@ Matcher GetPathMatcher(const std::string& expected_path_regex) {
         if (!re2::RE2::FullMatch(request.relative_url, expected_path_regex)) {
           ADD_FAILURE() << "Request path [" << request.relative_url
                         << "], did not match expected path regex ["
-                        << expected_path_regex << "].";
+                        << expected_path_regex << "], request content: "
+                        << GetPrintableContent(request);
           return false;
         }
         return true;
@@ -96,7 +98,7 @@ Matcher GetTargetURLMatcher(GURL target_url) {
     if (!base::StartsWith(request.all_headers, post_target,
                           base::CompareCase::INSENSITIVE_ASCII)) {
       ADD_FAILURE() << "Request all_headers [" << request.all_headers
-                    << "] does not starts with the expected [" << post_target
+                    << "] does not start with the expected [" << post_target
                     << "]";
       return false;
     }
@@ -243,7 +245,7 @@ Matcher GetMultipartContentMatcher(
     }
 
     const std::string content_type = request.headers.at("Content-Type");
-    if (!base::StartsWith(content_type, kMultifpartBoundaryPrefix)) {
+    if (!content_type.starts_with(kMultifpartBoundaryPrefix)) {
       ADD_FAILURE() << "Content-Type value is not the expected "
                     << "[multipart/form-data].";
       return false;
@@ -267,8 +269,8 @@ Matcher GetMultipartContentMatcher(
       const std::string& form_name = form_expectation.name;
       if (re2::RE2::FindAndConsume(
               &input,
-              base::StringPrintf(R"(Content-Disposition: form-data; name="%s")",
-                                 form_name.c_str()))) {
+              absl::StrFormat(R"(Content-Disposition: form-data; name="%s")",
+                              form_name.c_str()))) {
         VLOG(3) << "Found form with name [" << form_name << "]";
       } else {
         ADD_FAILURE() << "Form [" << form_name << "] not found.";
@@ -294,6 +296,35 @@ Matcher GetMultipartContentMatcher(
 
     return true;
   });
+}
+
+Matcher GetJSONContentMatcher(const base::DictValue& expected_target) {
+  // Capture `expected_target` by value, since the reference might be local
+  // to the test scope, but the matcher callback is used asynchronously.
+  return base::BindLambdaForTesting(
+      [target =
+           base::Value(expected_target.Clone())](const HttpRequest& request) {
+        std::optional<base::DictValue> doc = base::JSONReader::ReadDict(
+            request.decoded_content, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+        if (!doc) {
+          ADD_FAILURE() << "Could not parse decoded content as a JSON dict: "
+                        << GetPrintableContent(request);
+          return false;
+        }
+
+        base::Value doc_value(std::move(*doc));
+        if (!IsJSONSubset(target, doc_value,
+                          [](const std::string& a, const std::string& b) {
+                            return base::EqualsCaseInsensitiveASCII(a, b);
+                          })) {
+          ADD_FAILURE() << "Expected JSON subset: [" << target.DebugString()
+                        << "] not found in (parsed) request content: ["
+                        << doc_value.DebugString() << "]";
+          return false;
+        }
+
+        return true;
+      });
 }
 
 }  // namespace updater::test::request

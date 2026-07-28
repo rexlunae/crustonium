@@ -9,7 +9,6 @@
 
 #include "base/functional/callback_helpers.h"
 #include "build/build_config.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_prompt_decision.h"
@@ -23,7 +22,6 @@
 #include "components/url_formatter/elide_url.h"
 #include "url/origin.h"
 #else
-#include "components/vector_icons/vector_icons.h"
 #endif
 
 DownloadPermissionRequest::DownloadPermissionRequest(
@@ -31,8 +29,7 @@ DownloadPermissionRequest::DownloadPermissionRequest(
     const url::Origin& requesting_origin)
     : PermissionRequest(
           std::make_unique<permissions::PermissionRequestData>(
-              std::make_unique<permissions::ContentSettingPermissionResolver>(
-                  permissions::RequestType::kMultipleDownloads),
+              permissions::RequestType::kMultipleDownloads,
               /*user_gesture=*/false,
               requesting_origin.GetURL()),
           base::BindRepeating(&DownloadPermissionRequest::PermissionDecided,

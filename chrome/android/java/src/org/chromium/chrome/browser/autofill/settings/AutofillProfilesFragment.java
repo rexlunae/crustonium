@@ -5,71 +5,65 @@
 package org.chromium.chrome.browser.autofill.settings;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.autofill.settings.AutofillAiDelegate.disabledSettingsInThirdPartyMode;
 
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
 
+import androidx.lifecycle.Lifecycle;
 import androidx.preference.Preference;
+import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceScreen;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.autofill.AndroidAutofillAvailabilityStatus;
 import org.chromium.chrome.browser.autofill.AutofillAddress;
-import org.chromium.chrome.browser.autofill.AutofillClientProviderUtils;
 import org.chromium.chrome.browser.autofill.AutofillEditorBase;
-import org.chromium.chrome.browser.autofill.AutofillFallbackSurfaceLauncher;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
 import org.chromium.chrome.browser.autofill.SaveUpdateAddressProfilePromptMode;
-import org.chromium.chrome.browser.autofill.editors.AddressEditorCoordinator;
-import org.chromium.chrome.browser.autofill.editors.AddressEditorCoordinator.Delegate;
-import org.chromium.chrome.browser.autofill.editors.EditorDialogView;
-import org.chromium.chrome.browser.autofill.editors.EditorObserverForTest;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment.AutofillOptionsReferrer;
+import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManager;
+import org.chromium.chrome.browser.autofill.editors.address.AddressEditorCoordinator;
+import org.chromium.chrome.browser.autofill.editors.address.AddressEditorCoordinator.Delegate;
+import org.chromium.chrome.browser.autofill.editors.address.EditorDialogView;
+import org.chromium.chrome.browser.autofill.editors.common.EditorObserverForTest;
+import org.chromium.chrome.browser.autofill.editors.common.EditorViewBase;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.payments.SettingsAutofillAndPaymentsObserver;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
-import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.FieldType;
 import org.chromium.components.autofill.RecordType;
-import org.chromium.components.browser_ui.settings.CardWithButtonPreference;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.SettingsFragment;
-import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
-import org.chromium.components.plus_addresses.PlusAddressesUserActions;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.sync.UserSelectableType;
-import org.chromium.components.user_prefs.UserPrefs;
 
 /** Autofill profiles fragment, which allows the user to edit autofill profiles. */
 @NullMarked
 public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
-        implements PersonalDataManager.PersonalDataManagerObserver {
+        implements PersonalDataManager.PersonalDataManagerObserver,
+                EntityDataManager.EntityDataManagerObserver {
     private final Delegate mAddressEditorDelegate =
             new Delegate() {
                 // User has either created a new address, or edited an existing address.
@@ -78,6 +72,7 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
                 public void onDone(AutofillAddress address) {
                     PersonalDataManagerFactory.getForProfile(getProfile())
                             .setProfile(address.getProfile());
+                    recordAddressEditDone();
                     SettingsAutofillAndPaymentsObserver.getInstance()
                             .notifyOnAddressUpdated(address);
                     if (sObserverForTest != null) {
@@ -127,11 +122,13 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
                     }
                 }
             };
+
+    private final AutofillAiDelegate mAutofillAiDelegate =
+            new AutofillAiDelegate(this, this, /* toggleConfig= */ null);
+
     private static @Nullable EditorObserverForTest sObserverForTest;
     static final String PREF_NEW_PROFILE = "new_profile";
-    static final String MANAGE_PLUS_ADDRESSES = "manage_plus_addresses";
     static final String SAVE_AND_FILL_ADDRESSES = "save_and_fill_addresses";
-    static final String DISABLED_SETTINGS_INFO = "disabled_settings_info";
 
     public static final String GOOGLE_ACCOUNT_HOME_ADDRESS_EDIT_URL =
             "https://myaccount.google.com/address/home?utm_source=chrome&utm_campaign=manage_addresses";
@@ -146,8 +143,15 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
 
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
-        mPageTitle.set(getString(R.string.autofill_addresses_settings_title));
-        setHasOptionsMenu(true);
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            mPageTitle.set(getString(R.string.autofill_contact_info_title));
+        } else {
+            mPageTitle.set(getString(R.string.autofill_addresses_settings_title));
+        }
+
+        requireActivity()
+                .addMenuProvider(new AutofillHelpMenuProvider(this), this, Lifecycle.State.RESUMED);
+
         PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getStyledContext());
         // Suppresses unwanted animations while Preferences are removed from and re-added to the
         // screen.
@@ -167,27 +171,9 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
         if (mAddressEditor != null) {
             mAddressEditor.onConfigurationChanged();
         }
-    }
-
-    @Override
-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-        menu.clear();
-        MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
-        help.setIcon(R.drawable.ic_help_24dp);
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == R.id.menu_id_targeted_help) {
-            getHelpAndFeedbackLauncher()
-                    .show(
-                            getActivity(),
-                            getActivity().getString(R.string.help_context_autofill),
-                            null);
-            return true;
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            mAutofillAiDelegate.onConfigurationChanged();
         }
-        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -205,51 +191,33 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
         screen.removeAll();
         screen.setOrderingAsAdded(true);
         // LINT.IfChange(RebuildProfileList)
-        if (disabledSettingsInThirdPartyMode(getProfile())) {
-            addDisabledSettingsInfoCard(screen);
+        mAutofillAiDelegate.maybeAddDisabledSettingsInfoCard(
+                screen, AutofillOptionsReferrer.AUTOFILL_PROFILES_FRAGMENT);
+
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            mAutofillAiDelegate.maybeAddDisabledWalletDataSharingDataCard(screen);
         }
+
         addAutofillSwitch(screen);
         addProfilePreferences(screen);
         if (!disabledSettingsInThirdPartyMode(getProfile())) {
             addAddAddressButton(screen);
         }
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.PLUS_ADDRESSES_ENABLED)) {
-            addPlusAddressesPreference(screen);
-        }
         // LINT.ThenChange(:DynamicPreferences)
-
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            mAutofillAiDelegate.addAutofillAiEntities(screen, /* typeFilter= */ null);
+        }
         updateDynamicPreferences(getProfile());
-    }
-
-    /** Adds an information card if settings are disabled in third-party mode. */
-    private void addDisabledSettingsInfoCard(PreferenceScreen screen) {
-        // LINT.IfChange(AddDisabledSettingsInfoCard)
-        CardWithButtonPreference disabledSettingsInfoPref =
-                new CardWithButtonPreference(getStyledContext(), null);
-        disabledSettingsInfoPref.setKey(DISABLED_SETTINGS_INFO);
-        disabledSettingsInfoPref.setTitle(R.string.autofill_disable_settings_explanation_title);
-        disabledSettingsInfoPref.setSummary(R.string.autofill_disable_settings_explanation);
-        // LINT.ThenChange(:DynamicDisabledSettingsInfoCard)
-        disabledSettingsInfoPref.setButtonText(
-                getResources().getString(R.string.autofill_disable_settings_button_label));
-        disabledSettingsInfoPref.setIconResource(R.drawable.ic_google_services_24dp);
-        disabledSettingsInfoPref.setOnButtonClick(
-                () -> {
-                    SettingsNavigation settingsNavigation =
-                            SettingsNavigationFactory.createSettingsNavigation();
-                    settingsNavigation.startSettings(
-                            getPreferenceManager().getContext(),
-                            AutofillOptionsFragment.class,
-                            AutofillOptionsFragment.createRequiredArgs(
-                                    AutofillOptionsReferrer.AUTOFILL_PROFILES_FRAGMENT),
-                            /* addToBackStack= */ true);
-                });
-
-        screen.addPreference(disabledSettingsInfoPref);
     }
 
     /** Adds the "Save and fill addresses" toggle. */
     private void addAutofillSwitch(PreferenceScreen screen) {
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)) {
+            PreferenceCategory category = new PreferenceCategory(getStyledContext());
+            category.setTitle(R.string.autofill_addresses_section_title);
+            category.setKey("autofill_section_title");
+            screen.addPreference(category);
+        }
         // LINT.IfChange(AddAutofillSwitch)
         PersonalDataManager personalDataManager =
                 PersonalDataManagerFactory.getForProfile(getProfile());
@@ -297,7 +265,7 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
                     new AutofillProfileEditorPreference(getStyledContext());
             pref.setTitle(profile.getInfo(FieldType.NAME_FULL));
             pref.setSummary(profile.getLabel());
-            pref.setKey(String.valueOf(pref.getTitle())); // For testing.
+            pref.setKey(String.valueOf(pref.getTitle()));
 
             // Set the widget to display an icon indicating the profile's type: local, home or work.
             if (shouldShowLocalProfileIcon(profile)) {
@@ -340,21 +308,15 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
         }
     }
 
-    /** Adds the "Manage plus addresses" link if the feature is enabled. */
-    private void addPlusAddressesPreference(PreferenceScreen screen) {
-        // LINT.IfChange(AddPlusAddressesPreference)
-        AutofillProfileEditorPreference pref =
-                new AutofillProfileEditorPreference(getStyledContext());
-        pref.setTitle(R.string.plus_address_settings_entry_title);
-        pref.setSummary(R.string.plus_address_settings_entry_summary);
-        pref.setKey(MANAGE_PLUS_ADDRESSES);
-        // LINT.ThenChange(:DynamicAddPlusAddressesPreference)
-
-        screen.addPreference(pref);
+    @Override
+    public void onPersonalDataChanged() {
+        rebuildProfileList();
+        notifyPreferencesUpdated();
+        if (sObserverForTest != null) sObserverForTest.onEditorDismiss();
     }
 
     @Override
-    public void onPersonalDataChanged() {
+    public void onEntityInstancesChanged() {
         rebuildProfileList();
         notifyPreferencesUpdated();
         if (sObserverForTest != null) sObserverForTest.onEditorDismiss();
@@ -364,18 +326,29 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
     public void onActivityCreated(@Nullable Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
         PersonalDataManagerFactory.getForProfile(getProfile()).registerDataObserver(this);
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            mAutofillAiDelegate.onActivityCreated();
+        }
     }
 
     @Override
     public void onDestroyView() {
         PersonalDataManagerFactory.getForProfile(getProfile()).unregisterDataObserver(this);
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            mAutofillAiDelegate.onDestroyView();
+        }
         super.onDestroyView();
     }
 
     public static void setObserverForTest(EditorObserverForTest observerForTest) {
         sObserverForTest = observerForTest;
-        EditorDialogView.setEditorObserverForTest(sObserverForTest);
+        EditorDialogView.setEditorObserverForTest(sObserverForTest); // IN-TEST
+        EditorViewBase.setEditorObserverForTest(sObserverForTest); // IN-TEST
         ResettersForTesting.register(() -> sObserverForTest = null);
+    }
+
+    void onOpenGoogleWalletForTesting(boolean isPrivateEntity) {
+        mAutofillAiDelegate.getEntityEditorDelegate().onOpenGoogleWallet(isPrivateEntity);
     }
 
     @Override
@@ -387,12 +360,6 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
 
         AutofillProfileEditorPreference editorPreference =
                 (AutofillProfileEditorPreference) preference;
-
-        if (editorPreference.getKey().equals(MANAGE_PLUS_ADDRESSES)) {
-            AutofillFallbackSurfaceLauncher.openManagePlusAddresses(getActivity(), getProfile());
-            PlusAddressesUserActions.MANAGE_OPTION_ON_SETTINGS_SELECTED.log();
-            return;
-        }
 
         AutofillAddress autofillAddress = getAutofillAddress(editorPreference);
         if (autofillAddress == null) {
@@ -435,7 +402,7 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
     private boolean shouldShowLocalProfileIcon(AutofillProfile profile) {
         IdentityManager identityManager =
                 assumeNonNull(IdentityServicesProvider.get().getIdentityManager(getProfile()));
-        if (!identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+        if (!identityManager.hasPrimaryAccount()) {
             return false;
         }
         if (profile.getRecordType() != RecordType.LOCAL_OR_SYNCABLE) {
@@ -464,32 +431,24 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
         return "autofill_addresses";
     }
 
-    private static boolean disabledSettingsInThirdPartyMode(Profile profile) {
-        return AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
-                        UserPrefs.get(profile))
-                == AndroidAutofillAvailabilityStatus.AVAILABLE;
-    }
-
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new ChromeBaseSearchIndexProvider(AutofillProfilesFragment.class.getName(), 0) {
                 @Override
                 public void updateDynamicPreferences(
                         Context context, SettingsIndexData indexData, Profile profile) {
                     // LINT.IfChange(DynamicPreferences)
-                    boolean disabledSettingsInThirdPartyMode =
-                            disabledSettingsInThirdPartyMode(profile);
-
-                    if (disabledSettingsInThirdPartyMode) {
-                        addDisabledSettingsInfoCard(indexData, getPrefFragmentName());
-                    } else {
+                    AutofillAiDelegate.maybeAddDisabledSettingsInfoCard(
+                            indexData, profile, getPrefFragmentName());
+                    if (!disabledSettingsInThirdPartyMode(profile)) {
                         addAddAddressButton(indexData, profile, getPrefFragmentName());
                     }
 
-                    addAutofillSwitch(indexData);
-
-                    if (ChromeFeatureList.isEnabled(ChromeFeatureList.PLUS_ADDRESSES_ENABLED)) {
-                        addPlusAddressesPreference(indexData);
+                    if (!ChromeFeatureList.isEnabled(
+                            ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+                        AutofillAiDelegate.maybeAddDisabledWalletDataSharingDataCard(
+                                indexData, profile, getPrefFragmentName());
                     }
+                    addAutofillSwitch(indexData);
                     // LINT.ThenChange(:RebuildProfileList)
                 }
 
@@ -502,16 +461,6 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
                             R.string.autofill_enable_profiles_toggle_sublabel);
                     // LINT.ThenChange(:AddAutofillSwitch)
                 }
-
-                private void addPlusAddressesPreference(SettingsIndexData indexData) {
-                    // LINT.IfChange(DynamicAddPlusAddressesPreference)
-                    indexData.addEntryForKey(
-                            getPrefFragmentName(),
-                            MANAGE_PLUS_ADDRESSES,
-                            R.string.plus_address_settings_entry_title,
-                            R.string.plus_address_settings_entry_summary);
-                    // LINT.ThenChange(:AddPlusAddressesPreference)
-                }
             };
 
     private static void updateDynamicPreferences(Profile profile) {
@@ -520,32 +469,34 @@ public class AutofillProfilesFragment extends ChromeBaseSettingsFragment
 
         String prefFragmentName = AutofillProfilesFragment.class.getName();
 
-        boolean disabledSettingsInThirdPartyMode = disabledSettingsInThirdPartyMode(profile);
+        AutofillAiDelegate.maybeAddDisabledSettingsInfoCard(indexData, profile, prefFragmentName);
 
-        if (disabledSettingsInThirdPartyMode) {
-            if (indexData.getEntryForKey(prefFragmentName, DISABLED_SETTINGS_INFO) == null) {
-                addDisabledSettingsInfoCard(indexData, prefFragmentName);
-            }
+        if (disabledSettingsInThirdPartyMode(profile)) {
             indexData.removeEntryForKey(prefFragmentName, PREF_NEW_PROFILE);
         } else {
             if (indexData.getEntryForKey(prefFragmentName, PREF_NEW_PROFILE) == null) {
                 addAddAddressButton(indexData, profile, prefFragmentName);
             }
-            indexData.removeEntryForKey(prefFragmentName, DISABLED_SETTINGS_INFO);
         }
 
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+            AutofillAiDelegate.maybeAddDisabledWalletDataSharingDataCard(
+                    indexData, profile, prefFragmentName);
+        }
         indexData.resolveIndex();
     }
 
-    private static void addDisabledSettingsInfoCard(
-            SettingsIndexData indexData, String prefFragmentName) {
-        // LINT.IfChange(DynamicDisabledSettingsInfoCard)
-        indexData.addEntryForKey(
-                prefFragmentName,
-                DISABLED_SETTINGS_INFO,
-                R.string.autofill_disable_settings_explanation_title,
-                R.string.autofill_disable_settings_explanation);
-        // LINT.ThenChange(:AddDisabledSettingsInfoCard)
+    private void recordAddressEditDone() {
+        if (mAddressEditor == null) {
+            return;
+        }
+        int promptMode = mAddressEditor.getPromptMode();
+        if (promptMode == SaveUpdateAddressProfilePromptMode.CREATE_NEW_PROFILE
+                || promptMode == SaveUpdateAddressProfilePromptMode.SAVE_NEW_PROFILE) {
+            RecordUserAction.record("AutofillAddressesAdded");
+        } else {
+            RecordUserAction.record("AutofillAddressesEdited");
+        }
     }
 
     private static void addAddAddressButton(

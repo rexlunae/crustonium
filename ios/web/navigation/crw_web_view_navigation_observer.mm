@@ -6,8 +6,11 @@
 
 #import "base/check.h"
 #import "base/logging.h"
+#import "base/memory/weak_ptr.h"
 #import "base/metrics/histogram_functions.h"
+#import "base/sequence_checker.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/task/sequenced_task_runner.h"
 #import "ios/web/common/features.h"
 #import "ios/web/common/url_util.h"
 #import "ios/web/navigation/crw_error_page_helper.h"
@@ -17,18 +20,15 @@
 #import "ios/web/navigation/crw_wk_navigation_handler.h"
 #import "ios/web/navigation/crw_wk_navigation_states.h"
 #import "ios/web/navigation/navigation_context_impl.h"
+#import "ios/web/navigation/navigation_manager_impl.h"
 #import "ios/web/navigation/wk_navigation_util.h"
+#import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/util/wk_web_view_util.h"
 #import "ios/web/web_state/web_state_impl.h"
 #import "net/base/apple/http_response_headers_util.h"
 #import "net/base/apple/url_conversions.h"
 #import "url/gurl.h"
-
-// TODO(crbug.com/477899998): Remove when the investigation is over.
-#import "base/not_fatal_until.h"
-#import "ios/web/public/thread/web_task_traits.h"
-#import "ios/web/public/thread/web_thread.h"
 
 using web::NavigationManagerImpl;
 
@@ -55,11 +55,33 @@ using web::NavigationManagerImpl;
 
 @end
 
-@implementation CRWWebViewNavigationObserver
+@implementation CRWWebViewNavigationObserver {
+  // Task runner used to ensure that KVO notifications are handled on the
+  // correct sequence (as WebState and CRWWebViewNavigationObserver are
+  // sequence-affine, but KVO notifications are sent on the thread where
+  // the property is modified).
+  scoped_refptr<base::SequencedTaskRunner> _taskRunner;
+
+  // Used to enforce the use of the CRWWebViewNavigationObserver on the
+  // correct sequence (since this object is sequence-affine).
+  SEQUENCE_CHECKER(_sequenceChecker);
+}
+
+#pragma mark - NSObject
+
+- (instancetype)init {
+  if ((self = [super init])) {
+    // Store a refcounted pointer to the current sequence in order to
+    // ensure that the KVO notification are executed on that sequence.
+    _taskRunner = base::SequencedTaskRunner::GetCurrentDefault();
+  }
+  return self;
+}
 
 #pragma mark - Property
 
 - (void)setWebView:(WKWebView*)webView {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   for (NSString* keyPath in self.WKWebViewObservers) {
     [_webView removeObserver:self forKeyPath:keyPath];
   }
@@ -72,6 +94,7 @@ using web::NavigationManagerImpl;
 }
 
 - (NSDictionary*)WKWebViewObservers {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   return @{
     @"estimatedProgress" : @"webViewEstimatedProgressDidChange",
     @"loading" : @"webViewLoadingStateDidChange",
@@ -82,19 +105,23 @@ using web::NavigationManagerImpl;
 }
 
 - (NavigationManagerImpl*)navigationManagerImpl {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   return self.webStateImpl ? &(self.webStateImpl->GetNavigationManagerImpl())
                            : nil;
 }
 
 - (web::WebStateImpl*)webStateImpl {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   return [self.delegate webStateImplForWebViewHandler:self];
 }
 
 - (CRWWKNavigationHandler*)navigationHandler {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   return [self.delegate navigationHandlerForNavigationObserver:self];
 }
 
 - (const GURL&)documentURL {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   return [self.delegate documentURLForWebViewHandler:self];
 }
 
@@ -104,32 +131,37 @@ using web::NavigationManagerImpl;
                       ofObject:(id)object
                         change:(NSDictionary*)change
                        context:(void*)context {
-  // According to https://crbug.com/477494757, WebKit may end up calling this
-  // method on a background thread. WebState is not thread-safe and must only
-  // be accessed on the main thread. Thus being called on a background thread
-  // can lead to concurrent access of the same object on multiple threads and
-  // is likely to mess things up. As a band-aid until a proper fix is written
-  // perform a thread hop to the main thread here if necessary.
+  // As https://crbug.com/477494757 demonstrates, KVO will invoke this method
+  // on the thread where the observed property is modified, and WebKit does
+  // change properties of the WKWebView on background thread.
   //
-  // TODO(crbug.com/477899998): Remove when the investigation is over.
-  if (!web::WebThread::CurrentlyOn(web::WebThread::UI)) {
+  // The WebState is sequence-affine, and by extension the current object is
+  // also sequence-affine. So, if the observation happens on a background
+  // thread, post a task to the correct sequence via _taskRunner. This is safe
+  // as _taskRunner is unmodified after the object is initialized, and all the
+  // Objective-C pointers are reference counted (thus the object cannot be
+  // deallocated while KVO is sending the notification).
+  //
+  // Note that when going through the _taskRunner, the WebView may be destroyed
+  // or the observation unregistered by the time the task is executed. Thus it
+  // must correctly handle those cases.
+  if (!_taskRunner->RunsTasksInCurrentSequence()) {
     __weak __typeof(self) weakSelf = self;
-    web::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(^{
-          [weakSelf observeValueForKeyPath:keyPath
-                                  ofObject:object
-                                    change:change
-                                   context:context];
-        }));
-
+    _taskRunner->PostTask(FROM_HERE, base::BindOnce(^{
+                            [weakSelf observeValueForKeyPath:keyPath
+                                                    ofObject:object
+                                                      change:change
+                                                     context:context];
+                          }));
     return;
   }
 
-  // TODO(crbug.com/477899998): Remove when the investigation is over.
-  CHECK(web::WebThread::CurrentlyOn(web::WebThread::UI),
-        base::NotFatalUntil::M146);
+  // Do not move this before the PostTask(...).
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
+  if (self.beingDestroyed) {
+    return;
+  }
 
-  DCHECK(!self.beingDestroyed);
   NSString* dispatcherSelectorName = self.WKWebViewObservers[keyPath];
   DCHECK(dispatcherSelectorName);
   if (dispatcherSelectorName) {
@@ -151,11 +183,13 @@ using web::NavigationManagerImpl;
 
 // Called when WKWebView estimatedProgress has been changed.
 - (void)webViewEstimatedProgressDidChange {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   self.webStateImpl->SendChangeLoadProgress(self.webView.estimatedProgress);
 }
 
 // Called when WKWebView loading state has been changed.
 - (void)webViewLoadingStateDidChange {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   self.webStateImpl->SetIsLoading(self.webView.loading);
 
   if (self.webView.loading) {
@@ -204,10 +238,14 @@ using web::NavigationManagerImpl;
       }
       existingContext->SetIsSameDocument(isSameDocumentNavigation);
       existingContext->SetHasCommitted(!isSameDocumentNavigation);
+      base::WeakPtr<web::NavigationContextImpl> weakContext =
+          existingContext->GetWeakPtr();
       self.webStateImpl->OnNavigationStarted(existingContext);
-      [self.delegate navigationObserver:self
-               didChangePageWithContext:existingContext];
-      self.webStateImpl->OnNavigationFinished(existingContext);
+      if (weakContext) {
+        [self.delegate navigationObserver:self
+                 didChangePageWithContext:weakContext.get()];
+        self.webStateImpl->OnNavigationFinished(weakContext.get());
+      }
     }
   }
 
@@ -217,6 +255,7 @@ using web::NavigationManagerImpl;
 
 // Called when WKWebView canGoForward/canGoBack state has been changed.
 - (void)webViewBackForwardStateDidChange {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   // Don't trigger for LegacyNavigationManager because its back/foward state
   // doesn't always match that of WKWebView.
   self.webStateImpl->OnBackForwardStateChanged();
@@ -224,6 +263,7 @@ using web::NavigationManagerImpl;
 
 // Called when WKWebView URL has been changed.
 - (void)webViewURLDidChange {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   // TODO(crbug.com/41460688): Determine if there are any cases where this still
   // happens, and if so whether anything should be done when it does.
   if (self.webView.URL.absoluteString.length == 0) {
@@ -313,6 +353,7 @@ using web::NavigationManagerImpl;
          completionHandler:^(id result, NSError* error) {
            // If the web view has gone away, or the location
            // couldn't be retrieved, abort.
+           DCHECK_CALLED_ON_VALID_SEQUENCE(self->_sequenceChecker);
            if (!self.webView || ![result isKindOfClass:[NSString class]]) {
              return;
            }
@@ -368,6 +409,7 @@ using web::NavigationManagerImpl;
 // used in the context of a URL KVO callback firing, and only if `isLoading` is
 // YES for the web view (since if it's not, no guesswork is needed).
 - (BOOL)isKVOChangePotentialSameDocumentNavigationToURL:(const GURL&)newURL {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   // If the origin changes, it can't be same-document.
   if (const GURL originAsURL = self.documentURL.DeprecatedGetOriginAsURL();
       originAsURL.is_empty() ||

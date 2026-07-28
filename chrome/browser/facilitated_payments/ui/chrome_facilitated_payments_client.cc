@@ -24,6 +24,7 @@
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/bank_account.h"
 #include "components/autofill/core/browser/data_model/payments/ewallet.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/facilitated_payments/android/device_delegate_android.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_app_info_list.h"
 #include "components/facilitated_payments/core/browser/network_api/facilitated_payments_network_interface.h"
@@ -202,10 +203,25 @@ void ChromeFacilitatedPaymentsClient::InitPixAccountLinkingFlow(
 }
 
 void ChromeFacilitatedPaymentsClient::ShowPixAccountLinkingPrompt(
+    int strike_count,
     base::OnceCallback<void()> on_accepted,
     base::OnceCallback<void()> on_declined) {
   facilitated_payments_controller_->ShowPixAccountLinkingPrompt(
-      std::move(on_accepted), std::move(on_declined));
+      strike_count, std::move(on_accepted), std::move(on_declined));
+}
+
+void ChromeFacilitatedPaymentsClient::ShowPixAccountLinkingSuccessScreen() {
+  facilitated_payments_controller_->ShowPixAccountLinkingSuccessScreen();
+}
+
+void ChromeFacilitatedPaymentsClient::ShowAccountLinkingPrompt(
+    const payments::facilitated::AccountLinkingParams& params,
+    base::OnceCallback<void()> on_accepted,
+    base::OnceCallback<void()> on_declined,
+    base::OnceCallback<void()> on_dismissed) {
+  facilitated_payments_controller_->ShowAccountLinkingPrompt(
+      params, std::move(on_accepted), std::move(on_declined),
+      std::move(on_dismissed));
 }
 
 bool ChromeFacilitatedPaymentsClient::HasScreenlockOrBiometricSetup() {
@@ -222,6 +238,11 @@ void ChromeFacilitatedPaymentsClient::RegisterAllowlists() {
     if (base::FeatureList::IsEnabled(payments::facilitated::kEwalletPayments)) {
       optimization_guide_decider_->RegisterOptimizationTypes(
           {optimization_guide::proto::EWALLET_MERCHANT_ALLOWLIST});
+    }
+    if (base::FeatureList::IsEnabled(
+            payments::facilitated::kEnableIframeForPix)) {
+      optimization_guide_decider_->RegisterOptimizationTypes(
+          {optimization_guide::proto::PIX_PSP_ALLOWLIST});
     }
     optimization_guide_decider_->RegisterOptimizationTypes(
         {optimization_guide::proto::A2A_MERCHANT_ALLOWLIST});

@@ -15,7 +15,6 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.bookmarks.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.prefs.PrefChangeRegistrar.PrefObserver;
@@ -26,7 +25,6 @@ import org.chromium.ui.base.DeviceFormFactor;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.Collection;
-import java.util.function.Supplier;
 
 /** Utilities for the bookmark bar which provides users with bookmark access from top chrome. */
 @NullMarked
@@ -170,8 +168,7 @@ public class BookmarkBarUtils {
         if (sDeviceBookmarkBarCompatibleForTesting != null) {
             return sDeviceBookmarkBarCompatibleForTesting;
         }
-        return ChromeFeatureList.sAndroidBookmarkBar.isEnabled()
-                && DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
+        return DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
     }
 
     /**
@@ -201,26 +198,36 @@ public class BookmarkBarUtils {
      * @return Whether the Bookmark Bar is currently visible.
      */
     public static boolean isBookmarkBarVisible(
-            Context context,
-            @Nullable Profile profile,
-            @Nullable Supplier<Boolean> isXrFullSpaceMode) {
+            Context context, @Nullable Profile profile, boolean isXrFullSpaceMode) {
         if (sBookmarkBarVisibleForTesting != null) {
             return sBookmarkBarVisibleForTesting;
         }
 
-        if (isXrFullSpaceMode != null && Boolean.TRUE.equals(isXrFullSpaceMode.get())) {
+        if (isXrFullSpaceMode || !isActivityStateBookmarkBarCompatible(context)) {
             return false;
         }
 
-        if (!isActivityStateBookmarkBarCompatible(context)) {
-            return false;
-        }
         // On Desktop, we sync with the UserPrefs.
         // On tablets we use the device preference logic (policy (pref service)  > local pref
         // (shared pref) > FeatureParam).
         return DeviceInfo.isDesktop()
                 ? isUserPrefsShowBookmarksBarEnabled(profile)
                 : isDevicePrefShowBookmarksBarEnabled(profile);
+    }
+
+    /**
+     * Toggles the visibility of the bookmarks bar, automatically choosing between UserPrefs
+     * (Desktop) and Device preferences (Tablet) based on the device type.
+     *
+     * @param profile The profile for which the bookmarks bar visibility should be toggled.
+     * @param fromKeyboardShortcut True if the change was triggered by a keyboard shortcut.
+     */
+    public static void toggleShowBookmarksBar(Profile profile, boolean fromKeyboardShortcut) {
+        if (DeviceInfo.isDesktop()) {
+            toggleUserPrefsShowBookmarksBar(profile, fromKeyboardShortcut);
+        } else {
+            toggleDevicePrefShowBookmarksBar(profile, fromKeyboardShortcut);
+        }
     }
 
     /**
@@ -321,7 +328,7 @@ public class BookmarkBarUtils {
      *
      * @param profile The profile for which the UserPref should be toggled.
      */
-    public static void toggleUserPrefsShowBookmarksBar(
+    private static void toggleUserPrefsShowBookmarksBar(
             Profile profile, boolean fromKeyboardShortcut) {
         setUserPrefsShowBookmarksBar(
                 profile,
@@ -370,11 +377,10 @@ public class BookmarkBarUtils {
         // we respect the user's local choice.
         // If a user has set the show bookmarks bar setting explicitly, then we will use that value.
         // If the user has never set the preference, then we will return a default, which is
-        // currently controlled with a FeatureParam.
+        // currently false.
         return hasUserSetDevicePrefShowBookmarksBar()
-                ? ContextUtils.getAppSharedPreferences()
-                        .getBoolean(BookmarkBarConstants.BOOKMARK_BAR_SHOW_BOOKMARK_BAR, false)
-                : ChromeFeatureList.sAndroidBookmarkBarShowBookmarkBar.getValue();
+                && ContextUtils.getAppSharedPreferences()
+                        .getBoolean(BookmarkBarConstants.BOOKMARK_BAR_SHOW_BOOKMARK_BAR, false);
     }
 
     /**
@@ -419,7 +425,7 @@ public class BookmarkBarUtils {
      * Toggles the value of the show bookmarks bar device preference, this is stored locally and
      * only used on tablets, correctly interacting with enterprise policies.
      */
-    public static void toggleDevicePrefShowBookmarksBar(
+    private static void toggleDevicePrefShowBookmarksBar(
             Profile profile, boolean fromKeyboardShortcut) {
         setDevicePrefShowBookmarksBar(
                 profile, !isDevicePrefShowBookmarksBarEnabled(profile), fromKeyboardShortcut);
@@ -433,9 +439,7 @@ public class BookmarkBarUtils {
     }
 
     public static void recordStartUpMetrics(
-            Context context,
-            @Nullable Profile profile,
-            @Nullable Supplier<Boolean> isXrFullSpaceMode) {
+            Context context, @Nullable Profile profile, boolean isXrFullSpaceMode) {
         boolean isCurrentlyVisible = isBookmarkBarVisible(context, profile, isXrFullSpaceMode);
 
         // Record if the Bookmark Bar is visible, but not in cases of a forced feature param.

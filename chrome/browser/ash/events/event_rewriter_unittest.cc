@@ -20,6 +20,7 @@
 #include "ash/system/input_device_settings/input_device_settings_notification_controller.h"
 #include "ash/system/input_device_settings/input_device_settings_pref_names.h"
 #include "ash/system/toast/anchored_nudge_manager_impl.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
@@ -32,16 +33,16 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/ash/events/event_rewriter_delegate_impl.h"
 #include "chrome/browser/ash/input_method/input_method_configuration.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/notifications/deprecation_notification_controller.h"
 #include "chrome/browser/ash/preferences/preferences.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "components/prefs/pref_member.h"
+#include "components/session_manager/test/test_user_session_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "components/user_manager/scoped_user_manager.h"
 #include "device/udev_linux/fake_udev_loader.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window.h"
@@ -264,7 +265,7 @@ struct TestKey {
           {}) {
     return {ui::EventType::kKeyPressed,
             code,
-            (flags & ui::EF_SHIFT_DOWN) ? shifted_key : key,
+            ui::DomKey((flags & ui::EF_SHIFT_DOWN) ? shifted_key : key),
             keycode,
             flags | modifier_flag,
             kNoScanCode,
@@ -279,7 +280,7 @@ struct TestKey {
     // Note: modifier flag should not be present on release events.
     return {ui::EventType::kKeyReleased,
             code,
-            (flags & ui::EF_SHIFT_DOWN) ? shifted_key : key,
+            ui::DomKey((flags & ui::EF_SHIFT_DOWN) ? shifted_key : key),
             keycode,
             flags,
             kNoScanCode,
@@ -631,12 +632,13 @@ namespace ash {
 
 class EventRewriterTestBase : public ChromeAshTestBase {
  public:
-  EventRewriterTestBase()
-      : fake_user_manager_(new FakeChromeUserManager),
-        user_manager_enabler_(base::WrapUnique(fake_user_manager_.get())) {}
+  EventRewriterTestBase() = default;
   ~EventRewriterTestBase() override = default;
 
   void SetUp() override {
+    user_session_manager_ = std::make_unique<ash::test::TestUserSessionManager>(
+        TestingBrowserProcess::GetGlobal()->local_state());
+
     keyboard_layout_engine_ = std::make_unique<ui::StubKeyboardLayoutEngine>();
     // Inject custom table to make this closer to en-US behavior.
     keyboard_layout_engine_->SetCustomLookupTableForTesting({
@@ -957,9 +959,7 @@ class EventRewriterTestBase : public ChromeAshTestBase {
   }
 
   base::test::ScopedFeatureList scoped_feature_list_;
-  raw_ptr<FakeChromeUserManager, DanglingUntriaged>
-      fake_user_manager_;  // Not owned.
-  user_manager::ScopedUserManager user_manager_enabler_;
+  std::unique_ptr<ash::test::TestUserSessionManager> user_session_manager_;
   raw_ptr<input_method::MockInputMethodManagerImpl, DanglingUntriaged>
       input_method_manager_mock_;
   testing::FakeUdevLoader fake_udev_;
@@ -1036,7 +1036,9 @@ TEST_P(EventRewriterTest, TestKeyRewriteLatency) {
 
 TEST_P(EventRewriterTest, ModifiersNotRemappedWhenSuppressed) {
   // Remap Control -> Alt.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kControl,
                    ui::mojom::ModifierKey::kAlt);
 
@@ -1127,7 +1129,9 @@ TEST_P(EventRewriterTest, TestRewriteNumPadKeys) {
 TEST_P(EventRewriterTest, TestRewriteNumPadKeysOnAppleKeyboard) {
   // Simulate the default initialization of the Apple Command key remap pref to
   // Ctrl.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   keyboard_settings->modifier_remappings[ui::mojom::ModifierKey::kMeta] =
       ui::mojom::ModifierKey::kControl;
@@ -1220,7 +1224,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersNoRemapMultipleKeys) {
 
 TEST_P(EventRewriterTest, TestRewriteModifiersDisableSome) {
   // Disable Search, Control and Escape keys.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kMeta,
                    ui::mojom::ModifierKey::kVoid);
   RemapModifierKey(ui::mojom::ModifierKey::kControl,
@@ -1283,7 +1289,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersDisableSome) {
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapToControl) {
   // Remap Search to Control.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kMeta,
                    ui::mojom::ModifierKey::kControl);
 
@@ -1339,7 +1347,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapToControl) {
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapToEscape) {
   // Remap Search to Escape.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kMeta,
                    ui::mojom::ModifierKey::kEscape);
 
@@ -1354,7 +1364,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapToEscape) {
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapEscapeToAlt) {
   // Remap Escape to Alt.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kEscape,
                    ui::mojom::ModifierKey::kAlt);
 
@@ -1369,7 +1381,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapEscapeToAlt) {
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapAltToControl) {
   // Remap Alt to Control.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kAlt,
                    ui::mojom::ModifierKey::kControl);
 
@@ -1393,7 +1407,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapAltToControl) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapUnderEscapeControlAlt) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // Remap Escape to Alt.
   RemapModifierKey(ui::mojom::ModifierKey::kEscape,
@@ -1437,7 +1453,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapUnderEscapeControlAlt) {
 
 TEST_P(EventRewriterTest,
        TestRewriteModifiersRemapUnderEscapeControlAltSearch) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // Remap Escape to Alt.
   RemapModifierKey(ui::mojom::ModifierKey::kEscape,
@@ -1478,7 +1496,9 @@ TEST_P(EventRewriterTest,
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapBackspaceToEscape) {
   // Remap Backspace to Escape.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kBackspace,
                    ui::mojom::ModifierKey::kEscape);
 
@@ -1494,7 +1514,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapBackspaceToEscape) {
 TEST_P(EventRewriterTest,
        TestRewriteNonModifierToModifierWithRemapBetweenKeyEvents) {
   // Remap Escape to Alt.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kEscape,
                    ui::mojom::ModifierKey::kAlt);
 
@@ -1518,7 +1540,9 @@ TEST_P(EventRewriterTest,
 
 TEST_P(EventRewriterTest, TestRewriteModifiersRemapToCapsLock) {
   // Remap Search to Caps Lock.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kMeta,
                    ui::mojom::ModifierKey::kCapsLock);
 
@@ -1583,7 +1607,9 @@ TEST_P(EventRewriterTest, TestRewriteModifiersRemapToCapsLock) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteCapsLock) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   SetUpKeyboard(kExternalGenericKeyboard);
   EXPECT_FALSE(fake_ime_keyboard_.IsCapsLockEnabled());
@@ -1620,7 +1646,9 @@ TEST_P(EventRewriterTest, TestRewriteCapsLock) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteExternalCapsLockWithDifferentScenarios) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   SetUpKeyboard(kExternalGenericKeyboard);
   EXPECT_FALSE(fake_ime_keyboard_.IsCapsLockEnabled());
@@ -1661,7 +1689,9 @@ TEST_P(EventRewriterTest, TestRewriteExternalCapsLockWithDifferentScenarios) {
 
 TEST_P(EventRewriterTest, TestRewriteCapsLockToControl) {
   // Remap CapsLock to Control.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kCapsLock,
                    ui::mojom::ModifierKey::kControl);
 
@@ -1685,7 +1715,9 @@ TEST_P(EventRewriterTest, TestRewriteCapsLockToControl) {
 
 TEST_P(EventRewriterTest, TestRewriteCapsLockMod3InUse) {
   // Remap CapsLock to Control.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kCapsLock,
                    ui::mojom::ModifierKey::kControl);
 
@@ -1701,7 +1733,9 @@ TEST_P(EventRewriterTest, TestRewriteCapsLockMod3InUse) {
 
 TEST_P(EventRewriterTest, TestRewriteToQuickInsert) {
   // Remap QuickInsert to Control
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kControl,
                    ui::mojom::ModifierKey::kQuickInsert);
 
@@ -1765,7 +1799,9 @@ TEST_P(EventRewriterTest, TestRewriteToFunction) {
   SetUpKeyboard(kInternalChromeSplitModifierLayoutKeyboard);
 
   // Remap QuickInsert to Control
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kControl,
                    ui::mojom::ModifierKey::kFunction);
 
@@ -1870,7 +1906,9 @@ TEST_P(EventRewriterTest, TestRewriteFromQuickInsert) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteExtendedKeysAltVariants) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kAltClickAndSixPackCustomization);
@@ -1948,7 +1986,9 @@ TEST_P(EventRewriterTest, TestRewriteExtendedKeysAltVariants) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteExtendedKeyInsertDeprecatedNotification) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
       {}, {features::kAltClickAndSixPackCustomization});
@@ -1976,7 +2016,9 @@ TEST_P(EventRewriterTest, TestRewriteExtendedKeyInsertDeprecatedNotification) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteExtendedKeyInsert) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
       {}, {features::kAltClickAndSixPackCustomization});
@@ -2002,7 +2044,9 @@ TEST_P(EventRewriterTest, TestRewriteExtendedKeysSearchVariants) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kAltClickAndSixPackCustomization);
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   for (const auto keyboard : kNonAppleKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2041,7 +2085,9 @@ TEST_P(EventRewriterTest, TestRewriteExtendedKeysSearchVariants) {
 }
 
 TEST_P(EventRewriterTest, TestNumberRowIsNotRewritten) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kAltClickAndSixPackCustomization);
@@ -2069,7 +2115,9 @@ TEST_P(EventRewriterTest, TestRewriteSearchNumberToFunctionKey) {
   TestShortcutMappingPrefDelegate delegate;
   CHECK(!::features::IsImprovedKeyboardShortcutsEnabled());
   ASSERT_FALSE(::features::IsImprovedKeyboardShortcutsEnabled());
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   for (const auto& keyboard : kNonAppleNonCustomLayoutKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2105,7 +2153,9 @@ TEST_P(EventRewriterTest, TestRewriteSearchNumberToFunctionKey) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteSearchNumberToFunctionKeyNoAction) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   for (const auto& keyboard : kNonAppleNonCustomLayoutKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2141,7 +2191,9 @@ TEST_P(EventRewriterTest, TestRewriteSearchNumberToFunctionKeyNoAction) {
 }
 
 TEST_P(EventRewriterTest, TestFunctionKeysNotRewrittenBySearch) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   for (const auto& keyboard : kNonAppleNonCustomLayoutKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2167,7 +2219,9 @@ TEST_P(EventRewriterTest, TestFunctionKeysNotRewrittenBySearch) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysNonCustomLayouts) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // Old CrOS keyboards that do not have custom layouts send F-Keys by default
   // and are translated by default to Actions based on hardcoded mappings.
@@ -2263,7 +2317,9 @@ TEST_P(EventRewriterTest, TestRewriteFunctionKeysNonCustomLayouts) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysCustomLayoutsFKeyUnchanged) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   // On devices with custom layouts, the F-Keys are never remapped.
   for (const auto& keyboard : kChromeCustomKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2286,7 +2342,9 @@ TEST_P(EventRewriterTest, TestRewriteFunctionKeysCustomLayoutsFKeyUnchanged) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysCustomLayoutsActionUnchanged) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // An action key on these devices is one where the scan code matches an entry
   // in the layout map. It doesn't matter what the action is, as long the
@@ -2313,7 +2371,9 @@ TEST_P(EventRewriterTest,
   // For EF_COMMAND_DOWN modifier.
   SendKeyEvent(KeyLMeta::Pressed());
 
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   delegate_->SuppressMetaTopRowKeyComboRewrites(true);
   keyboard_settings->suppress_meta_fkey_rewrites = true;
 
@@ -2343,7 +2403,9 @@ TEST_P(EventRewriterTest,
   // For EF_COMMAND_DOWN.
   SendKeyEvent(KeyLMeta::Pressed());
 
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   delegate_->SuppressMetaTopRowKeyComboRewrites(true);
   keyboard_settings->suppress_meta_fkey_rewrites = true;
 
@@ -2381,7 +2443,9 @@ TEST_P(EventRewriterTest,
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysCustomLayouts) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // On devices with custom layouts, scan codes that match the layout
   // map get mapped to F-Keys based only on the scan code. The search
@@ -2492,7 +2556,9 @@ TEST_P(EventRewriterTest, TestRewriteFunctionKeysCustomLayoutsWithFunction) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysLayout2) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   SetUpKeyboard({.name = "Internal Keyboard",
                  .layout = kKbdTopRowLayout2Tag,
                  .type = ui::INPUT_DEVICE_INTERNAL,
@@ -2585,7 +2651,9 @@ TEST_P(EventRewriterTest, TestRewriteFunctionKeysLayout2) {
 
 TEST_P(EventRewriterTest,
        TestFunctionKeysLayout2SuppressMetaTopRowKeyRewrites) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   delegate_->SuppressMetaTopRowKeyComboRewrites(true);
   keyboard_settings->suppress_meta_fkey_rewrites = true;
 
@@ -2646,7 +2714,9 @@ TEST_P(EventRewriterTest,
 }
 
 TEST_P(EventRewriterTest, RecordEventRemappedToRightClick) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   IntegerPrefMember alt_remap_to_right_click;
   IntegerPrefMember search_remap_to_right_click;
   alt_remap_to_right_click.Init(prefs::kAltEventRemappedToRightClick, prefs());
@@ -2663,7 +2733,9 @@ TEST_P(EventRewriterTest, RecordEventRemappedToRightClick) {
 TEST_P(
     EventRewriterTest,
     TestFunctionKeysLayout2SuppressMetaTopRowKeyRewritesWithTreatTopRowAsFKeys) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   delegate_->SuppressMetaTopRowKeyComboRewrites(true);
   keyboard_settings->suppress_meta_fkey_rewrites = true;
 
@@ -2708,7 +2780,9 @@ TEST_P(
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysWilcoLayouts) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   for (const auto& keyboard : kWilcoKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2864,7 +2938,9 @@ TEST_P(EventRewriterTest, TestRewriteFunctionKeysWilcoLayouts) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteActionKeysWilcoLayouts) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   for (const auto& keyboard : kWilcoKeyboardVariants) {
     SCOPED_TRACE(keyboard.name);
@@ -2970,7 +3046,9 @@ TEST_P(EventRewriterTest, TestRewriteActionKeysWilcoLayouts) {
 
 TEST_P(EventRewriterTest,
        TestRewriteActionKeysWilcoLayoutsSuppressMetaTopRowKeyRewrites) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   delegate_->SuppressMetaTopRowKeyComboRewrites(true);
   keyboard_settings->suppress_meta_fkey_rewrites = true;
 
@@ -3046,7 +3124,9 @@ TEST_P(EventRewriterTest,
 TEST_P(
     EventRewriterTest,
     TestRewriteActionKeysWilcoLayoutsSuppressMetaTopRowKeyRewritesWithTopRowAreFkeys) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   delegate_->SuppressMetaTopRowKeyComboRewrites(true);
   keyboard_settings->suppress_meta_fkey_rewrites = true;
 
@@ -3120,7 +3200,9 @@ TEST_P(
 }
 
 TEST_P(EventRewriterTest, TestTopRowAsFnKeysForKeyboardWilcoLayouts) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // Enable preference treat-top-row-as-function-keys.
   // That causes action keys to be mapped back to Fn keys, unless the search
@@ -3233,7 +3315,9 @@ TEST_P(EventRewriterTest, TestTopRowAsFnKeysForKeyboardWilcoLayouts) {
 }
 
 TEST_P(EventRewriterTest, TestRewriteFunctionKeysInvalidLayout) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // Not adding a keyboard simulates a failure in getting top row layout, which
   // will fallback to Layout1 in which case keys are rewritten to their default
@@ -3257,7 +3341,9 @@ TEST_P(EventRewriterTest, TestRewriteFunctionKeysInvalidLayout) {
 // Tests that event rewrites still work even if modifiers are remapped.
 TEST_P(EventRewriterTest, TestRewriteExtendedKeysWithControlRemapped) {
   // Remap Control to Search.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kAltClickAndSixPackCustomization);
@@ -3278,7 +3364,9 @@ TEST_P(EventRewriterTest, TestRewriteExtendedKeysWithControlRemapped) {
 
 TEST_P(EventRewriterTest, TestRewriteKeyEventSentByXSendEvent) {
   // Remap Control to Alt.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kControl,
                    ui::mojom::ModifierKey::kAlt);
 
@@ -3294,7 +3382,9 @@ TEST_P(EventRewriterTest, TestRewriteKeyEventSentByXSendEvent) {
 
 TEST_P(EventRewriterTest, TestRewriteNonNativeEvent) {
   // Remap Control to Alt.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kControl,
                    ui::mojom::ModifierKey::kAlt);
 
@@ -3319,7 +3409,9 @@ TEST_P(EventRewriterTest, TestRewriteNonNativeEvent) {
 }
 
 TEST_P(EventRewriterTest, TopRowKeysAreFunctionKeys) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   std::unique_ptr<aura::Window> window(
       CreateTestWindowInShell({.window_id = 1}));
   wm::ActivateWindow(window.get());
@@ -3349,7 +3441,9 @@ TEST_P(EventRewriterTest, TopRowKeysAreFunctionKeys) {
 // Alt+Click or Search+Click. After a transition period this will
 // default to Search+Click and the Alt+Click logic will be removed.
 void EventRewriterTestBase::DontRewriteIfNotRewritten(int right_click_flags) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   ui::DeviceDataManager* device_data_manager =
       ui::DeviceDataManager::GetInstance();
   std::vector<ui::TouchpadDevice> touchpad_devices(2);
@@ -3473,8 +3567,8 @@ void EventRewriterTestBase::DontRewriteIfNotRewritten(int right_click_flags) {
   // Still rewrite to right button, even if the modifier key is already
   // released when the mouse release event happens
   // This is for regressions such as:
-  // https://crbug.com/1399284
-  // https://crbug.com/1417079
+  // https://crbug.com/40249767
+  // https://crbug.com/40893842
   {
     ui::MouseEvent press(ui::EventType::kMousePressed, gfx::Point(),
                          gfx::Point(), ui::EventTimeForNow(), right_click_flags,
@@ -3517,15 +3611,6 @@ TEST_P(EventRewriterTest, DontRewriteIfNotRewritten_AltClickIsRightClick_New) {
   scoped_feature_list.InitWithFeatures(
       {}, {features::kAltClickAndSixPackCustomization});
   DontRewriteIfNotRewritten(ui::EF_LEFT_MOUSE_BUTTON | ui::EF_ALT_DOWN);
-  EXPECT_EQ(message_center_.NotificationCount(), 0u);
-}
-
-TEST_P(EventRewriterTest, DontRewriteIfNotRewritten_SearchClickIsRightClick) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kUseSearchClickForRightClick},
-      {features::kAltClickAndSixPackCustomization});
-  DontRewriteIfNotRewritten(ui::EF_LEFT_MOUSE_BUTTON | ui::EF_COMMAND_DOWN);
   EXPECT_EQ(message_center_.NotificationCount(), 0u);
 }
 
@@ -3736,7 +3821,9 @@ TEST_P(EventRewriterTest, MouseWheelEventDispatchImpl) {
 // Tests that if modifier keys are remapped, the flags of a mouse wheel event
 // will be rewritten properly.
 TEST_P(EventRewriterTest, MouseWheelEventModifiersRewritten) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // For EF_CONTROL_DOWN modifier.
   SendKeyEvent(KeyLControl::Pressed());
@@ -3776,7 +3863,9 @@ TEST_P(EventRewriterTest, MouseWheelEventModifiersRewritten) {
 }
 
 TEST_P(EventRewriterTest, MouseEventMaintainNativeEvent) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   gfx::Point location(0, 0);
   ui::MouseEvent native_event(ui::EventType::kMouseMoved, location, location,
@@ -3804,9 +3893,11 @@ TEST_P(EventRewriterTest, MouseEventMaintainNativeEvent) {
   }
 }
 
-// Tests edge cases of key event rewriting (see https://crbug.com/913209).
+// Tests edge cases of key event rewriting (see https://crbug.com/40605692).
 TEST_P(EventRewriterTest, KeyEventRewritingEdgeCases) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndDisableFeature(
@@ -3902,7 +3993,9 @@ TEST_P(EventRewriterTest, ScrollEventDispatchImpl) {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 TEST_P(EventRewriterTest, RemapHangulOnCros1p) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   RemapModifierKey(ui::mojom::ModifierKey::kAlt, ui::mojom::ModifierKey::kAlt);
 
   scoped_refptr<input_method::MockInputMethodManagerImpl::State> state =
@@ -4146,7 +4239,9 @@ TEST_P(StickyKeysOverlayTest, ModifierVisibility) {
 }
 
 TEST_P(EventRewriterTest, RewrittenModifier) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
 
   // Register Control + B as an extension shortcut.
   SetExtensionCommands({{{ui::VKEY_B, ui::EF_CONTROL_DOWN}}});
@@ -4198,7 +4293,9 @@ TEST_P(EventRewriterTest, RecordRewritingToFunctionKeys) {
   TestShortcutMappingPrefDelegate delegate;
   ASSERT_FALSE(::features::IsImprovedKeyboardShortcutsEnabled());
 
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::HistogramTester histogram_tester;
   histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 0);
 
@@ -4603,7 +4700,9 @@ TEST_P(ModifierPressedMetricsTest, KeyPressedWithRemappingToBackspaceTest) {
     GTEST_SKIP() << "Shift cannot be remapped";
   }
 
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::HistogramTester histogram_tester;
   RemapModifierKey(mojom_modifier_, ui::mojom::ModifierKey::kBackspace);
 
@@ -4649,7 +4748,9 @@ TEST_P(ModifierPressedMetricsTest, KeyPressedWithRemappingToControlTest) {
     GTEST_SKIP() << "Shift cannot be remapped";
   }
 
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   base::HistogramTester histogram_tester;
 
   const bool right = ui::KeycodeConverter::DomCodeToLocation(event_.code) ==
@@ -4816,7 +4917,9 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::Bool());
 
 TEST_P(EventRewriterSixPackKeysTest, TestRewriteSixPackKeysSearchVariants) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   mojom::KeyboardSettings settings;
   settings.six_pack_key_remappings = ash::mojom::SixPackKeyInfo::New();
   EXPECT_CALL(*input_device_settings_controller_mock_,
@@ -4861,7 +4964,9 @@ TEST_P(EventRewriterSixPackKeysTest, TestRewriteSixPackKeysSearchVariants) {
 }
 
 TEST_P(EventRewriterSixPackKeysTest, TestRewriteSixPackKeysAltVariants) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   mojom::KeyboardSettings settings;
   settings.six_pack_key_remappings = ash::mojom::SixPackKeyInfo::New();
   settings.six_pack_key_remappings->del =
@@ -4913,7 +5018,9 @@ TEST_P(EventRewriterSixPackKeysTest, TestRewriteSixPackKeysAltVariants) {
 }
 
 TEST_P(EventRewriterSixPackKeysTest, TestRewriteSixPackKeysBlockedBySetting) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   mojom::KeyboardSettings settings;
   // "six pack" key settings use the search modifier by default.
   settings.six_pack_key_remappings = ash::mojom::SixPackKeyInfo::New();
@@ -4965,7 +5072,9 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::Bool());
 
 TEST_P(EventRewriterExtendedFkeysTest, TestRewriteExtendedFkeys) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   mojom::KeyboardSettings settings;
   settings.f11 = ui::mojom::ExtendedFkeysModifier::kAlt;
   settings.f12 = ui::mojom::ExtendedFkeysModifier::kShift;
@@ -4990,7 +5099,9 @@ TEST_P(EventRewriterExtendedFkeysTest, TestRewriteExtendedFkeys) {
 
 TEST_P(EventRewriterExtendedFkeysTest,
        TestRewriteExtendedFkeysBlockedBySetting) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   mojom::KeyboardSettings settings;
   settings.f11 = ui::mojom::ExtendedFkeysModifier::kDisabled;
   settings.f12 = ui::mojom::ExtendedFkeysModifier::kDisabled;
@@ -5006,7 +5117,9 @@ TEST_P(EventRewriterExtendedFkeysTest,
 }
 
 TEST_P(EventRewriterExtendedFkeysTest, TestRewriteExtendedFkeysTopRowAreFkeys) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   mojom::KeyboardSettings settings;
   settings.f11 = ui::mojom::ExtendedFkeysModifier::kAlt;
   settings.f12 = ui::mojom::ExtendedFkeysModifier::kShift;
@@ -5068,7 +5181,9 @@ TEST_P(EventRewriterSettingsSplitTest, TopRowAreFKeys) {
 TEST_P(EventRewriterSettingsSplitTest,
        TopRowAreFKeys_unknownDeviceRespectsPreference) {
   // Create the preference.
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   BooleanPrefMember top_row_as_fn_key_pref;
   top_row_as_fn_key_pref.Init(prefs::kSendFunctionKeys, prefs());
 
@@ -5156,7 +5271,9 @@ INSTANTIATE_TEST_SUITE_P(
              prefs::kKeyEventRemappedToSixPackPageUp}}));
 
 TEST_P(KeyEventRemappedToSixPackKeyTest, KeyEventRemappedTest) {
-  Preferences::RegisterProfilePrefs(prefs()->registry());
+  Preferences::RegisterProfilePrefs(
+      CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+      prefs()->registry());
   IntegerPrefMember int_pref;
   int_pref.Init(pref_name_, prefs());
   int_pref.SetValue(0);
@@ -5178,7 +5295,9 @@ class EventRewriterRemapToRightClickTest
 
     EventRewriterTestBase::SetUp();
 
-    Preferences::RegisterProfilePrefs(prefs()->registry());
+    Preferences::RegisterProfilePrefs(
+        CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()),
+        prefs()->registry());
     ui::DeviceDataManager* device_data_manager =
         ui::DeviceDataManager::GetInstance();
     std::vector<ui::TouchpadDevice> touchpad_devices(1);

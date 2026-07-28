@@ -33,10 +33,8 @@ namespace {
 //       {
 //           "platforms": [
 //               "android",
-//               "android_weblayer",
 //               "android_webview",
 //               "chromeos",
-//               "chromeos_lacros",
 //               "fuchsia",
 //               "ios",
 //               "linux",
@@ -60,10 +58,8 @@ namespace {
 
 const Study::Platform array_kFieldTrialConfig_platforms_0[] = {
     Study::PLATFORM_ANDROID,
-    Study::PLATFORM_ANDROID_WEBLAYER,
     Study::PLATFORM_ANDROID_WEBVIEW,
     Study::PLATFORM_CHROMEOS,
-    Study::PLATFORM_CHROMEOS_LACROS,
     Study::PLATFORM_FUCHSIA,
     Study::PLATFORM_IOS,
     Study::PLATFORM_LINUX,
@@ -315,9 +311,7 @@ const FieldTrialTestingConfig kTestingConfig = {
     array_kFieldTrialConfig_studies};
 
 std::unique_ptr<ClientFilterableState> CreateDummyClientFilterableState() {
-  auto client_state = std::make_unique<ClientFilterableState>(
-      base::BindOnce([] { return false; }),
-      base::BindOnce([] { return base::flat_set<uint64_t>(); }));
+  auto client_state = std::make_unique<ClientFilterableState>();
   client_state->locale = "en-CA";
   client_state->reference_date = base::Time::Now();
   client_state->version = base::Version("20.0.0.0");

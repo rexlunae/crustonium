@@ -7,11 +7,13 @@
 #import "base/metrics/user_metrics.h"
 #import "base/notreached.h"
 #import "base/time/time.h"
+#import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_animator.h"
-#import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_reason.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/ntp/shared/metrics/home_metrics.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
+#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/animation_util.h"
@@ -57,6 +59,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 // Whether a page is loading.
 @property(nonatomic, assign, getter=isLoading) BOOL loading;
 @property(nonatomic, assign) BOOL isNTP;
+@property(nonatomic, assign) BOOL isStartSurface;
 // The last progress of fullscreen registered. The progress range is between 0
 // and 1.
 @property(nonatomic, assign) CGFloat previousFullscreenProgress;
@@ -69,6 +72,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 @synthesize buttonFactory = _buttonFactory;
 @synthesize loading = _loading;
 @synthesize isNTP = _isNTP;
+@synthesize isStartSurface = _isStartSurface;
 
 #pragma mark - Public
 
@@ -139,10 +143,6 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 }
 
 - (void)disconnect {
-  if (!IsGeminiCopresenceEnabled()) {
-    return;
-  }
-
   for (LegacyToolbarButton* button in self.view.allButtons) {
     // Ensures that unrecognized command selectors aren't called and context
     // menu interactions are disabled after disconnecting view controller.
@@ -169,7 +169,6 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   // Add the layout guide names to the buttons.
   self.view.toolsMenuButton.guideName = kToolsMenuGuide;
   self.view.tabGridButton.guideName = kTabSwitcherGuide;
-  self.view.openNewTabButton.guideName = kNewTabButtonGuide;
   self.view.forwardButton.guideName = kForwardButtonGuide;
   self.view.backButton.guideName = kBackButtonGuide;
   self.view.shareButton.guideName = kShareButtonGuide;
@@ -204,10 +203,10 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
   [self updateUIOnTraitChange:nil];
 
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(@[
+  NSArray<UITrait>* traits = @[
     UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class,
     UITraitPreferredContentSizeCategory.class
-  ]);
+  ];
   __weak __typeof(self) weakSelf = self;
   UITraitChangeHandler handler = ^(id<UITraitEnvironment> traitEnvironment,
                                    UITraitCollection* previousCollection) {
@@ -267,10 +266,6 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     self.view.locationBarContainer.hidden = YES;
   }
   [self updateProgressBarVisibility];
-}
-
-- (void)setLocationBarHeight:(CGFloat)height {
-  [self.view setLocationBarHeight:height];
 }
 
 #pragma mark - LegacyToolbarConsumer
@@ -364,6 +359,10 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   _isNTP = isNTP;
 }
 
+- (void)setIsStartSurface:(BOOL)isStartSurface {
+  _isStartSurface = isStartSurface;
+}
+
 - (void)updateTabGroupState:(ToolbarTabGroupState)tabGroupState {
   [self.view updateTabGroupState:tabGroupState];
 }
@@ -376,6 +375,12 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 - (void)setScrollProgressForTabletOmnibox:(CGFloat)progress {
   // No-op, should be handled by the primary toolbar.
+}
+
+#pragma mark - FullscreenBrowserAgentObserving
+
+- (void)fullscreenDidUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  [self updateAllButtonsVisibility];
 }
 
 #pragma mark - FullscreenUIElement
@@ -455,13 +460,6 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 // Updates `locationBarContainer` height and adjusts its corner radius for the
 // fullscreen `progress`
 - (void)updateLocationBarHeightForFullscreenProgress:(CGFloat)progress {
-  /// When multiline omnibox is enabled and focused, refrain from updating the
-  /// location bar container height, this is already handled by the toolbar
-  /// height delegate.
-  if (IsMultilineBrowserOmniboxEnabled() && _locationBarFocused) {
-    return;
-  }
-
   const CGFloat expandedHeight =
       LocationBarHeight(self.traitCollection.preferredContentSizeCategory);
   const CGFloat collapsedHeight =
@@ -531,24 +529,52 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   }
 
   if (sender == self.view.backButton) {
+    if (self.isNTP) {
+      base::RecordAction(base::UserMetricsAction("MobileToolbarBackOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarBack"));
   } else if (sender == self.view.forwardButton) {
+    if (self.isNTP) {
+      base::RecordAction(base::UserMetricsAction("MobileToolbarForwardOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarForward"));
   } else if (sender == self.view.reloadButton) {
+    if (self.isNTP) {
+      base::RecordAction(base::UserMetricsAction("MobileToolbarReloadOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarReload"));
   } else if (sender == self.view.stopButton) {
+    if (self.isNTP) {
+      base::RecordAction(base::UserMetricsAction("MobileToolbarStopOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarStop"));
   } else if (sender == self.view.toolsMenuButton) {
+    if (self.isNTP) {
+      base::RecordAction(base::UserMetricsAction("MobileToolbarShowMenuOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarShowMenu"));
     if (self.adaptiveDelegate.isReaderModeActive) {
       base::RecordAction(
           base::UserMetricsAction("MobileToolbarShowMenuFromReaderMode"));
     }
   } else if (sender == self.view.tabGridButton) {
+    if (self.isNTP) {
+      base::RecordAction(
+          base::UserMetricsAction("MobileToolbarShowStackViewOnNTP"));
+      RecordHomeAction(IOSHomeActionType::kTabSwitcher, self.isStartSurface);
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarShowStackView"));
   } else if (sender == self.view.shareButton) {
+    if (self.isNTP) {
+      base::RecordAction(
+          base::UserMetricsAction("MobileToolbarShareMenuOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarShareMenu"));
   } else if (sender == self.view.openNewTabButton) {
+    if (self.isNTP) {
+      base::RecordAction(
+          base::UserMetricsAction("MobileToolbarNewTabShortcutOnNTP"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileToolbarNewTabShortcut"));
     base::RecordAction(base::UserMetricsAction("MobileTabNewTab"));
   } else {
@@ -564,13 +590,6 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   // Adds an empty menu so the event triggers the first time.
   UIMenu* emptyMenu = [UIMenu menuWithChildren:@[]];
   button.menu = emptyMenu;
-
-  // Fix the order of the New Tab button menu to ensure the menu and child menus
-  // are displayed in the correct visual order.
-  if (buttonType == AdaptiveToolbarButtonTypeNewTab) {
-    button.preferredMenuElementOrder =
-        UIContextMenuConfigurationElementOrderFixed;
-  }
 
   [button removeActionForIdentifier:kContextMenuActionIdentifier
                    forControlEvents:UIControlEventMenuActionTriggered];
@@ -602,7 +621,8 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 // Exits fullscreen.
 - (void)exitFullscreen {
-  [self.adaptiveDelegate exitFullscreen:FullscreenExitReason::kUserTapped];
+  [self.adaptiveDelegate
+      exitFullscreen:FullscreenModeTransitionTrigger::kForcedByUser];
 }
 
 // Modifies the UI based on the UITraits that changed on the device.

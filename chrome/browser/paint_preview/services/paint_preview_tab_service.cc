@@ -8,6 +8,8 @@
 #include <utility>
 
 #include "base/functional/callback.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -58,6 +60,9 @@ int TabIdFromDirectoryKey(const DirectoryKey& key) {
   return out;
 }
 
+constexpr base::MemoryConsumerTraits kPaintPreviewTabServiceTraits(
+    base::MemoryConsumerTraits::ConsumerType::kPassive);
+
 }  // namespace
 
 PaintPreviewTabService::TabServiceTask::TabServiceTask(
@@ -88,9 +93,11 @@ PaintPreviewTabService::PaintPreviewTabService(
                               std::move(policy),
                               is_off_the_record),
       cache_ready_(false),
-      memory_pressure_listener_registration_(
-          base::MemoryPressureListenerTag::kPaintPreviewTabService,
-          this) {
+      memory_consumer_registration_(
+          /*consumer_name=*/"PaintPreviewTabService",
+          kPaintPreviewTabServiceTraits,
+          this,
+          base::MemoryConsumerRegistration::CheckUnregister::kDisabled) {
   GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&FileManager::ListUsedKeys,
@@ -133,7 +140,7 @@ void PaintPreviewTabService::CaptureTab(int tab_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If the system is under memory pressure don't try to capture.
-  if (memory_pressure_level() >= base::MEMORY_PRESSURE_LEVEL_MODERATE) {
+  if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
     return;
   }
 

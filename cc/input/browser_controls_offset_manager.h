@@ -15,9 +15,11 @@
 #include "base/types/optional_ref.h"
 #include "cc/input/browser_controls_offset_tag_modifications.h"
 #include "cc/input/browser_controls_state.h"
+#include "cc/input/scroll_velocity_tracker.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/trees/browser_controls_params.h"
 #include "components/viz/common/quads/offset_tag.h"
+#include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
@@ -143,8 +145,18 @@ class CC_EXPORT BrowserControlsOffsetManager {
   void OnBrowserControlsParamsChanged(bool animate_changes);
 
   void ScrollBegin();
-  gfx::Vector2dF ScrollBy(const gfx::Vector2dF& pending_delta);
-  void ScrollEnd();
+  // Scrolls the browser controls by the given `pending_delta` and returns the
+  // remaining scroll delta that was not applied. `is_inertial` indicates
+  // whether the scroll update received from the browser process corresponds to
+  // a scroll that continues after the user lifts their finger off the screen
+  // (e.g. fling).
+  //
+  // TODO(anandrv): Remove the default value for the `is_inertial` parameter
+  // once snap animation is always enabled.
+  gfx::Vector2dF ScrollBy(const gfx::Vector2dF& pending_delta,
+                          bool is_inertial = false);
+  void ScrollEnd(
+      const gfx::Vector2dF& compensated_scroll_delta = gfx::Vector2dF());
 
   // The caller should ensure that |Pinch{Begin,End}| are called within
   // the scope of |Scroll{Begin,End}|.
@@ -163,6 +175,28 @@ class CC_EXPORT BrowserControlsOffsetManager {
 
   float MaximumShownRatioDeltaPerFrame(float min_ratio) const;
 
+  // Returns the viewport Y-offset above which the toolbar will always be shown
+  // when snap animation is enabled.
+  float SnapAnimationAlwaysShownRegionHeight() const;
+
+  // Returns the viewport Y-offset below which the toolbar can be hidden when
+  // snap animation is enabled.
+  //
+  // `slowness` is a multiplier that controls how much the height of the
+  // can-hide region changes relative to the height of the controls, where a
+  // higher value means a larger region and a lower value means a smaller
+  // region. The value should be between 0 and 1.
+  float SnapAnimationCanHideRegionHeight(float slowness) const;
+
+  // Returns the magnitude of scroll delta in a single scroll sequence required
+  // to trigger the snap animation.
+  //
+  // `slowness` is a multiplier that controls how much the trigger threshold
+  // changes relative to the reference threshold, where a higher value means
+  // a larger threshold and a lower value means a smaller threshold. The value
+  // should be between 0 and 1.
+  float SnapAnimationThreshold(float slowness) const;
+
  protected:
   BrowserControlsOffsetManager(BrowserControlsOffsetManagerClient* client,
                                float controls_show_threshold,
@@ -171,7 +205,19 @@ class CC_EXPORT BrowserControlsOffsetManager {
  private:
   class Animation;
 
-  void SetupAnimation(AnimationDirection direction);
+  void SetupAnimation(AnimationDirection direction,
+                      int64_t duration_ms,
+                      gfx::Tween::Type tween_type = gfx::Tween::LINEAR);
+
+  // Sets up the snap animation in the given direction based on the given scroll
+  // delta.
+  //
+  // `use_minimum_can_hide_region` indicates whether to use the smallest
+  // possible value for the can-hide region height when deciding whether to
+  // trigger the snap animation.
+  void SetupSnapAnimation(AnimationDirection direction,
+                          const gfx::Vector2dF& scroll_delta,
+                          bool use_minimum_can_hide_region);
   void StartAnimationIfNecessary();
   void ResetBaseline();
   float OldTopControlsMinShownRatio();
@@ -183,6 +229,10 @@ class CC_EXPORT BrowserControlsOffsetManager {
   void SetTopMinHeightOffsetAnimationRange(float from, float to);
   void SetBottomMinHeightOffsetAnimationRange(float from, float to);
   bool IsAnimatingHeightChange();
+
+  gfx::Vector2dF ScrollByPrecise(const gfx::Vector2dF& pending_delta);
+  void ScrollBySnap(const gfx::Vector2dF& pending_delta, bool is_inertial);
+  float ControlsAnimatedHeight() const;
 
   // The client manages the lifecycle of this.
   raw_ptr<BrowserControlsOffsetManagerClient> client_;
@@ -244,6 +294,14 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // gesture, then we reorder the animation until after the scroll.
   bool show_controls_when_scroll_completes_ = false;
 
+  // Used to track if the browser controls hide animation ran during the current
+  // scroll sequence.
+  bool did_hide_this_scroll_ = false;
+
+  // If set to true, browser controls will snap to fully show or hide on scroll
+  // instead of moving in pixel-perfect sync with the scroll.
+  const bool use_snap_animation_ = false;
+
   BrowserControlsOffsetTagModifications offset_tag_modifications_;
 
   // Class that holds and manages the state of the controls animations.
@@ -259,7 +317,8 @@ class CC_EXPORT BrowserControlsOffsetManager {
                     float start_value,
                     float stop_value,
                     int64_t duration,
-                    bool jump_to_end_on_reset);
+                    bool jump_to_end_on_reset,
+                    gfx::Tween::Type tween_type);
     // Returns the animated value for the given monotonic time tick if the
     // animation is initialized. Otherwise, returns |std::nullopt|.
     std::optional<float> Tick(base::TimeTicks monotonic_time);
@@ -295,20 +354,23 @@ class CC_EXPORT BrowserControlsOffsetManager {
     // Animation duration.
     base::TimeDelta duration_;
     // Start and stop values.
-    float start_value_ = 0.f;
-    float stop_value_ = 0.f;
+    float start_value_ = 0.0f;
+    float stop_value_ = 0.0f;
     // Minimum and maximum values the animation can have, used to decide if the
     // animation is complete.
-    float min_value_ = 0.f;
-    float max_value_ = 1.f;
+    float min_value_ = 0.0f;
+    float max_value_ = 1.0f;
     // Whether to fast-forward to end when reset. It is still BCOM's
     // responsibility to actually set the shown ratios using the value returned
     // by ::Reset().
     bool jump_to_end_on_reset_ = false;
+    gfx::Tween::Type tween_type_ = gfx::Tween::LINEAR;
   };
 
   Animation top_controls_animation_;
   Animation bottom_controls_animation_;
+
+  ScrollVelocityTracker scroll_velocity_tracker_;
 };
 
 }  // namespace cc

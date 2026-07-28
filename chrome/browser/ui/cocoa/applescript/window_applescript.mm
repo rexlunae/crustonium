@@ -16,21 +16,22 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/cocoa/applescript/constants_applescript.h"
 #include "chrome/browser/ui/cocoa/applescript/error_applescript.h"
 #import "chrome/browser/ui/cocoa/applescript/tab_applescript.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/web_contents.h"
 
@@ -103,7 +104,7 @@
     // TODO(crbug.com/452431839): Make a new NewTabTypes enum value
     // for new tabs made with AppleScript requests.
     chrome::NewTab(browser, NewTabTypes::kNewTabCommand);
-    browser->window()->Show();
+    browser->GetWindow()->Show();
 
     _browser = browser->GetWeakPtr();
     self.uniqueID =
@@ -176,7 +177,7 @@
   }
 
   return base::SysUTF8ToNSString(
-      _browser->GetBrowserForMigrationOnly()->user_title());
+      WindowMetadataController::From(_browser.get())->user_title());
 }
 
 - (void)setGivenName:(NSString*)name {
@@ -184,8 +185,8 @@
     return;
   }
 
-  _browser->GetBrowserForMigrationOnly()->SetWindowUserTitle(
-      base::SysNSStringToUTF8(name));
+  WindowMetadataController::From(_browser.get())
+      ->SetWindowUserTitle(base::SysNSStringToUTF8(name));
 }
 
 - (NSString*)mode {
@@ -301,7 +302,9 @@
 
 - (void)setOrderedIndex:(NSNumber*)anIndex {
   int index = anIndex.intValue - 1;
-  if (index < 0 || index >= static_cast<int>(chrome::GetTotalBrowserCount())) {
+  if (index < 0 ||
+      index >=
+          static_cast<int>(GlobalBrowserCollection::GetInstance()->GetSize())) {
     AppleScript::SetError(AppleScript::Error::kWrongIndex);
     return;
   }

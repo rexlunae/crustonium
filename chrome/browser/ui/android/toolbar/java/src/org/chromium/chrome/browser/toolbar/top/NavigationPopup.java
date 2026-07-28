@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnLayoutChangeListener;
@@ -21,6 +22,7 @@ import android.widget.ListPopupWindow;
 import android.widget.PopupWindow;
 import android.widget.TextView;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.IntDef;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.widget.ImageViewCompat;
@@ -231,10 +233,17 @@ public class NavigationPopup implements AdapterView.OnItemClickListener {
         }
 
         // Set clipToOutline to true to contain the mouse hover effect inside the
-        // popup's outline. Also set the background of the list view to menu_bg_shape
+        // popup's outline. Also set the background of the list view to popup_bg_shape
         // to make its shape the same as the popup.
         assumeNonNull(mPopup.getListView());
-        mPopup.getListView().setBackgroundResource(R.drawable.menu_bg_shape);
+        TypedValue typedValue = new TypedValue();
+        @DrawableRes
+        int bgResId =
+                mContext.getTheme().resolveAttribute(R.attr.popupBgShape, typedValue, true)
+                        ? typedValue.resourceId
+                        : 0;
+        assert bgResId != 0;
+        mPopup.getListView().setBackgroundResource(bgResId);
         mPopup.getListView().setClipToOutline(true);
     }
 
@@ -285,7 +294,7 @@ public class NavigationPopup implements AdapterView.OnItemClickListener {
                         (bitmap, iconUrl) ->
                                 NavigationPopup.this.onFaviconAvailable(pageUrl, bitmap);
                 mFaviconHelper.getLocalFaviconImageForURL(
-                        mProfile, pageUrl, mFaviconSize, imageCallback);
+                        mProfile, pageUrl, mFaviconSize, /* fallbackToHost= */ true, imageCallback);
                 requestedUrls.add(pageUrl);
             }
         }
@@ -377,8 +386,7 @@ public class NavigationPopup implements AdapterView.OnItemClickListener {
             if (entry.getIndex() == FULL_HISTORY_ENTRY_INDEX) {
                 ImageViewCompat.setImageTintList(
                         viewHolder.mImageView,
-                        AppCompatResources.getColorStateList(
-                                mContext, R.color.default_icon_color_accent1_tint_list));
+                        mContext.getColorStateList(R.color.default_icon_color_accent1_tint_list));
             } else {
                 ImageViewCompat.setImageTintList(viewHolder.mImageView, null);
             }

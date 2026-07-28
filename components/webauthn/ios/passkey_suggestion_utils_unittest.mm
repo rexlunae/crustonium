@@ -68,6 +68,7 @@ TEST_F(PasskeySuggestionUtilsTest, FormSuggestionsFromPasskeyCredentials) {
   EXPECT_EQ(
       std::get<autofill::Suggestion::Guid>(suggestions[0].payload).value(),
       base::Base64Encode(passkeys[0].credential_id()));
+  EXPECT_NSEQ(suggestions[0].minorValue, base::SysUTF8ToNSString(kRpId));
 }
 
 // Tests that converting a PasskeyCredential with a display name results in a
@@ -79,10 +80,10 @@ TEST_F(PasskeySuggestionUtilsTest,
 
   // The passkey's username should be displayed in the display description as
   // the passkey's display name will appear as the value of the suggestion.
-  NSString* expected_display_description =
-      [NSString stringWithFormat:@"%@ • %@", base::SysUTF8ToNSString(kUsername),
-                                 l10n_util::GetNSString(
-                                     IDS_IOS_PASSKEY_SUGGESTION_LABEL)];
+  NSString* expected_display_description = [NSString
+      stringWithFormat:@"%@ • %@",
+                       l10n_util::GetNSString(IDS_IOS_PASSKEY_SUGGESTION_LABEL),
+                       base::SysUTF8ToNSString(kUsername)];
 
   ASSERT_EQ(1u, suggestions.count);
   EXPECT_NSEQ(base::SysUTF8ToNSString(kDisplayName), suggestions[0].value);
@@ -103,6 +104,35 @@ TEST_F(PasskeySuggestionUtilsTest, MergePasskeyAndPasswordSuggestions) {
   ASSERT_EQ(2u, merged.count);
   EXPECT_NSEQ(kPasskeySuggestionValue, merged[0].value);
   EXPECT_NSEQ(kPasswordSuggestionValue, merged[1].value);
+}
+
+// Tests that converting a PasskeyCredential with a display name equal to its
+// username results in a FormSuggestion with only the Passkey label as its
+// `displayDescription`.
+TEST_F(PasskeySuggestionUtilsTest, SameDisplayNameAndUsername) {
+  NSArray<FormSuggestion*>* suggestions = FormSuggestionsFromPasskeyCredentials(
+      {CreatePasskeyCredential(/*display_name=*/kUsername)});
+
+  ASSERT_EQ(1u, suggestions.count);
+  EXPECT_NSEQ(base::SysUTF8ToNSString(kUsername), suggestions[0].value);
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_PASSKEY_SUGGESTION_LABEL),
+              suggestions[0].displayDescription);
+}
+
+// Tests the formatting logic for a passkey Manual Fill cell's subtitle.
+TEST_F(PasskeySuggestionUtilsTest, ManualFillSubtitleFormat) {
+  NSString* passkey_label =
+      l10n_util::GetNSString(IDS_IOS_PASSKEY_SUGGESTION_LABEL);
+  NSString* expected_subtitle =
+      [NSString stringWithFormat:@"%@ • %@", passkey_label,
+                                 base::SysUTF8ToNSString(kDisplayName)];
+
+  EXPECT_NSEQ(passkey_label,
+              FormatPasskeyManualFillSubtitle(/*display_name=*/nil));
+  EXPECT_NSEQ(passkey_label,
+              FormatPasskeyManualFillSubtitle(/*display_name=*/@""));
+  EXPECT_NSEQ(expected_subtitle, FormatPasskeyManualFillSubtitle(
+                                     base::SysUTF8ToNSString(kDisplayName)));
 }
 
 }  // namespace webauthn

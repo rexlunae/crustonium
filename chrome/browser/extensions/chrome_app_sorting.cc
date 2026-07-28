@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "components/app_constants/constants.h"
 #include "components/webapps/common/web_app_id.h"
@@ -533,7 +533,7 @@ void ChromeAppSorting::SetExtensionVisible(const ExtensionId& extension_id,
 void ChromeAppSorting::OnWebAppInstalled(const webapps::AppId& app_id) {
   const web_app::WebApp* web_app = web_app_registrar_->GetAppById(app_id);
   // There seems to be a racy bug where |web_app| can be a nullptr. Until that
-  // bug is solved, check for that here. https://crbug.com/1101668
+  // bug is solved, check for that here. https://crbug.com/40703690
   if (!web_app)
     return;
   if (web_app->user_page_ordinal().IsValid() &&
@@ -549,7 +549,7 @@ void ChromeAppSorting::OnWebAppInstallManagerDestroyed() {
 }
 
 void ChromeAppSorting::OnWebAppsWillBeUpdatedFromSync(
-    const std::vector<const web_app::WebApp*>& updated_apps_state) {
+    base::span<const web_app::WebApp* const> updated_apps_state) {
   DCHECK(web_app_registrar_);
 
   // Unlike the extensions system (which calls SetPageOrdinal() and
@@ -746,7 +746,7 @@ syncer::StringOrdinal ChromeAppSorting::ResolveCollision(
   // Finds the next app launcher ordinal. This is done by the following loop
   // because this function could be called before FixNTPOrdinalCollisions and
   // thus |page| might contains multiple entries with the same app launch
-  // ordinal. See http://crbug.com/155603
+  // ordinal. See http://crbug.com/40951861
   while (app_it != page.end() && app_launch_ordinal.Equals(app_it->first))
     ++app_it;
 

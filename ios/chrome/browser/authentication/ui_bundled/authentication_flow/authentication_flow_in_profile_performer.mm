@@ -109,9 +109,7 @@
 - (void)registerUserPolicy:(ProfileIOS*)profile
                forIdentity:(id<SystemIdentity>)identity {
   std::string userEmail = base::SysNSStringToUTF8(identity.userEmail);
-  CoreAccountId accountID =
-      IdentityManagerFactory::GetForProfile(profile)->PickAccountIdForAccount(
-          identity.gaiaId, userEmail);
+  const CoreAccountId accountID = CoreAccountId::FromGaiaId(identity.gaiaId);
 
   policy::UserPolicySigninService* userPolicyService =
       policy::UserPolicySigninServiceFactory::GetForProfile(profile);
@@ -201,6 +199,7 @@
 
 - (void)didFetchAccountCapabilities {
   [_delegate didFetchAccountCapabilities];
+  _capabilitiesFetcher = nil;
 }
 
 // Starts a Watchdog Timer that ends the user policy registration on time out.

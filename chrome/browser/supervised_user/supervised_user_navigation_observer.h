@@ -45,6 +45,7 @@ class SupervisedUserNavigationObserver
     : public content::WebContentsUserData<SupervisedUserNavigationObserver>,
       public content::WebContentsObserver,
       public SupervisedUserServiceObserver,
+      public supervised_user::SupervisedUserUrlFilteringService::Observer,
       public supervised_user::mojom::SupervisedUserCommands {
  public:
   SupervisedUserNavigationObserver(const SupervisedUserNavigationObserver&) =
@@ -80,6 +81,8 @@ class SupervisedUserNavigationObserver
 
   // SupervisedUserServiceObserver:
   void OnURLFilterChanged() override;
+  // SupervisedUserUrlFilteringService::Observer:
+  void OnUrlFilteringServiceChanged() override;
 
   // Called when interstitial error page is no longer being shown in the main
   // frame.
@@ -120,6 +123,10 @@ class SupervisedUserNavigationObserver
   // Filters the RenderFrameHost if render frame is live.
   void FilterRenderFrame(content::RenderFrameHost* render_frame_host);
 
+  // Returns the active (showing) interstitial for the current frame, or nullptr
+  // if there is no active interstitial.
+  supervised_user::SupervisedUserInterstitial* GetInterstitialForFrame();
+
   // supervised_user::mojom::SupervisedUserCommands implementation. Should not
   // be called when an interstitial is no longer showing. This should be
   // enforced by the mojo caller.
@@ -142,8 +149,6 @@ class SupervisedUserNavigationObserver
 
   void RecordPageLoadUKM(content::RenderFrameHost* render_frame_host);
 
-  content::FrameTreeNodeId frame_tree_node_id();
-
   supervised_user::SupervisedUserService* supervised_user_service() const;
   supervised_user::SupervisedUserUrlFilteringService*
   supervised_user_url_filtering_service() const;
@@ -157,6 +162,10 @@ class SupervisedUserNavigationObserver
   base::ScopedObservation<supervised_user::SupervisedUserService,
                           SupervisedUserServiceObserver>
       supervised_user_service_observation_{this};
+  base::ScopedObservation<
+      supervised_user::SupervisedUserUrlFilteringService,
+      supervised_user::SupervisedUserUrlFilteringService::Observer>
+      url_filtering_service_observation_{this};
 
   // Keeps track of the blocked frames. It maps the frame's globally unique
   // id to its corresponding |SupervisedUserInterstitial| instance.

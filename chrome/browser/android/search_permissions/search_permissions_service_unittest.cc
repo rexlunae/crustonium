@@ -18,12 +18,17 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_uma_util.h"
+#include "components/permissions/resolvers/permission_prompt_options.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
@@ -61,7 +66,7 @@ class SearchPermissionsServiceTest : public testing::Test {
     // Because notification channel settings aren't tied to the profile,
     // they will persist across tests. We need to make sure they're clean
     // here.
-    ClearContentSettings(ContentSettingsType::NOTIFICATIONS);
+    ClearPermissionSettings(ContentSettingsType::NOTIFICATIONS);
 
     auto test_delegate = std::make_unique<TestSearchEngineDelegate>();
     test_delegate_ = test_delegate.get();
@@ -73,13 +78,13 @@ class SearchPermissionsServiceTest : public testing::Test {
 
     // Because notification channel settings aren't tied to the profile, they
     // will persist across tests. We need to make sure they're reset here.
-    ClearContentSettings(ContentSettingsType::NOTIFICATIONS);
+    ClearPermissionSettings(ContentSettingsType::NOTIFICATIONS);
 
     profile_.reset();
   }
 
-  void ClearContentSettings(ContentSettingsType type) {
-    SetContentSetting(kGoogleURL, type, CONTENT_SETTING_DEFAULT);
+  void ClearPermissionSettings(ContentSettingsType type) {
+    SetPermissionSetting(kGoogleURL, type, std::nullopt);
   }
 
   TestingProfile* profile() { return profile_.get(); }
@@ -90,9 +95,9 @@ class SearchPermissionsServiceTest : public testing::Test {
     return SearchPermissionsService::Factory::GetForBrowserContext(profile());
   }
 
-  void SetContentSetting(const std::string& origin_string,
-                         ContentSettingsType type,
-                         ContentSetting setting) {
+  void SetPermissionSetting(const std::string& origin_string,
+                            ContentSettingsType type,
+                            std::optional<PermissionSetting> setting) {
     GURL url(origin_string);
     HostContentSettingsMap* hcsm =
         HostContentSettingsMapFactory::GetForProfile(profile());
@@ -105,9 +110,10 @@ class SearchPermissionsServiceTest : public testing::Test {
     // should never be changed between ALLOW<->BLOCK on Android. Do not copy
     // this code. Check with the notifications team if you need to do something
     // like this.
-    hcsm->SetContentSettingDefaultScope(url, url, type,
-                                        CONTENT_SETTING_DEFAULT);
-    hcsm->SetContentSettingDefaultScope(url, url, type, setting);
+    hcsm->SetPermissionSettingDefaultScope(url, url, type, std::nullopt);
+    if (setting) {
+      hcsm->SetPermissionSettingDefaultScope(url, url, type, *setting);
+    }
   }
 
   // Simulates the initialization that happens when recreating the service. If
@@ -136,27 +142,77 @@ TEST_F(SearchPermissionsServiceTest, IsDseOrigin) {
 // Records DSE origin settings whenever the service is initialized.
 TEST_F(SearchPermissionsServiceTest, DSEEffectiveSettingMetric) {
   base::HistogramTester histograms;
-  ClearContentSettings(ContentSettingsType::NOTIFICATIONS);
-  ClearContentSettings(ContentSettingsType::GEOLOCATION);
+  ClearPermissionSettings(ContentSettingsType::NOTIFICATIONS);
 
   ReinitializeService();
   histograms.ExpectBucketCount("Permissions.DSE.EffectiveSetting.Notifications",
                                CONTENT_SETTING_ASK, 1);
-  histograms.ExpectBucketCount("Permissions.DSE.EffectiveSetting.Geolocation",
-                               CONTENT_SETTING_ASK, 1);
 
-  SetContentSetting(kGoogleURL, ContentSettingsType::NOTIFICATIONS,
-                    CONTENT_SETTING_BLOCK);
-  SetContentSetting(kGoogleURL, ContentSettingsType::GEOLOCATION,
-                    CONTENT_SETTING_ALLOW);
+  SetPermissionSetting(kGoogleURL, ContentSettingsType::NOTIFICATIONS,
+                       CONTENT_SETTING_BLOCK);
 
   ReinitializeService();
   histograms.ExpectBucketCount("Permissions.DSE.EffectiveSetting.Notifications",
                                CONTENT_SETTING_ASK, 1);
   histograms.ExpectBucketCount("Permissions.DSE.EffectiveSetting.Notifications",
                                CONTENT_SETTING_BLOCK, 1);
-  histograms.ExpectBucketCount("Permissions.DSE.EffectiveSetting.Geolocation",
-                               CONTENT_SETTING_ASK, 1);
-  histograms.ExpectBucketCount("Permissions.DSE.EffectiveSetting.Geolocation",
-                               CONTENT_SETTING_ALLOW, 1);
+}
+
+TEST_F(SearchPermissionsServiceTest,
+       DSEEffectiveSettingMetricApproximateGeolocation) {
+  ClearPermissionSettings(ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  {
+    base::HistogramTester histograms;
+
+    ReinitializeService();
+    histograms.ExpectUniqueSample(
+        "Permissions.DSE.EffectiveSetting.Geolocation", CONTENT_SETTING_ASK, 1);
+  }
+
+  struct {
+    GeolocationSetting setting;
+    ContentSetting expected_setting;
+    std::optional<GeolocationAccuracy> expected_accuracy;
+  } testCases[]{
+      {
+          {.approximate = PermissionOption::kDenied,
+           .precise = PermissionOption::kDenied},
+          ContentSetting::CONTENT_SETTING_BLOCK,
+      },
+      {
+          {.approximate = PermissionOption::kAllowed,
+           .precise = PermissionOption::kDenied},
+          ContentSetting::CONTENT_SETTING_ALLOW,
+          GeolocationAccuracy::kApproximate,
+      },
+      {
+          {.approximate = PermissionOption::kAllowed,
+           .precise = PermissionOption::kAsk},
+          ContentSetting::CONTENT_SETTING_ALLOW,
+          GeolocationAccuracy::kApproximate,
+      },
+      {
+          {.approximate = PermissionOption::kAllowed,
+           .precise = PermissionOption::kAllowed},
+          ContentSetting::CONTENT_SETTING_ALLOW,
+          GeolocationAccuracy::kPrecise,
+      },
+  };
+
+  for (const auto& testCase : testCases) {
+    base::HistogramTester histograms;
+    SetPermissionSetting(kGoogleURL,
+                         ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+                         testCase.setting);
+
+    ReinitializeService();
+    histograms.ExpectUniqueSample(
+        "Permissions.DSE.EffectiveSetting.Geolocation",
+        testCase.expected_setting, 1);
+    if (testCase.expected_accuracy) {
+      histograms.ExpectUniqueSample(
+          "Permissions.DSE.EffectiveSetting.Geolocation.Accuracy",
+          *testCase.expected_accuracy, 1);
+    }
+  }
 }

@@ -32,12 +32,14 @@ class ColorTrackingVectorImageButton : public ImageButton {
                                  const gfx::VectorIcon& icon,
                                  int dip_size,
                                  ui::ColorId icon_color_id,
-                                 ui::ColorId icon_disabled_color_id)
+                                 ui::ColorId icon_disabled_color_id,
+                                 ui::ColorId icon_hovered_color_id)
       : ImageButton(std::move(callback)),
         icon_(icon),
         dip_size_(dip_size),
         icon_color_id_(icon_color_id),
-        icon_disabled_color_id_(icon_disabled_color_id) {}
+        icon_disabled_color_id_(icon_disabled_color_id),
+        icon_hovered_color_id_(icon_hovered_color_id) {}
 
   // ImageButton:
   void OnThemeChanged() override {
@@ -45,8 +47,9 @@ class ColorTrackingVectorImageButton : public ImageButton {
     const ui::ColorProvider* cp = GetColorProvider();
     const SkColor color = cp->GetColor(icon_color_id_);
     const SkColor disabled_color = cp->GetColor(icon_disabled_color_id_);
-    SetImageFromVectorIconWithColor(this, *icon_, dip_size_,
-                                    {color, disabled_color});
+    SetImageFromVectorIconWithColor(
+        this, *icon_, dip_size_,
+        {color, disabled_color, icon_hovered_color_id_});
   }
 
  private:
@@ -54,6 +57,7 @@ class ColorTrackingVectorImageButton : public ImageButton {
   int dip_size_;
   ui::ColorId icon_color_id_;
   ui::ColorId icon_disabled_color_id_;
+  ui::ColorId icon_hovered_color_id_;
 };
 
 }  // namespace
@@ -62,7 +66,8 @@ std::unique_ptr<ImageButton> CreateVectorImageButtonWithNativeTheme(
     const gfx::VectorIcon& icon,
     std::optional<int> dip_size,
     ui::ColorId icon_color_id,
-    ui::ColorId icon_disabled_color_id) {
+    ui::ColorId icon_disabled_color_id,
+    ui::ColorId icon_hovered_color_id) {
   // We can't use `value_or` as that ALWAYS evaluates the false case, which is
   // undefined for some valid and commonly used Chrome vector icons.
   const int dip_size_value = dip_size.has_value()
@@ -71,7 +76,7 @@ std::unique_ptr<ImageButton> CreateVectorImageButtonWithNativeTheme(
 
   auto button = std::make_unique<ColorTrackingVectorImageButton>(
       std::move(callback), icon, dip_size_value, icon_color_id,
-      icon_disabled_color_id);
+      icon_disabled_color_id, icon_hovered_color_id);
   ConfigureVectorImageButton(button.get());
   return button;
 }
@@ -89,6 +94,17 @@ std::unique_ptr<ToggleImageButton> CreateVectorToggleImageButton(
   ConfigureVectorImageButton(button.get());
   return button;
 }
+
+IconColors::IconColors(ui::ColorVariant color,
+                       ui::ColorVariant disabled_color,
+                       ui::ColorId hovered_color)
+    : color(color),
+      disabled_color(disabled_color),
+      hovered_color(hovered_color) {}
+
+IconColors::IconColors(const IconColors&) = default;
+IconColors& IconColors::operator=(const IconColors&) = default;
+IconColors::~IconColors() = default;
 
 void ConfigureVectorImageButton(ImageButton* button) {
   InkDrop::Get(button)->SetMode(views::InkDropHost::InkDropMode::ON);
@@ -110,6 +126,13 @@ void SetImageFromVectorIconWithColor(ImageButton* button,
 
   button->SetImageModel(Button::STATE_NORMAL, normal_image);
   button->SetImageModel(Button::STATE_DISABLED, disabled_image);
+
+  // Set hovered/pressed images for high contrast mode support.
+  const ui::ImageModel& hovered_image =
+      ui::ImageModel::FromVectorIcon(icon, colors.hovered_color, dip_size);
+  button->SetImageModel(Button::STATE_HOVERED, hovered_image);
+  button->SetImageModel(Button::STATE_PRESSED, hovered_image);
+
   InkDrop::Get(button)->SetBaseColor(colors.color);
 }
 
@@ -135,6 +158,12 @@ void SetToggledImageFromVectorIconWithColor(ToggleImageButton* button,
 
   button->SetToggledImageModel(Button::STATE_NORMAL, normal_image);
   button->SetToggledImageModel(Button::STATE_DISABLED, disabled_image);
+
+  // Set hovered/pressed toggled images for high contrast mode support.
+  const ui::ImageModel& hovered_image =
+      ui::ImageModel::FromVectorIcon(icon, colors.hovered_color, dip_size);
+  button->SetToggledImageModel(Button::STATE_HOVERED, hovered_image);
+  button->SetToggledImageModel(Button::STATE_PRESSED, hovered_image);
 }
 
 void SetToggledImageFromVectorIconWithColor(ToggleImageButton* button,

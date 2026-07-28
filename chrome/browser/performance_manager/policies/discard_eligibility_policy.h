@@ -12,6 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/performance_manager/policies/cannot_discard_reason.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-shared.h"
 #include "components/performance_manager/public/graph/graph.h"
@@ -25,6 +26,9 @@ class URLMatcher;
 
 namespace performance_manager::policies {
 
+namespace internal {
+// kNonVisiblePagesUrgentProtectionTime is encapsulated in CanDiscard(). This is
+// only accessible to testing code.
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 inline constexpr base::TimeDelta kNonVisiblePagesUrgentProtectionTime =
     base::TimeDelta();
@@ -34,6 +38,8 @@ inline constexpr base::TimeDelta kNonVisiblePagesUrgentProtectionTime =
 inline constexpr base::TimeDelta kNonVisiblePagesUrgentProtectionTime =
     base::Minutes(10);
 #endif
+
+}  // namespace internal
 
 #if BUILDFLAG(IS_ANDROID)
 // TODO(crbug.com/412839833): kTabAudioProtectionTime may be needed on Android
@@ -132,9 +138,11 @@ class DiscardEligibilityPolicy
     return weak_factory_.GetWeakPtr();
   }
 
-  void SetNoDiscardPatternsForProfile(const std::string& browser_context_id,
-                                      const std::vector<std::string>& patterns);
-  void ClearNoDiscardPatternsForProfile(const std::string& browser_context_id);
+  void SetNoDiscardPatternsForProfile(
+      const base::UnguessableToken& browser_context_id,
+      const std::vector<std::string>& patterns);
+  void ClearNoDiscardPatternsForProfile(
+      const base::UnguessableToken& browser_context_id);
 
   // Indicates if the page will be immediately perceptible to the users after
   // discard.
@@ -148,14 +156,21 @@ class DiscardEligibilityPolicy
   bool IsDiscardAllowed(const PageNode* page_node) const;
 
   // Indicates if `page_node` can be urgently discarded, using a list of
-  // criteria depending on `discard_reason`. If `minimum_time_in_background` is
-  // non-zero, the page will not be discarded if it has not spent at least
-  // `minimum_time_in_background` in the not-visible state.
+  // criteria depending on `discard_reason`. Uses the default background
+  // protection window unless `ignore_recent_visibility` is true (which
+  // uses a zero duration window).
   CanDiscardResult CanDiscard(
       const PageNode* page_node,
       DiscardReason discard_reason,
-      base::TimeDelta minimum_time_in_background =
-          kNonVisiblePagesUrgentProtectionTime,
+      bool ignore_recent_visibility = false,
+      std::vector<CannotDiscardReason>* cannot_discard_reasons = nullptr) const;
+
+  // Similar to `CanDiscard`, but uses a custom background protection window
+  // specified by `minimum_time_in_background`.
+  CanDiscardResult CanDiscardWithCustomRecentVisibilityWindow(
+      const PageNode* page_node,
+      DiscardReason discard_reason,
+      base::TimeDelta minimum_time_in_background,
       std::vector<CannotDiscardReason>* cannot_discard_reasons = nullptr) const;
 
   // This must be called from PageDiscardingHelper or from test only.
@@ -166,10 +181,11 @@ class DiscardEligibilityPolicy
   // SetNoDiscardPatternsForProfile() or ClearNoDiscardPatternsForProfile()
   // methosd is called, with the method's `browser_context_id` argument.
   void SetOptOutPolicyChangedCallback(
-      base::RepeatingCallback<void(std::string_view)> callback);
+      base::RepeatingCallback<void(const base::UnguessableToken&)> callback);
 
-  bool IsPageOptedOutOfDiscarding(const std::string& browser_context_id,
-                                  const GURL& url) const;
+  bool IsPageOptedOutOfDiscarding(
+      const base::UnguessableToken& browser_context_id,
+      const GURL& url) const;
 
   void set_always_discard_for_testing(bool always_discard) {
     always_discard_for_testing_ = always_discard;
@@ -190,10 +206,10 @@ class DiscardEligibilityPolicy
   // NodeDataDescriber implementation:
   base::DictValue DescribePageNodeData(const PageNode* node) const override;
 
-  std::map<std::string, std::unique_ptr<url_matcher::URLMatcher>>
+  std::map<base::UnguessableToken, std::unique_ptr<url_matcher::URLMatcher>>
       profiles_no_discard_patterns_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  base::RepeatingCallback<void(std::string_view)>
+  base::RepeatingCallback<void(const base::UnguessableToken&)>
       opt_out_policy_changed_callback_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   bool always_discard_for_testing_ = false;

@@ -13,13 +13,13 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
@@ -31,6 +31,11 @@
 namespace media {
 
 namespace {
+
+perfetto::NamedTrack GetTracingTrack(const VideoRendererImpl* renderer) {
+  return perfetto::NamedTrack::FromPointer("media::VideoRendererImpl",
+                                           renderer);
+}
 
 // Maximum number of frames we will buffer, regardless of their "effectiveness".
 // See HaveReachedBufferingCap(). The value was historically described in terms
@@ -94,6 +99,7 @@ VideoRendererImpl::~VideoRendererImpl() {
 void VideoRendererImpl::Flush(base::OnceClosure callback) {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  TRACE_EVENT_BEGIN("media", "VideoRendererImpl::Flush", GetTracingTrack(this));
 
   if (sink_started_)
     StopSink();
@@ -164,7 +170,7 @@ void VideoRendererImpl::Initialize(
     PipelineStatusCallback init_cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   TRACE_EVENT_BEGIN("media", "VideoRendererImpl::Initialize",
-                    perfetto::Track::FromPointer(this));
+                    GetTracingTrack(this));
 
   base::AutoLock auto_lock(lock_);
   DCHECK(stream);
@@ -226,7 +232,7 @@ scoped_refptr<VideoFrame> VideoRendererImpl::Render(
     base::TimeTicks deadline_min,
     base::TimeTicks deadline_max,
     RenderingMode rendering_mode) {
-  TRACE_EVENT_BEGIN1("media", "VideoRendererImpl::Render", "id", player_id_);
+  TRACE_EVENT_BEGIN("media", "VideoRendererImpl::Render", "id", player_id_);
   base::AutoLock auto_lock(lock_);
   DCHECK_EQ(state_, kPlaying);
 
@@ -285,8 +291,7 @@ scoped_refptr<VideoFrame> VideoRendererImpl::Render(
                      weak_factory_.GetWeakPtr(), result->format(),
                      result->natural_size()));
 
-  TRACE_EVENT_END1("media", "VideoRendererImpl::Render", "frame",
-                   result->AsHumanReadableString());
+  TRACE_EVENT_END("media", "frame", result->AsHumanReadableString());
   return result;
 }
 
@@ -325,15 +330,15 @@ void VideoRendererImpl::OnVideoDecoderStreamInitialized(bool success) {
 
 void VideoRendererImpl::FinishInitialization(PipelineStatus status) {
   DCHECK(init_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(init_cb_).Run(status);
 }
 
 void VideoRendererImpl::FinishFlush() {
   DCHECK(flush_cb_);
-  TRACE_EVENT_END("media", /*"VideoRendererImpl::Flush"*/
-                  perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("media",
+                  /*"VideoRendererImpl::Flush"*/ GetTracingTrack(this));
   std::move(flush_cb_).Run();
 }
 
@@ -596,24 +601,23 @@ void VideoRendererImpl::FrameReady(VideoDecoderStream::ReadResult result) {
       // Anything other than `kOk` or `kAborted` is treated as an error.
       DCHECK(!result.has_value());
 
-      PipelineStatus::Codes pipeline_status_code;
+      std::optional<PipelineStatus> status;
       switch (result.code()) {
         case DecoderStatus::Codes::kDisconnected:
-          pipeline_status_code = PIPELINE_ERROR_DISCONNECTED;
+          status = {PIPELINE_ERROR_DISCONNECTED, std::move(result).error()};
           break;
         case DecoderStatus::Codes::kOutOfMemory:
-          pipeline_status_code = PIPELINE_ERROR_OUT_OF_MEMORY;
+          status = {PIPELINE_ERROR_OUT_OF_MEMORY, std::move(result).error()};
           break;
         default:
-          pipeline_status_code = PIPELINE_ERROR_DECODE;
+          status = {PIPELINE_ERROR_DECODE, std::move(result).error()};
           break;
       }
-
-      PipelineStatus status = {pipeline_status_code, std::move(result).error()};
-      task_runner_->PostTask(
-          FROM_HERE,
-          base::BindOnce(&VideoRendererImpl::OnPlaybackError,
-                         weak_factory_.GetWeakPtr(), std::move(status)));
+      DCHECK(status.has_value());
+      task_runner_->PostTask(FROM_HERE,
+                             base::BindOnce(&VideoRendererImpl::OnPlaybackError,
+                                            weak_factory_.GetWeakPtr(),
+                                            std::move(status).value()));
       return;
   }
 
@@ -855,9 +859,8 @@ void VideoRendererImpl::UpdateStats_Locked(bool force_update) {
   }
 
   if (stats_.video_frames_dropped) {
-    TRACE_EVENT_INSTANT2("media", "VideoFramesDropped",
-                         TRACE_EVENT_SCOPE_THREAD, "count",
-                         stats_.video_frames_dropped, "id", player_id_);
+    TRACE_EVENT_INSTANT("media", "VideoFramesDropped", "count",
+                        stats_.video_frames_dropped, "id", player_id_);
   }
 
   const size_t memory_usage = algorithm_->GetMemoryUsage();
@@ -937,20 +940,17 @@ void VideoRendererImpl::MaybeFireEndedCallback_Locked(bool time_progressing) {
     return;
 
   // Fire ended if we have no more effective frames, only ever had one frame, or
-  // we only have 1 effective frame and there's less than one render interval
+  // we only have <= 1 effective frame and there's less than one render interval
   // left before the ended event should execute.
   base::TimeDelta ended_event_delay;
   bool should_render_end_of_stream = false;
-  if (!algorithm_->effective_frames_queued()) {
-    // The best frame doesn't exist or was already rendered; end immediately.
-    should_render_end_of_stream = true;
-  } else if (algorithm_->frames_queued() == 1u &&
-             (algorithm_->average_frame_duration().is_zero() ||
-              algorithm_->render_interval().is_zero() || !time_progressing)) {
+  if (algorithm_->frames_queued() == 1u &&
+      (algorithm_->average_frame_duration().is_zero() ||
+       algorithm_->render_interval().is_zero() || !time_progressing)) {
     // We'll end up here if playback never started or there was only one frame.
     should_render_end_of_stream = true;
   } else if (algorithm_->frames_queued() == 1u &&
-             algorithm_->effective_frames_queued() == 1 && time_progressing) {
+             algorithm_->effective_frames_queued() <= 1 && time_progressing) {
     const auto end_delay =
         std::max(base::TimeDelta(),
                  algorithm_->last_frame_end_time() - tick_clock_->NowTicks());
@@ -961,6 +961,9 @@ void VideoRendererImpl::MaybeFireEndedCallback_Locked(bool time_progressing) {
       should_render_end_of_stream = true;
       ended_event_delay = end_delay;
     }
+  } else if (!algorithm_->effective_frames_queued()) {
+    // The best frame doesn't exist or was already rendered; end immediately.
+    should_render_end_of_stream = true;
   }
 
   if (!should_render_end_of_stream)

@@ -66,6 +66,9 @@ class TabModelObserver {
   // Called when all |tabs| closure is undone.
   virtual void OnTabCloseUndone(const std::vector<TabAndroid*>& tabs);
 
+  // Called when the set of multi-selected tabs has changed.
+  virtual void OnTabsSelectionsChanged();
+
   // Called when a |tab| closure is undone.
   virtual void TabClosureUndone(TabAndroid* tab);
 
@@ -75,6 +78,9 @@ class TabModelObserver {
   // Called when an all tabs closure has been committed and can't be undone
   // anymore.
   virtual void AllTabsClosureCommitted();
+
+  // Called when tabs are being closed and there are no more tabs left.
+  virtual void AllTabsAreClosing();
 
   // Called after a tab has been removed. At this point the tab is no longer in
   // the TabModel.
@@ -91,6 +97,9 @@ class TabModelObserver {
 
   // Called after a tab group's visual data has been changed.
   virtual void OnTabGroupVisualsChanged(tab_groups::TabGroupId group_id);
+
+  // Called when the TabModel is destroyed.
+  virtual void OnTabModelDestroyed(TabModel& tab_model);
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_TAB_MODEL_TAB_MODEL_OBSERVER_H_

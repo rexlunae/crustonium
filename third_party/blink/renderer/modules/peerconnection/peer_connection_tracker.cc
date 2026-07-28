@@ -277,6 +277,10 @@ String SerializeConfiguration(
       // "require" is the default and not serialized.
       break;
   }
+  // Serialize alwaysNegotiateDataChannels.
+  json->SetBoolean("alwaysNegotiateDataChannels",
+                   config.always_negotiate_data_channels);
+
   // Serialize (non-standard and obsolete) encodedInsertableStreams.
   if (usesInsertableStreams) {
     json->SetBoolean("encodedInsertableStreams", true);
@@ -336,7 +340,7 @@ class InternalStandardStatsObserver : public webrtc::RTCStatsCollectorCallback {
     // We're on the signaling thread.
     DCHECK(!main_thread_->BelongsToCurrentThread());
     PostCrossThreadTask(
-        *main_thread_.get(), FROM_HERE,
+        *main_thread_, FROM_HERE,
         CrossThreadBindOnce(
             &InternalStandardStatsObserver::OnStatsDeliveredOnMainThread,
             scoped_refptr<InternalStandardStatsObserver>(this), report));
@@ -365,7 +369,7 @@ class InternalStandardStatsObserver : public webrtc::RTCStatsCollectorCallback {
 
     base::ListValue result_list;
 
-    if (!pc_handler_) {
+    if (!pc_handler_ || !pc_handler_->frame()) {
       return result_list;
     }
     auto* local_frame = To<WebLocalFrameImpl>(*pc_handler_->frame()).GetFrame();
@@ -848,10 +852,10 @@ void PeerConnectionTracker::TrackTransceiver(
   if (id == -1)
     return;
   String callback_type =
-      StrCat({"transceiver", String::FromUTF8(callback_type_ending)});
+      StrCat({"transceiver", String::FromUtf8(callback_type_ending)});
   std::unique_ptr<JSONObject> json = SerializeTransceiver(transceiver);
   json->SetString("reason", GetTransceiverUpdatedReasonString(reason));
-  json->SetInteger("transceiverIndex", transceiver_index);
+  json->SetInteger("transceiverIndex", static_cast<int>(transceiver_index));
 
   StringBuilder value;
   json->WriteJSON(&value);
@@ -868,7 +872,7 @@ void PeerConnectionTracker::TrackCreateDataChannel(
     return;
   // See https://w3c.github.io/webrtc-pc/#dom-rtcdatachannelinit
   auto json = std::make_unique<JSONObject>();
-  json->SetString("label", String::FromUTF8(data_channel->label()));
+  json->SetString("label", String::FromUtf8(data_channel->label()));
   json->SetBoolean("ordered", data_channel->ordered());
   std::optional<uint16_t> maxPacketLifeTime = data_channel->maxPacketLifeTime();
   if (maxPacketLifeTime.has_value()) {
@@ -879,7 +883,7 @@ void PeerConnectionTracker::TrackCreateDataChannel(
     json->SetInteger("maxRetransmits", *maxRetransmits);
   }
   if (!data_channel->protocol().empty()) {
-    json->SetString("protocol", String::FromUTF8(data_channel->protocol()));
+    json->SetString("protocol", String::FromUtf8(data_channel->protocol()));
   }
   bool negotiated = data_channel->negotiated();
   if (negotiated) {
@@ -1002,7 +1006,7 @@ void PeerConnectionTracker::TrackSessionId(RTCPeerConnectionHandler* pc_handler,
   String non_null_session_id =
       session_id.IsNull() ? g_empty_string : session_id;
   peer_connection_tracker_host_->OnPeerConnectionSessionIdSet(
-      local_id, non_null_session_id);
+      local_id, non_null_session_id, base::DoNothing());
 }
 
 void PeerConnectionTracker::TrackOnRenegotiationNeeded(

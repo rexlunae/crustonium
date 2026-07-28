@@ -42,6 +42,7 @@
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/declarative_net_request.h"
+#include "extensions/common/api/web_request/web_request_constants.h"
 #include "extensions/common/extension_id.h"
 #include "net/cookies/cookie_util.h"
 #include "net/cookies/parsed_cookie.h"
@@ -679,7 +680,7 @@ RequestCookieModification::~RequestCookieModification() = default;
 
 bool RequestCookieModification::operator==(
     const RequestCookieModification& other) const {
-  // This ignores |type|. Why? https://crbug.com/916248
+  // This ignores |type|. Why? https://crbug.com/40607023
   return std::tie(filter, modification) ==
          std::tie(other.filter, other.modification);
 }
@@ -705,7 +706,7 @@ ResponseCookieModification::~ResponseCookieModification() = default;
 
 bool ResponseCookieModification::operator==(
     const ResponseCookieModification& other) const {
-  // This ignores |type|. Why? https://crbug.com/916248
+  // This ignores |type|. Why? https://crbug.com/40607023
   return std::tie(filter, modification) ==
          std::tie(other.filter, other.modification);
 }
@@ -1817,17 +1818,15 @@ base::DictValue CreateHeaderDictionary(const std::string& name,
 bool ShouldHideRequestHeader(content::BrowserContext* browser_context,
                              int extra_info_spec,
                              const std::string& name) {
-  static constexpr auto kRequestHeaders =
-      base::MakeFixedFlatSet<std::string_view>({"accept-encoding",
-                                                "accept-language", "cookie",
-                                                "origin", "referer"});
   return !(extra_info_spec & ExtraInfoSpec::EXTRA_HEADERS) &&
-         kRequestHeaders.contains(base::ToLowerASCII(name));
+         extensions::kExtraRequestHeaderNames.contains(
+             base::ToLowerASCII(name));
 }
 
 bool ShouldHideResponseHeader(int extra_info_spec, const std::string& name) {
   return !(extra_info_spec & ExtraInfoSpec::EXTRA_HEADERS) &&
-         base::EqualsCaseInsensitiveASCII(name, "set-cookie");
+         extensions::kExtraResponseHeaderNames.contains(
+             base::ToLowerASCII(name));
 }
 
 void RedirectRequestAfterHeadersReceived(

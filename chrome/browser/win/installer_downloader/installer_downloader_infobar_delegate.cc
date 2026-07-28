@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/views/infobars/confirm_infobar.h"
 #include "chrome/browser/win/installer_downloader/installer_downloader_feature.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_manager.h"
@@ -22,6 +21,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "url/gurl.h"
 
@@ -36,7 +36,7 @@ infobars::InfoBar* InstallerDownloaderInfoBarDelegate::Show(
       std::make_unique<InstallerDownloaderInfoBarDelegate>(std::move(accept_cb),
                                                            std::move(close_cb));
   return infobar_manager->AddInfoBar(
-      std::make_unique<ConfirmInfoBar>(std::move(delegate)));
+      ConfirmInfoBar::Create(std::move(delegate)));
 }
 
 InstallerDownloaderInfoBarDelegate::InstallerDownloaderInfoBarDelegate(
@@ -55,7 +55,9 @@ InstallerDownloaderInfoBarDelegate::GetIdentifier() const {
 
 const gfx::VectorIcon& InstallerDownloaderInfoBarDelegate::GetVectorIcon()
     const {
-  return dark_mode() ? omnibox::kProductChromeRefreshIcon
+  return dark_mode() ? features::IsRoundedIconsEnabled()
+                           ? omnibox::kChromeProductIcon
+                           : omnibox::kProductChromeRefreshOldIcon
                      : vector_icons::kProductRefreshIcon;
 }
 

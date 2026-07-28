@@ -389,13 +389,13 @@ void BodyStreamBuffer::OnStateChange() {
     case BytesConsumer::PublicState::kReadableOrWaiting:
       break;
     case BytesConsumer::PublicState::kClosed:
-      Close(PassThroughException(script_state_->GetIsolate()));
+      Close(ASSERT_NO_EXCEPTION);
       return;
     case BytesConsumer::PublicState::kErrored:
       GetError();
       return;
   }
-  ProcessData(PassThroughException(script_state_->GetIsolate()));
+  ProcessData(ASSERT_NO_EXCEPTION);
 }
 
 void BodyStreamBuffer::ContextDestroyed() {
@@ -433,7 +433,6 @@ void BodyStreamBuffer::CloseAndLockAndDisturb(ExceptionState& exception_state) {
     // the internal buffer.
     Close(exception_state);
   }
-
   stream_->LockAndDisturb(script_state_);
 }
 

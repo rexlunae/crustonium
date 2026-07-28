@@ -25,15 +25,13 @@ constexpr base::TimeDelta kPromoTimeout = base::Seconds(8);
 namespace signin {
 // Returns whether it is possible to start a sign-in.
 bool SigninIsPossible(AuthenticationService* auth_service) {
-  return !auth_service->HasPrimaryIdentity(signin::ConsentLevel::kSignin) &&
-         auth_service->SigninEnabled();
+  return !auth_service->HasPrimaryIdentity() && auth_service->SigninEnabled();
 }
 
 }  // namespace signin
 
-@interface NonModalSignInPromoMediator () <
-    AuthenticationServiceObserving,
-    IdentityManagerObserverBridgeDelegate>
+@interface NonModalSignInPromoMediator () <AuthenticationServiceObserving,
+                                           IdentityManagerObserving>
 @end
 
 @implementation NonModalSignInPromoMediator {
@@ -195,9 +193,9 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
   [self.delegate nonModalSignInPromoMediatorShouldDismiss:self];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   [self maybeCancelPromo];
 }

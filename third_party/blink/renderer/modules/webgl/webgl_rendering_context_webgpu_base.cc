@@ -6,10 +6,14 @@
 #include <dawn/dawn_proc.h>
 #include <dawn/wire/WireClient.h>
 
+#include <type_traits>
+
 #include "base/notimplemented.h"
 #include "gpu/command_buffer/client/gles2_interface_stub.h"
 #include "third_party/blink/public/platform/web_url.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_element_elementimage.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_htmlcanvaselement_offscreencanvas.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_webgl_copy_element_image_config.h"
 #include "third_party/blink/renderer/bindings/modules/v8/webgl_any.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -22,9 +26,15 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_framebuffer.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_object.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_program.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_query.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_renderbuffer.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_sampler.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_shader.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_sync.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_texture.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_transform_feedback.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_uniform_location.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_vertex_array_object.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/dawn_control_client_holder.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_callback.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
@@ -65,6 +75,36 @@ GLGetProcAddressProc GetStaticANGLEGetProcAddressFunction() {
 namespace blink {
 namespace {
 
+// Helper template for validating WebGL objects for is* queries.
+template <typename T>
+bool ValidateIsObject(WebGLRenderingContextWebGPUBase* context, T* object) {
+  if (!object || !object->Validate(context)) {
+    return false;
+  }
+  // Programs and Shaders are exempt from deletion checks because GLES spec
+  // dictates they remain valid as long as they are attached, which matches
+  // WebGL spec. All other object types are subject to GL ID reuse, so we
+  // must check MarkedForDeletion() to avoid returning true for a deleted
+  // JS object whose ID has been recycled by ANGLE.
+  constexpr bool check_deletion =
+      !std::is_same_v<T, WebGLProgram> && !std::is_same_v<T, WebGLShader>;
+  if constexpr (check_deletion) {
+    if (object->MarkedForDeletion()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Helper template for implementing standard WebGLRenderingContext.is* queries:
+template <typename T, typename GLIsFn>
+bool IsObject(WebGLRenderingContextWebGPUBase* context,
+              T* object,
+              GLIsFn gl_is_fn) {
+  return ValidateIsObject(context, object) &&
+         gl_is_fn(object->Object()) == GL_TRUE;
+}
+
 const DawnProcTable* GetDawnProcs() {
 #if BUILDFLAG(USE_DAWN)
   return &dawn::wire::client::GetProcs();
@@ -73,6 +113,19 @@ const DawnProcTable* GetDawnProcs() {
   return nullptr;
 #endif  // BUILDFLAG(USE_DAWN)
 }
+
+// The maximum supported size of an ArrayBuffer is the maximum size that can be
+// allocated in JavaScript. This maximum is defined by the maximum size
+// PartitionAlloc can allocate. We limit the maximum size of ArrayBuffers we
+// support to avoid integer overflows in the WebGL implementation. WebGL stores
+// the data size as uint32_t, so if sizes just below uint32_t::max() were passed
+// in, integer overflows could happen. The limit defined here is (2GB-2MB),
+// which should be enough buffer to avoid integer overflow. This limit should
+// restrict the usability of WebGL2 only insignificantly, as JavaScript cannot
+// allocate bigger ArrayBuffers anyways. Only with WebAssembly it is possible to
+// allocate bigger ArrayBuffers.
+static constexpr size_t kMaximumSupportedArrayBufferSize =
+    ::partition_alloc::internal::MaxDirectMapped();
 
 void GL_APIENTRY
 WebGLRenderingContextWebGPUBaseDebugMessageCallback(GLenum source,
@@ -97,24 +150,26 @@ void InitializeGLDebugLogging(const gl::DriverGL& gl,
   gl.fn.glEnableFn(GL_DEBUG_OUTPUT);
   gl.fn.glEnableFn(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 
-  gl.fn.glDebugMessageControlFn(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_ERROR,
-                                GL_DONT_CARE, 0, nullptr, GL_TRUE);
+  gl.fn.glDebugMessageControlKHRFn(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_ERROR,
+                                   GL_DONT_CARE, 0, nullptr, GL_TRUE);
 
   if (log_non_errors) {
     // Enable logging of medium and high severity messages
-    gl.fn.glDebugMessageControlFn(GL_DONT_CARE, GL_DONT_CARE,
-                                  GL_DEBUG_SEVERITY_HIGH, 0, nullptr, GL_TRUE);
-    gl.fn.glDebugMessageControlFn(GL_DONT_CARE, GL_DONT_CARE,
-                                  GL_DEBUG_SEVERITY_MEDIUM, 0, nullptr,
-                                  GL_TRUE);
-    gl.fn.glDebugMessageControlFn(GL_DONT_CARE, GL_DONT_CARE,
-                                  GL_DEBUG_SEVERITY_LOW, 0, nullptr, GL_FALSE);
-    gl.fn.glDebugMessageControlFn(GL_DONT_CARE, GL_DONT_CARE,
-                                  GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr,
-                                  GL_FALSE);
+    gl.fn.glDebugMessageControlKHRFn(GL_DONT_CARE, GL_DONT_CARE,
+                                     GL_DEBUG_SEVERITY_HIGH, 0, nullptr,
+                                     GL_TRUE);
+    gl.fn.glDebugMessageControlKHRFn(GL_DONT_CARE, GL_DONT_CARE,
+                                     GL_DEBUG_SEVERITY_MEDIUM, 0, nullptr,
+                                     GL_TRUE);
+    gl.fn.glDebugMessageControlKHRFn(GL_DONT_CARE, GL_DONT_CARE,
+                                     GL_DEBUG_SEVERITY_LOW, 0, nullptr,
+                                     GL_FALSE);
+    gl.fn.glDebugMessageControlKHRFn(GL_DONT_CARE, GL_DONT_CARE,
+                                     GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr,
+                                     GL_FALSE);
   }
 
-  gl.fn.glDebugMessageCallbackFn(callback, user_param);
+  gl.fn.glDebugMessageCallbackKHRFn(callback, user_param);
 }
 
 void InitializeEGLDebugLogging(const gl::DriverEGL& egl,
@@ -531,14 +586,15 @@ bool WebGLRenderingContextWebGPUBase::Initialize(
 // Start of WebGLRenderingContextBase's IDL methods
 // ****************************************************************************
 
-V8UnionHTMLCanvasElementOrOffscreenCanvas*
-WebGLRenderingContextWebGPUBase::getHTMLOrOffscreenCanvas() const {
+V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret
+WebGLRenderingContextWebGPUBase::getHTMLOrOffscreenCanvas(
+    ScriptState* script_state) const {
   if (canvas()) {
-    return MakeGarbageCollected<V8UnionHTMLCanvasElementOrOffscreenCanvas>(
-        static_cast<HTMLCanvasElement*>(Host()));
+    return V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret(
+        script_state, static_cast<HTMLCanvasElement*>(Host()));
   }
-  return MakeGarbageCollected<V8UnionHTMLCanvasElementOrOffscreenCanvas>(
-      static_cast<OffscreenCanvas*>(Host()));
+  return V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret(
+      script_state, static_cast<OffscreenCanvas*>(Host()));
 }
 
 int WebGLRenderingContextWebGPUBase::drawingBufferWidth() const {
@@ -622,17 +678,26 @@ void WebGLRenderingContextWebGPUBase::bindBuffer(GLenum target,
     case GL_ARRAY_BUFFER:
       array_buffer_binding_ = buffer;
       break;
+    case GL_COPY_READ_BUFFER:
+      copy_read_buffer_binding_ = buffer;
+      break;
+    case GL_COPY_WRITE_BUFFER:
+      copy_write_buffer_binding_ = buffer;
+      break;
     case GL_ELEMENT_ARRAY_BUFFER:
       element_array_buffer_binding_ = buffer;
       break;
-    case GL_COPY_READ_BUFFER:
-    case GL_COPY_WRITE_BUFFER:
     case GL_PIXEL_PACK_BUFFER:
+      pixel_pack_buffer_binding_ = buffer;
+      break;
     case GL_PIXEL_UNPACK_BUFFER:
+      pixel_unpack_buffer_binding_ = buffer;
+      break;
     case GL_TRANSFORM_FEEDBACK_BUFFER:
+      transform_feedback_buffer_binding_ = buffer;
+      break;
     case GL_UNIFORM_BUFFER:
-      // TODO(413078308): Implement WebGL2 buffer bindings.
-      NOTIMPLEMENTED();
+      uniform_buffer_binding_ = buffer;
       break;
   }
 }
@@ -1005,11 +1070,13 @@ void WebGLRenderingContextWebGPUBase::enableVertexAttribArray(GLuint index) {
 }
 
 void WebGLRenderingContextWebGPUBase::finish() {
-  NOTIMPLEMENTED();
+  // Intentionally a flush, not a finish, to prevent blocking the Blink main
+  // thread and triggering "Page Unresponsive" dialogs.
+  flush();
 }
 
 void WebGLRenderingContextWebGPUBase::flush() {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glFlushFn();
 }
 
 void WebGLRenderingContextWebGPUBase::framebufferRenderbuffer(
@@ -1410,12 +1477,11 @@ int64_t WebGLRenderingContextWebGPUBase::getVertexAttribOffset(GLuint index,
 }
 
 void WebGLRenderingContextWebGPUBase::hint(GLenum target, GLenum mode) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glHintFn(target, mode);
 }
 
-bool WebGLRenderingContextWebGPUBase::isBuffer(WebGLBuffer*) {
-  NOTIMPLEMENTED();
-  return false;
+bool WebGLRenderingContextWebGPUBase::isBuffer(WebGLBuffer* buffer) {
+  return IsObject(this, buffer, driver_gl_.fn.glIsBufferFn);
 }
 
 bool WebGLRenderingContextWebGPUBase::isEnabled(GLenum cap) {
@@ -1423,29 +1489,26 @@ bool WebGLRenderingContextWebGPUBase::isEnabled(GLenum cap) {
   return false;
 }
 
-bool WebGLRenderingContextWebGPUBase::isFramebuffer(WebGLFramebuffer*) {
-  NOTIMPLEMENTED();
-  return false;
+bool WebGLRenderingContextWebGPUBase::isFramebuffer(
+    WebGLFramebuffer* framebuffer) {
+  return IsObject(this, framebuffer, driver_gl_.fn.glIsFramebufferEXTFn);
 }
 
-bool WebGLRenderingContextWebGPUBase::isProgram(WebGLProgram*) {
-  NOTIMPLEMENTED();
-  return false;
+bool WebGLRenderingContextWebGPUBase::isProgram(WebGLProgram* program) {
+  return IsObject(this, program, driver_gl_.fn.glIsProgramFn);
 }
 
-bool WebGLRenderingContextWebGPUBase::isRenderbuffer(WebGLRenderbuffer*) {
-  NOTIMPLEMENTED();
-  return false;
+bool WebGLRenderingContextWebGPUBase::isRenderbuffer(
+    WebGLRenderbuffer* renderbuffer) {
+  return IsObject(this, renderbuffer, driver_gl_.fn.glIsRenderbufferEXTFn);
 }
 
-bool WebGLRenderingContextWebGPUBase::isShader(WebGLShader*) {
-  NOTIMPLEMENTED();
-  return false;
+bool WebGLRenderingContextWebGPUBase::isShader(WebGLShader* shader) {
+  return IsObject(this, shader, driver_gl_.fn.glIsShaderFn);
 }
 
-bool WebGLRenderingContextWebGPUBase::isTexture(WebGLTexture*) {
-  NOTIMPLEMENTED();
-  return false;
+bool WebGLRenderingContextWebGPUBase::isTexture(WebGLTexture* texture) {
+  return IsObject(this, texture, driver_gl_.fn.glIsTextureFn);
 }
 
 void WebGLRenderingContextWebGPUBase::lineWidth(GLfloat width) {
@@ -1481,7 +1544,11 @@ void WebGLRenderingContextWebGPUBase::readPixels(
     GLenum format,
     GLenum type,
     MaybeShared<DOMArrayBufferView> pixels) {
-  NOTIMPLEMENTED();
+  // Forward to the WebGL2 readPixels function that takes an offset. The WebGL2
+  // readPixels doesn't validate that we are a WebGL2 context as that's done at
+  // the type level in the WebGL IDL: the readPixels with offset can only be
+  // called if a successful `getContext("webgl2")` happened.
+  readPixels(x, y, width, height, format, type, pixels, 0);
 }
 
 void WebGLRenderingContextWebGPUBase::renderbufferStorage(GLenum target,
@@ -1513,10 +1580,10 @@ void WebGLRenderingContextWebGPUBase::shaderSource(WebGLShader* shader,
   std::vector<char> ascii_source;
   ascii_source.reserve(source.length());
   for (auto code_point : source) {
-    ascii_source.push_back(IsASCII(code_point) ? code_point : '?');
+    ascii_source.push_back(IsAscii(code_point) ? code_point : '?');
   }
 
-  GLint c_ascii_size = ascii_source.size();
+  GLint c_ascii_size = base::checked_cast<GLint>(ascii_source.size());
   const char* c_ascii_source = ascii_source.data();
   RETURN_IF_GL_ERROR(driver_gl_.fn.glShaderSourceFn(
       shader->Object(), 1, &c_ascii_source, &c_ascii_size));
@@ -1775,7 +1842,8 @@ void WebGLRenderingContextWebGPUBase::uniform1fv(
   if (!ValidateUniformV("uniform1fv", location, 1, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform1fvFn(location->Location(), v.size(), v.data());
+  driver_gl_.fn.glUniform1fvFn(location->Location(), static_cast<int>(v.size()),
+                               v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform1i(
@@ -1793,7 +1861,8 @@ void WebGLRenderingContextWebGPUBase::uniform1iv(
   if (!ValidateUniformV("uniform1iv", location, 1, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform1ivFn(location->Location(), v.size(), v.data());
+  driver_gl_.fn.glUniform1ivFn(location->Location(), static_cast<int>(v.size()),
+                               v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform2f(
@@ -1812,7 +1881,8 @@ void WebGLRenderingContextWebGPUBase::uniform2fv(
   if (!ValidateUniformV("uniform2fv", location, 2, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform2fvFn(location->Location(), v.size() / 2, v.data());
+  driver_gl_.fn.glUniform2fvFn(location->Location(),
+                               static_cast<int>(v.size() / 2), v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform2i(
@@ -1831,7 +1901,8 @@ void WebGLRenderingContextWebGPUBase::uniform2iv(
   if (!ValidateUniformV("uniform2iv", location, 2, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform2ivFn(location->Location(), v.size() / 2, v.data());
+  driver_gl_.fn.glUniform2ivFn(location->Location(),
+                               static_cast<int>(v.size() / 2), v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform3f(
@@ -1851,7 +1922,8 @@ void WebGLRenderingContextWebGPUBase::uniform3fv(
   if (!ValidateUniformV("uniform3fv", location, 3, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform3fvFn(location->Location(), v.size() / 3, v.data());
+  driver_gl_.fn.glUniform3fvFn(location->Location(),
+                               static_cast<int>(v.size() / 3), v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform3i(
@@ -1871,7 +1943,8 @@ void WebGLRenderingContextWebGPUBase::uniform3iv(
   if (!ValidateUniformV("uniform3iv", location, 3, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform3ivFn(location->Location(), v.size() / 3, v.data());
+  driver_gl_.fn.glUniform3ivFn(location->Location(),
+                               static_cast<int>(v.size() / 3), v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform4f(
@@ -1892,7 +1965,8 @@ void WebGLRenderingContextWebGPUBase::uniform4fv(
   if (!ValidateUniformV("uniform4fv", location, 4, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform4fvFn(location->Location(), v.size() / 4, v.data());
+  driver_gl_.fn.glUniform4fvFn(location->Location(),
+                               static_cast<int>(v.size() / 4), v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform4i(
@@ -1913,7 +1987,8 @@ void WebGLRenderingContextWebGPUBase::uniform4iv(
   if (!ValidateUniformV("uniform4iv", location, 4, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniform4ivFn(location->Location(), v.size() / 4, v.data());
+  driver_gl_.fn.glUniform4ivFn(location->Location(),
+                               static_cast<int>(v.size() / 4), v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniformMatrix2fv(
@@ -1923,8 +1998,9 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix2fv(
   if (!ValidateUniformV("uniformMatrix2fv", location, 4, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix2fvFn(location->Location(), v.size() / 4,
-                                     transpose, v.data());
+  driver_gl_.fn.glUniformMatrix2fvFn(location->Location(),
+                                     static_cast<int>(v.size() / 4), transpose,
+                                     v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniformMatrix3fv(
@@ -1934,8 +2010,9 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix3fv(
   if (!ValidateUniformV("uniformMatrix3fv", location, 9, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix3fvFn(location->Location(), v.size() / 9,
-                                     transpose, v.data());
+  driver_gl_.fn.glUniformMatrix3fvFn(location->Location(),
+                                     static_cast<int>(v.size() / 9), transpose,
+                                     v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniformMatrix4fv(
@@ -1945,8 +2022,9 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix4fv(
   if (!ValidateUniformV("uniformMatrix4fv", location, 16, v.size())) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix4fvFn(location->Location(), v.size() / 16,
-                                     transpose, v.data());
+  driver_gl_.fn.glUniformMatrix4fvFn(location->Location(),
+                                     static_cast<int>(v.size() / 16), transpose,
+                                     v.data());
 }
 
 void WebGLRenderingContextWebGPUBase::useProgram(WebGLProgram* program) {
@@ -1968,38 +2046,68 @@ void WebGLRenderingContextWebGPUBase::validateProgram(WebGLProgram* program) {
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib1f(GLuint index, GLfloat x) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttrib1fFn(index, x);
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib1fv(
     GLuint index,
     base::span<const GLfloat> values) {
-  NOTIMPLEMENTED();
+  // WebGL allows larger spans (reusing an array for different sizes to
+  // avoid repeated allocations). Extra elements are ignored.
+  if (values.size() < 1) {
+    InsertGLError(GL_INVALID_VALUE, "vertexAttrib1fv", "invalid size");
+    return;
+  }
+  driver_gl_.fn.glVertexAttrib1fvFn(index, values.data());
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib2f(GLuint index,
                                                      GLfloat x,
                                                      GLfloat y) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttrib2fFn(index, x, y);
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib2fv(
     GLuint index,
     base::span<const GLfloat> values) {
-  NOTIMPLEMENTED();
+  // WebGL allows larger spans (reusing an array for different sizes to
+  // avoid repeated allocations). Extra elements are ignored.
+  if (values.size() < 2) {
+    InsertGLError(GL_INVALID_VALUE, "vertexAttrib2fv", "invalid size");
+    return;
+  }
+  driver_gl_.fn.glVertexAttrib2fvFn(index, values.data());
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib3f(GLuint index,
                                                      GLfloat x,
                                                      GLfloat y,
                                                      GLfloat z) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttrib3fFn(index, x, y, z);
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib3fv(
     GLuint index,
     base::span<const GLfloat> values) {
-  NOTIMPLEMENTED();
+  // WebGL allows larger spans (reusing an array for different sizes to
+  // avoid repeated allocations). Extra elements are ignored.
+  if (values.size() < 3) {
+    InsertGLError(GL_INVALID_VALUE, "vertexAttrib3fv", "invalid size");
+    return;
+  }
+  driver_gl_.fn.glVertexAttrib3fvFn(index, values.data());
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib4f(GLuint index,
@@ -2007,13 +2115,23 @@ void WebGLRenderingContextWebGPUBase::vertexAttrib4f(GLuint index,
                                                      GLfloat y,
                                                      GLfloat z,
                                                      GLfloat w) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttrib4fFn(index, x, y, z, w);
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttrib4fv(
     GLuint index,
     base::span<const GLfloat> values) {
-  NOTIMPLEMENTED();
+  // WebGL allows larger spans (reusing an array for different sizes to
+  // avoid repeated allocations). Extra elements are ignored.
+  if (values.size() < 4) {
+    InsertGLError(GL_INVALID_VALUE, "vertexAttrib4fv", "invalid size");
+    return;
+  }
+  driver_gl_.fn.glVertexAttrib4fvFn(index, values.data());
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttribPointer(GLuint index,
@@ -2275,112 +2393,9 @@ void WebGLRenderingContextWebGPUBase::texImage2D(
 
 void WebGLRenderingContextWebGPUBase::texElementImage2D(
     GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElementImage2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLsizei width,
-    GLsizei height,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElementImage2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLfloat sx,
-    GLfloat sy,
-    GLfloat swidth,
-    GLfloat sheight,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElementImage2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLfloat sx,
-    GLfloat sy,
-    GLfloat swidth,
-    GLfloat sheight,
-    GLsizei width,
-    GLsizei height,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElement2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElement2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLsizei width,
-    GLsizei height,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElement2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLfloat sx,
-    GLfloat sy,
-    GLfloat swidth,
-    GLfloat sheight,
-    GLenum format,
-    GLenum type,
-    Element* element,
-    ExceptionState& exception_state) {
-  NOTIMPLEMENTED();
-}
-
-void WebGLRenderingContextWebGPUBase::texElement2D(
-    GLenum target,
-    GLint level,
-    GLint internalformat,
-    GLfloat sx,
-    GLfloat sy,
-    GLfloat swidth,
-    GLfloat sheight,
-    GLsizei width,
-    GLsizei height,
-    GLenum format,
-    GLenum type,
-    Element* element,
+    GLenum internalformat,
+    const V8UnionElementOrElementImage* element,
+    const WebGLCopyElementImageConfig* config,
     ExceptionState& exception_state) {
   NOTIMPLEMENTED();
 }
@@ -2960,7 +2975,8 @@ void WebGLRenderingContextWebGPUBase::uniform1fv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform1fvFn(location->Location(), data.size(), data.data());
+  driver_gl_.fn.glUniform1fvFn(location->Location(),
+                               static_cast<int>(data.size()), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform2fv(
@@ -2973,8 +2989,8 @@ void WebGLRenderingContextWebGPUBase::uniform2fv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform2fvFn(location->Location(), data.size() / 2,
-                               data.data());
+  driver_gl_.fn.glUniform2fvFn(location->Location(),
+                               static_cast<int>(data.size() / 2), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform3fv(
@@ -2987,8 +3003,8 @@ void WebGLRenderingContextWebGPUBase::uniform3fv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform3fvFn(location->Location(), data.size() / 3,
-                               data.data());
+  driver_gl_.fn.glUniform3fvFn(location->Location(),
+                               static_cast<int>(data.size() / 3), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform4fv(
@@ -3001,8 +3017,8 @@ void WebGLRenderingContextWebGPUBase::uniform4fv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform4fvFn(location->Location(), data.size() / 4,
-                               data.data());
+  driver_gl_.fn.glUniform4fvFn(location->Location(),
+                               static_cast<int>(data.size() / 4), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform1iv(
@@ -3015,7 +3031,8 @@ void WebGLRenderingContextWebGPUBase::uniform1iv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform1ivFn(location->Location(), data.size(), data.data());
+  driver_gl_.fn.glUniform1ivFn(location->Location(),
+                               static_cast<int>(data.size()), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform2iv(
@@ -3028,8 +3045,8 @@ void WebGLRenderingContextWebGPUBase::uniform2iv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform2ivFn(location->Location(), data.size() / 2,
-                               data.data());
+  driver_gl_.fn.glUniform2ivFn(location->Location(),
+                               static_cast<int>(data.size() / 2), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform3iv(
@@ -3042,8 +3059,8 @@ void WebGLRenderingContextWebGPUBase::uniform3iv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform3ivFn(location->Location(), data.size() / 3,
-                               data.data());
+  driver_gl_.fn.glUniform3ivFn(location->Location(),
+                               static_cast<int>(data.size() / 3), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform4iv(
@@ -3056,8 +3073,8 @@ void WebGLRenderingContextWebGPUBase::uniform4iv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform4ivFn(location->Location(), data.size() / 4,
-                               data.data());
+  driver_gl_.fn.glUniform4ivFn(location->Location(),
+                               static_cast<int>(data.size() / 4), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform1uiv(
@@ -3070,7 +3087,8 @@ void WebGLRenderingContextWebGPUBase::uniform1uiv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform1uivFn(location->Location(), data.size(), data.data());
+  driver_gl_.fn.glUniform1uivFn(location->Location(),
+                                static_cast<int>(data.size()), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform2uiv(
@@ -3083,8 +3101,8 @@ void WebGLRenderingContextWebGPUBase::uniform2uiv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform2uivFn(location->Location(), data.size() / 2,
-                                data.data());
+  driver_gl_.fn.glUniform2uivFn(location->Location(),
+                                static_cast<int>(data.size() / 2), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform3uiv(
@@ -3097,8 +3115,8 @@ void WebGLRenderingContextWebGPUBase::uniform3uiv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform3uivFn(location->Location(), data.size() / 3,
-                                data.data());
+  driver_gl_.fn.glUniform3uivFn(location->Location(),
+                                static_cast<int>(data.size() / 3), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniform4uiv(
@@ -3111,8 +3129,8 @@ void WebGLRenderingContextWebGPUBase::uniform4uiv(
                         &data)) {
     return;
   }
-  driver_gl_.fn.glUniform4uivFn(location->Location(), data.size() / 4,
-                                data.data());
+  driver_gl_.fn.glUniform4uivFn(location->Location(),
+                                static_cast<int>(data.size() / 4), data.data());
 }
 
 void WebGLRenderingContextWebGPUBase::uniformMatrix2fv(
@@ -3126,7 +3144,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix2fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix2fvFn(location->Location(), data.size() / 4,
+  driver_gl_.fn.glUniformMatrix2fvFn(location->Location(),
+                                     static_cast<int>(data.size() / 4),
                                      transpose, data.data());
 }
 
@@ -3141,7 +3160,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix3fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix3fvFn(location->Location(), data.size() / 9,
+  driver_gl_.fn.glUniformMatrix3fvFn(location->Location(),
+                                     static_cast<int>(data.size() / 9),
                                      transpose, data.data());
 }
 
@@ -3156,7 +3176,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix4fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix4fvFn(location->Location(), data.size() / 16,
+  driver_gl_.fn.glUniformMatrix4fvFn(location->Location(),
+                                     static_cast<int>(data.size() / 16),
                                      transpose, data.data());
 }
 
@@ -3171,7 +3192,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix2x3fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix2x3fvFn(location->Location(), data.size() / 6,
+  driver_gl_.fn.glUniformMatrix2x3fvFn(location->Location(),
+                                       static_cast<int>(data.size() / 6),
                                        transpose, data.data());
 }
 
@@ -3186,7 +3208,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix3x2fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix3x2fvFn(location->Location(), data.size() / 6,
+  driver_gl_.fn.glUniformMatrix3x2fvFn(location->Location(),
+                                       static_cast<int>(data.size() / 6),
                                        transpose, data.data());
 }
 
@@ -3201,7 +3224,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix2x4fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix2x4fvFn(location->Location(), data.size() / 8,
+  driver_gl_.fn.glUniformMatrix2x4fvFn(location->Location(),
+                                       static_cast<int>(data.size() / 8),
                                        transpose, data.data());
 }
 
@@ -3216,7 +3240,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix4x2fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix4x2fvFn(location->Location(), data.size() / 8,
+  driver_gl_.fn.glUniformMatrix4x2fvFn(location->Location(),
+                                       static_cast<int>(data.size() / 8),
                                        transpose, data.data());
 }
 
@@ -3231,7 +3256,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix3x4fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix3x4fvFn(location->Location(), data.size() / 12,
+  driver_gl_.fn.glUniformMatrix3x4fvFn(location->Location(),
+                                       static_cast<int>(data.size() / 12),
                                        transpose, data.data());
 }
 
@@ -3246,7 +3272,8 @@ void WebGLRenderingContextWebGPUBase::uniformMatrix4x3fv(
                         src_length, &data)) {
     return;
   }
-  driver_gl_.fn.glUniformMatrix4x3fvFn(location->Location(), data.size() / 12,
+  driver_gl_.fn.glUniformMatrix4x3fvFn(location->Location(),
+                                       static_cast<int>(data.size() / 12),
                                        transpose, data.data());
 }
 
@@ -3255,13 +3282,23 @@ void WebGLRenderingContextWebGPUBase::vertexAttribI4i(GLuint index,
                                                       GLint y,
                                                       GLint z,
                                                       GLint w) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttribI4iFn(index, x, y, z, w);
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttribI4iv(
     GLuint index,
     base::span<const GLint> v) {
-  NOTIMPLEMENTED();
+  // WebGL allows larger spans (reusing an array for different sizes to
+  // avoid repeated allocations). Extra elements are ignored.
+  if (v.size() < 4) {
+    InsertGLError(GL_INVALID_VALUE, "vertexAttribI4iv", "invalid size");
+    return;
+  }
+  driver_gl_.fn.glVertexAttribI4ivFn(index, v.data());
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttribI4ui(GLuint index,
@@ -3269,13 +3306,23 @@ void WebGLRenderingContextWebGPUBase::vertexAttribI4ui(GLuint index,
                                                        GLuint y,
                                                        GLuint z,
                                                        GLuint w) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttribI4uiFn(index, x, y, z, w);
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttribI4uiv(
     GLuint index,
     base::span<const GLuint> v) {
-  NOTIMPLEMENTED();
+  // WebGL allows larger spans (reusing an array for different sizes to
+  // avoid repeated allocations). Extra elements are ignored.
+  if (v.size() < 4) {
+    InsertGLError(GL_INVALID_VALUE, "vertexAttribI4uiv", "invalid size");
+    return;
+  }
+  driver_gl_.fn.glVertexAttribI4uivFn(index, v.data());
+  // TODO(crbug.com/413078308): Track the type of the array so the correct
+  // typed array is returned for getVertexAttrib(index, CURRENT_VERTEX_ATTRIB).
 }
 
 void WebGLRenderingContextWebGPUBase::vertexAttribIPointer(GLuint index,
@@ -3288,7 +3335,7 @@ void WebGLRenderingContextWebGPUBase::vertexAttribIPointer(GLuint index,
 
 void WebGLRenderingContextWebGPUBase::vertexAttribDivisor(GLuint index,
                                                           GLuint divisor) {
-  NOTIMPLEMENTED();
+  driver_gl_.fn.glVertexAttribDivisorANGLEFn(index, divisor);
 }
 
 void WebGLRenderingContextWebGPUBase::drawArraysInstanced(
@@ -3363,8 +3410,7 @@ void WebGLRenderingContextWebGPUBase::deleteQuery(WebGLQuery* query) {
 }
 
 bool WebGLRenderingContextWebGPUBase::isQuery(WebGLQuery* query) {
-  NOTIMPLEMENTED();
-  return false;
+  return IsObject(this, query, driver_gl_.fn.glIsQueryFn);
 }
 
 void WebGLRenderingContextWebGPUBase::beginQuery(GLenum target,
@@ -3401,8 +3447,7 @@ void WebGLRenderingContextWebGPUBase::deleteSampler(WebGLSampler* sampler) {
 }
 
 bool WebGLRenderingContextWebGPUBase::isSampler(WebGLSampler* sampler) {
-  NOTIMPLEMENTED();
-  return false;
+  return IsObject(this, sampler, driver_gl_.fn.glIsSamplerFn);
 }
 
 void WebGLRenderingContextWebGPUBase::bindSampler(GLuint unit,
@@ -3437,8 +3482,9 @@ WebGLSync* WebGLRenderingContextWebGPUBase::fenceSync(GLenum condition,
 }
 
 bool WebGLRenderingContextWebGPUBase::isSync(WebGLSync* sync) {
-  NOTIMPLEMENTED();
-  return false;
+  // WebGLSync is managed entirely on the client side and does not require an
+  // ANGLE query.
+  return ValidateIsObject(this, sync) && sync->Object() != 0;
 }
 
 void WebGLRenderingContextWebGPUBase::deleteSync(WebGLSync* sync) {
@@ -3479,8 +3525,7 @@ void WebGLRenderingContextWebGPUBase::deleteTransformFeedback(
 
 bool WebGLRenderingContextWebGPUBase::isTransformFeedback(
     WebGLTransformFeedback* feedback) {
-  NOTIMPLEMENTED();
-  return false;
+  return IsObject(this, feedback, driver_gl_.fn.glIsTransformFeedbackFn);
 }
 
 void WebGLRenderingContextWebGPUBase::bindTransformFeedback(
@@ -3601,8 +3646,7 @@ void WebGLRenderingContextWebGPUBase::deleteVertexArray(
 
 bool WebGLRenderingContextWebGPUBase::isVertexArray(
     WebGLVertexArrayObject* vertex_array) {
-  NOTIMPLEMENTED();
-  return false;
+  return IsObject(this, vertex_array, driver_gl_.fn.glIsVertexArrayOESFn);
 }
 
 void WebGLRenderingContextWebGPUBase::bindVertexArray(
@@ -3617,7 +3661,22 @@ void WebGLRenderingContextWebGPUBase::readPixels(GLint x,
                                                  GLenum format,
                                                  GLenum type,
                                                  int64_t offset) {
-  NOTIMPLEMENTED();
+  if (!ValidateFitsNonNegInt32("readPixels", "offset", offset)) {
+    return;
+  }
+
+  // WebGL separates the entrypoints for readPixels back to CPU or to a
+  // PIXEL_PACK buffer, so there is validation that the correct entrypoint is
+  // used depending on whether the PIXEL_PACK buffer is present.
+  if (!pixel_pack_buffer_binding_) {
+    InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                  "no PIXEL_PACK buffer bound");
+    return;
+  }
+
+  EnsureDefaultFramebuffer();
+  driver_gl_.fn.glReadPixelsFn(x, y, width, height, format, type,
+                               reinterpret_cast<void*>(offset));
 }
 
 void WebGLRenderingContextWebGPUBase::readPixels(
@@ -3629,7 +3688,132 @@ void WebGLRenderingContextWebGPUBase::readPixels(
     GLenum type,
     MaybeShared<DOMArrayBufferView> pixels,
     int64_t offset) {
-  NOTIMPLEMENTED();
+  // Due to WebGL's same-origin restrictions, it is not possible to taint the
+  // origin using the WebGL API.
+  DCHECK(Host()->OriginClean());
+
+  // WebGL separates the entrypoints for readPixels back to CPU or to a
+  // PIXEL_PACK buffer, so there is validation that the correct entrypoint is
+  // used depending on whether the PIXEL_PACK buffer is present.
+  if (pixel_pack_buffer_binding_) {
+    InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                  "PIXEL_PACK buffer should not be bound");
+    return;
+  }
+
+  // Validation specific to WebGL because it uses a DOMArrayBufferView instead
+  // of a void* like in OpenGL ES.
+  if (pixels.IsNull()) {
+    InsertGLError(GL_INVALID_VALUE, "readPixels",
+                  "no destination ArrayBufferView");
+    return;
+  }
+  if (offset > int64_t(pixels->byteLength() / pixels->TypeSize())) {
+    InsertGLError(GL_INVALID_VALUE, "readPixels",
+                  "destination offset out of range");
+    return;
+  }
+  size_t byte_offset = size_t(offset * pixels->TypeSize());
+  base::span<uint8_t> data_at_offset = pixels->ByteSpan().subspan(byte_offset);
+
+  // Validation specific to WebGL that the type of the DOMArrayBufferView
+  // matches the type used to read back data.
+  DOMArrayBufferView::ViewType pixels_type = pixels->GetType();
+  switch (type) {
+    case GL_UNSIGNED_BYTE:
+      if (pixels_type != DOMArrayBufferView::kTypeUint8 &&
+          pixels_type != DOMArrayBufferView::kTypeUint8Clamped) {
+        InsertGLError(
+            GL_INVALID_OPERATION, "readPixels",
+            "type UNSIGNED_BYTE but ArrayBufferView not Uint8Array or "
+            "Uint8ClampedArray");
+        return;
+      }
+      break;
+    case GL_BYTE:
+      if (pixels_type != DOMArrayBufferView::kTypeInt8) {
+        InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                      "type BYTE but ArrayBufferView not Int8Array");
+        return;
+      }
+      break;
+    case GL_HALF_FLOAT:
+      if (pixels_type != DOMArrayBufferView::kTypeUint16) {
+        InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                      "type HALF_FLOAT but ArrayBufferView not Uint16Array");
+        return;
+      }
+      break;
+    case GL_FLOAT:
+      if (pixels_type != DOMArrayBufferView::kTypeFloat32) {
+        InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                      "type FLOAT but ArrayBufferView not Float32Array");
+        return;
+      }
+      break;
+    case GL_UNSIGNED_SHORT_5_6_5:
+    case GL_UNSIGNED_SHORT_4_4_4_4:
+    case GL_UNSIGNED_SHORT_5_5_5_1:
+      if (pixels_type != DOMArrayBufferView::kTypeUint16) {
+        InsertGLError(
+            GL_INVALID_OPERATION, "readPixels",
+            "type UNSIGNED_SHORT but ArrayBufferView not Uint16Array");
+        return;
+      }
+      break;
+    case GL_UNSIGNED_SHORT:
+      if (pixels_type != DOMArrayBufferView::kTypeUint16) {
+        InsertGLError(
+            GL_INVALID_OPERATION, "readPixels",
+            "type GL_UNSIGNED_SHORT but ArrayBufferView not Uint16Array");
+        return;
+      }
+      break;
+    case GL_SHORT:
+      if (pixels_type != DOMArrayBufferView::kTypeInt16) {
+        InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                      "type SHORT but ArrayBufferView not Int16Array");
+        return;
+      }
+      break;
+    case GL_UNSIGNED_INT:
+    case GL_UNSIGNED_INT_2_10_10_10_REV:
+    case GL_UNSIGNED_INT_10F_11F_11F_REV:
+    case GL_UNSIGNED_INT_5_9_9_9_REV:
+      if (pixels_type != DOMArrayBufferView::kTypeUint32) {
+        InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                      "type UNSIGNED_INT but ArrayBufferView not Uint32Array");
+        return;
+      }
+      break;
+    case GL_INT:
+      if (pixels_type != DOMArrayBufferView::kTypeInt32) {
+        InsertGLError(GL_INVALID_OPERATION, "readPixels",
+                      "type INT but ArrayBufferView not Int32Array");
+        return;
+      }
+      break;
+    default:
+      InsertGLError(GL_INVALID_ENUM, "readPixels", "invalid type");
+      return;
+  }
+
+  EnsureDefaultFramebuffer();
+
+  // Use ReadPixelsRobustANGLE that will check that the bytes written don't go
+  // past the end of the DOMArrayBufferView. We also need to ensure the size
+  // fits in a GLsizei (the type used for the bufSize parameter) and doesn't go
+  // past kMaximumSupportedArrayBufferSize (see comment for that constant).
+  constexpr size_t kMaxBufSize =
+      std::min(size_t(std::numeric_limits<GLsizei>::max()),
+               kMaximumSupportedArrayBufferSize);
+  size_t bufSizeSizeT = std::min(data_at_offset.size(), kMaxBufSize);
+  // Safe with the min() above.
+  GLsizei bufSize = static_cast<GLsizei>(bufSizeSizeT);
+
+  driver_gl_.fn.glReadPixelsRobustANGLEFn(x, y, width, height, format, type,
+                                          bufSize, nullptr, nullptr, nullptr,
+                                          data_at_offset.data());
 }
 
 // **************************************************************************
@@ -3639,26 +3823,8 @@ void WebGLRenderingContextWebGPUBase::readPixels(
 // ****************************************************************************
 // Start of CanvasRenderingContext implementation
 // ****************************************************************************
-SkAlphaType WebGLRenderingContextWebGPUBase::GetAlphaType() const {
-  // WebGL spec section 2.2 The Drawing Buffer
-  //
-  //   If defined, the alpha channel is used by the HTML compositor to combine
-  //   the color buffer with the rest of the page.
-  return CreationAttributes().alpha ? kPremul_SkAlphaType : kOpaque_SkAlphaType;
-}
-
-viz::SharedImageFormat WebGLRenderingContextWebGPUBase::GetSharedImageFormat()
-    const {
-  // TODO(413078308): Add support for RGBA16Float drawing buffer.
-  if (swap_buffers_) {
-    return swap_buffers_->Format();
-  }
-  return GetN32FormatForCanvas();
-}
-
-gfx::ColorSpace WebGLRenderingContextWebGPUBase::GetColorSpace() const {
-  // TODO(413078308): Add support for non-SRGB color spaces.
-  return gfx::ColorSpace::CreateSRGB();
+bool WebGLRenderingContextWebGPUBase::IsOpaque() const {
+  return !CreationAttributes().alpha;
 }
 
 base::ByteSize WebGLRenderingContextWebGPUBase::AllocatedBufferSize() const {
@@ -3730,9 +3896,12 @@ void WebGLRenderingContextWebGPUBase::FinalizeFrame(FlushReason) {
   NOTIMPLEMENTED();
 }
 
-bool WebGLRenderingContextWebGPUBase::PushFrame() {
+scoped_refptr<CanvasResource>
+WebGLRenderingContextWebGPUBase::GetResourceForPushFrame(
+    bool& should_call_push_frame) {
+  should_call_push_frame = false;
   NOTIMPLEMENTED();
-  return false;
+  return nullptr;
 }
 
 // ****************************************************************************
@@ -3775,9 +3944,18 @@ bool WebGLRenderingContextWebGPUBase::IsGPUDeviceDestroyed() {
 void WebGLRenderingContextWebGPUBase::Trace(Visitor* visitor) const {
   visitor->Trace(draw_framebuffer_binding_);
   visitor->Trace(read_framebuffer_binding_);
+
   visitor->Trace(array_buffer_binding_);
+  visitor->Trace(copy_read_buffer_binding_);
+  visitor->Trace(copy_write_buffer_binding_);
+  visitor->Trace(pixel_pack_buffer_binding_);
+  visitor->Trace(pixel_unpack_buffer_binding_);
+  visitor->Trace(transform_feedback_buffer_binding_);
+  visitor->Trace(uniform_buffer_binding_);
   visitor->Trace(element_array_buffer_binding_);
+
   visitor->Trace(program_binding_);
+
   for (size_t texture_type_idx = 0; texture_type_idx < bound_textures_.size();
        texture_type_idx++) {
     for (size_t texture_unit_idx = 0;
@@ -3786,6 +3964,7 @@ void WebGLRenderingContextWebGPUBase::Trace(Visitor* visitor) const {
       visitor->Trace(bound_textures_[texture_type_idx][texture_unit_idx]);
     }
   }
+
   WebGLContextObjectSupport::Trace(visitor);
   CanvasRenderingContext::Trace(visitor);
 }
@@ -3824,8 +4003,12 @@ void WebGLRenderingContextWebGPUBase::EnsureDefaultFramebuffer() {
   texDesc.format = swap_buffers_->TextureFormat();
   texDesc.dimension = wgpu::TextureDimension::e2D;
 
+  SkAlphaType alpha_type =
+      CreationAttributes().alpha ? kPremul_SkAlphaType : kOpaque_SkAlphaType;
+
   scoped_refptr<WebGPUMailboxTexture> mailbox_texture =
-      swap_buffers_->GetNewTexture(texDesc, GetAlphaType());
+      swap_buffers_->GetNewTexture(texDesc, alpha_type);
+
   Host()->UpdateMemoryUsage();
   mailbox_texture->SetNeedsPresent(true);
 
@@ -4036,6 +4219,10 @@ void WebGLRenderingContextWebGPUBase::InitializeContext() {
 }
 
 void WebGLRenderingContextWebGPUBase::Destroy() {
+  if (swap_buffers_) {
+    swap_buffers_->Neuter();
+  }
+
   if (context_) {
     DCHECK(display_ != EGL_NO_DISPLAY);
     driver_egl_.fn.eglMakeCurrentFn(EGL_NO_DISPLAY, EGL_NO_CONTEXT,

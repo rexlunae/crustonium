@@ -8,31 +8,43 @@
 #import <UIKit/UIKit.h>
 
 #import "ios/chrome/browser/browser_content/ui_bundled/browser_content_consumer.h"
+#import "ios/chrome/browser/policy/model/browser_management_service.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_action_provider.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/ui_swift.h"
 
 namespace bookmarks {
 class BookmarkModel;
-}
+}  // namespace bookmarks
 namespace feature_engagement {
 class Tracker;
-}
-namespace web {
-class WebState;
-}
+}  // namespace feature_engagement
+namespace image_fetcher {
+class ImageFetcher;
+}  // namespace image_fetcher
+namespace signin {
+class AvatarProvider;
+class IdentityManager;
+}  // namespace signin
 namespace syncer {
 class SyncService;
-}
+}  // namespace syncer
+namespace web {
+class WebState;
+}  // namespace web
 
 @protocol ActivityServiceCommands;
 class AuthenticationService;
 @protocol BookmarksCommands;
 @protocol BrowserCoordinatorCommands;
 class BrowserPolicyConnectorIOS;
-@protocol BWGCommands;
+@protocol CobaltCommands;
 @protocol FindInPageCommands;
+@protocol GeminiCommands;
 @protocol HelpCommands;
+class HomeBackgroundCustomizationService;
+@class LayoutGuideCenter;
 @protocol LensOverlayCommands;
+@protocol LevelUpCommands;
 @protocol OverflowMenuCustomizationCommands;
 @class OverflowMenuOrderer;
 class OverlayPresenter;
@@ -42,6 +54,7 @@ class PrefService;
 @protocol PriceTrackedItemsCommands;
 class PromosManager;
 @protocol QuickDeleteCommands;
+@protocol NewTabPageCommands;
 @protocol ReaderModeCommands;
 class ReadingListBrowserAgent;
 class ReadingListModel;
@@ -49,9 +62,9 @@ class ReadingListModel;
 @protocol SceneCommands;
 @protocol SettingsCommands;
 class TabBasedIPHBrowserAgent;
-@protocol TabGroupsCommands;
 class TemplateURLService;
 @protocol TextZoomCommands;
+class UserUploadedImageManager;
 class WebNavigationBrowserAgent;
 class WebStateList;
 @protocol WhatsNewCommands;
@@ -89,9 +102,11 @@ class WebStateList;
 @property(nonatomic, weak) id<TextZoomCommands> textZoomHandler;
 @property(nonatomic, weak) id<QuickDeleteCommands> quickDeleteHandler;
 @property(nonatomic, weak) id<WhatsNewCommands> whatsNewHandler;
+@property(nonatomic, weak) id<LevelUpCommands> levelUpHandler;
 @property(nonatomic, weak) id<ReaderModeCommands> readerModeHandler;
-@property(nonatomic, weak) id<BWGCommands> BWGHandler;
-@property(nonatomic, weak) id<TabGroupsCommands> tabGroupsHandler;
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
+@property(nonatomic, weak) id<CobaltCommands> cobaltHandler;
+@property(nonatomic, weak) id<NewTabPageCommands> NTPCommandHandler;
 
 // Navigation agent for reloading pages.
 @property(nonatomic, assign) WebNavigationBrowserAgent* navigationAgent;
@@ -105,11 +120,24 @@ class WebStateList;
 // BaseViewController for presenting some UI.
 @property(nonatomic, weak) UIViewController* baseViewController;
 
+// The LayoutGuideCenter to use to retrieve the layout guide.
+@property(nonatomic, strong) LayoutGuideCenter* layoutGuideCenter;
+
 // Bookmark model to know if the page is bookmarked.
 @property(nonatomic, assign) bookmarks::BookmarkModel* bookmarkModel;
 
 // Readinglist model to know if model has finished loading.
 @property(nonatomic, assign) ReadingListModel* readingListModel;
+
+// Service for NTP background customization.
+@property(nonatomic, assign)
+    HomeBackgroundCustomizationService* backgroundCustomizationService;
+
+// Manager for user-uploaded NTP background images.
+@property(nonatomic, assign) UserUploadedImageManager* userUploadedImageManager;
+
+// Fetcher for preset NTP background images.
+@property(nonatomic, assign) image_fetcher::ImageFetcher* imageFetcher;
 
 // Pref service to retrieve profile preference values.
 @property(nonatomic, assign) PrefService* profilePrefs;
@@ -142,14 +170,24 @@ class WebStateList;
 // The AuthenticationService to get sign-in info.
 @property(nonatomic, assign) AuthenticationService* authenticationService;
 
+// The IdentityManager to check account capabilities.
+@property(nonatomic, assign) signin::IdentityManager* identityManager;
+
 // The TabBasedIPHBrowserAgent to handle tab based in-product help bubbles.
 @property(nonatomic, assign) TabBasedIPHBrowserAgent* tabBasedIPHBrowserAgent;
 
 // TemplateURLService to observe default search engine change.
 @property(nonatomic, assign) TemplateURLService* templateURLService;
 
+// Browser management service to determine if the browser is managed.
+@property(nonatomic, assign)
+    policy::BrowserManagementService* browserManagementService;
+
 // If settings destination has a blue dot.
 @property(nonatomic, assign) bool hasSettingsBlueDot;
+
+// The AvatarProvider to get identity avatars.
+@property(nonatomic, assign) signin::AvatarProvider* identityAvatarProvider;
 
 // Disconnect the mediator.
 - (void)disconnect;

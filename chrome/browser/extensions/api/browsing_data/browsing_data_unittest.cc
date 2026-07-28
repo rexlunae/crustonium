@@ -45,7 +45,7 @@ enum OriginTypeMask {
   EXTENSION = chrome_browsing_data_remover::ORIGIN_TYPE_EXTENSION
 };
 
-// TODO(http://crbug.com/1266606): appcache is a noop and should be removed.
+// TODO(http://crbug.com/40802227): appcache is a noop and should be removed.
 // TODO(http://crbug.com/420857719): webSQL is a noop and should be removed.
 const char kRemoveEverythingArguments[] =
     R"([{"since": 1000}, {
@@ -61,8 +61,7 @@ class BrowsingDataApiTest : public ExtensionServiceTestBase {
   void SetUp() override {
 #if !BUILDFLAG(IS_ANDROID)
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{browsing_data::features::kDbdRevampDesktop,
-                              browsing_data::features::
+        /*enabled_features=*/{browsing_data::features::
                                   kPasswordRemovalExtensionErrorKillSwitch},
         /*disabled_features=*/{});
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -142,10 +141,7 @@ class BrowsingDataApiTest : public ExtensionServiceTestBase {
 
   void SetSinceAndVerify(browsing_data::TimePeriod since_pref) {
     PrefService* prefs = profile()->GetPrefs();
-    browsing_data::ClearBrowsingDataTab tab =
-        static_cast<browsing_data::ClearBrowsingDataTab>(
-            prefs->GetInteger(browsing_data::prefs::kLastClearBrowsingDataTab));
-    auto* time_period_pref = browsing_data::GetTimePeriodPreferenceName(tab);
+    auto* time_period_pref = browsing_data::GetTimePeriodPreferenceName();
     prefs->SetInteger(time_period_pref, static_cast<int>(since_pref));
 
     scoped_refptr<BrowsingDataSettingsFunction> function =
@@ -174,9 +170,6 @@ class BrowsingDataApiTest : public ExtensionServiceTestBase {
                                  uint64_t expected_origin_type_mask,
                                  uint64_t expected_removal_mask) {
     PrefService* prefs = profile()->GetPrefs();
-    prefs->SetInteger(
-        browsing_data::prefs::kLastClearBrowsingDataTab,
-        static_cast<int>(browsing_data::ClearBrowsingDataTab::ADVANCED));
     prefs->SetBoolean(
         browsing_data::prefs::kDeleteCache,
         !!(data_type_flags & content::BrowsingDataRemover::DATA_TYPE_CACHE));
@@ -199,26 +192,6 @@ class BrowsingDataApiTest : public ExtensionServiceTestBase {
     prefs->SetBoolean(browsing_data::prefs::kDeletePasswords,
                       !!(data_type_flags &
                          chrome_browsing_data_remover::DATA_TYPE_PASSWORDS));
-
-    VerifyRemovalMask(expected_origin_type_mask, expected_removal_mask);
-  }
-
-  void SetBasicPrefsAndVerifySettings(uint64_t data_type_flags,
-                                      uint64_t expected_origin_type_mask,
-                                      uint64_t expected_removal_mask) {
-    PrefService* prefs = profile()->GetPrefs();
-    prefs->SetInteger(
-        browsing_data::prefs::kLastClearBrowsingDataTab,
-        static_cast<int>(browsing_data::ClearBrowsingDataTab::BASIC));
-    prefs->SetBoolean(
-        browsing_data::prefs::kDeleteCacheBasic,
-        !!(data_type_flags & content::BrowsingDataRemover::DATA_TYPE_CACHE));
-    prefs->SetBoolean(
-        browsing_data::prefs::kDeleteCookiesBasic,
-        !!(data_type_flags & content::BrowsingDataRemover::DATA_TYPE_COOKIES));
-    prefs->SetBoolean(
-        browsing_data::prefs::kDeleteBrowsingHistoryBasic,
-        !!(data_type_flags & chrome_browsing_data_remover::DATA_TYPE_HISTORY));
 
     VerifyRemovalMask(expected_origin_type_mask, expected_removal_mask);
   }
@@ -361,11 +334,11 @@ TEST_F(BrowsingDataApiTest, RemoveBrowsingDataAll) {
   EXPECT_EQ(base::Time::FromSecondsSinceUnixEpoch(1.0), GetBeginTime());
   EXPECT_EQ(
       // TODO(benwells): implement clearing of site usage data via the
-      // browsing data API. https://crbug.com/500801.
+      // browsing data API. https://crbug.com/41183097.
       // TODO(dmurph): implement clearing of durable storage permission
-      // via the browsing data API. https://crbug.com/500801.
+      // via the browsing data API. https://crbug.com/41183097.
       // TODO(ramyasharma): implement clearing of external protocol data
-      // via the browsing data API. https://crbug.com/692850.
+      // via the browsing data API. https://crbug.com/40506819.
       content::BrowsingDataRemover::DATA_TYPE_COOKIES |
           (content::BrowsingDataRemover::DATA_TYPE_DOM_STORAGE &
            ~content::BrowsingDataRemover::DATA_TYPE_BACKGROUND_FETCH &
@@ -438,9 +411,6 @@ TEST_F(BrowsingDataApiTest, BrowsingDataRemovalMaskCombination) {
 // Make sure the remove() function accepts the format produced by settings().
 TEST_F(BrowsingDataApiTest, BrowsingDataRemovalInputFromSettings) {
   PrefService* prefs = profile()->GetPrefs();
-  prefs->SetInteger(
-      browsing_data::prefs::kLastClearBrowsingDataTab,
-      static_cast<int>(browsing_data::ClearBrowsingDataTab::ADVANCED));
   prefs->SetBoolean(browsing_data::prefs::kDeleteCache, true);
   prefs->SetBoolean(browsing_data::prefs::kDeleteBrowsingHistory, true);
   prefs->SetBoolean(browsing_data::prefs::kDeleteDownloadHistory, true);
@@ -530,12 +500,6 @@ TEST_F(BrowsingDataApiTest, SettingsFunctionSimple) {
                             content::BrowsingDataRemover::DATA_TYPE_DOWNLOADS);
   SetPrefsAndVerifySettings(chrome_browsing_data_remover::DATA_TYPE_PASSWORDS,
                             0, 0);
-  SetBasicPrefsAndVerifySettings(content::BrowsingDataRemover::DATA_TYPE_CACHE,
-                                 0,
-                                 content::BrowsingDataRemover::DATA_TYPE_CACHE);
-  SetBasicPrefsAndVerifySettings(
-      chrome_browsing_data_remover::DATA_TYPE_HISTORY, 0,
-      chrome_browsing_data_remover::DATA_TYPE_HISTORY);
 }
 
 // Test cookie and app data settings.
@@ -554,9 +518,6 @@ TEST_F(BrowsingDataApiTest, SettingsFunctionSiteData) {
       content::BrowsingDataRemover::DATA_TYPE_COOKIES |
           chrome_browsing_data_remover::DATA_TYPE_HOSTED_APP_DATA_TEST_ONLY,
       PROTECTED_WEB | UNPROTECTED_WEB, supported_site_data);
-  SetBasicPrefsAndVerifySettings(
-      content::BrowsingDataRemover::DATA_TYPE_COOKIES, UNPROTECTED_WEB,
-      supported_site_data);
 }
 
 // Test an arbitrary assortment of settings.

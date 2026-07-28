@@ -38,6 +38,7 @@
 #include "gpu/config/gpu_preferences.h"
 #include "media/base/bitstream_buffer.h"
 #include "media/base/decoder_buffer.h"
+#include "media/base/media_serializers.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/base/test_helpers.h"
@@ -55,6 +56,7 @@
 #include "third_party/libyuv/include/libyuv.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/init/gl_factory.h"
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
@@ -92,7 +94,6 @@ class MockCommandBufferHelper : public CommandBufferHelper {
 struct VideoParams {
   VideoCodecProfile profile;
   VideoPixelFormat pixel_format;
-  bool use_gl_surface = false;
   bool use_shared_image = false;
 };
 
@@ -120,20 +121,9 @@ class NdkVideoEncoderAcceleratorTest
     enabled_features.push_back(kPlatformHEVCEncoderSupport);
 #endif
 
-    if (args.use_gl_surface) {
-      if (__builtin_available(android 35, *)) {
-        SetupSharedImages();
-      } else {
-        GTEST_SKIP() << "Not supported Android version. "
-                     << "Surface input needs Android 15 or newer.";
-      }
-      enabled_features.push_back(kSurfaceInputForAndroidVEA);
-    } else {
-      disabled_features.push_back(kSurfaceInputForAndroidVEA);
-      if (args.use_shared_image) {
-        enabled_features.push_back(media::kAndroidZeroCopyVideoCapture);
-        SetupSharedImages();
-      }
+    if (args.use_shared_image) {
+      enabled_features.push_back(media::kAndroidZeroCopyVideoCapture);
+      SetupSharedImages();
     }
     feature_list_.InitWithFeatures(enabled_features, disabled_features);
 
@@ -154,17 +144,7 @@ class NdkVideoEncoderAcceleratorTest
   void TearDown() override {
     accelerator_.reset();
     RunUntilIdle();
-    auto args = GetParam();
     si_refs.clear();
-    if (args.use_gl_surface) {
-      if (context_state_) {
-        context_state_->MakeCurrent(gl_surface_.get(), true);
-        context_state_.reset();
-        gl_context_.reset();
-        gl_surface_.reset();
-      }
-      gl::init::ShutdownGL(nullptr, false);
-    }
   }
 
   // Implementation for VEA::Client
@@ -336,12 +316,14 @@ class NdkVideoEncoderAcceleratorTest
       gmb_handle.android_hardware_buffer = std::move(ahb_handle);
 
       backing = backing_factory_->CreateSharedImage(
-          mailbox, viz_format, size, color_space, surface_origin, alpha_type,
-          usage, "TestLabel", /*is_thread_safe=*/false, std::move(gmb_handle));
+          mailbox,
+          gpu::SharedImageInfo(viz_format, size, color_space, surface_origin,
+                               alpha_type, usage, "TestLabel"),
+          /*is_thread_safe=*/false, std::move(gmb_handle));
 
     } else {
       CHECK_EQ(software_frame->format(), PIXEL_FORMAT_XBGR);
-      viz_format = viz::SinglePlaneFormat::kRGBA_8888;
+      viz_format = viz::SinglePlaneFormat::kRGBX_8888;
 
       AHardwareBuffer_Desc desc = {};
       desc.width = size.width();
@@ -382,8 +364,10 @@ class NdkVideoEncoderAcceleratorTest
       gmb_handle.android_hardware_buffer = std::move(ahb_handle);
 
       backing = backing_factory_->CreateSharedImage(
-          mailbox, viz_format, size, color_space, surface_origin, alpha_type,
-          usage, "TestLabel", /*is_thread_safe=*/false, std::move(gmb_handle));
+          mailbox,
+          gpu::SharedImageInfo(viz_format, size, color_space, surface_origin,
+                               alpha_type, usage, "TestLabel"),
+          /*is_thread_safe=*/false, std::move(gmb_handle));
     }
     CHECK(backing);
 
@@ -401,10 +385,9 @@ class NdkVideoEncoderAcceleratorTest
         base::MakeRefCounted<gpu::SharedImageInterfaceHolder>(test_ssi.get()),
         gfx::EMPTY_BUFFER);
 
-    return VideoFrame::WrapSharedImage(software_frame->format(),
-                                       client_shared_image, sync_token,
-                                       base::DoNothing(), size, gfx::Rect(size),
-                                       size, software_frame->timestamp());
+    return VideoFrame::WrapSharedImage(
+        software_frame->format(), client_shared_image, sync_token,
+        base::DoNothing(), gfx::Rect(size), size, software_frame->timestamp());
   }
 
   VideoEncodeAccelerator::Config GetDefaultConfig() {
@@ -421,6 +404,21 @@ class NdkVideoEncoderAcceleratorTest
     return config;
   }
 
+  VideoEncodeAccelerator::Config GetDefaultSvcConfig(
+      size_t num_temporal_layers) {
+    auto config = GetDefaultConfig();
+    config.spatial_layers.clear();
+    config.spatial_layers.emplace_back();
+    auto& layer = config.spatial_layers.back();
+    layer.width = config.input_visible_size.width();
+    layer.height = config.input_visible_size.height();
+    layer.bitrate_bps = config.bitrate.target_bps();
+    layer.framerate = config.framerate;
+    layer.max_qp = 30;
+    layer.num_of_temporal_layers = num_temporal_layers;
+    return config;
+  }
+
   void Run() {
     loop_->Run();
     loop_ = std::make_unique<base::RunLoop>();
@@ -433,7 +431,7 @@ class NdkVideoEncoderAcceleratorTest
   std::unique_ptr<VideoEncodeAccelerator> MakeNdkAccelerator() {
     auto runner = task_environment_.GetMainThreadTaskRunner();
     return base::WrapUnique<VideoEncodeAccelerator>(
-        new NdkVideoEncodeAccelerator(runner));
+        new NdkVideoEncodeAccelerator(runner, gpu::GpuDriverBugWorkarounds()));
   }
 
   void SetCommandBufferHelper() {
@@ -450,7 +448,7 @@ class NdkVideoEncoderAcceleratorTest
     switch (codec_) {
       case VideoCodec::kH264: {
         H264Parser parser;
-        parser.SetStream(data.data(), data.size());
+        parser.SetStream(data);
 
         int num_parsed_nalus = 0;
         while (true) {
@@ -487,7 +485,7 @@ class NdkVideoEncoderAcceleratorTest
       }
       case VideoCodec::kVP9: {
         Vp9Parser parser;
-        parser.SetStream(data.data(), data.size(), nullptr);
+        parser.SetStream(data, nullptr);
 
         int num_parsed_frames = 0;
         while (true) {
@@ -532,9 +530,8 @@ class NdkVideoEncoderAcceleratorTest
         base::MakeRefCounted<gl::GLShareGroup>(), gl_surface_, gl_context_,
         /*use_virtualized_gl_contexts=*/false, base::DoNothing(),
         gpu::GrContextType::kGL);
-    ASSERT_TRUE(context_state_->InitializeGL(
-        gpu_preferences, base::MakeRefCounted<gpu::gles2::FeatureInfo>(
-                             gpu_workarounds, gpu_feature_info)));
+    ASSERT_TRUE(context_state_->InitializeGL(gpu_preferences, gpu_workarounds,
+                                             gpu_feature_info));
 
     backing_factory_ =
         std::make_unique<gpu::AHardwareBufferImageBackingFactory>(
@@ -556,7 +553,6 @@ class NdkVideoEncoderAcceleratorTest
   VideoCodec codec_;
   VideoCodecProfile profile_;
   VideoPixelFormat pixel_format_;
-  bool use_gl_surface_ = false;
 
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::ThreadingMode::MULTIPLE_THREADS};
@@ -610,7 +606,7 @@ class NdkVideoEncoderAcceleratorE2ETest
     std::unique_ptr<VideoDecoder> decoder;
     if (codec_ == VideoCodec::kH264) {
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
-      decoder = std::make_unique<FFmpegVideoDecoder>(&media_log_);
+      decoder = std::make_unique<FFmpegVideoDecoder>(media_log_.Clone());
 #endif
     } else if (codec_ == VideoCodec::kVP8 || codec_ == VideoCodec::kVP9) {
 #if BUILDFLAG(ENABLE_LIBVPX)
@@ -663,14 +659,33 @@ TEST_P(NdkVideoEncoderAcceleratorTest, InitializeAndDestroy) {
   EXPECT_CALL(*this, OnRequireBuffer()).WillOnce(Return(false));
 
   auto status = accelerator_->Initialize(config, this, NullLog());
-  ASSERT_TRUE(status.is_ok())
-      << EncoderStatusCodeToString(status.code()) << " " << status.message();
+  ASSERT_TRUE(status.is_ok()) << MediaSerializeForTesting(status);
   SetCommandBufferHelper();
 
   Run();
   EXPECT_GE(id_to_buffer_.size(), 1u);
   accelerator_.reset();
   EXPECT_FALSE(error_status_.has_value());
+}
+
+TEST_P(NdkVideoEncoderAcceleratorTest, WorkaroundDisablesZeroCopy) {
+  if (!GetParam().use_shared_image) {
+    GTEST_SKIP() << "Test only relevant for shared image input";
+  }
+
+  std::vector<int32_t> workaround_list;
+  workaround_list.push_back(gpu::DISABLE_ANDROID_ZERO_COPY_VIDEO_CAPTURE);
+  gpu::GpuDriverBugWorkarounds workarounds(workaround_list);
+
+  auto runner = task_environment_.GetMainThreadTaskRunner();
+  auto accelerator =
+      std::make_unique<NdkVideoEncodeAccelerator>(runner, workarounds);
+
+  auto profiles = accelerator->GetSupportedProfiles();
+  for (const auto& profile : profiles) {
+    EXPECT_FALSE(profile.supports_gpu_shared_images);
+    EXPECT_TRUE(profile.gpu_supported_pixel_formats.empty());
+  }
 }
 
 TEST_P(NdkVideoEncoderAcceleratorTest, HandleEncodingError) {
@@ -680,8 +695,7 @@ TEST_P(NdkVideoEncoderAcceleratorTest, HandleEncodingError) {
   EXPECT_CALL(*this, OnError()).WillOnce(Return(false));
 
   auto status = accelerator_->Initialize(config, this, NullLog());
-  ASSERT_TRUE(status.is_ok())
-      << EncoderStatusCodeToString(status.code()) << " " << status.message();
+  ASSERT_TRUE(status.is_ok()) << MediaSerializeForTesting(status);
   SetCommandBufferHelper();
   Run();
 
@@ -710,8 +724,7 @@ TEST_P(NdkVideoEncoderAcceleratorTest, EncodeSeveralFrames) {
   });
 
   auto status = accelerator_->Initialize(config, this, NullLog());
-  ASSERT_TRUE(status.is_ok())
-      << EncoderStatusCodeToString(status.code()) << " " << status.message();
+  ASSERT_TRUE(status.is_ok()) << MediaSerializeForTesting(status);
   SetCommandBufferHelper();
   Run();
 
@@ -736,6 +749,106 @@ TEST_P(NdkVideoEncoderAcceleratorTest, EncodeSeveralFrames) {
   // has a keyframe flag set to true, but because MediaCodec
   // is unreliable in inserting keyframes at our request we can't test
   // for it. In practice it usually works, just not always.
+
+  std::vector<uint8_t> stream;
+  for (auto& output : outputs_) {
+    auto& mapping = id_to_buffer_[output.id]->GetMapping();
+    EXPECT_GE(mapping.size(), output.md.payload_size_bytes);
+    EXPECT_GT(output.md.payload_size_bytes, 0u);
+    auto span =
+        mapping.GetMemoryAsSpan<uint8_t>().first(output.md.payload_size_bytes);
+    stream.insert(stream.end(), span.begin(), span.end());
+  }
+  ValidateStream(stream);
+}
+
+TEST_P(NdkVideoEncoderAcceleratorTest, ResizeOnEncode) {
+  auto config = GetDefaultConfig();
+  config.input_visible_size = gfx::Size(720, 576);
+  const std::vector<gfx::Size> frame_sizes = {
+      {320, 200}, {640, 480}, {720, 576}, {800, 600}, {1280, 720}};
+  const size_t total_frames_count = frame_sizes.size();
+
+  accelerator_ = MakeNdkAccelerator();
+  EXPECT_CALL(*this, OnRequireBuffer()).WillOnce(Return(false));
+  EXPECT_CALL(*this, OnBufferReady())
+      .WillRepeatedly([this, total_frames_count]() {
+        if (outputs_.size() < total_frames_count) {
+          return true;
+        }
+        return false;
+      });
+
+  auto status = accelerator_->Initialize(config, this, NullLog());
+  ASSERT_TRUE(status.is_ok()) << MediaSerializeForTesting(status);
+  SetCommandBufferHelper();
+  Run();
+
+  auto duration = base::Milliseconds(16);
+  for (auto frame_index = 0u; frame_index < total_frames_count; frame_index++) {
+    auto timestamp = frame_index * duration;
+    uint32_t color = random_color_.Rand() & 0x00FFFFFF;
+    auto frame =
+        CreateFrame(frame_sizes[frame_index], pixel_format_, timestamp, color);
+    if (GetParam().use_shared_image) {
+      frame = WrapInSharedImageFrame(frame);
+    }
+
+    accelerator_->Encode(frame, /*force_keyframe=*/false);
+  }
+
+  Run();
+  EXPECT_FALSE(error_status_.has_value());
+  EXPECT_GE(outputs_.size(), total_frames_count);
+
+  std::vector<uint8_t> stream;
+  for (auto& output : outputs_) {
+    auto& mapping = id_to_buffer_[output.id]->GetMapping();
+    EXPECT_GE(mapping.size(), output.md.payload_size_bytes);
+    EXPECT_GT(output.md.payload_size_bytes, 0u);
+    auto span =
+        mapping.GetMemoryAsSpan<uint8_t>().first(output.md.payload_size_bytes);
+    stream.insert(stream.end(), span.begin(), span.end());
+  }
+  ValidateStream(stream);
+}
+
+TEST_P(NdkVideoEncoderAcceleratorTest, EncodeWithTemporalLayers) {
+  if (codec_ != VideoCodec::kH264 && codec_ != VideoCodec::kVP9 &&
+      codec_ != VideoCodec::kAV1) {
+    GTEST_SKIP() << "SVC is only supported for H.264, VP9 and AV1.";
+  }
+
+  auto config = GetDefaultSvcConfig(/*num_temporal_layers=*/2);
+
+  const size_t total_frames_count = 10;
+  accelerator_ = MakeNdkAccelerator();
+  EXPECT_CALL(*this, OnRequireBuffer()).WillOnce(Return(false));
+  EXPECT_CALL(*this, OnBufferReady()).WillRepeatedly([this]() {
+    return outputs_.size() < total_frames_count;
+  });
+
+  auto status = accelerator_->Initialize(config, this, NullLog());
+  ASSERT_TRUE(status.is_ok()) << MediaSerializeForTesting(status);
+  SetCommandBufferHelper();
+  Run();
+
+  auto duration = base::Milliseconds(16);
+  for (auto frame_index = 0u; frame_index < total_frames_count; frame_index++) {
+    auto timestamp = frame_index * duration;
+    uint32_t color = random_color_.Rand() & 0x00FFFFFF;
+    auto frame =
+        CreateFrame(config.input_visible_size, pixel_format_, timestamp, color);
+    if (GetParam().use_shared_image) {
+      frame = WrapInSharedImageFrame(frame);
+    }
+    bool key_frame = (frame_index == 0);
+    accelerator_->Encode(frame, key_frame);
+  }
+
+  Run();
+  EXPECT_FALSE(error_status_.has_value());
+  EXPECT_GE(outputs_.size(), total_frames_count);
 
   std::vector<uint8_t> stream;
   for (auto& output : outputs_) {
@@ -798,8 +911,7 @@ TEST_P(NdkVideoEncoderAcceleratorE2ETest, EncodeAndDecode) {
   });
 
   auto status = accelerator_->Initialize(config, this, NullLog());
-  ASSERT_TRUE(status.is_ok())
-      << EncoderStatusCodeToString(status.code()) << " " << status.message();
+  ASSERT_TRUE(status.is_ok()) << MediaSerializeForTesting(status);
   SetCommandBufferHelper();
   Run();
 
@@ -837,9 +949,6 @@ TEST_P(NdkVideoEncoderAcceleratorE2ETest, EncodeAndDecode) {
 std::string PrintTestParams(const testing::TestParamInfo<VideoParams>& info) {
   auto result = GetProfileName(info.param.profile) + "__" +
                 VideoPixelFormatToString(info.param.pixel_format);
-  if (info.param.use_gl_surface) {
-    result += "__Surface";
-  }
   if (info.param.use_shared_image) {
     result += "__SharedImage";
   }
@@ -900,6 +1009,25 @@ TEST_P(NdkVideoEncoderAcceleratorTest, Histograms) {
   EXPECT_GT(latency_samples, 1u);
 }
 
+TEST_P(NdkVideoEncoderAcceleratorTest, SvcHistograms) {
+  if (codec_ != VideoCodec::kH264 && codec_ != VideoCodec::kVP9 &&
+      codec_ != VideoCodec::kAV1) {
+    GTEST_SKIP() << "SVC is only supported for H.264, VP9 and AV1.";
+  }
+
+  auto config = GetDefaultSvcConfig(/*num_temporal_layers=*/2);
+
+  accelerator_ = MakeNdkAccelerator();
+
+  base::HistogramTester histogram_tester;
+  std::ignore = accelerator_->Initialize(config, this, NullLog());
+  // We don't care if initialization fails; the capability histograms are logged
+  // before the hardware encoder configuration is actually attempted.
+
+  histogram_tester.ExpectTotalCount(
+      "Media.VideoEncoder.NDKVEA.TemporalLayerEncodingEnabled", 1);
+}
+
 std::vector<VideoParams> GenerateVariants(
     base::span<const VideoParams> params) {
   std::vector<VideoParams> result;
@@ -907,33 +1035,18 @@ std::vector<VideoParams> GenerateVariants(
     switch (param.pixel_format) {
       case PIXEL_FORMAT_I420:
         param.use_shared_image = false;
-        param.use_gl_surface = false;
         result.push_back(param);
         break;
       case PIXEL_FORMAT_NV12:
         param.use_shared_image = false;
-        param.use_gl_surface = false;
         result.push_back(param);
 
         param.use_shared_image = true;
-        param.use_gl_surface = false;
-        result.push_back(param);
-
-        param.use_shared_image = true;
-        param.use_gl_surface = true;
-        result.push_back(param);
-
-        param.use_shared_image = false;
-        param.use_gl_surface = true;
         result.push_back(param);
         break;
       case PIXEL_FORMAT_XBGR:
         // RGB always assumes shared image input
         param.use_shared_image = true;
-        param.use_gl_surface = false;
-        result.push_back(param);
-
-        param.use_gl_surface = true;
         result.push_back(param);
         break;
       default:
@@ -988,6 +1101,32 @@ INSTANTIATE_TEST_SUITE_P(E2ENdkEncoderTests,
                          NdkVideoEncoderAcceleratorE2ETest,
                          ::testing::ValuesIn(GenerateVariants(kE2EParams)),
                          PrintTestParams);
+
+TEST(NdkVideoEncoderLayersTest, SvcBitrateRatios) {
+  // Test 2 layers (0.6, 0.4).
+  std::vector<double> ratios2 =
+      NdkVideoEncodeAccelerator::GetDefaultSvcBitrateRatios(2);
+  ASSERT_EQ(ratios2.size(), 2u);
+  EXPECT_DOUBLE_EQ(ratios2[0], 0.6);
+  EXPECT_DOUBLE_EQ(ratios2[1], 0.4);
+  EXPECT_EQ(NdkVideoEncodeAccelerator::GetSvcBitrateRatiosString(ratios2),
+            "0.6");
+
+  // Test 3 layers (0.5, 0.2, 0.3).
+  std::vector<double> ratios3 =
+      NdkVideoEncodeAccelerator::GetDefaultSvcBitrateRatios(3);
+  ASSERT_EQ(ratios3.size(), 3u);
+  EXPECT_DOUBLE_EQ(ratios3[0], 0.5);
+  EXPECT_DOUBLE_EQ(ratios3[1], 0.2);
+  EXPECT_DOUBLE_EQ(ratios3[2], 0.3);
+  EXPECT_EQ(NdkVideoEncodeAccelerator::GetSvcBitrateRatiosString(ratios3),
+            "0.5;0.7");
+
+  // Test edge cases.
+  EXPECT_TRUE(NdkVideoEncodeAccelerator::GetDefaultSvcBitrateRatios(1).empty());
+  EXPECT_EQ(NdkVideoEncodeAccelerator::GetSvcBitrateRatiosString({}), "");
+  EXPECT_EQ(NdkVideoEncodeAccelerator::GetSvcBitrateRatiosString({0.5}), "");
+}
 
 }  // namespace media
 #pragma clang attribute pop

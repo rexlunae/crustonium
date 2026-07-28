@@ -42,11 +42,16 @@ class InfoBarContainerWithPriority : public InfoBarContainer {
   // InfoBarContainer overrides:
   void ChangeInfoBarManager(InfoBarManager* infobar_manager) override;
 
+  bool HasPendingInfoBars() const { return !pending_infobars_.empty(); }
+
  protected:
   // InfoBarContainer overrides:
   void OnInfoBarAdded(InfoBar* infobar) override;
   void OnInfoBarRemoved(InfoBar* infobar, bool animate) override;
   void OnInfoBarReplaced(InfoBar* old_infobar, InfoBar* new_infobar) override;
+
+  virtual size_t GetInfoBarPriorityCapFor(
+      InfoBarDelegate::InfobarPriority priority) const;
 
  private:
   // Represents the description of an infobar entry in the queue.

@@ -28,9 +28,11 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/child_process_id.h"
+#include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 
 namespace content {
+struct DropData;
 class NavigationHandle;
 class RenderFrameHost;
 }
@@ -237,8 +239,10 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // Returns the URL of the owner RenderFrameHost's last committed URL.
   const GURL& GetOwnerLastCommittedURL() const;
 
-  // Returns the URL of the owner RenderFrameHost's SiteInstance.
-  const GURL& GetOwnerSiteURL() const;
+  // Returns a URL representing the owner RenderFrameHost's origin, derived from
+  // its last committed origin. For opaque origins (e.g., sandboxed frames),
+  // uses the precursor tuple origin.
+  GURL GetOwnerSiteURL() const;
 
   // Returns the host of the owner WebContents. If the owner RenderFrameHost is
   // for an extension, returns the host of its URL, which is an extension ID. If
@@ -333,10 +337,11 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   content::RenderFrameHost* GetProspectiveOuterDocument() override;
 
   // WebContentsDelegate implementation.
+  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+      content::WebContents* source,
+      const input::NativeWebKeyboardEvent& event) override;
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
-  bool PreHandleGestureEvent(content::WebContents* source,
-                             const blink::WebGestureEvent& event) override;
 
   // WebContentsObserver implementation.
   void DidFinishNavigation(
@@ -497,6 +502,9 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   void UpdatePreferredSize(content::WebContents* web_contents,
                            const gfx::Size& pref_size) final;
   void UpdateTargetURL(content::WebContents* source, const GURL& url) final;
+  bool CanDragEnter(content::WebContents* source,
+                    const content::DropData& data,
+                    blink::DragOperationsMask operations_allowed) final;
   void DraggableRegionsChanged(
       const std::vector<blink::mojom::DraggableRegionPtr>& regions,
       content::WebContents* contents) final;

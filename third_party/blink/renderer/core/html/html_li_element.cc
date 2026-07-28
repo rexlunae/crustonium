@@ -50,23 +50,28 @@ bool HTMLLIElement::IsPresentationAttribute(const QualifiedName& name) const {
 }
 
 AtomicString ListTypeAttributeToStyleName(const AtomicString& value) {
-  if (value == "a")
-    return keywords::kLowerAlpha;
-  if (value == "A")
-    return keywords::kUpperAlpha;
-  if (value == "i")
-    return keywords::kLowerRoman;
-  if (value == "I")
-    return keywords::kUpperRoman;
-  if (value == "1")
-    return keywords::kDecimal;
-  if (EqualIgnoringASCIICase(value, keywords::kDisc)) {
+  if (value.length() == 1) {
+    switch (value[0]) {
+      case 'a':
+        return keywords::kLowerAlpha;
+      case 'A':
+        return keywords::kUpperAlpha;
+      case 'i':
+        return keywords::kLowerRoman;
+      case 'I':
+        return keywords::kUpperRoman;
+      case '1':
+        return keywords::kDecimal;
+    }
+    return g_null_atom;
+  }
+  if (EqualIgnoringAsciiCase(value, keywords::kDisc)) {
     return keywords::kDisc;
   }
-  if (EqualIgnoringASCIICase(value, keywords::kCircle)) {
+  if (EqualIgnoringAsciiCase(value, keywords::kCircle)) {
     return keywords::kCircle;
   }
-  if (EqualIgnoringASCIICase(value, keywords::kSquare)) {
+  if (EqualIgnoringAsciiCase(value, keywords::kSquare)) {
     return keywords::kSquare;
   }
   return g_null_atom;
@@ -77,7 +82,7 @@ void HTMLLIElement::CollectStyleForPresentationAttribute(
     const AtomicString& value,
     HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kTypeAttr) {
-    if (EqualIgnoringASCIICase(value, "none")) {
+    if (EqualIgnoringAsciiCase(value, keywords::kNone)) {
       AddPropertyToPresentationAttributeStyle(
           style, CSSPropertyID::kListStyleType, CSSValueID::kNone);
     } else {

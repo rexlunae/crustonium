@@ -21,8 +21,8 @@
     ],
   },
   observers: {
-    AdTracker: {
-      include_path: "third_party/blink/renderer/core/frame",
+    ScriptInitiationMonitor: {
+      include_path: "third_party/blink/renderer/core/ad_tracker",
       probes: [
         "CallFunction",
         "ExecuteScript",
@@ -73,6 +73,7 @@
       probes: [
         "ActiveStyleSheetsUpdated",
         "DidMutateStyleSheet",
+        "DidInvalidateStyleAttr",
         "GetTextPosition",
         "DocumentDetached",
         "FontsUpdated",
@@ -103,6 +104,7 @@
         "FrameOwnerContentUpdated",
         "NodeCreated",
         "UpdateScrollableFlag",
+        "UpdateAdRelatedState",
         "UpdateAffectedByStartingStylesFlag",
         "PseudoElementCreated",
         "TopLayerElementsChanged",
@@ -310,6 +312,15 @@
         "DidAddSpeculationRuleSet",
         "DidRemoveSpeculationRuleSet",
         "SpeculationCandidatesUpdated",
+      ]
+    },
+    InspectorWebMCPAgent: {
+      probes: [
+        "WebMCPToolAdded",
+        "WebMCPToolRemoved",
+        "WebMCPToolExecuted",
+        "WebMCPToolResponded",
+        "WebMCPToolFailed",
       ]
     },
     InspectorTraceEvents: {

@@ -7,6 +7,8 @@
 #include "third_party/blink/renderer/core/animation/scroll_timeline.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
@@ -23,7 +25,7 @@ void DeferredTimeline::AttachTimeline(ScrollTimeline* timeline) {
 
   wtf_size_t insertion_point = attached_timelines_.size();
 
-  if (RuntimeEnabledFeatures::CSSTimelineScopeGlobalEnabled()) {
+  if (RuntimeEnabledFeatures::CSSTimelineNameConflictResolutionEnabled()) {
     Element* reference_element = timeline->GetReferenceElement();
     // Only named ScrollTimelines and ViewTimelines produced by CSS
     // should be attached, and such timelines always have a reference element.
@@ -44,6 +46,11 @@ void DeferredTimeline::AttachTimeline(ScrollTimeline* timeline) {
   }
 
   attached_timelines_.insert(insertion_point, timeline);
+
+  if (attached_timelines_.size() > 1) {
+    UseCounter::Count(GetDocument(),
+                      WebFeature::kCSSTimelineScopeAttachedMultiple);
+  }
 
   if (original_timeline != EffectiveScrollTimeline()) {
     OnAttachedTimelineChange();
@@ -83,10 +90,11 @@ DeferredTimeline::TimelineState DeferredTimeline::ComputeTimelineState() const {
 }
 
 ScrollTimeline* DeferredTimeline::EffectiveScrollTimeline() {
-  if (!RuntimeEnabledFeatures::CSSTimelineScopeGlobalEnabled() &&
+  if (!RuntimeEnabledFeatures::CSSTimelineNameConflictResolutionEnabled() &&
       attached_timelines_.size() != 1u) {
     return nullptr;
   }
+
   // The item at back() is the last attached timeline in flat tree order.
   return attached_timelines_.empty() ? nullptr : attached_timelines_.back();
 }

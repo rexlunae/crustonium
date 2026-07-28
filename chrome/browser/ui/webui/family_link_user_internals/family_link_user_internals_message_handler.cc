@@ -8,8 +8,9 @@
 #include <string_view>
 #include <utility>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
-#include "base/memory/ref_counted.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -17,24 +18,23 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
-#include "chrome/common/channel_info.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/primary_account_change_event.h"
 #include "components/signin/public/identity_manager/tribool.h"
-#include "components/supervised_user/core/browser/child_account_service.h"
 #include "components/supervised_user/core/browser/family_link_settings_service.h"
-#include "components/supervised_user/core/browser/supervised_user_error_page.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
-#include "components/supervised_user/core/common/features.h"
+#include "components/supervised_user/core/common/pref_names.h"
 #include "components/url_formatter/url_fixer.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
-#include "google_apis/gaia/gaia_id.h"
+#include "extensions/buildflags/buildflags.h"
+#include "google_apis/gaia/google_service_auth_error.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -179,12 +179,12 @@ void FamilyLinkUserInternalsMessageHandler::RegisterMessages() {
 }
 
 void FamilyLinkUserInternalsMessageHandler::OnJavascriptDisallowed() {
-  url_filter_observation_.Reset();
+  url_filtering_service_observation_.Reset();
   identity_manager_observation_.Reset();
   weak_factory_.InvalidateWeakPtrs();
 }
 
-void FamilyLinkUserInternalsMessageHandler::OnURLFilterChanged() {
+void FamilyLinkUserInternalsMessageHandler::OnUrlFilteringServiceChanged() {
   SendBasicInfo();
 }
 
@@ -217,14 +217,7 @@ void FamilyLinkUserInternalsMessageHandler::OnAccountChanged() {
   SendBasicInfo();
 }
 
-supervised_user::SupervisedUserService*
-FamilyLinkUserInternalsMessageHandler::GetSupervisedUserService() {
-  Profile* profile = Profile::FromWebUI(web_ui());
-  return SupervisedUserServiceFactory::GetForProfile(
-      profile->GetOriginalProfile());
-}
-
-const supervised_user::SupervisedUserUrlFilteringService*
+supervised_user::SupervisedUserUrlFilteringService*
 FamilyLinkUserInternalsMessageHandler::GetSupervisedUserUrlFilteringService() {
   Profile* profile = Profile::FromWebUI(web_ui());
   return supervised_user::SupervisedUserUrlFilteringServiceFactory::
@@ -236,8 +229,10 @@ void FamilyLinkUserInternalsMessageHandler::HandleRegisterForEvents(
   CHECK(args.empty()) << "Expected call is (void)";
 
   AllowJavascript();
-  if (!url_filter_observation_.IsObserving()) {
-    url_filter_observation_.Observe(GetSupervisedUserService()->GetURLFilter());
+
+  if (!url_filtering_service_observation_.IsObserving()) {
+    url_filtering_service_observation_.Observe(
+        GetSupervisedUserUrlFilteringService());
   }
 
   Profile* profile = Profile::FromWebUI(web_ui());
@@ -290,12 +285,16 @@ void FamilyLinkUserInternalsMessageHandler::SendBasicInfo() {
   base::ListValue section_list;
   Profile* profile = Profile::FromWebUI(web_ui());
 
+  supervised_user::FamilyLinkSettingsService* settings_service =
+      supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
+          profile->GetProfileKey());
+
   base::ListValue* section_profile = AddSection(&section_list, "Profile");
   AddSectionEntry(section_profile, "Account", profile->GetProfileUserName());
 
   base::ListValue* section_filter = AddSection(&section_list, "Filter");
   AddSectionEntry(section_filter, "SafeSites enabled",
-                  supervised_user::IsSafeSitesEnabled(*profile->GetPrefs()));
+                  settings_service->IsSafeSitesEnabled());
   AddSectionEntry(
       section_filter, "Web filter type",
       WebFilterTypeToString(
@@ -319,35 +318,47 @@ void FamilyLinkUserInternalsMessageHandler::SendBasicInfo() {
          identity_manager
              ->GetExtendedAccountInfoForAccountsWithRefreshToken()) {
       base::ListValue* section_user = AddSection(
-          &section_list, "User Information for " + account.full_name);
+          &section_list, "User Information for " +
+                             std::string(account.GetFullName().value_or("")));
       AddSectionEntry(section_user, "Account id",
-                      account.account_id.ToString());
-      AddSectionEntry(section_user, "Gaia", account.gaia.ToString());
-      AddSectionEntry(section_user, "Email", account.email);
-      AddSectionEntry(section_user, "Given name", account.given_name);
+                      account.GetAccountId().ToString());
+      AddSectionEntry(section_user, "Gaia", account.GetGaiaId().ToString());
+      AddSectionEntry(section_user, "Email", account.GetEmail());
+      AddSectionEntry(section_user, "Given name",
+                      account.GetGivenName().value_or(""));
       AddSectionEntry(section_user, "Hosted domain",
                       GetHostedDomainString(account.GetHostedDomain()));
-      AddSectionEntry(section_user, "Locale", account.locale);
-      AddSectionEntry(
-          section_user, "Is subject to parental controls",
-          TriboolToString(
-              account.capabilities.is_subject_to_parental_controls()));
+      AddSectionEntry(section_user, "Locale", account.GetLocale().value_or(""));
+      AddSectionEntry(section_user, "Is subject to parental controls",
+                      TriboolToString(account.GetAccountCapabilities()
+                                          .is_subject_to_parental_controls()));
       AddSectionEntry(section_user, "Is valid", account.IsValid());
-      AddSectionEntry(
-          section_user, "Is subject to family link parental controls",
-          TriboolToString(
-              account.capabilities.is_subject_to_parental_controls()));
+      AddSectionEntry(section_user,
+                      "Is subject to family link parental controls",
+                      TriboolToString(account.GetAccountCapabilities()
+                                          .is_subject_to_parental_controls()));
     }
   }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  const base::DictValue& approved_extensions =
+      profile->GetPrefs()->GetDict(prefs::kSupervisedUserApprovedExtensions);
+  if (!approved_extensions.empty()) {
+    base::ListValue* section_extensions =
+        AddSection(&section_list, "Approved Extensions");
+    for (const auto&& [extension_id, version] : approved_extensions) {
+      AddSectionEntry(
+          section_extensions, extension_id,
+          version.is_string() ? version.GetString() : "unknown version");
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   base::DictValue result;
   result.Set("sections", std::move(section_list));
   FireWebUIListener("basic-info-received", result);
 
   // Trigger retrieval of the user settings
-  supervised_user::FamilyLinkSettingsService* settings_service =
-      supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
-          profile->GetProfileKey());
   user_settings_subscription_ =
       settings_service->SubscribeForSettingsChange(base::BindRepeating(
           &FamilyLinkUserInternalsMessageHandler::SendFamilyLinkUserSettings,
@@ -369,7 +380,7 @@ void FamilyLinkUserInternalsMessageHandler::OnTryURLResult(
   ResolveJavascriptCallback(base::Value(callback_id), result);
 }
 
-void FamilyLinkUserInternalsMessageHandler::OnURLChecked(
+void FamilyLinkUserInternalsMessageHandler::OnUrlChecked(
     supervised_user::WebFilteringResult filtering_result) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   base::DictValue result;

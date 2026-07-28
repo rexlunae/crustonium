@@ -4,22 +4,45 @@
 
 package org.chromium.chrome.browser.firstrun;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.metrics.ChangeMetricsReportingStateCalledFrom;
 import org.chromium.chrome.browser.metrics.UmaSessionStats;
 import org.chromium.ui.accessibility.AccessibilityState;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
 /** Provides first run related utility functions. */
 @NullMarked
 public class FirstRunUtils {
+    /** Arm variations for the Safety FRE promo field trial parameter. */
+    @IntDef({
+        SafetyFrePromoArm.UNDEFINED,
+        SafetyFrePromoArm.PASSWORD_MANAGER,
+        SafetyFrePromoArm.HISTORY_QUICK_DELETE,
+        SafetyFrePromoArm.PASSWORD_MANAGER_AND_HISTORY_QUICK_DELETE,
+        SafetyFrePromoArm.ANIMATED_ILLUSTRATION
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface SafetyFrePromoArm {
+        int UNDEFINED = 0;
+        int PASSWORD_MANAGER = 1;
+        int HISTORY_QUICK_DELETE = 2;
+        int PASSWORD_MANAGER_AND_HISTORY_QUICK_DELETE = 3;
+        int ANIMATED_ILLUSTRATION = 4;
+    }
+
     private static final int DEFAULT_SKIP_TOS_EXIT_DELAY_MS = 1000;
 
     private static boolean sDisableDelayOnExitFreForTest;
+    private static @Nullable Boolean sCctTosDialogEnabledForTesting;
 
     /**
      * Synchronizes first run native and Java preferences. Must be called after native
@@ -41,7 +64,7 @@ public class FirstRunUtils {
      *     collect stats.
      */
     static void acceptTermsOfService(boolean allowMetricsAndCrashUploading) {
-        UmaSessionStats.changeMetricsReportingConsent(
+        UmaSessionStats.changeMetricsReportingState(
                 allowMetricsAndCrashUploading, ChangeMetricsReportingStateCalledFrom.UI_FIRST_RUN);
         setEulaAccepted();
     }
@@ -63,14 +86,22 @@ public class FirstRunUtils {
      * @return Whether the ToS should be shown during the first-run for CCTs/PWAs.
      */
     public static boolean isCctTosDialogEnabled() {
+        if (sCctTosDialogEnabledForTesting != null) {
+            return sCctTosDialogEnabledForTesting;
+        }
         return FirstRunUtilsJni.get().getCctTosDialogEnabled();
+    }
+
+    public static void setCctTosDialogEnabledForTesting(boolean isEnabled) {
+        sCctTosDialogEnabledForTesting = isEnabled;
+        ResettersForTesting.register(() -> sCctTosDialogEnabledForTesting = null);
     }
 
     /**
      * The the number of ms delay before exiting FRE with policy. By default the delay would be
      * {@link #DEFAULT_SKIP_TOS_EXIT_DELAY_MS}, but we will get the recommended timeout from the
-     * AccessibilityState, which calculates a time based on currently running accessibility
-     * services and OS-level system settings.
+     * AccessibilityState, which calculates a time based on currently running accessibility services
+     * and OS-level system settings.
      *
      * @return The number of ms delay before exiting FRE with policy.
      */

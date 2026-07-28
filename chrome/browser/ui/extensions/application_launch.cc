@@ -23,21 +23,21 @@
 #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
 #include "chrome/browser/extensions/app_tab_helper.h"
 #include "chrome/browser/extensions/extension_util.h"
-#include "chrome/browser/extensions/file_handlers/file_handling_launch_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
 #include "chrome/browser/ui/extensions/web_file_handlers/multiclient_util.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
@@ -45,6 +45,7 @@
 #include "chrome/common/url_constants.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/webapps/browser/launch_queue/launch_params.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
@@ -69,6 +70,32 @@ using extensions::ExtensionRegistrar;
 using extensions::ExtensionRegistry;
 
 namespace {
+
+// Returns the most recently activated tabbed (TYPE_NORMAL) browser for
+// `profile`, filtered by `display_id` when it is not kInvalidDisplayId.
+// Browsers scheduled for deletion are excluded.
+BrowserWindowInterface* FindTabbedBrowser(Profile* profile,
+                                          int64_t display_id) {
+  BrowserWindowInterface* match = nullptr;
+  ProfileBrowserCollection::GetForProfile(profile)->ForEach(
+      [&match, display_id](BrowserWindowInterface* browser) {
+        if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
+            browser->IsDeleteScheduled()) {
+          return true;
+        }
+        if (display_id != display::kInvalidDisplayId &&
+            display::Screen::Get()
+                    ->GetDisplayNearestWindow(
+                        browser->GetWindow()->GetNativeWindow())
+                    .id() != display_id) {
+          return true;
+        }
+        match = browser;
+        return false;  // stop iterating
+      },
+      BrowserCollection::Order::kActivation);
+  return match;
+}
 
 // Attempts to launch an app, prompting the user to enable it if necessary.
 // This class manages its own lifetime.
@@ -201,6 +228,22 @@ ui::mojom::WindowShowState DetermineWindowShowState(
   return ui::mojom::WindowShowState::kDefault;
 }
 
+std::optional<webapps::LaunchParams> MaybeGetLaunchParams(
+    const apps::AppLaunchParams& params,
+    const Extension* extension,
+    const GURL& url) {
+  if (!extension ||
+      !extensions::WebFileHandlers::SupportsWebFileHandlers(*extension)) {
+    return std::nullopt;
+  }
+  webapps::LaunchParams launch_params;
+  launch_params.set_app_id(extension->id());
+  launch_params.set_target_url(url);
+  launch_params.set_paths(params.launch_files);
+  launch_params.set_started_new_navigation(true);
+  return launch_params;
+}
+
 WebContents* OpenApplicationTab(Profile* profile,
                                 const apps::AppLaunchParams& launch_params,
                                 const GURL& url) {
@@ -208,13 +251,13 @@ WebContents* OpenApplicationTab(Profile* profile,
   CHECK(extension);
   WindowOpenDisposition disposition = launch_params.disposition;
 
-  Browser* browser =
-      chrome::FindTabbedBrowser(profile, false, launch_params.display_id);
+  BrowserWindowInterface* browser =
+      FindTabbedBrowser(profile, launch_params.display_id);
   WebContents* contents = nullptr;
   if (browser) {
     // For existing browser, ensure its window is shown and activated.
-    browser->window()->Show();
-    browser->window()->Activate();
+    browser->GetWindow()->Show();
+    browser->GetWindow()->Activate();
   } else {
     // No browser for this profile, need to open a new one.
     if (Browser::GetCreationStatusForProfile(profile) !=
@@ -226,7 +269,7 @@ WebContents* OpenApplicationTab(Profile* profile,
     // system to here.
     browser = Browser::Create(
         Browser::CreateParams(Browser::TYPE_NORMAL, profile, true));
-    browser->window()->Show();
+    browser->GetWindow()->Show();
     // There's no current tab in this browser window, so add a new one.
     disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   }
@@ -243,11 +286,17 @@ WebContents* OpenApplicationTab(Profile* profile,
   NavigateParams params(browser, url, transition);
   params.tabstrip_add_types = add_type;
   params.disposition = disposition;
+  if (auto nav_launch_params =
+          MaybeGetLaunchParams(launch_params, extension, url)) {
+    params.web_app_navigation_data.emplace();
+    params.web_app_navigation_data->SetLaunchParams(
+        std::move(*nav_launch_params));
+  }
 
   if (disposition == WindowOpenDisposition::CURRENT_TAB) {
     WebContents* existing_tab =
-        browser->tab_strip_model()->GetActiveWebContents();
-    TabStripModel* model = browser->tab_strip_model();
+        browser->GetTabStripModel()->GetActiveWebContents();
+    TabStripModel* model = browser->GetTabStripModel();
     int tab_index = model->GetIndexOfWebContents(existing_tab);
 
     existing_tab->OpenURL(
@@ -260,7 +309,7 @@ WebContents* OpenApplicationTab(Profile* profile,
             disposition, transition, false),
         /*navigation_handle_callback=*/{});
     // Reset existing_tab as OpenURL() may have clobbered it.
-    existing_tab = browser->tab_strip_model()->GetActiveWebContents();
+    existing_tab = browser->GetTabStripModel()->GetActiveWebContents();
     if (params.tabstrip_add_types & AddTabTypes::ADD_PINNED) {
       model->SetTabPinned(tab_index, true);
       // Pinning may have moved the tab.
@@ -288,7 +337,7 @@ WebContents* OpenApplicationTab(Profile* profile,
   // the tab, but stay in full screen mode.  Should we leave full screen mode in
   // this case?
   if (launch_type == extensions::LaunchType::kFullscreen &&
-      !browser->window()->IsFullscreen()) {
+      !browser->GetWindow()->IsFullscreen()) {
     chrome::ToggleFullscreenMode(browser, /*user_initiated=*/false);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -367,11 +416,6 @@ WebContents* OpenEnabledApplicationHelper(Profile* profile,
       NOTREACHED();
   }
 
-  if (supports_web_file_handlers) {
-    extensions::EnqueueLaunchParamsInWebContents(tab, extension, url,
-                                                 params.launch_files);
-  }
-
   return tab;
 }
 
@@ -446,18 +490,14 @@ Browser* CreateApplicationWindow(Profile* profile,
   const Extension* const extension = GetExtension(profile, params);
 
   std::string app_name;
-  if (!params.override_app_name.empty()) {
-    app_name = params.override_app_name;
-  } else if (extension) {
+  if (extension) {
     app_name = web_app::GenerateApplicationNameFromAppId(extension->id());
   } else {
     app_name = web_app::GenerateApplicationNameFromURL(url);
   }
 
   gfx::Rect initial_bounds;
-  if (!params.override_bounds.IsEmpty()) {
-    initial_bounds = params.override_bounds;
-  } else if (extension) {
+  if (extension) {
     initial_bounds.set_width(
         extensions::AppLaunchInfo::GetLaunchWidth(extension));
     initial_bounds.set_height(
@@ -490,14 +530,21 @@ WebContents* NavigateApplicationWindow(Browser* browser,
                                        const apps::AppLaunchParams& params,
                                        const GURL& url,
                                        WindowOpenDisposition disposition) {
-  const Extension* const extension = GetExtension(browser->profile(), params);
+  const Extension* const extension =
+      GetExtension(browser->GetProfile(), params);
   ui::PageTransition transition =
       (extension ? ui::PAGE_TRANSITION_AUTO_BOOKMARK
                  : ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
 
   NavigateParams nav_params(browser, url, transition);
   nav_params.disposition = disposition;
-  nav_params.pwa_navigation_capturing_force_off = true;
+  webapps::NavigationData web_app_navigation_data;
+  nav_params.web_app_navigation_data.emplace();
+  nav_params.web_app_navigation_data->SetNavigationCapturingForceOff(true);
+  if (auto nav_launch_params = MaybeGetLaunchParams(params, extension, url)) {
+    nav_params.web_app_navigation_data->SetLaunchParams(
+        *std::move(nav_launch_params));
+  }
   Navigate(&nav_params);
 
   WebContents* const web_contents = nav_params.navigated_or_inserted_contents;
@@ -525,7 +572,7 @@ WebContents* OpenApplicationWindow(Profile* profile,
   WebContents* web_contents = NavigateApplicationWindow(
       browser, params, url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
 
-  browser->window()->Show();
+  browser->GetWindow()->Show();
   return web_contents;
 }
 
@@ -586,7 +633,8 @@ void LaunchAppWithCallback(
         apps::OpenExtensionApplicationTab(profile, app_id);
     if (app_tab) {
       container = apps::LaunchContainer::kLaunchContainerTab;
-      app_browser = chrome::FindBrowserWithTab(app_tab);
+      app_browser =
+          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(app_tab);
     } else {
       // Open an empty browser window as the app_id is invalid.
       app_browser = apps::CreateBrowserWithNewTabPage(profile);

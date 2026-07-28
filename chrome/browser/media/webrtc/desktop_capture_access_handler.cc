@@ -28,7 +28,6 @@
 #include "chrome/browser/ui/screen_capture_notification_ui.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
@@ -56,8 +55,8 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -109,9 +108,11 @@ bool HasNotificationExemption(const GURL& url) {
 // Find browser or app window from a given |web_contents|.
 gfx::NativeWindow FindParentWindowForWebContents(
     content::WebContents* web_contents) {
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
-  if (browser && browser->window())
-    return browser->window()->GetNativeWindow();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
+  if (browser && browser->GetWindow()) {
+    return browser->GetWindow()->GetNativeWindow();
+  }
 
   const extensions::AppWindowRegistry::AppWindowList& window_list =
       extensions::AppWindowRegistry::Get(web_contents->GetBrowserContext())
@@ -294,7 +295,7 @@ void DesktopCaptureAccessHandler::ProcessScreenCaptureAccessRequest(
               pending_request->request.render_frame_id))) {
     std::move(pending_request->callback)
         .Run(blink::mojom::StreamDevicesSet(),
-             MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
+             MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN_OTHER,
              /*ui=*/nullptr);
     return;
   }
@@ -432,7 +433,7 @@ void DesktopCaptureAccessHandler::HandleRequest(
   if (!main_frame) {
     std::move(pending_request->callback)
         .Run(blink::mojom::StreamDevicesSet(),
-             MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
+             MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN_OTHER,
              /*ui=*/nullptr);
     return;
   }
@@ -567,6 +568,20 @@ void DesktopCaptureAccessHandler::ProcessQueuedAccessRequest(
 
   const PendingAccessRequest& pending_request = *queue.front();
 
+  content::RenderFrameHost* const rfh = content::RenderFrameHost::FromID(
+      pending_request.request.render_process_id,
+      pending_request.request.render_frame_id);
+  if (!rfh || !rfh->IsActive()) {
+    RejectRequest(web_contents, blink::mojom::MediaStreamRequestResult::
+                                    FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_HANDLER);
+    return;
+  }
+  if (rfh->GetLastCommittedOrigin() != pending_request.request.url_origin) {
+    RejectRequest(web_contents,
+                  blink::mojom::MediaStreamRequestResult::INVALID_STATE);
+    return;
+  }
+
   if (!pending_request.picker) {
     DCHECK(!pending_request.request.requested_video_device_ids.empty());
     content::WebContentsMediaCaptureId web_contents_id;
@@ -593,7 +608,7 @@ void DesktopCaptureAccessHandler::ProcessQueuedAccessRequest(
 
   auto source_lists = picker_factory_->CreateMediaList(
       {DesktopMediaList::Type::kWebContents}, web_contents,
-      std::move(includable_web_contents_filter));
+      includable_web_contents_filter);
 
   // base::Unretained(this) is safe because DesktopCaptureAccessHandler is owned
   // by MediaCaptureDevicesDispatcher, which is a lazy singleton which is
@@ -638,6 +653,31 @@ void DesktopCaptureAccessHandler::ProcessQueuedAccessRequest(
     delegate->ActivateContents(web_contents);
 }
 
+void DesktopCaptureAccessHandler::RejectRequest(
+    content::WebContents* web_contents,
+    blink::mojom::MediaStreamRequestResult result) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  DCHECK(web_contents);
+
+  auto it = pending_requests_.find(web_contents);
+  if (it == pending_requests_.end()) {
+    return;
+  }
+  RequestsQueue& mutable_queue = it->second;
+  if (mutable_queue.empty()) {
+    return;
+  }
+  PendingAccessRequest& mutable_request = *mutable_queue.front();
+  if (mutable_request.callback) {
+    std::move(mutable_request.callback)
+        .Run(blink::mojom::StreamDevicesSet(), result, /*ui=*/nullptr);
+  }
+  mutable_queue.pop_front();
+  if (!mutable_queue.empty()) {
+    ProcessQueuedAccessRequest(mutable_queue, web_contents);
+  }
+}
+
 void DesktopCaptureAccessHandler::OnPickerDialogResults(
     base::WeakPtr<content::WebContents> web_contents,
     const std::u16string& application_title,
@@ -667,9 +707,11 @@ void DesktopCaptureAccessHandler::OnPickerDialogResults(
   queue.pop_front();
 
   if (!result.has_value()) {
-    std::move(pending_request->callback)
-        .Run(blink::mojom::StreamDevicesSet(), result.error(),
-             /*ui=*/nullptr);
+    if (pending_request->callback) {
+      std::move(pending_request->callback)
+          .Run(blink::mojom::StreamDevicesSet(), result.error(),
+               /*ui=*/nullptr);
+    }
   } else {
     const content::DesktopMediaID media_id = result.value();
     CHECK(!media_id.is_null());
@@ -771,8 +813,10 @@ void DesktopCaptureAccessHandler::OnDesktopCaptureDevicesObtained(
   stream_devices_set.stream_devices.emplace_back(
       blink::mojom::StreamDevices::New());
   *(stream_devices_set.stream_devices[0]) = std::move(devices);
-  std::move(pending_request->callback)
-      .Run(stream_devices_set, MediaStreamRequestResult::OK, std::move(ui));
+  if (pending_request->callback) {
+    std::move(pending_request->callback)
+        .Run(stream_devices_set, MediaStreamRequestResult::OK, std::move(ui));
+  }
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -791,10 +835,12 @@ void DesktopCaptureAccessHandler::OnDlpRestrictionChecked(
   }
 
   if (!is_dlp_allowed) {
-    std::move(pending_request->callback)
-        .Run(blink::mojom::StreamDevicesSet(),
-             MediaStreamRequestResult::DLP_PERMISSION_DENIED,
-             /*ui=*/nullptr);
+    if (pending_request->callback) {
+      std::move(pending_request->callback)
+          .Run(blink::mojom::StreamDevicesSet(),
+               MediaStreamRequestResult::DLP_PERMISSION_DENIED,
+               /*ui=*/nullptr);
+    }
     return;
   }
 

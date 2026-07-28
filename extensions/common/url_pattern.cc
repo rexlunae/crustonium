@@ -123,12 +123,9 @@ std::string_view StripTrailingWildcard(std::string_view path) {
   return path;
 }
 
-// Removes trailing dot from |host_piece| if any.
+// Removes trailing dot(s) from |host_piece| if any.
 std::string_view CanonicalizeHostForMatching(std::string_view host_piece) {
-  if (base::EndsWith(host_piece, ".")) {
-    host_piece.remove_suffix(1);
-  }
-  return host_piece;
+  return base::TrimString(host_piece, ".", base::TRIM_TRAILING);
 }
 
 }  // namespace
@@ -396,8 +393,8 @@ bool URLPattern::IsValidScheme(std::string_view scheme) const {
   }
 
   for (size_t i = 0; i < std::size(kValidSchemes); ++i) {
-    if (scheme == kValidSchemes[i] && (valid_schemes_ & kValidSchemeMasks[i])) {
-      return true;
+    if (scheme == kValidSchemes[i]) {
+      return valid_schemes_ & kValidSchemeMasks[i];
     }
   }
 
@@ -699,7 +696,17 @@ std::optional<URLPattern> URLPattern::CreateIntersection(
       }
       URLPattern result(intersection_schemes);
       ParseResult parse_result = result.Parse(copy_source->GetAsString());
-      CHECK_EQ(ParseResult::kSuccess, parse_result);
+      // It is possible for parsing to fail if the intersected scheme mask
+      // excludes the scheme present in `copy_source`. For example, this happens
+      // when taking the intersection of policy-allowed hosts and the hosts on
+      // the extension's permissions data, and the policy pattern corresponds
+      // to a scheme that isn't present in the intersected schemes (like an
+      // extension without extension scheme access intersecting with a policy
+      // allowing an extension scheme URL). In this case, the intersection is
+      // empty.
+      if (parse_result != ParseResult::kSuccess) {
+        return std::nullopt;
+      }
       return result;
     }
   }

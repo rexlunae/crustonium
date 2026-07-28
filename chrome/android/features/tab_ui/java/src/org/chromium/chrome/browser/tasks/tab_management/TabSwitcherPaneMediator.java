@@ -5,26 +5,18 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.tasks.tab_management.TabListContainerProperties.ANIMATE_SUPPLEMENTARY_CONTAINER;
 import static org.chromium.chrome.browser.tasks.tab_management.TabListContainerProperties.BLOCK_TOUCH_INPUT;
 import static org.chromium.chrome.browser.tasks.tab_management.TabListContainerProperties.FOCUS_TAB_INDEX_FOR_ACCESSIBILITY;
 import static org.chromium.chrome.browser.tasks.tab_management.TabListContainerProperties.INITIAL_SCROLL_INDEX;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ObjectAnimator;
-import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
-
-import androidx.annotation.NonNull;
-import androidx.annotation.Px;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ValueChangedCallback;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
@@ -37,35 +29,32 @@ import org.chromium.chrome.browser.hub.HubUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherCustomViewManager;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tasks.tab_management.PriceMessageService.PriceWelcomeMessageReviewActionProvider;
+import org.chromium.chrome.browser.tasks.tab_management.TabActionButtonData.TabActionButtonType;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridDialogMediator.DialogController;
+import org.chromium.chrome.browser.tasks.tab_management.TabListContainerProperties.SupplementaryContainerAnimationMetadata;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorCoordinator.TabListEditorController;
-import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.GridCardOnClickListenerProvider;
-import org.chromium.chrome.browser.tasks.tab_management.pinned_tabs_strip.PinnedTabStripUtils;
-import org.chromium.chrome.tab_ui.R;
+import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.TabListItemOnClickListenerProvider;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
-import org.chromium.ui.animation.AnimationHandler;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /** Mediator for {@link TabSwitcherPaneCoordinator}. */
 @NullMarked
 public class TabSwitcherPaneMediator
-        implements GridCardOnClickListenerProvider,
+        implements TabListItemOnClickListenerProvider,
                 PriceWelcomeMessageReviewActionProvider,
                 TabSwitcherCustomViewManager.Delegate,
                 BackPressHandler {
-
-    private static final int PINNED_TABS_SEARCH_BOX_DURATION_MS = 250;
     private final SettableNonNullObservableSupplier<Boolean> mBackPressChangedSupplier =
             ObservableSuppliers.createNonNull(false);
     private final SettableNonNullObservableSupplier<Boolean> mIsDialogVisibleSupplier =
@@ -84,8 +73,8 @@ public class TabSwitcherPaneMediator
                     // Intentional no-op.
                 }
             };
-    private final Callback<TabGroupModelFilter> mOnTabGroupModelFilterChanged =
-            new ValueChangedCallback<>(this::onTabGroupModelFilterChanged);
+    private final Callback<TabModel> mOnTabModelChanged =
+            new ValueChangedCallback<>(this::onTabModelChanged);
     private final Callback<Boolean> mOnDialogShowingOrAnimatingCallback =
             this::onDialogShowingOrAnimatingChanged;
 
@@ -155,7 +144,7 @@ public class TabSwitcherPaneMediator
 
     private final Context mContext;
     private final TabSwitcherResetHandler mResetHandler;
-    private final MonotonicObservableSupplier<TabGroupModelFilter> mTabGroupModelFilterSupplier;
+    private final MonotonicObservableSupplier<TabModel> mTabModelSupplier;
     private final LazyOneshotSupplier<DialogController> mTabGridDialogControllerSupplier;
     private final PropertyModel mContainerViewModel;
     private final ViewGroup mContainerView;
@@ -166,27 +155,21 @@ public class TabSwitcherPaneMediator
     private final TabIndexLookup mTabIndexLookup;
     private final BottomSheetController mBottomSheetController;
     private final Runnable mAddOnLayoutChangedAfterInitialScrollListener;
-    private final AnimationHandler mSupplementaryContainerAnimationHandler = new AnimationHandler();
     private @Nullable MonotonicObservableSupplier<TabListEditorController>
             mTabListEditorControllerSupplier;
     private final SettableNonNullObservableSupplier<Boolean> mHubSearchBoxVisibilitySupplier;
-    private final SettableNonNullObservableSupplier<Boolean> mManualSearchBoxAnimationSupplier =
-            ObservableSuppliers.createNonNull(false);
-    private final SettableNonNullObservableSupplier<Float> mSearchBoxVisibilityFractionSupplier =
-            ObservableSuppliers.createNonNull(0.0f);
     private @Nullable NonNullObservableSupplier<Boolean>
             mCurrentTabListEditorControllerBackSupplier;
     private @Nullable View mCustomView;
     private @Nullable Runnable mCustomViewBackPressRunnable;
-    private final @Px int mSearchBoxGapPx;
 
     private boolean mTryToShowOnFilterChanged;
 
     /**
      * @param context The context for retrieving resources.
      * @param resetHandler The reset handler for updating the {@link TabListCoordinator}.
-     * @param tabGroupModelFilterSupplier The supplier of the {@link TabGroupModelFilter}. This
-     *     should usually only ever be set once.
+     * @param tabModelSupplier The supplier of the {@link TabModel}. This should usually only ever
+     *     be set once.
      * @param tabGridDialogControllerSupplier The supplier of the {@link DialogController}.
      * @param containerViewModel The {@link PropertyModel} for the {@link TabListRecyclerView}.
      * @param containerView The view that hosts the {@link TabListRecyclerView}.
@@ -204,7 +187,7 @@ public class TabSwitcherPaneMediator
     public TabSwitcherPaneMediator(
             Context context,
             TabSwitcherResetHandler resetHandler,
-            MonotonicObservableSupplier<TabGroupModelFilter> tabGroupModelFilterSupplier,
+            MonotonicObservableSupplier<TabModel> tabModelSupplier,
             LazyOneshotSupplier<DialogController> tabGridDialogControllerSupplier,
             PropertyModel containerViewModel,
             ViewGroup containerView,
@@ -220,19 +203,19 @@ public class TabSwitcherPaneMediator
         mResetHandler = resetHandler;
         mTabIndexLookup = tabIndexLookup;
         mOnTabClickCallback = onTabClickCallback;
-        mTabGroupModelFilterSupplier = tabGroupModelFilterSupplier;
-        var filter = mTabGroupModelFilterSupplier.addObserver(mOnTabGroupModelFilterChanged);
-        mTryToShowOnFilterChanged = filter == null || !filter.isTabModelRestored();
+        mTabModelSupplier = tabModelSupplier;
+        var tabModel = mTabModelSupplier.addSyncObserverAndPostIfNonNull(mOnTabModelChanged);
+        mTryToShowOnFilterChanged = tabModel == null || !tabModel.isTabModelRestored();
 
         mTabGridDialogControllerSupplier = tabGridDialogControllerSupplier;
         tabGridDialogControllerSupplier.onAvailable(
                 tabGridDialogController -> {
                     tabGridDialogController
                             .getHandleBackPressChangedSupplier()
-                            .addObserver(mNotifyBackPressedCallback);
+                            .addSyncObserverAndPostIfNonNull(mNotifyBackPressedCallback);
                     tabGridDialogController
                             .getShowingOrAnimationSupplier()
-                            .addObserver(mOnDialogShowingOrAnimatingCallback);
+                            .addSyncObserverAndPostIfNonNull(mOnDialogShowingOrAnimatingCallback);
                 });
 
         mContainerViewModel = containerViewModel;
@@ -244,15 +227,14 @@ public class TabSwitcherPaneMediator
         mOnTabSwitcherShown = onTabSwitcherShown;
 
         mIsVisibleSupplier = isVisibleSupplier;
-        isVisibleSupplier.addObserver(mOnVisibilityChanged);
+        isVisibleSupplier.addSyncObserverAndPostIfNonNull(mOnVisibilityChanged);
         mIsAnimatingSupplier = isAnimatingSupplier;
-        isAnimatingSupplier.addObserver(mOnAnimatingChanged);
+        isAnimatingSupplier.addSyncObserverAndPostIfNonNull(mOnAnimatingChanged);
         mBottomSheetController = bottomSheetController;
         mBottomSheetController.addObserver(mBottomSheetObserver);
         mAddOnLayoutChangedAfterInitialScrollListener =
                 addOnLayoutChangedAfterInitialScrollListener;
         mHubSearchBoxVisibilitySupplier = hubSearchBoxVisibilitySupplier;
-        mSearchBoxGapPx = mContext.getResources().getDimensionPixelSize(R.dimen.hub_search_box_gap);
 
         notifyBackPressStateChangedInternal();
     }
@@ -260,8 +242,8 @@ public class TabSwitcherPaneMediator
     /** Destroys the mediator unregistering all its observers. */
     public void destroy() {
         hideDialogs();
-        mTabGroupModelFilterSupplier.removeObserver(mOnTabGroupModelFilterChanged);
-        removeTabModelObserver(mTabGroupModelFilterSupplier.get());
+        mTabModelSupplier.removeObserver(mOnTabModelChanged);
+        removeTabModelObserver(mTabModelSupplier.get());
 
         mIsVisibleSupplier.removeObserver(mOnVisibilityChanged);
         mIsAnimatingSupplier.removeObserver(mOnAnimatingChanged);
@@ -287,18 +269,18 @@ public class TabSwitcherPaneMediator
 
     /** Requests accessibility focus on the currently selected tab. */
     public void requestAccessibilityFocusOnCurrentTab() {
-        TabGroupModelFilter filter = mTabGroupModelFilterSupplier.get();
-        assumeNonNull(filter);
+        TabModel tabModel = mTabModelSupplier.get();
+        assumeNonNull(tabModel);
         mContainerViewModel.set(
-                FOCUS_TAB_INDEX_FOR_ACCESSIBILITY, filter.getCurrentRepresentativeTabIndex());
+                FOCUS_TAB_INDEX_FOR_ACCESSIBILITY, tabModel.getCurrentRepresentativeTabIndex());
     }
 
     /** Scrolls to the currently selected tab. */
     public void setInitialScrollIndexOffset() {
-        TabGroupModelFilter filter = mTabGroupModelFilterSupplier.get();
-        assumeNonNull(filter);
+        TabModel tabModel = mTabModelSupplier.get();
+        assumeNonNull(tabModel);
         scrollToTab(
-                mTabIndexLookup.getNthTabIndexInModel(filter.getCurrentRepresentativeTabIndex()));
+                mTabIndexLookup.getNthTabIndexInModel(tabModel.getCurrentRepresentativeTabIndex()));
     }
 
     @Override
@@ -313,7 +295,7 @@ public class TabSwitcherPaneMediator
         }
 
         if (mIsAnimatingSupplier.get()) {
-            // crbug.com/1420410: intentionally do nothing to wait for tab-to-GTS transition to be
+            // crbug.com/40063303: intentionally do nothing to wait for tab-to-GTS transition to be
             // finished. Note this has to be before following if-branch since during transition, the
             // container is still invisible. On tablet, the translation transition replaces the
             // tab-to-GTS (expand/shrink) animation, which does not suffer from the same issue.
@@ -341,13 +323,13 @@ public class TabSwitcherPaneMediator
     }
 
     @Override
-    public @Nullable TabActionListener openTabGridDialog(Tab tab) {
+    public @Nullable TabActionListener onTabGroupClicked(Tab tab) {
         if (!ableToOpenDialog(tab)) return null;
         return mTabGridDialogOpener;
     }
 
     @Override
-    public @Nullable TabActionListener openTabGridDialog(String syncId) {
+    public @Nullable TabActionListener onTabGroupClicked(String syncId) {
         // Intentional no-op.
         return null;
     }
@@ -358,6 +340,20 @@ public class TabSwitcherPaneMediator
     }
 
     @Override
+    public @Nullable Boolean isTabGroupSelected(Tab tab, PropertyModel model) {
+        return null;
+    }
+
+    @Override
+    public @Nullable TabActionButtonData getTabGroupActionButtonData(
+            Tab tab,
+            PropertyModel model,
+            Supplier<TabActionListener> defaultOverflowListenerSupplier) {
+        return new TabActionButtonData(
+                TabActionButtonType.OVERFLOW, defaultOverflowListenerSupplier.get());
+    }
+
+    @Override
     public void scrollToTab(int tabIndexInModel) {
         mAddOnLayoutChangedAfterInitialScrollListener.run();
         mContainerViewModel.set(INITIAL_SCROLL_INDEX, tabIndexInModel);
@@ -365,18 +361,13 @@ public class TabSwitcherPaneMediator
 
     /** Scroll to a given tab or tab group by id. */
     public void scrollToTabById(int tabId) {
-        TabGroupModelFilter filter = mTabGroupModelFilterSupplier.get();
-        assumeNonNull(filter);
-        TabModel tabModel = filter.getTabModel();
+        TabModel tabModel = mTabModelSupplier.get();
+        assumeNonNull(tabModel);
         Tab tab = tabModel.getTabById(tabId);
 
-        // TODO(crbug.com/375309394): Figure out why the tab is null here and prevent it.
-        boolean hasTab = tab != null;
-        RecordHistogram.recordBooleanHistogram(
-                "Tabs.GridTabSwitcher.ScrollToTabById.HasTab", hasTab);
-        if (!hasTab) return;
+        if (tab == null) return;
 
-        int index = filter.representativeIndexOf(tab);
+        int index = tabModel.representativeIndexOf(tab);
         scrollToTab(mTabIndexLookup.getNthTabIndexInModel(index));
     }
 
@@ -414,7 +405,8 @@ public class TabSwitcherPaneMediator
         mCurrentTabListEditorControllerBackSupplier =
                 tabListEditorControllerSupplier.createTransitiveNonNull(
                         false, BackPressHandler::getHandleBackPressChangedSupplier);
-        mCurrentTabListEditorControllerBackSupplier.addObserver(mNotifyBackPressedCallback);
+        mCurrentTabListEditorControllerBackSupplier.addSyncObserverAndPostIfNonNull(
+                mNotifyBackPressedCallback);
     }
 
     void hideDialogs() {
@@ -435,71 +427,13 @@ public class TabSwitcherPaneMediator
 
     /** Translates the pinned strip to make space for the search box. */
     void maybeTranslatePinnedStrip(boolean shouldShowSearchBox, boolean forced) {
-        // Show search box always when screen size is less than tablet and search box movement is
-        // disabled.
-        if (!PinnedTabStripUtils.isSearchBoxMovementEnabledForPinnedTabs()) {
-            shouldShowSearchBox = true;
-        }
-
         Configuration config = mContext.getResources().getConfiguration();
         boolean isTabletOrLandscape = HubUtils.isScreenWidthTablet(config.screenWidthDp);
         boolean shouldShow = shouldShowSearchBox && !isTabletOrLandscape;
 
-        animateSupplementaryDataContainer(shouldShow, forced);
-    }
-
-    private void animateSupplementaryDataContainer(boolean isSearchBoxVisible, boolean forced) {
-        // Early out if the animation is already running.
-        if (mSupplementaryContainerAnimationHandler.isAnimationPresent()) return;
-
-        LinearLayout supplementaryDataContainer =
-                mContainerView.findViewById(R.id.supplementary_data_container);
-        if (supplementaryDataContainer == null) return;
-
-        int translationHeight = isSearchBoxVisible ? mSearchBoxGapPx : 0;
-
-        // Early out if we are already in the correct state.
-        if (!forced
-                && isSearchBoxVisible
-                && supplementaryDataContainer.getTranslationY() == translationHeight) {
-            return;
-        }
-
-        // TODO(crbug.com/455919135): Move view manipulation to View binder with relevant property.
-        ValueAnimator translateAnimator =
-                ObjectAnimator.ofFloat(
-                        supplementaryDataContainer,
-                        View.TRANSLATION_Y,
-                        supplementaryDataContainer.getTranslationY(),
-                        translationHeight);
-        translateAnimator.setDuration(PINNED_TABS_SEARCH_BOX_DURATION_MS);
-        translateAnimator.addListener(
-                new AnimatorListenerAdapter() {
-                    @Override
-                    public void onAnimationStart(Animator animation) {
-                        setManualSearchBoxAnimation(true);
-                        if (isSearchBoxVisible) {
-                            setHubSearchBoxVisibility(true);
-                        }
-                    }
-
-                    @Override
-                    public void onAnimationEnd(@NonNull Animator animation, boolean isReverse) {
-                        if (!isSearchBoxVisible) {
-                            setHubSearchBoxVisibility(false);
-                        }
-                        setManualSearchBoxAnimation(false);
-                    }
-                });
-
-        translateAnimator.addUpdateListener(
-                animation -> {
-                    float translation = (float) animation.getAnimatedValue();
-                    float fraction = mSearchBoxGapPx > 0 ? translation / mSearchBoxGapPx : 0f;
-                    setSearchBoxVisibilityFraction(fraction);
-                });
-
-        mSupplementaryContainerAnimationHandler.startAnimation(translateAnimator);
+        mContainerViewModel.set(
+                ANIMATE_SUPPLEMENTARY_CONTAINER,
+                new SupplementaryContainerAnimationMetadata(shouldShow, forced));
     }
 
     /**
@@ -513,15 +447,13 @@ public class TabSwitcherPaneMediator
     }
 
     private boolean ableToOpenDialog(Tab tab) {
-        TabGroupModelFilter filter = mTabGroupModelFilterSupplier.get();
-        assumeNonNull(filter);
-        return filter.getTabModel().isIncognito() == tab.isIncognito()
-                && filter.isTabInTabGroup(tab);
+        TabModel tabModel = mTabModelSupplier.get();
+        assumeNonNull(tabModel);
+        return tabModel.isIncognito() == tab.isIncognito() && tabModel.isTabInTabGroup(tab);
     }
 
     public void openTabGroupDialog(int tabId) {
-        List<Tab> relatedTabs =
-                assumeNonNull(mTabGroupModelFilterSupplier.get()).getRelatedTabList(tabId);
+        List<Tab> relatedTabs = assumeNonNull(mTabModelSupplier.get()).getRelatedTabList(tabId);
         if (relatedTabs.size() == 0) {
             relatedTabs = null;
         }
@@ -570,23 +502,22 @@ public class TabSwitcherPaneMediator
         return !supplier.hasValue() ? null : supplier.get();
     }
 
-    private void removeTabModelObserver(@Nullable TabGroupModelFilter filter) {
-        if (filter == null) return;
+    private void removeTabModelObserver(@Nullable TabModel tabModel) {
+        if (tabModel == null) return;
 
-        filter.removeObserver(mTabModelObserver);
+        tabModel.removeObserver(mTabModelObserver);
     }
 
-    private void onTabGroupModelFilterChanged(
-            TabGroupModelFilter newFilter, @Nullable TabGroupModelFilter oldFilter) {
-        removeTabModelObserver(oldFilter);
+    private void onTabModelChanged(TabModel newTabModel, @Nullable TabModel oldTabModel) {
+        removeTabModelObserver(oldTabModel);
 
-        if (newFilter != null) {
-            newFilter.addObserver(mTabModelObserver);
+        if (newTabModel != null) {
+            newTabModel.addObserver(mTabModelObserver);
             // The tab model may already be restored and `restoreCompleted` will be skipped, but
             // this pane is visible. To avoid an empty state, try to show tabs now.
             // `resetWithListOfTabs` will skip in the case the tab model is not initialized so this
             // will no-op if it is racing with `restoreCompleted`. Only do this if in the
-            // constructor there was no TabGroupModelFilter or it wasn't initialized.
+            // constructor there was no TabModel or it wasn't initialized.
             if (mTryToShowOnFilterChanged) {
                 showTabsIfVisible();
                 mTryToShowOnFilterChanged = false;
@@ -634,32 +565,12 @@ public class TabSwitcherPaneMediator
     private void showTabsIfVisible() {
         if (mIsVisibleSupplier.get()) {
             mResetHandler.resetWithListOfTabs(
-                    assumeNonNull(mTabGroupModelFilterSupplier.get()).getRepresentativeTabList());
+                    assumeNonNull(mTabModelSupplier.get()).getRepresentativeTabList());
             setInitialScrollIndexOffset();
         }
     }
 
     private void suppressAccessibility(boolean suppress) {
         mContainerViewModel.set(TabListContainerProperties.SUPPRESS_ACCESSIBILITY, suppress);
-    }
-
-    /** Returns whether the search box animation is manual. */
-    NonNullObservableSupplier<Boolean> getManualSearchBoxAnimationSupplier() {
-        return mManualSearchBoxAnimationSupplier;
-    }
-
-    /** Returns a fraction for the manual search box animation. */
-    NonNullObservableSupplier<Float> getSearchBoxVisibilityFractionSupplier() {
-        return mSearchBoxVisibilityFractionSupplier;
-    }
-
-    /** Sets whether the search box animation is manual. */
-    private void setManualSearchBoxAnimation(boolean manual) {
-        mManualSearchBoxAnimationSupplier.set(manual);
-    }
-
-    /** Sets the search box visibility fraction. */
-    private void setSearchBoxVisibilityFraction(float fraction) {
-        mSearchBoxVisibilityFractionSupplier.set(fraction);
     }
 }

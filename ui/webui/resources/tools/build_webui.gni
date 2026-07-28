@@ -48,6 +48,18 @@ if (is_chromeos) {
 template("build_webui") {
   not_needed([ "target_name" ])
 
+  if (defined(invoker.in_folder) && invoker.in_folder != ".") {
+    # build_webui() targets are generally not allowed to refer to parent
+    # folders. A temporary exception is added for the folders below, which will
+    # be removed once experimentation in these folders concludes.
+    _in_folder_exceptions =
+        [ "//chrome/browser/resources/omnibox/aim_eligibility_extension:build" ]
+    _current_label = get_label_info(":$target_name", "label_no_toolchain")
+    assert(
+        filter_include([ _current_label ], _in_folder_exceptions) != [],
+        "build_webui() target ${_current_label} is not allowed to use in_folder. Setting in_folder is restricted to avoid misuse. Please reach out to WebUI owners if you have a valid use case.")
+  }
+
   forward_variables_from(invoker, [ "grd_prefix" ])
 
   preprocess_dir = "${target_gen_dir}/preprocessed"
@@ -191,11 +203,17 @@ template("build_webui") {
 
   if (defined(invoker.static_files)) {
     preprocess_if_expr("preprocess_static_files") {
-      visibility = [ ":$generate_grd_target_name" ]
+      visibility = [
+        ":$generate_grd_target_name",
+        ":lint_css",
+      ]
 
       defines = preprocessor_defines
 
       in_folder = "."
+      if (defined(invoker.in_folder)) {
+        in_folder = invoker.in_folder
+      }
       out_folder = preprocess_dir
       in_files = static_preprocessed_files
       out_manifest = "${target_gen_dir}/preprocess_static_files_manifest.json"
@@ -216,6 +234,9 @@ template("build_webui") {
       defines = preprocessor_defines
 
       in_folder = "."
+      if (defined(invoker.in_folder)) {
+        in_folder = invoker.in_folder
+      }
       out_folder = preprocess_dir
       if (enable_source_maps) {
         out_folder = "${preprocess_dir}/_tmp"
@@ -231,21 +252,25 @@ template("build_webui") {
       # ":html_wrapper_files".
       inline_sourcemaps = true
 
-      sources = filter_include(
-              get_target_outputs(":preprocess_ts_files"),
-              [
-                "*.ts",
+      sources = filter_include(get_target_outputs(":preprocess_ts_files"),
+                               [
+                                 "*.ts",
 
-                # TODO(crbug.com/40167175): Remove once we no longer pass JS
-                # files to build_webui.
-                "*.js",
-              ])
+                                 # TODO(crbug.com/40167175): Remove once we no
+                                 # longer pass JS files to build_webui.
+                                 "*.js",
+                               ])
       originals = []
       outputs = []
 
+      _in_folder = "."
+      if (defined(invoker.in_folder)) {
+        _in_folder = invoker.in_folder
+      }
+
       foreach(in_file, sources) {
         rebased_path = rebase_path(in_file, "${preprocess_dir}/_tmp")
-        originals += [ rebased_path ]
+        originals += [ _in_folder + "/" + rebased_path ]
         outputs += [ "${preprocess_dir}/" + rebased_path ]
       }
       deps = [ ":preprocess_ts_files" ]
@@ -263,6 +288,9 @@ template("build_webui") {
       defines = preprocessor_defines
 
       in_folder = "."
+      if (defined(invoker.in_folder)) {
+        in_folder = invoker.in_folder
+      }
       out_folder = preprocess_dir
 
       in_files = []
@@ -359,12 +387,33 @@ template("build_webui") {
       in_files = invoker.css_files
       minify = optimize
     }
+  }
 
-    stylelint("lint_css") {
-      deps = [ ":preprocess_html_css_files" ]
-      in_folder = preprocess_dir
-      in_files = invoker.css_files
+  # Detect whether there are any CSS files to be checked via stylelint. Define
+  # the ":lint_css" target only if such files exist.
+  stylelint_in_files = []
+  stylelint_deps = []
+  if (defined(invoker.css_files)) {
+    stylelint_in_files += invoker.css_files
+    stylelint_deps += [ ":preprocess_html_css_files" ]
+  }
+  if (defined(invoker.static_files)) {
+    static_css_files = filter_include(invoker.static_files, [ "*.css" ])
+    if (static_css_files != []) {
+      stylelint_in_files += static_css_files
+      stylelint_deps += [ ":preprocess_static_files" ]
     }
+  }
+
+  if (stylelint_in_files != []) {
+    stylelint("lint_css") {
+      deps = stylelint_deps
+      in_folder = preprocess_dir
+      in_files = stylelint_in_files
+    }
+  } else {
+    # Prevent GN from throwing an error.
+    not_needed([ "stylelint_deps" ])
   }
 
   if (defined(invoker.mojo_files_deps)) {
@@ -526,6 +575,95 @@ template("build_webui") {
         enable_web_component_missing_deps =
             invoker.eslint_enable_web_component_missing_deps
       }
+
+      legacy_chrome_send_users = [
+        # Note: DO NOT add new entries to the list below. All new WebUIs should
+        # use Mojo instead, see https://chromium.googlesource.com/chromium/src/+/main/docs/webui/webui_explainer.md#Pre_Mojo-alternative_chrome_send_WebUIMessageHandler
+        "//ios/chrome/app/resources/profile_internals",
+        "//chrome/browser/resources/about_sys",
+        "//chrome/browser/resources/access_code_cast",
+        "//chrome/browser/resources/accessibility",
+        "//chrome/browser/resources/bookmarks",
+        "//chrome/browser/resources/browser_switch",
+        "//chrome/browser/resources/certificate_manager",
+        "//chrome/browser/resources/certificate_viewer",
+        "//chrome/browser/resources/components",
+        "//chrome/browser/resources/conflicts",
+        "//chrome/browser/resources/device_log",
+        "//chrome/browser/resources/downloads",
+        "//chrome/browser/resources/family_link_user_internals",
+        "//chrome/browser/resources/feedback",
+        "//chrome/browser/resources/history",
+        "//chrome/browser/resources/inline_login",
+        "//chrome/browser/resources/intro",
+        "//chrome/browser/resources/management",
+        "//chrome/browser/resources/media",
+        "//chrome/browser/resources/media_router/cast_feedback",
+        "//chrome/browser/resources/media_router/internals",
+        "//chrome/browser/resources/memory_internals",
+        "//chrome/browser/resources/omnibox",
+        "//chrome/browser/resources/password_manager",
+        "//chrome/browser/resources/predictors",
+        "//chrome/browser/resources/print_preview",
+        "//chrome/browser/resources/profile_internals",
+        "//chrome/browser/resources/sandbox_internals",
+        "//chrome/browser/resources/settings",
+        "//chrome/browser/resources/settings_shared",
+        "//chrome/browser/resources/side_panel/customize_chrome",
+        "//chrome/browser/resources/signin",
+        "//chrome/browser/resources/signin/profile_picker",
+        "//chrome/browser/resources/support_tool",
+        "//chrome/browser/resources/tab_search",
+        "//chrome/browser/resources/webapks",
+        "//chrome/browser/resources/webui_toolbar",
+        "//components/autofill/core/browser/autofill_and_password_manager_internals",
+        "//components/crash/core/browser/resources",
+        "//components/download/resources/download_internals",
+        "//components/gcm_driver/resources",
+        "//components/metrics/debug",
+        "//components/ntp_tiles/webui/resources",
+        "//components/policy/resources/webui",
+        "//components/signin/core/browser/resources",
+        "//components/sync/service/resources",
+        "//components/ukm/debug",
+        "//components/webui/flags/resources",
+        "//components/webui/safe_browsing/resources",
+        "//components/webui/user_actions/resources",
+        "//components/webui/version/resources",
+        "//content/browser/resources/gpu",
+        "//content/browser/resources/histograms",
+        "//content/browser/resources/service_worker",
+        "//ui/webui/resources/cr_components/managed_footnote",
+        "//ui/webui/resources/cr_elements",
+        "//ui/webui/resources/js",
+      ]
+
+      if (filter_include([ get_label_info(":lint_ts", "dir") ],
+                         legacy_chrome_send_users) == [] && !is_ash_webui) {
+        enable_no_chrome_send = true
+      }
+
+      no_explicit_any_exceptions = [
+        # Note: DO NOT add new entries to the list below.
+        # TODO(crbug.com/494464740): Fix all violations below and turn on this
+        # check by default.
+        "//chrome/browser/resources/print_preview",
+        "//chrome/browser/resources/tab_search",
+        "//ui/webui/resources/js",
+      ]
+
+      if (is_android) {
+        no_explicit_any_exceptions +=
+            [ "//chrome/browser/resources/contextual_tasks" ]
+      }
+
+      if (!is_ash_webui && filter_include([ get_label_info(":lint_ts", "dir") ],
+                                          no_explicit_any_exceptions) == []) {
+        enable_no_explicit_any = true
+      } else {
+        # Prevent GN from throwing an error.
+        not_needed([ "no_explicit_any_exceptions" ])
+      }
     }
   }
 
@@ -630,6 +768,15 @@ template("build_webui") {
       }
       manifest_files = [ "$target_gen_dir/build_code_cache_manifest.json" ]
       deps = [ ":build_code_cache" ]
+      if (bundle) {
+        resource_path_rewrites = []
+        foreach(f, invoker.optimize_webui_in_files) {
+          name = get_path_info(f, "name")
+          output_file = string_replace(f, "${name}.js", "${name}.rollup.js")
+          resource_path_rewrites +=
+              [ "${output_file}.code_cache|${f}.code_cache" ]
+        }
+      }
     }
 
     if (!generate_grdp) {
@@ -721,7 +868,7 @@ template("build_webui") {
       deps += [ ":lint_ts" ]
     }
 
-    if (defined(invoker.css_files)) {
+    if (stylelint_in_files != []) {
       deps += [ ":lint_css" ]
     }
   }

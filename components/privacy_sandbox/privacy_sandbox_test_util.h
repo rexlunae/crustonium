@@ -39,8 +39,6 @@ class PrivacySandboxServiceTestInterface {
   virtual base::Time TopicsConsentLastUpdateTime() const = 0;
   virtual std::string TopicsConsentLastUpdateText() const = 0;
   virtual void ForceChromeBuildForTests(bool force_chrome_build) const = 0;
-  virtual int GetRequiredPromptType(int surface_type) const = 0;
-  virtual void PromptActionOccurred(int action, int surface_type) const = 0;
 };
 
 // Allow tests to access private variables and functions from
@@ -158,11 +156,11 @@ enum class InputKey {
   kTopicsURL = 2,
   kFledgeAuctionPartyOrigin = 3,
   kAdMeasurementReportingOrigin = 4,
-  kAdMeasurementSourceOrigin = 5,
-  kAdMeasurementDestinationOrigin = 6,
   kAccessingOrigin = 7,
   kTopicsToggleNewValue = 8,
   kForceChromeBuild = 9,
+  // kPromptAction is Obsolete.
+  // TODO(crbug.com/474716334): Remove this enum.
   kPromptAction = 10,
   kEventReportingDestinationOrigin = 11,
   kOutSharedStorageDebugMessage = 12,
@@ -177,15 +175,11 @@ enum class InputKey {
 enum class OutputKey {
   kIsTopicsAllowed = 1,
   kIsTopicsAllowedForContext = 2,
-  kIsAttributionReportingAllowed = 4,
-  kMaySendAttributionReport = 5,
   kIsSharedStorageAllowed = 6,
   kIsSharedStorageSelectURLAllowed = 7,
   kIsPrivateAggregationAllowed = 8,
   kIsTopicsAllowedMetric = 9,
   kIsTopicsAllowedForContextMetric = 10,
-  kIsAttributionReportingAllowedMetric = 12,
-  kMaySendAttributionReportMetric = 13,
   kIsSharedStorageAllowedMetric = 14,
   kIsSharedStorageSelectURLAllowedMetric = 15,
   kIsPrivateAggregationAllowedMetric = 16,
@@ -193,6 +187,8 @@ enum class OutputKey {
   kTopicsConsentLastUpdateReason = 18,
   kTopicsConsentLastUpdateTime = 19,
   kTopicsConsentStringIdentifiers = 20,
+  // kPromptType and kM1PromptSuppressedReason are Obsolete.
+  // TODO(crbug.com/474716334): Remove obsolete enums.
   kPromptType = 21,
   kM1PromptSuppressedReason = 22,
   kM1ConsentDecisionMade = 23,
@@ -201,8 +197,6 @@ enum class OutputKey {
   kM1TopicsEnabled = 26,
   kM1FledgeEnabled = 27,
   kM1AdMeasurementEnabled = 28,
-  kIsAttributionReportingEverAllowed = 29,
-  kIsAttributionReportingEverAllowedMetric = 30,
   kM1RestrictedNoticeAcknowledged = 31,
   kIsEventReportingDestinationAttestedForFledge = 32,
   kIsEventReportingDestinationAttestedForSharedStorage = 33,
@@ -224,8 +218,6 @@ enum class OutputKey {
   kIsSharedStorageBlockSiteSettingSpecific = 50,
   kIsSharedStorageSelectURLBlockSiteSettingSpecific = 51,
   kIsPrivateAggregationBlockSiteSettingSpecific = 52,
-  kIsFencedStorageReadAllowed = 53,
-  kIsFencedStorageReadAllowedMetric = 54,
 };
 
 // To allow multiple input keys to map to the same value, without having to

@@ -8,11 +8,13 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "base/check_deref.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/scoped_observation.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/drive/drivefs_test_support.h"
@@ -25,7 +27,6 @@
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_browser_main.h"
@@ -33,9 +34,9 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/browser_process_platform_part_test_api_chromeos.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
@@ -65,23 +66,26 @@ inline constexpr char kDemoPhotoName[] = "photo.jpg";
 
 // inline constexpr base::TimeDelta kDemoIdleTimeout = base::Seconds(90);
 
-void SetDemoConfigPref(DemoSession::DemoModeConfig demo_config) {
-  PrefService* prefs = g_browser_process->local_state();
-  prefs->SetInteger(prefs::kDemoModeConfig, static_cast<int>(demo_config));
+void SetDemoConfigPref(PrefService& local_state,
+                       DemoSession::DemoModeConfig demo_config) {
+  local_state.SetInteger(prefs::kDemoModeConfig, static_cast<int>(demo_config));
 }
 
-void CheckDemoMode() {
+void CheckDemoMode(PrefService& local_state) {
   EXPECT_TRUE(ash::demo_mode::IsDeviceInDemoMode());
-  EXPECT_EQ(DemoSession::DemoModeConfig::kOnline, DemoSession::GetDemoConfig());
+  EXPECT_EQ(DemoSession::DemoModeConfig::kOnline,
+            DemoSession::GetDemoConfig(local_state));
 }
 
-void CheckNoDemoMode() {
+void CheckNoDemoMode(PrefService& local_state) {
   EXPECT_FALSE(ash::demo_mode::IsDeviceInDemoMode());
-  EXPECT_EQ(DemoSession::DemoModeConfig::kNone, DemoSession::GetDemoConfig());
+  EXPECT_EQ(DemoSession::DemoModeConfig::kNone,
+            DemoSession::GetDemoConfig(local_state));
 
-  SetDemoConfigPref(DemoSession::DemoModeConfig::kOnline);
+  SetDemoConfigPref(local_state, DemoSession::DemoModeConfig::kOnline);
   EXPECT_FALSE(ash::demo_mode::IsDeviceInDemoMode());
-  EXPECT_EQ(DemoSession::DemoModeConfig::kNone, DemoSession::GetDemoConfig());
+  EXPECT_EQ(DemoSession::DemoModeConfig::kNone,
+            DemoSession::GetDemoConfig(local_state));
 }
 
 }  // namespace
@@ -101,7 +105,8 @@ class DemoSessionDemoDeviceModeTest : public OobeBaseTest {
   // OobeBaseTest:
   void SetUpOnMainThread() override {
     OobeBaseTest::SetUpOnMainThread();
-    SetDemoConfigPref(DemoSession::DemoModeConfig::kOnline);
+    SetDemoConfigPref(*g_browser_process->local_state(),
+                      DemoSession::DemoModeConfig::kOnline);
   }
 
  private:
@@ -110,7 +115,7 @@ class DemoSessionDemoDeviceModeTest : public OobeBaseTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DemoSessionDemoDeviceModeTest, IsDemoMode) {
-  CheckDemoMode();
+  CheckDemoMode(*g_browser_process->local_state());
 }
 
 // Tests locking device to demo mode domain without policy::DEVICE_MODE_DEMO
@@ -133,7 +138,8 @@ class DemoSessionDemoEnrolledDeviceTest : public OobeBaseTest {
   // OobeBaseTest:
   void SetUpOnMainThread() override {
     OobeBaseTest::SetUpOnMainThread();
-    SetDemoConfigPref(DemoSession::DemoModeConfig::kOnline);
+    SetDemoConfigPref(*g_browser_process->local_state(),
+                      DemoSession::DemoModeConfig::kOnline);
   }
 
  private:
@@ -142,7 +148,7 @@ class DemoSessionDemoEnrolledDeviceTest : public OobeBaseTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DemoSessionDemoEnrolledDeviceTest, IsDemoMode) {
-  CheckDemoMode();
+  CheckDemoMode(*g_browser_process->local_state());
 }
 
 class DemoSessionNonDemoEnrolledDeviceTest : public OobeBaseTest {
@@ -162,7 +168,7 @@ class DemoSessionNonDemoEnrolledDeviceTest : public OobeBaseTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DemoSessionNonDemoEnrolledDeviceTest, NotDemoMode) {
-  CheckNoDemoMode();
+  CheckNoDemoMode(*g_browser_process->local_state());
 }
 
 class DemoSessionConsumerDeviceTest : public OobeBaseTest {
@@ -181,7 +187,7 @@ class DemoSessionConsumerDeviceTest : public OobeBaseTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DemoSessionConsumerDeviceTest, NotDemoMode) {
-  CheckNoDemoMode();
+  CheckNoDemoMode(*g_browser_process->local_state());
 }
 
 class DemoSessionUnownedDeviceTest : public OobeBaseTest {
@@ -200,7 +206,7 @@ class DemoSessionUnownedDeviceTest : public OobeBaseTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DemoSessionUnownedDeviceTest, NotDemoMode) {
-  CheckNoDemoMode();
+  CheckNoDemoMode(*g_browser_process->local_state());
 }
 
 class DemoSessionActiveDirectoryDeviceTest : public OobeBaseTest {
@@ -221,7 +227,7 @@ class DemoSessionActiveDirectoryDeviceTest : public OobeBaseTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DemoSessionActiveDirectoryDeviceTest, NotDemoMode) {
-  CheckNoDemoMode();
+  CheckNoDemoMode(*g_browser_process->local_state());
 }
 
 /* ============================ Demo Login Tests =============================*/
@@ -294,7 +300,6 @@ class DemoLoginTestMainExtraParts : public ChromeBrowserMainExtraParts {
 // Currently this fixture enables the Demo SWA by default - consider extracting
 // this feature enablement into a subclass if non-SWA tests are needed
 class DemoSessionLoginTest : public LoginManagerTest,
-                             public LocalStateMixin::Delegate,
                              public user_manager::UserManager::Observer,
                              public chromeos::FakePowerManagerClient::Observer {
  public:
@@ -346,9 +351,9 @@ class DemoSessionLoginTest : public LoginManagerTest,
   }
 
  protected:
-  // LocalStateMixin::Delegate
-  void SetUpLocalState() override {
-    SetDemoConfigPref(DemoSession::DemoModeConfig::kOnline);
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    LoginManagerTest::SetUpLocalStatePrefService(local_state);
+    SetDemoConfigPref(*local_state, DemoSession::DemoModeConfig::kOnline);
   }
 
   void OpenBrowserAndInstallSystemAppForActiveProfile() {
@@ -370,7 +375,6 @@ class DemoSessionLoginTest : public LoginManagerTest,
   LoginManagerMixin login_manager_mixin_{&mixin_host_};
   DeviceStateMixin device_state_mixin_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_DEMO_MODE};
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
   base::OnceClosure on_browser_added_callback_;
   static constexpr double kInitialBrightness = 20.0;
   base::FilePath growth_campaigns_mounted_path_;
@@ -389,12 +393,11 @@ IN_PROC_BROWSER_TEST_F(DemoSessionLoginTest, DemoSWALaunchesOnSessionStartup) {
   OpenBrowserAndInstallSystemAppForActiveProfile();
 
   // Verify that Demo Mode App is opened.
-  Browser* app_browser = FindSystemWebAppBrowser(
-      ProfileManager::GetActiveUserProfile(), SystemWebAppType::DEMO_MODE,
-      Browser::TYPE_APP, GURL(kDemoModeAppUrl));
+  ash::BrowserDelegate* app_browser = ash::FindSystemWebAppBrowser(
+      ProfileManager::GetActiveUserProfile(), ash::SystemWebAppType::DEMO_MODE,
+      ash::BrowserType::kApp, GURL(kDemoModeAppUrl));
   ASSERT_TRUE(app_browser);
-  content::WebContents* tab =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* tab = app_browser->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_EQ(tab->GetController().GetVisibleEntry()->GetPageType(),
             content::PAGE_TYPE_NORMAL);
@@ -405,10 +408,10 @@ IN_PROC_BROWSER_TEST_F(
     DemoSessionKeyboardBrightnessIncreaseThreeTimesToOneHundredPercents) {
   base::ScopedAllowBlockingForTesting scoped_allow_blocking;
   login_manager_mixin_.WaitForActiveSession();
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(chromeos::FakePowerManagerClient::Get()
-                ->num_increase_keyboard_brightness_calls(),
-            3);
+  EXPECT_TRUE(base::test::RunUntil([]() {
+    return chromeos::FakePowerManagerClient::Get()
+               ->num_increase_keyboard_brightness_calls() == 3;
+  }));
 }
 
 class DemoSessionLoginWithGrowthCampaignTest : public DemoSessionLoginTest {
@@ -462,13 +465,12 @@ IN_PROC_BROWSER_TEST_F(DemoSessionLoginWithGrowthCampaignTest,
       R"({"attractionLoop":{"videoSrcLang1":"/asset/peripherals_lang1.mp4",)"
       R"("videoSrcLang2":"/asset/peripherals_lang2.mp4"}})";
   auto url = net::AppendQueryParameter(base_url, /*name=*/"model", param_value);
-  Browser* app_browser = FindSystemWebAppBrowser(
-      ProfileManager::GetActiveUserProfile(), SystemWebAppType::DEMO_MODE,
-      Browser::TYPE_APP, url);
+  ash::BrowserDelegate* app_browser = ash::FindSystemWebAppBrowser(
+      ProfileManager::GetActiveUserProfile(), ash::SystemWebAppType::DEMO_MODE,
+      ash::BrowserType::kApp, url);
   ASSERT_TRUE(app_browser);
 
-  content::WebContents* tab =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* tab = app_browser->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_EQ(tab->GetController().GetVisibleEntry()->GetPageType(),
             content::PAGE_TYPE_NORMAL);
@@ -494,12 +496,11 @@ IN_PROC_BROWSER_TEST_F(DemoSessionLoginWithGrowthCampaignTest,
 
   // Verify that Demo Mode App is opened without payload.
   auto base_url = GURL(kDemoModeAppUrl);
-  Browser* app_browser = FindSystemWebAppBrowser(
-      ProfileManager::GetActiveUserProfile(), SystemWebAppType::DEMO_MODE,
-      Browser::TYPE_APP, base_url);
+  ash::BrowserDelegate* app_browser = ash::FindSystemWebAppBrowser(
+      ProfileManager::GetActiveUserProfile(), ash::SystemWebAppType::DEMO_MODE,
+      ash::BrowserType::kApp, base_url);
   ASSERT_TRUE(app_browser);
-  content::WebContents* tab =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* tab = app_browser->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_EQ(tab->GetController().GetVisibleEntry()->GetPageType(),
             content::PAGE_TYPE_NORMAL);
@@ -548,12 +549,11 @@ IN_PROC_BROWSER_TEST_F(DemoSessionLoginWithGrowthCampaignTest,
 
   // Verify that Demo Mode App is opened without payload.
   auto base_url = GURL(kDemoModeAppUrl);
-  Browser* app_browser = FindSystemWebAppBrowser(
-      ProfileManager::GetActiveUserProfile(), SystemWebAppType::DEMO_MODE,
-      Browser::TYPE_APP, base_url);
+  ash::BrowserDelegate* app_browser = ash::FindSystemWebAppBrowser(
+      ProfileManager::GetActiveUserProfile(), ash::SystemWebAppType::DEMO_MODE,
+      ash::BrowserType::kApp, base_url);
   ASSERT_TRUE(app_browser);
-  content::WebContents* tab =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* tab = app_browser->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_EQ(tab->GetController().GetVisibleEntry()->GetPageType(),
             content::PAGE_TYPE_NORMAL);
@@ -589,13 +589,12 @@ IN_PROC_BROWSER_TEST_F(DemoSessionLoginWithGrowthCampaignTest,
       R"({"attractionLoop":{"videoSrcLang1":"/asset/peripherals_lang1.mp4",)"
       R"("videoSrcLang2":"/asset/peripherals_lang2.mp4"}})";
   auto url = net::AppendQueryParameter(base_url, /*name=*/"model", param_value);
-  Browser* app_browser = FindSystemWebAppBrowser(
-      ProfileManager::GetActiveUserProfile(), SystemWebAppType::DEMO_MODE,
-      Browser::TYPE_APP, url);
+  ash::BrowserDelegate* app_browser = ash::FindSystemWebAppBrowser(
+      ProfileManager::GetActiveUserProfile(), ash::SystemWebAppType::DEMO_MODE,
+      ash::BrowserType::kApp, url);
   ASSERT_TRUE(app_browser);
 
-  content::WebContents* tab =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* tab = app_browser->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_EQ(tab->GetController().GetVisibleEntry()->GetPageType(),
             content::PAGE_TYPE_NORMAL);
@@ -648,7 +647,7 @@ class DemoSessionLoginIdleHandlerTest : public DemoSessionLoginTest {
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore non-user profile.
-    if (!ProfileHelper::IsUserProfile(profile)) {
+    if (!IsUserBrowserContext(profile)) {
       return nullptr;
     }
 

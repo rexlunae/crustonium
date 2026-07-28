@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/android/device_info.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
@@ -63,6 +64,8 @@ using JniAudioDevice = media::AudioManagerAndroid::JniAudioDevice;
 using JniDelegate = media::AudioManagerAndroid::JniDelegate;
 
 namespace media {
+
+using Error = AudioInputStream::AudioInputCallback::Error;
 namespace {
 
 ACTION_P4(CheckCountAndPostQuitTask, count, limit, task_runner, quit_closure) {
@@ -218,7 +221,7 @@ class MockAudioInputCallback : public AudioInputStream::AudioInputCallback {
                     base::TimeTicks capture_time,
                     double volume,
                     const AudioGlitchInfo& glitch_info));
-  MOCK_METHOD0(OnError, void());
+  MOCK_METHOD1(OnError, void(Error));
 };
 
 // Implements AudioInputStream::AudioInputCallback and writes the recorded
@@ -242,8 +245,9 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
     EXPECT_TRUE(
         base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &file_path));
     file_path = file_path.AppendASCII(file_name.c_str());
-    binary_file_ = base::OpenFile(file_path, "wb");
-    DLOG_IF(ERROR, !binary_file_) << "Failed to open binary PCM data file.";
+    binary_file_path_ = file_path;
+    // Create and truncate the file.
+    EXPECT_TRUE(base::WriteFile(binary_file_path_, base::span<uint8_t>()));
     DVLOG(0) << "Writing to file: " << file_path.value().c_str();
   }
 
@@ -260,12 +264,10 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
       }
 
       // Write recorded data chunk to the file and prepare for next chunk.
-      // TODO(henrika): use file_util:: instead.
-      UNSAFE_TODO(fwrite(chunk.data(), 1, chunk.size(), binary_file_));
+      EXPECT_TRUE(base::AppendToFile(binary_file_path_, chunk));
       buffer_->Seek(chunk.size());
       bytes_written += chunk.size();
     }
-    base::CloseFile(binary_file_);
   }
 
   // AudioInputStream::AudioInputCallback implementation.
@@ -285,13 +287,13 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
     }
   }
 
-  void OnError() override {}
+  void OnError(Error error_code) override {}
 
  private:
   raw_ptr<base::WaitableEvent> event_;
   AudioParameters params_;
   std::unique_ptr<media::SeekableBuffer> buffer_;
-  raw_ptr<FILE> binary_file_;
+  base::FilePath binary_file_path_;
 };
 
 // Implements AudioInputCallback and AudioSourceCallback to support full
@@ -317,7 +319,7 @@ class FullDuplexAudioSinkSource
   ~FullDuplexAudioSinkSource() override {}
 
   // AudioInputStream::AudioInputCallback implementation
-  void OnError() override {}
+  void OnError(Error error_code) override {}
   void OnData(const AudioBus* src,
               base::TimeTicks capture_time,
               double volume,
@@ -463,6 +465,12 @@ class AudioAndroidOutputTest : public testing::TestWithParam<AudioApi> {
         break;
       case AudioApi::OpenSLES:
         break;
+    }
+
+    if (enable_aaudio_per_stream_device_selection &&
+        !base::android::device_info::is_desktop()) {
+      GTEST_SKIP()
+          << "Per-stream device selection is only supported on desktop.";
     }
 
     if (!enable_aaudio) {
@@ -754,7 +762,7 @@ class AudioAndroidInputTest : public AudioAndroidOutputTest {
             &count, num_callbacks,
             base::SingleThreadTaskRunner::GetCurrentDefault(),
             run_loop.QuitWhenIdleClosure()));
-    EXPECT_CALL(sink, OnError()).Times(0);
+    EXPECT_CALL(sink, OnError(_)).Times(0);
 
     OpenAndStartAudioInputStreamOnAudioThread(&sink);
 
@@ -1214,6 +1222,15 @@ TEST_P(AudioAndroidInputTest, OpenAndCloseInputStream) {
 // closed, emitting a histogram value for successfully setting the
 // device ID if AAudioWithPerStreamDeviceSelection is enabled.
 TEST_P(AudioAndroidInputTest, OpenAndCloseInputStreamWithDevice) {
+  const bool is_per_stream_selection_enabled =
+      GetParam() == AudioApi::AAudioWithPerStreamDeviceSelection;
+
+  if (is_per_stream_selection_enabled &&
+      !base::android::device_info::is_desktop()) {
+    GTEST_SKIP() << "Per-stream device selection is only supported on "
+                 << "desktop.";
+  }
+
   std::optional<AudioDeviceDescription> device =
       GetFirstNonDefaultInputDevice();
   if (!device.has_value()) {
@@ -1225,7 +1242,7 @@ TEST_P(AudioAndroidInputTest, OpenAndCloseInputStreamWithDevice) {
   base::HistogramTester histogram_tester;
   OpenAudioInputStreamOnAudioThread();
 
-  if (GetParam() == AudioApi::AAudioWithPerStreamDeviceSelection) {
+  if (is_per_stream_selection_enabled) {
     constexpr std::string_view kHistogramPrefix =
         "Media.Audio.Android.AAudioSetDeviceId.Input.";
     const std::string kSuccessHistogram =
@@ -1289,7 +1306,7 @@ TEST_F(AudioAndroidOutputTest, OpenAndCloseOutputStreamWithDevice) {
 // explicitly being stopped.
 TEST_P(AudioAndroidInputTest, OpenStartAndCloseInputStream) {
   NiceMock<MockAudioInputCallback> callback;
-  EXPECT_CALL(callback, OnError()).Times(0);
+  EXPECT_CALL(callback, OnError(_)).Times(0);
 
   AudioParameters params = GetDefaultInputStreamParametersOnAudioThread();
   MakeAudioInputStreamOnAudioThread(params);

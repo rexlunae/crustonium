@@ -15,17 +15,18 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorageDelegate
     : public BackendStorage::Delegate {
  public:
   // BackendStorage::Delegate:
-  std::optional<PendingBackend> MakePendingBackend(
+  base::expected<PendingBackend, TransactionError> MakePendingBackend(
       Client client,
       const base::FilePath& directory,
       const base::FilePath& base_name,
       bool single_connection,
       bool journal_mode_wal) override;
-  std::unique_ptr<Backend> MakeBackend(Client client,
-                                       const base::FilePath& directory,
-                                       const base::FilePath& base_name,
-                                       bool single_connection,
-                                       bool journal_mode_wal) override;
+  base::expected<std::unique_ptr<Backend>, TransactionError> MakeBackend(
+      Client client,
+      const base::FilePath& directory,
+      const base::FilePath& base_name,
+      bool single_connection,
+      bool journal_mode_wal) override;
   std::optional<PendingBackend> ShareReadOnlyConnection(
       const base::FilePath& directory,
       const base::FilePath& base_name,

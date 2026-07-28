@@ -15,6 +15,7 @@ import type {WallpaperSearchElement, WallpaperSearchResponse} from 'chrome://cus
 import {DESCRIPTOR_D_VALUE} from 'chrome://customize-chrome-side-panel.top-chrome/wallpaper_search/wallpaper_search.js';
 import {WallpaperSearchProxy} from 'chrome://customize-chrome-side-panel.top-chrome/wallpaper_search/wallpaper_search_proxy.js';
 import {WindowProxy} from 'chrome://customize-chrome-side-panel.top-chrome/window_proxy.js';
+import type {CrA11yAnnouncerMessagesSentEvent} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrAutoImgElement} from 'chrome://resources/cr_elements/cr_auto_img/cr_auto_img.js';
 import type {CrCollapseElement} from 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
 import {CrFeedbackOption} from 'chrome://resources/cr_elements/cr_feedback_buttons/cr_feedback_buttons.js';
@@ -730,13 +731,15 @@ suite('WallpaperSearchTest', () => {
       await microtasksFinished();
 
       const loadingEventPromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+          eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+              'cr-a11y-announcer-messages-sent', document.body);
       wallpaperSearchElement.$.submitButton.click();
       const loadingEvent = await loadingEventPromise;
       assertTrue(loadingEvent.detail.messages.includes('Generating...'));
 
       const successEventPromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+          eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+              'cr-a11y-announcer-messages-sent', document.body);
       resultsResolver.resolve({
         status: WallpaperSearchStatus.kOk,
         results: [
@@ -863,13 +866,13 @@ suite('WallpaperSearchTest', () => {
       wallpaperSearchCallbackRouterRemote.setHistory([]);
       await wallpaperSearchCallbackRouterRemote.$.flushForTesting();
 
-      assertTrue(!!wallpaperSearchElement.$.historyCard.hidden);
+      assertTrue(wallpaperSearchElement.$.historyCard.hidden);
     });
 
     test('show history in history card', async () => {
       createWallpaperSearchElement();
 
-      assertTrue(!!wallpaperSearchElement.$.historyCard.hidden);
+      assertTrue(wallpaperSearchElement.$.historyCard.hidden);
 
       wallpaperSearchCallbackRouterRemote.setHistory([
         {
@@ -887,7 +890,7 @@ suite('WallpaperSearchTest', () => {
 
       const historyTiles =
           wallpaperSearchElement.$.historyCard.querySelectorAll('.tile');
-      assertFalse(!!wallpaperSearchElement.$.historyCard.hidden);
+      assertFalse(wallpaperSearchElement.$.historyCard.hidden);
       assertEquals(historyTiles.length, 2);
       assertEquals(
           (historyTiles[0]! as HTMLElement).getAttribute('aria-label'),
@@ -2127,7 +2130,8 @@ suite('WallpaperSearchTest', () => {
       assertTrue(!!secondGroupTitle);
 
       let loadingEventPromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+          eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+              'cr-a11y-announcer-messages-sent', document.body);
       (firstGroupTitle as HTMLElement).click();
       await microtasksFinished();
 
@@ -2146,15 +2150,16 @@ suite('WallpaperSearchTest', () => {
       let loadingEvent = await loadingEventPromise;
       assertTrue(loadingEvent.detail.messages.includes('Descriptors updated'));
 
-      loadingEventPromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+      loadingEventPromise = eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+          'cr-a11y-announcer-messages-sent', document.body);
       (secondGroupTitle as HTMLElement)
           .dispatchEvent(new KeyboardEvent('keydown', {key: ' '}));
       await microtasksFinished();
 
       assertEquals(
           'key bar', wallpaperSearchElement.$.descriptorComboboxA.value);
-      assertEquals(null, wallpaperSearchElement.$.descriptorComboboxB.value);
+      assertEquals(
+          undefined, wallpaperSearchElement.$.descriptorComboboxB.value);
       assertEquals(
           'key baz', wallpaperSearchElement.$.descriptorComboboxC.value);
       assertFalse(
@@ -2230,7 +2235,8 @@ suite('WallpaperSearchTest', () => {
           !!$$(wallpaperSearchElement, '#descriptorMenuD button [checked]'));
 
       let loadingEventPromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+          eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+              'cr-a11y-announcer-messages-sent', document.body);
       const inspirationGroupGrids =
           wallpaperSearchElement.shadowRoot.querySelectorAll(
               '#inspirationCard cr-grid');
@@ -2253,8 +2259,8 @@ suite('WallpaperSearchTest', () => {
       let loadingEvent = await loadingEventPromise;
       assertTrue(loadingEvent.detail.messages.includes('Descriptors updated'));
 
-      loadingEventPromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+      loadingEventPromise = eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+          'cr-a11y-announcer-messages-sent', document.body);
       inspirationTile = inspirationGroupGrids[1]!.querySelector('.tile');
       assertTrue(!!inspirationTile);
       (inspirationTile as HTMLElement).click();
@@ -2262,8 +2268,10 @@ suite('WallpaperSearchTest', () => {
 
       assertEquals(
           'key bar', wallpaperSearchElement.$.descriptorComboboxA.value);
-      assertEquals(null, wallpaperSearchElement.$.descriptorComboboxB.value);
-      assertEquals(null, wallpaperSearchElement.$.descriptorComboboxC.value);
+      assertEquals(
+          undefined, wallpaperSearchElement.$.descriptorComboboxB.value);
+      assertEquals(
+          undefined, wallpaperSearchElement.$.descriptorComboboxC.value);
       assertFalse(
           !!$$(wallpaperSearchElement, '#descriptorMenuD button [checked]'));
       loadingEvent = await loadingEventPromise;

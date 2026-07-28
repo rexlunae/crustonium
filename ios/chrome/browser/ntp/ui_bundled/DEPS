@@ -8,6 +8,7 @@ include_rules = [
   "+ios/chrome/browser/bubble/public",
   "+ios/chrome/browser/bubble/ui_bundled",
   "+ios/chrome/browser/composebox/coordinator",
+  "+ios/chrome/browser/composebox/menu/coordinator/composebox_menu_coordinator.h",
   "+ios/chrome/browser/content_notification/model/content_notification_util.h",
   "+ios/chrome/browser/content_suggestions",
   "+ios/chrome/browser/context_menu/ui_bundled/link_preview",
@@ -35,6 +36,7 @@ include_rules = [
   "+ios/chrome/browser/omnibox/ui",
   "+ios/chrome/browser/overscroll_actions/ui_bundled",
   "+ios/chrome/browser/policy/model/policy_util.h",
+  "+ios/chrome/browser/popup_menu/overflow_menu/public/features.h",
   "+ios/chrome/browser/push_notification/model/constants.h",
   "+ios/chrome/browser/push_notification/model/provisional_push_notification_service.h",
   "+ios/chrome/browser/push_notification/model/provisional_push_notification_service_factory.h",
@@ -51,7 +53,7 @@ include_rules = [
   "+ios/chrome/browser/signin/model/authentication_service.h",
   "+ios/chrome/browser/signin/model/authentication_service_factory.h",
   "+ios/chrome/browser/signin/model/authentication_service_observer_bridge.h",
-  "+ios/chrome/browser/signin/model/avatar_provider.h",
+  "+ios/chrome/browser/signin/model/avatar/avatar_provider.h",
   "+ios/chrome/browser/signin/model/capabilities_types.h",
   "+ios/chrome/browser/signin/model/chrome_account_manager_service.h",
   "+ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h",
@@ -68,6 +70,7 @@ include_rules = [
   "+ios/chrome/browser/toolbar/tab_group/coordinator/tab_group_indicator_coordinator.h",
   "+ios/chrome/browser/toolbar/tab_group/ui/tab_group_indicator_constants.h",
   "+ios/chrome/browser/toolbar/tab_group/ui/tab_group_indicator_view.h",
+  "+ios/chrome/browser/toolbar/ui",
   "+ios/chrome/browser/url_loading/model/url_loading_browser_agent.h",
   "+ios/chrome/browser/url_loading/model/url_loading_params.h",
   "+ios/chrome/browser/web/model/web_navigation_util.h",
@@ -78,7 +81,7 @@ include_rules = [
 
 specific_include_rules = {
   # TODO(crbug.com/41259428): Remove this exception.
-  "^new_tab_page_controller\.mm$": [
+  "^new_tab_page_controller\\.mm$": [
     "+ios/web/web_state/ui/crw_swipe_recognizer_provider.h",
   ],
 }

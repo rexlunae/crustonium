@@ -11,7 +11,6 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -371,7 +370,7 @@ void ThreadController::RunLevelTracker::RunLevel::LogOnActiveMetrics(
   const double probability =
       time_keeper_->wall_time_based_metrics_enabled_for_testing() ? 1.0 : 0.001;
   if (thread_ticks_supported &&
-      metrics_sub_sampler_.ShouldSample(probability)) {
+      base::ShouldRecordSubsampledMetric(probability)) {
     last_active_start_ = lazy_now.Now();
     last_active_threadtick_start_ = ThreadTicks::Now();
   }

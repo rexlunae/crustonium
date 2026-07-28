@@ -9,15 +9,19 @@
 
 #include <memory>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/models/image_model.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace base {
 class FilePath;
@@ -31,6 +35,17 @@ class ImageSkia;
 class Profile;
 class ProfileAttributesEntry;
 class SkBitmap;
+
+// Type of avatar icon returned by
+// ProfileAttributesEntry::GetAvatarIconWithType() and
+// StateProvider::GetAvatarIcon().
+enum class AvatarIconType {
+  // The default placeholder silhouette (a pre-rasterized bitmap that cannot
+  // be re-colored by the view framework on state changes).
+  kPlaceholder,
+  // Any other icon (GAIA picture, account image, vector icon, etc.).
+  kNonPlaceholder,
+};
 
 namespace profiles {
 
@@ -184,6 +199,10 @@ std::string GetDefaultAvatarIconUrl(size_t index);
 // Checks if |index| is a valid avatar icon index
 bool IsDefaultAvatarIconIndex(size_t index);
 
+// Returns a valid avatar index. If `icon_index` is negative or invalid,
+// returns the placeholder avatar index.
+size_t GetSanitizedAvatarIndex(int icon_index);
+
 // Checks if the given URL points to one of the default avatar icons. If it
 // is, returns true and its index through |icon_index|. If not, returns false.
 bool IsDefaultAvatarIconUrl(std::string_view icon_url, size_t* icon_index);
@@ -212,7 +231,7 @@ base::ListValue GetCustomProfileAvatarIconsAndLabels(
 // This method tries to find a random avatar index that is not in
 // |used_icon_indices|. If there is no such index, a random index is returned.
 size_t GetRandomAvatarIconIndex(
-    const std::unordered_set<size_t>& used_icon_indices);
+    const absl::flat_hash_set<size_t>& used_icon_indices);
 
 #if !BUILDFLAG(IS_ANDROID)
 // Get all the available profile icons to choose from for a specific profile
@@ -250,6 +269,21 @@ ui::ImageModel EmbedAvatarOntoImage(int resource_id,
                                     const gfx::Image& avatar,
                                     const gfx::Point& avatar_position,
                                     size_t avatar_size);
+
+#if !BUILDFLAG(IS_ANDROID)
+// Returns a circular avatar with a decorative linear gradient ring.
+gfx::ImageSkia AddLinearGradientRingToAvatar(
+    const ui::ImageModel& avatar_image,
+    const ui::ColorProvider& color_provider,
+    SkColor start_color,
+    SkColor end_color,
+    base::span<const float, 4> positions,
+    base::span<const float, 2> p1_normalized,
+    base::span<const float, 2> p2_normalized,
+    int avatar_size,
+    int gap_width,
+    int ring_thickness);
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace profiles
 

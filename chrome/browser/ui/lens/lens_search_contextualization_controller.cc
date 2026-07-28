@@ -27,6 +27,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "pdf/buildflags.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/mojom/content_extraction/ai_page_content.mojom.h"
 #include "ui/gfx/skia_util.h"
 
 #if BUILDFLAG(ENABLE_PDF)
@@ -135,12 +136,6 @@ double CalculateWordOverlapSimilarity(std::string dom_text,
   return total_ocr_words == 0 ? 0.0 : overlap_count / total_ocr_words;
 }
 
-bool IsProtectedPageFeatureEnabled() {
-  return lens::features::IsLensSearchProtectedPageEnabled() &&
-         lens::IsLensOverlayContextualSearchboxEnabled() &&
-         lens::features::UseApcAsContext();
-}
-
 }  // namespace
 
 namespace lens {
@@ -167,7 +162,8 @@ void LensSearchContextualizationController::StartContextualization(
 void LensSearchContextualizationController::GetPageContextualization(
     PageContentRetrievedCallback callback) {
   // If the contextual searchbox is disabled, exit early.
-  if (!lens::IsLensOverlayContextualSearchboxEnabled()) {
+  if (!lens::IsLensOverlayContextualSearchboxEnabled(
+          lens_search_controller_->GetProfile())) {
     std::move(callback).Run(/*page_contents=*/{}, lens::MimeType::kUnknown,
                             std::nullopt);
     return;
@@ -279,6 +275,7 @@ void LensSearchContextualizationController::ResetState() {
   // Reset the page context eligibility API state.
   page_context_eligibility_callback_.Reset();
   pending_context_eligibility_params_.reset();
+  weak_ptr_factory_.InvalidateWeakPtrs();
   state_ = State::kOff;
 }
 
@@ -383,7 +380,8 @@ void LensSearchContextualizationController::UpdatePageContextualization(
     return;
   }
 
-  if (!lens::IsLensOverlayContextualSearchboxEnabled()) {
+  if (!lens::IsLensOverlayContextualSearchboxEnabled(
+          lens_search_controller_->GetProfile())) {
     std::move(on_page_context_updated_callback_).Run();
     return;
   }
@@ -996,7 +994,7 @@ void LensSearchContextualizationController::
   page_title_ = page_title;
 
   GetQueryController()->StartQueryFlow(
-      viewport_screenshot_, page_url_, page_title_,
+      viewport_screenshot_, viewport_screenshot_, page_url_, page_title_,
       ConvertSignificantRegionBoxes(all_bounds),
       std::vector<lens::PageContent>(), lens::MimeType::kUnknown,
       pdf_current_page, GetUiScaleFactor(), base::TimeTicks::Now());
@@ -1135,6 +1133,13 @@ LensSearchContextualizationController::GetSearchboxController() {
       lens_search_controller_->lens_searchbox_controller();
   CHECK(searchbox_controller);
   return searchbox_controller;
+}
+
+bool LensSearchContextualizationController::IsProtectedPageFeatureEnabled() {
+  return lens::features::IsLensSearchProtectedPageEnabled() &&
+         lens::IsLensOverlayContextualSearchboxEnabled(
+             lens_search_controller_->GetProfile()) &&
+         lens::features::UseApcAsContext();
 }
 
 }  // namespace lens

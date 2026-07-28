@@ -6,13 +6,12 @@ package org.chromium.chrome.browser.touch_to_fill.payments;
 
 import android.content.Context;
 
-import androidx.annotation.Nullable;
-
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
@@ -30,7 +29,6 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvi
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
-import java.util.Arrays;
 import java.util.List;
 
 /** JNI wrapper for C++ TouchToFillPaymentMethodViewImpl. Delegates calls from native to Java. */
@@ -78,11 +76,9 @@ class TouchToFillPaymentMethodViewBridge {
 
     @CalledByNative
     private void showPaymentMethods(
-            @JniType("std::vector") Object[] suggestions,
+            @JniType("std::vector") List<AutofillSuggestion> suggestions,
             TouchToFillDisplayOptions touchToFillDisplayOptions) {
-        mComponent.showPaymentMethods(
-                (List<AutofillSuggestion>) (List<?>) Arrays.asList(suggestions),
-                touchToFillDisplayOptions);
+        mComponent.showPaymentMethods(suggestions, touchToFillDisplayOptions);
     }
 
     @CalledByNative

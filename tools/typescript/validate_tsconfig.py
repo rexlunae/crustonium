@@ -141,7 +141,6 @@ def validateJavaScriptAllowed(source_dir, out_dir, platform):
     ash_directories = [
         'ash/webui/annotator/resources/untrusted/',
         'ash/webui/camera_app_ui/',
-        'ash/webui/color_internals/',
         'ash/webui/common/resources/',
         'ash/webui/file_manager/resources/labs/',
         # TODO(b/314827247): Migrate media_app_ui to TypeScript and remove
@@ -152,6 +151,9 @@ def validateJavaScriptAllowed(source_dir, out_dir, platform):
         'ash/webui/help_app_ui/',
         # TODO(b/267329383): Migrate A11y to TypeScript.
         'chrome/browser/resources/chromeos/accessibility',
+        'chrome/browser/resources/chromeos/account_manager',
+        'chrome/browser/resources/chromeos/drive_internals',
+        'chrome/browser/resources/chromeos/sys_internals',
         'chrome/test/data/webui/chromeos',
         'chrome/test/data/webui/chromeos/ash_common',
         'chrome/test/data/webui/chromeos/nearby_share',
@@ -202,7 +204,6 @@ def isMappingAllowed(is_ash_target, target_path, mapping_path):
 def isUnsupportedJsTarget(gen_dir, root_gen_dir):
   target_path = getTargetPath(gen_dir, root_gen_dir)
   exceptions = [
-      'ash/webui/color_internals/resources',
       'chrome/browser/resources/chromeos/accessibility/select_to_speak',
   ]
   return target_path in exceptions
@@ -221,9 +222,10 @@ def validateRootDir(root_dir, gen_dir, root_gen_dir, is_ios):
 
   # Broadly special casing ios/ for now, since compile_ts.gni relies on
   # unsupported behavior of setting the root_dir to src/.
-  # TODO (https://www.crbug.com/1412158): Make iOS TypeScript build tools use
+  # TODO (https://www.crbug.com/493269336): Make iOS TypeScript build tools use
   # ts_library in a supported way, or change them to not rely on ts_library.
-  if (is_ios and 'ios' in pathlib.Path(target_path).parts):
+  if is_ios and ('ios' in pathlib.Path(target_path).parts
+                 or 'ios_internal' in pathlib.Path(target_path).parts):
     return True, None
 
   # Legacy cases supported for backward-compatibility. Do not add new targets

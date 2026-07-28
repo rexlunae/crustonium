@@ -32,6 +32,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
@@ -66,6 +67,7 @@
 #include "third_party/blink/renderer/core/loader/prefetched_signed_exchange_manager.h"
 #include "third_party/blink/renderer/core/loader/preload_helper.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
 #include "third_party/blink/renderer/core/script/html_parser_script_runner.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
@@ -344,6 +346,8 @@ class HTMLDocumentParser::PendingPreloads
 
 HTMLDocumentParser::HTMLDocumentParser(HTMLDocument& document,
                                        ParserSynchronizationPolicy sync_policy,
+                                       CustomElementRegistry* registry,
+                                       StreamingSanitizer* sanitizer,
                                        ParserPrefetchPolicy prefetch_policy)
     : HTMLDocumentParser(document,
                          kAllowScriptingContent,
@@ -357,16 +361,18 @@ HTMLDocumentParser::HTMLDocumentParser(HTMLDocument& document,
   bool include_shadow_roots = document.GetDeclarativeShadowRootAllowState() !=
                               Document::DeclarativeShadowRootAllowState::kDeny;
   tree_builder_ = MakeGarbageCollected<HTMLTreeBuilder>(
-      this, document, kAllowScriptingContent, options_, include_shadow_roots);
+      this, document, kAllowScriptingContent, options_, include_shadow_roots,
+      registry, sanitizer);
 }
 
 HTMLDocumentParser::HTMLDocumentParser(
-    ContainerNode* fragment_target,
+    DocumentFragment* fragment_target,
     Element* context_element,
     ParserContentPolicy parser_content_policy,
     ParserPrefetchPolicy parser_prefetch_policy,
     CustomElementRegistry* registry,
-    StreamingSanitizer* sanitizer)
+    StreamingSanitizer* sanitizer,
+    ParserRootInsertionPoint* root_insertion_point)
     : HTMLDocumentParser(fragment_target->GetDocument(),
                          parser_content_policy,
                          kForceSynchronousParsing,
@@ -382,10 +388,15 @@ HTMLDocumentParser::HTMLDocumentParser(
   tokenizer_.SetState(TokenizerStateForContextElement(context_element,
                                                       report_errors, options_));
 
-  // No script_runner_ in fragment parser.
+  if (parser_content_policy == kAllowScriptingContentAndMarkAsParserInserted) {
+    CHECK(RuntimeEnabledFeatures::NewHTMLSettingMethodsEnabled());
+    script_runner_ = HTMLParserScriptRunner::Create(
+        ReentryPermit(), &fragment_target->GetDocument(), this);
+  }
+
   tree_builder_ = MakeGarbageCollected<HTMLTreeBuilder>(
       this, fragment_target, context_element, parser_content_policy, options_,
-      include_shadow_roots, registry, sanitizer);
+      include_shadow_roots, registry, sanitizer, root_insertion_point);
 }
 
 HTMLDocumentParser::HTMLDocumentParser(Document& document,
@@ -425,7 +436,7 @@ HTMLDocumentParser::HTMLDocumentParser(Document& document,
   if (sync_policy == kAllowDeferredParsing &&
       document.IsInOutermostMainFrame() &&
       base::TimeTicks::IsHighResolution() &&
-      document.Url().ProtocolIsInHTTPFamily()) {
+      document.Url().ProtocolIsInHttpFamily()) {
     metrics_reporter_ = std::make_unique<HTMLParserMetrics>(
         document.UkmSourceID(), document.UkmRecorder());
   }
@@ -552,7 +563,7 @@ void HTMLDocumentParser::PrepareToStopParsing() {
   AttemptToRunDeferredScriptsAndEnd();
 
   base::TimeDelta elapsed_time = timer.Elapsed();
-  if (metrics_sub_sampler_.ShouldSample(0.01)) {
+  if (base::ShouldRecordSubsampledMetric(0.01)) {
     base::UmaHistogramTimes("Blink.PrepareToStopParsingTime", elapsed_time);
   }
   if (metrics_reporter_) {
@@ -686,9 +697,9 @@ bool HTMLDocumentParser::PumpTokenizer() {
   unsigned starting_bytes;
   if (is_tracing) {
     starting_bytes = input_.length();
-    TRACE_EVENT_BEGIN2("blink", "HTMLDocumentParser::PumpTokenizer",
-                       "should_complete", should_run_until_completion,
-                       "bytes_queued", starting_bytes);
+    TRACE_EVENT_BEGIN("blink", "HTMLDocumentParser::PumpTokenizer",
+                      "should_complete", should_run_until_completion,
+                      "bytes_queued", starting_bytes);
   }
   base::ElapsedTimer pump_tokenizer_timer;
 
@@ -787,7 +798,7 @@ bool HTMLDocumentParser::PumpTokenizer() {
   }
 
   base::TimeDelta pump_tokenizer_elapsed_time = pump_tokenizer_timer.Elapsed();
-  if (metrics_sub_sampler_.ShouldSample(0.01)) {
+  if (base::ShouldRecordSubsampledMetric(0.01)) {
     base::UmaHistogramTimes("Blink.PumpTokenizerTime",
                             pump_tokenizer_elapsed_time);
   }
@@ -797,9 +808,8 @@ bool HTMLDocumentParser::PumpTokenizer() {
   }
 
   if (is_tracing) {
-    TRACE_EVENT_END2("blink", "HTMLDocumentParser::PumpTokenizer",
-                     "parsed_tokens", tokens_parsed, "parsed_bytes",
-                     starting_bytes - input_.length());
+    TRACE_EVENT_END("blink", "parsed_tokens", tokens_parsed, "parsed_bytes",
+                    starting_bytes - input_.length());
   }
 
   const bool is_stopped_or_parsing_fragment =
@@ -894,6 +904,7 @@ void HTMLDocumentParser::ConstructTreeFromToken(AtomicHTMLToken& atomic_token) {
   // Check whether we've exited the header.
   if (!task_runner_state_->HaveExitedHeader()) {
     if (GetDocument()->body()) {
+      TRACE_EVENT_INSTANT("blink", "HTMLDocumentParser::SetExitedHeader");
       task_runner_state_->SetExitedHeader();
     }
   }
@@ -1369,23 +1380,11 @@ void HTMLDocumentParser::ParseDocumentFragment(
     DocumentFragment* fragment,
     Element* context_element,
     CustomElementRegistry* registry,
-    ParserContentPolicy parser_content_policy) {
+    ParserContentPolicy parser_content_policy,
+    StreamingSanitizer* sanitizer) {
   auto* parser = MakeGarbageCollected<HTMLDocumentParser>(
       fragment, context_element, parser_content_policy,
-      ParserPrefetchPolicy::kAllowPrefetching, registry, /*sanitizer*/ nullptr);
-
-  if (RuntimeEnabledFeatures::DOMPartsAPIEnabled()) {
-    // Within templates containing the `parseparts` attribute, allow parsing
-    // DOM Parts. Otherwise do not parse any DOM Part content.
-    DOMPartsAllowed parts_allowed{DOMPartsAllowed::kNever};
-    if (auto* template_element =
-            DynamicTo<HTMLTemplateElement>(context_element);
-        template_element &&
-        template_element->hasAttribute(html_names::kParsepartsAttr)) {
-      parts_allowed = DOMPartsAllowed::kAlways;
-    }
-    parser->tree_builder_->SetDOMPartsAllowedState(parts_allowed);
-  }
+      ParserPrefetchPolicy::kAllowPrefetching, registry, sanitizer);
 
   parser->Append(source);
   parser->Finish();
@@ -1427,7 +1426,7 @@ void HTMLDocumentParser::DocumentElementAvailable() {
               perfetto::Flow::FromPointer(this));
   Document* document = GetDocument();
   DCHECK(document);
-  DCHECK(document->documentElement());
+  DCHECK(document->documentElement() || tree_builder_);
   Element* documentElement = GetDocument()->documentElement();
   if (documentElement->hasAttribute(AtomicString(u"\u26A1")) ||
       documentElement->hasAttribute(AtomicString("amp")) ||
@@ -1637,6 +1636,12 @@ void HTMLDocumentParser::ScanInBackground(const String& source) {
     return;
   }
 
+  // Text documents don't have any external resources, so they won't benefit
+  // from the background scanner.
+  if (GetDocument()->IsTextDocument()) {
+    return;
+  }
+
   if (ThreadedPreloadScannerEnabled() && preloader_ &&
       // TODO(crbug.com/1329535): Support scanning prefetch documents in the
       // background.
@@ -1820,14 +1825,21 @@ bool HTMLDocumentParser::AllowPreloading() {
     return false;
   }
 
+  CHECK_GE(seen_csp_meta_tags_, 0);
+  if (!seen_csp_meta_tags_) {
+    // No CSP meta tags seen - Early return allowing preloads.
+    return true;
+  }
+
   if (RuntimeEnabledFeatures::AllowPreloadingWithCSPMetaTagEnabled()) {
-    CHECK_GE(seen_csp_meta_tags_, 0);
-    if (!seen_csp_meta_tags_) {
-      // No CSP meta tags seen - Early return allowing preloads.
-      return true;
+    Document* document = GetDocument();
+    if (!document) {
+      // Seen CSP tag, but there is no document to check the CSP (detach()
+      // has been called). Disallow preloads.
+      return false;
     }
 
-    ExecutionContext* context = GetDocument()->GetExecutionContext();
+    ExecutionContext* context = document->GetExecutionContext();
     if (!context) {
       // Seen CSP meta tag but there's no CSP info yet. Disallow preloads.
       return false;
@@ -1840,11 +1852,17 @@ bool HTMLDocumentParser::AllowPreloading() {
     }
 
     // Only allows preloads if all seen meta tags have been processed.
-    return static_cast<int>(csp->GetParsedPolicies().size()) ==
-           seen_csp_meta_tags_;
+    int processed_meta_policies = 0;
+    for (const auto& policy : csp->GetParsedPolicies()) {
+      if (policy->header->source ==
+          network::mojom::blink::ContentSecurityPolicySource::kMeta) {
+        ++processed_meta_policies;
+      }
+    }
+    return processed_meta_policies == seen_csp_meta_tags_;
+  } else {
+    return false;
   }
-
-  return true;
 }
 
 }  // namespace blink

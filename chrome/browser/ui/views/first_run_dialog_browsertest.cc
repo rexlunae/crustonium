@@ -77,3 +77,5 @@ IN_PROC_BROWSER_TEST_F(FirstRunDialogTest, CallbackFalseIfNotAccepted) {
   views::test::CancelDialog(dialog_widget);
   EXPECT_FALSE(closed_through_accept_button_);
 }
+
+

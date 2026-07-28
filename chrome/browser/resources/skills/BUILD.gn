@@ -4,39 +4,61 @@
 
 import("//ui/webui/resources/tools/build_webui.gni")
 
-assert(is_win || is_mac || is_linux || is_chromeos,
-       "This target is only supported on Windows, Mac, Linux, or ChromeOS.")
-
 build_webui("build") {
   grd_prefix = "skills"
 
   static_files = [
-    "images/skills_empty.svg",
-    "images/skills_empty_dark.svg",
+    "favicon.png",
     "skills.html",
     "skills_dialog.html",
+    "v2/skills.html",
+    "v2/skills_dialog.html",
   ]
 
   ts_composite = true
   ts_files = [
     "app.html.ts",
     "app.ts",
+    "card.html.ts",
+    "card.ts",
+    "carousel.html.ts",
+    "carousel.ts",
     "discover_skills_page.html.ts",
     "discover_skills_page.ts",
+    "emoji_data.ts",
+    "error_page.html.ts",
+    "error_page.ts",
     "icons.html.ts",
     "sidebar.html.ts",
     "sidebar.ts",
     "skills_dialog_app.html.ts",
     "skills_dialog_app.ts",
     "skills_dialog_browser_proxy.ts",
+    "skills_emoji_picker.html.ts",
+    "skills_emoji_picker.ts",
+    "skills_empty.html.ts",
+    "skills_empty.ts",
+    "skills_page_browser_proxy.ts",
+    "v2/skills_webview_bridge.ts",
+    "v2/skills_webview_bridge_constants.ts",
+    "v2/skills_webview.ts",
     "user_skills_page.html.ts",
     "user_skills_page.ts",
+    "v2/skills.ts",
+    "v2/skills_dialog.ts",
   ]
 
   css_files = [
     "app.css",
+    "card.css",
+    "carousel.css",
+    "discover_skills_page.css",
+    "error_page.css",
+    "shared_style.css",
+    "shared_vars.css",
     "sidebar.css",
     "skills_dialog.css",
+    "skills_emoji_picker.css",
     "user_skills_page.css",
   ]
 
@@ -49,6 +71,13 @@ build_webui("build") {
   mojo_files = [
     "$root_gen_dir/chrome/browser/ui/webui/skills/skills.mojom-webui.ts",
     "$root_gen_dir/components/skills/public/skill.mojom-webui.ts",
+    "$root_gen_dir/components/skills/public/skill_metrics.mojom-webui.ts",
+  ]
+
+  ts_definitions = [
+    "//tools/typescript/definitions/chrome_event.d.ts",
+    "//tools/typescript/definitions/chrome_histograms.d.ts",
+    "//tools/typescript/definitions/webview_tag.d.ts",
   ]
 
   ts_deps = [

@@ -17,6 +17,7 @@
 #include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
 #include "components/optimization_guide/core/model_execution/test/test_on_device_model_component_state_manager.h"
+#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom.h"
 #include "components/prefs/testing_pref_service.h"
@@ -55,8 +56,12 @@ class FakeModelBroker {
     // Setting this to kUnknown will emulate first-run state.
     OnDeviceModelPerformanceClass performance_class =
         OnDeviceModelPerformanceClass::kHigh;
+    // Initialize VRAM high enough to support audio input capability.
+    uint64_t vram_mb = kOnDeviceModelAudioVramMinMb;
     // If true, installs a base model to the component_state_.
     bool preinstall_base_model = true;
+    // If true, initializes the classifier controller.
+    bool include_classifier = true;
   };
   explicit FakeModelBroker(const Options& options);
   ~FakeModelBroker();
@@ -94,6 +99,7 @@ class FakeModelBroker {
   on_device_model::FakeServiceLauncher& launcher() { return fake_launcher_; }
 
  private:
+  Options options_;
   ScopedModelBrokerFeatureList feature_list_;
   ModelBrokerPrefService local_state_;
   on_device_model::FakeOnDeviceServiceSettings fake_settings_;

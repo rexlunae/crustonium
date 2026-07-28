@@ -50,7 +50,7 @@ SharingHubBubbleViewImpl::SharingHubBubbleViewImpl(
                                     attempt.web_contents.get(),
                                     /*autosize=*/true),
       attempt_(attempt) {
-  DCHECK(!std::holds_alternative<std::nullptr_t>(anchor));
+  DCHECK(!anchor.IsNull());
   DCHECK(controller);
 
   SetBackgroundColor(ui::kColorMenuBackground);
@@ -59,7 +59,7 @@ SharingHubBubbleViewImpl::SharingHubBubbleViewImpl(
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
   RegisterWindowClosingCallback(base::BindOnce(
-      &SharingHubBubbleViewImpl::OnWindowClosing, base::Unretained(this)));
+      &SharingHubBubbleViewImpl::OnWindowClosing, weak_factory_.GetWeakPtr()));
   SetEnableArrowKeyTraversal(true);
   SetShowCloseButton(false);
   SetShowTitle(false);

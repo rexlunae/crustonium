@@ -4,14 +4,9 @@
 
 #import "ios/web/web_state/ui/crw_context_menu_controller.h"
 
-#import "ios/web/web_state/ui/buildflags.h"
-
-#if BUILDFLAG(IOS_USE_BE_DEFERRED_CONTEXT_MENU)
-#import <BrowserEngineKit/BrowserEngineKit.h>
-#endif
-
 #import "base/auto_reset.h"
 #import "base/feature_list.h"
+#import "base/memory/weak_ptr.h"
 #import "base/values.h"
 #import "ios/web/common/crw_viewport_adjustment.h"
 #import "ios/web/common/crw_viewport_adjustment_container.h"
@@ -20,13 +15,14 @@
 #import "ios/web/public/ui/context_menu_params.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_delegate.h"
+#import "ios/web/web_state/ui/buildflags.h"
 #import "ios/web/web_state/ui/crw_context_menu_element_fetcher.h"
 #import "ui/gfx/geometry/rect_f.h"
 #import "ui/gfx/image/image.h"
 
 namespace {
 
-const CGFloat kJavaScriptTimeout = 1;
+const CGFloat kJavaScriptTimeout = 0.5;
 
 // Wrapper around CFRunLoop() to help crash server put all crashes happening
 // while the loop is executed in the same bucket. Marked as `noinline` to
@@ -47,17 +43,9 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
 
 @property(nonatomic, strong) WKWebView* webView;
 
-@property(nonatomic, assign) web::WebState* webState;
+@property(nonatomic) base::WeakPtr<web::WebState> webState;
 
 @property(nonatomic, strong) CRWContextMenuElementFetcher* elementFetcher;
-
-#if BUILDFLAG(IOS_USE_BE_DEFERRED_CONTEXT_MENU)
-- (void)fulfillConfiguration:(BEContextMenuConfiguration*)config
-                  withParams:(const web::ContextMenuParams&)params
-                    location:(CGPoint)location
-                 interaction:(UIContextMenuInteraction*)interaction
-    API_AVAILABLE(ios(17.4));
-#endif
 
 - (UIContextMenuConfiguration*)
     contextMenuConfigurationWithParams:(web::ContextMenuParams)params
@@ -86,7 +74,7 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
     // with the JS touch event. see crbug/351696381.
     [containerView addInteraction:_contextMenu];
 
-    _webState = webState;
+    _webState = webState ? webState->GetWeakPtr() : nullptr;
 
     _elementFetcher =
         [[CRWContextMenuElementFetcher alloc] initWithWebView:webView
@@ -128,19 +116,33 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
 #if BUILDFLAG(IOS_USE_BE_DEFERRED_CONTEXT_MENU)
   if (@available(iOS 17.4, *)) {
     if (base::FeatureList::IsEnabled(
-            web::features::kEnableBEContextMenuConfiguration)) {
-      BEContextMenuConfiguration* config =
-          [[BEContextMenuConfiguration alloc] init];
-      __weak __typeof(self) weakSelf = self;
-      [self.elementFetcher
-          fetchDOMElementAtPoint:locationInWebView
-               completionHandler:^(const web::ContextMenuParams& params) {
-                 [weakSelf fulfillConfiguration:config
-                                     withParams:params
-                                       location:location
-                                    interaction:interaction];
-               }];
-      return config;
+            web::features::kEnableBEContextMenuConfiguration) &&
+        self.webState && self.webState->GetDelegate()) {
+      UIContextMenuConfiguration* config =
+          self.webState->GetDelegate()->GetCustomContextMenuConfiguration();
+      if (config) {
+        __weak __typeof(self) weakSelf = self;
+        [self.elementFetcher
+            fetchDOMElementAtPoint:locationInWebView
+                 completionHandler:^(const web::ContextMenuParams& params) {
+                   CRWContextMenuController* strongSelf = weakSelf;
+                   if (!strongSelf) {
+                     return;
+                   }
+                   UIContextMenuConfiguration* innerConfig = [strongSelf
+                       contextMenuConfigurationWithParams:params
+                                                 location:location
+                                              interaction:interaction];
+
+                   if (!strongSelf.webState) {
+                     return;
+                   }
+
+                   strongSelf.webState->GetDelegate()
+                       ->ContextMenuConfigurationLoaded(config, innerConfig);
+                 }];
+        return config;
+      }
     }
   }
 #endif
@@ -201,7 +203,7 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
                                                     animator {
   if (self.webState && self.webState->GetDelegate()) {
     self.webState->GetDelegate()->ContextMenuWillCommitWithAnimator(
-        self.webState, animator);
+        self.webState.get(), animator);
   }
 }
 
@@ -219,20 +221,6 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
 
 #pragma mark - Private
 
-#if BUILDFLAG(IOS_USE_BE_DEFERRED_CONTEXT_MENU)
-- (void)fulfillConfiguration:(BEContextMenuConfiguration*)config
-                  withParams:(const web::ContextMenuParams&)params
-                    location:(CGPoint)location
-                 interaction:(UIContextMenuInteraction*)interaction
-    API_AVAILABLE(ios(17.4)) {
-  UIContextMenuConfiguration* innerConfig =
-      [self contextMenuConfigurationWithParams:params
-                                      location:location
-                                   interaction:interaction];
-  [config fulfillUsingConfiguration:innerConfig];
-}
-#endif
-
 - (UIContextMenuConfiguration*)
     contextMenuConfigurationWithParams:(web::ContextMenuParams)params
                               location:(CGPoint)location
@@ -249,7 +237,7 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
   __block UIContextMenuConfiguration* configuration = nil;
   if (self.webState && self.webState->GetDelegate()) {
     self.webState->GetDelegate()->ContextMenuConfiguration(
-        self.webState, params, ^(UIContextMenuConfiguration* conf) {
+        self.webState.get(), params, ^(UIContextMenuConfiguration* conf) {
           configuration = conf;
         });
   }
@@ -338,6 +326,10 @@ void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
   }
 
   isRunLoopComplete = YES;
+
+  if (!self.webState) {
+    return std::nullopt;
+  }
 
   return resultParams;
 }

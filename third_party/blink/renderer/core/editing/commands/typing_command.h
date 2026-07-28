@@ -59,7 +59,7 @@ class CORE_EXPORT TypingCommand final : public CompositeEditCommand {
     kKillRing = 1 << 1,
     kSmartDelete = 1 << 2
   };
-  typedef unsigned Options;
+  using Options = unsigned;
 
   static void DeleteSelection(Document&, Options = 0);
   static void DeleteKeyPressed(Document&,
@@ -79,7 +79,7 @@ class CORE_EXPORT TypingCommand final : public CompositeEditCommand {
   static void InsertText(
       Document&,
       const String&,
-      const SelectionInDOMTree&,
+      const SelectionInDomTree&,
       Options,
       EditingState*,
       PasswordEchoBehavior,
@@ -92,6 +92,9 @@ class CORE_EXPORT TypingCommand final : public CompositeEditCommand {
   static bool InsertParagraphSeparatorInQuotedContent(Document&);
   static void CloseTyping(LocalFrame*);
   static void CloseTypingIfNeeded(LocalFrame*);
+
+  // Normalizes CRLF and standalone CR to LF for consistent newline handling.
+  static String NormalizeTextForInsertion(const String&);
 
   static TypingCommand* LastTypingCommandIfStillOpenForTyping(LocalFrame*);
   static void UpdateSelectionIfDifferentFromCurrentSelection(TypingCommand*,

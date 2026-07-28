@@ -7,6 +7,7 @@
  * for Autofill AI.
  */
 
+import '/shared/settings/controls/extension_controlled_indicator.js';
 import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_icons.css.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
@@ -126,11 +127,11 @@ export class SettingsAutofillAiSectionElement extends
         If true, Autofill AI does not depend on whether Autofill for addresses
         is enabled.
       */
-      autofillAiIgnoresWhetherAddressFillingIsEnabled_: {
+      autofillSettingsEnterprisePolicyEnabled_: {
         type: Boolean,
         value() {
           return loadTimeData.getBoolean(
-              'AutofillAiIgnoresWhetherAddressFillingIsEnabled');
+              'AutofillSettingsEnterprisePolicyEnabled');
         },
       },
 
@@ -150,8 +151,10 @@ export class SettingsAutofillAiSectionElement extends
 
   static get observers() {
     return [
-      `onAutofillAddressPrefChanged_(
-          prefs.autofill.profile_enabled.value)`,
+      `onEnterprisePolicyChanged_(prefs.${
+          AiEnterpriseFeaturePrefName.AUTOFILL_AI}.value,
+          prefs.autofill.profile_enabled.*,
+          ineligibleUser)`,
     ];
   }
 
@@ -162,31 +165,56 @@ export class SettingsAutofillAiSectionElement extends
   declare private optedIn_: chrome.settingsPrivate.PrefObject;
   declare private isWalletServerStorageEnabled_: boolean;
   declare private isUserEligibleForWalletablePassDetection_: boolean;
-  declare private autofillAiIgnoresWhetherAddressFillingIsEnabled_: boolean;
+  declare private autofillSettingsEnterprisePolicyEnabled_: boolean;
   declare private autofillAiAvailableByDefault_: boolean;
 
   private entityDataManager_: EntityDataManagerProxy =
       EntityDataManagerProxyImpl.getInstance();
 
-  override connectedCallback() {
-    super.connectedCallback();
+  private async onEnterprisePolicyChanged_() {
+    // TODO(crbug.com/490338056): replace undefined check with pref
+    // initialization check
+    const addressAutofillEnabled = this.get('prefs.autofill.profile_enabled');
 
-    this.entityDataManager_.getOptInStatus().then(
-        optedIn => this.set('optedIn_.value', !this.ineligibleUser && optedIn));
-    const policyDisabled =
+    if (!!addressAutofillEnabled &&
+        addressAutofillEnabled.enforcement ===
+            chrome.settingsPrivate.Enforcement.ENFORCED &&
+        !addressAutofillEnabled.value &&
+        !this.autofillSettingsEnterprisePolicyEnabled_) {
+      // We need to check addressAutofillEnabled.value here. this.ineligibleUser
+      // does consider addressAutofillEnabled.value, but loadTimeData constants
+      // are refreshed only after page reload.
+      this.set(
+          'optedIn_.value',
+          !this.ineligibleUser && addressAutofillEnabled.value);
+      this.set('optedIn_.enforcement', addressAutofillEnabled.enforcement);
+      this.set('optedIn_.controlledBy', addressAutofillEnabled.controlledBy);
+      return;
+    }
+
+    const optedIn = await this.entityDataManager_.getOptInStatus();
+    const autofillAiPolicyDisabled =
         this.getPref(AiEnterpriseFeaturePrefName.AUTOFILL_AI).value ===
         ModelExecutionEnterprisePolicyValue.DISABLE;
-    if (policyDisabled) {
+    if (autofillAiPolicyDisabled) {
       this.set(
           'optedIn_.enforcement', chrome.settingsPrivate.Enforcement.ENFORCED);
       this.set(
           'optedIn_.controlledBy',
           chrome.settingsPrivate.ControlledBy.USER_POLICY);
+    } else {
+      this.set('optedIn_.enforcement', undefined);
+      this.set('optedIn_.controlledBy', undefined);
     }
-  }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
+    if (this.autofillSettingsEnterprisePolicyEnabled_) {
+      this.set('optedIn_.value', !this.ineligibleUser && optedIn);
+    } else {
+      this.set(
+          'optedIn_.value',
+          !this.ineligibleUser && optedIn && !!addressAutofillEnabled &&
+              addressAutofillEnabled.value);
+    }
   }
 
   private async onOptInToggleChange_() {
@@ -217,25 +245,11 @@ export class SettingsAutofillAiSectionElement extends
     return pref !== ModelExecutionEnterprisePolicyValue.ALLOW;
   }
 
-  // Adjusts the opt-in state when address autofill status changes.
-  //
-  // This covers the case where a user disables address autofill and then checks
-  // the AutofillAI opt-in status. In this case, we do not remove the AutofillAI
-  // entry, but just set the opt-in to false. Note that other
-  // preconditions (e.g., sync) are not covered.
-  private async onAutofillAddressPrefChanged_(prefValue: boolean) {
-    if (this.autofillAiIgnoresWhetherAddressFillingIsEnabled_) {
-      return;
-    }
-    const optedIn = await this.entityDataManager_.getOptInStatus();
-    this.set('optedIn_.value', !this.ineligibleUser && optedIn && prefValue);
-  }
-
   private getFirstWhenOnSectionTitle_() {
     return this.i18n(
         this.autofillAiAvailableByDefault_ ?
             'autofillAiWhenOnCanFillDifficultFields' :
-            'autofillAiWhenOnUseToFill');
+            'autofillAiWhenOnSavedInfo');
   }
 
   private getFirstWhenOnSectionIcon_() {
@@ -246,6 +260,30 @@ export class SettingsAutofillAiSectionElement extends
   // SettingsViewMixin implementation.
   override focusBackButton() {
     this.shadowRoot!.querySelector('settings-subpage')!.focusBackButton();
+  }
+
+  private showExtensionControlledIndicator_() {
+    // TODO(crbug.com/490338056): replace undefined check with pref
+    // initialization check
+    const addressAutofillEnabled = this.get('prefs.autofill.profile_enabled');
+
+    // We show the extension control only if the extension forces false value
+    return !!addressAutofillEnabled && !!addressAutofillEnabled.extensionId &&
+        !addressAutofillEnabled.value;
+  }
+
+  private optInToggleDisabled_(): boolean {
+    // TODO(crbug.com/490338056): replace undefined check with pref
+    // initialization check
+    const addressAutofillEnabled = this.get('prefs.autofill.profile_enabled');
+    const addressAutofillEnforcedFalse = !!addressAutofillEnabled &&
+        addressAutofillEnabled.enforcement ===
+            chrome.settingsPrivate.Enforcement.ENFORCED &&
+        !addressAutofillEnabled.value;
+    // We need to check addressAutofillEnabled.value here. this.ineligibleUser
+    // does consider addressAutofillEnabled.value, but loadTimeData constants
+    // are refreshed only after page reload.
+    return this.ineligibleUser || addressAutofillEnforcedFalse;
   }
 }
 

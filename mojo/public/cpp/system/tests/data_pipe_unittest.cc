@@ -10,8 +10,10 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/test/task_environment.h"
+#include "mojo/buildflags.h"
 #include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/system/data_pipe.h"
+#include "partition_alloc/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -82,15 +84,49 @@ TEST(DataPipeCppTest, WriteDataGracefullyHandlesBigSize) {
   // TODO(lukasza): Avoid UB risk by testing with a `std::vector` that contains
   // `std::numeric_limits<uint32_t>::max() + 123` bytes.  (Once our allocator
   // supports such big vectors.)
+  //
+  // Note: this will be challenging given the limits of different platforms
+  // crossed with different build configurations. One must account for
+  //
+  // *    Whether PartitionAlloc-Everywhere is in use (limiting your max
+  //      alloc size)
+  //
+  // *    If Windows (and not PA-E), the limits of the Windows CRT
+  //
+  // *    If sanitizer, the limits of the underlying allocator
+  //
+  // *    ...other not-immediately-obvious platform-specific pitfalls (e.g.
+  //      Mac, Fuchsia, and linux-chromeos failures)
+  //
+  // *    See https://crrev.com/c/7637373 for an example CL that almost
+  //      satisfies these constraints (but later fails on non-CQ bots).
   std::vector<uint8_t> kData(1024, 0x00);
   base::span<const uint8_t> big_span = UNSAFE_BUFFERS(base::span<const uint8_t>(
-      kData.data(),
+      base::unchecked, kData.data(),
       std::numeric_limits<size_t>::max()));  // subtle - see above why ok
   size_t bytes_written = 0;
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_BUILDFLAG(CHECKED_SPAN) && !BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
+  // Even though we use `base::unchecked` to mint the bogus `big_span`,
+  // Mojo will blow this apart into a pointer+size, pass it through the
+  // C API layer, and reconstitute a (checked) span underneath --- where
+  // we would crash.
+  //
+  // Note: this reconstitution doesn't take place on non-ipcz Mojo Core,
+  // where this ends up being routed to
+  // `DataPipeProducerDispatcher::WriteData()`, using naked `memcpy()`.
+  EXPECT_DEATH_IF_SUPPORTED(
+      producer_handle->WriteData(big_span, MOJO_BEGIN_WRITE_DATA_FLAG_NONE,
+                                 bytes_written),
+      "");
+#else
   ASSERT_EQ(producer_handle->WriteData(
                 big_span, MOJO_BEGIN_WRITE_DATA_FLAG_NONE, bytes_written),
             MOJO_RESULT_OK);
   EXPECT_EQ(bytes_written, 16u);
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&
+        // PA_BUILDFLAG(CHECKED_SPAN) && !BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
 }
 
 TEST(DataPipeCppTest, ReadDataGracefullyHandlesBigSize) {
@@ -116,16 +152,50 @@ TEST(DataPipeCppTest, ReadDataGracefullyHandlesBigSize) {
   // TODO(lukasza): Avoid UB risk by testing with a `std::vector` that can
   // accommodate `std::numeric_limits<uint32_t>::max() + 123` bytes.  (Once our
   // allocator supports such big vectors.)
+  //
+  // Note: this will be challenging given the limits of different platforms
+  // crossed with different build configurations. One must account for
+  //
+  // *    Whether PartitionAlloc-Everywhere is in use (limiting your max
+  //      alloc size)
+  //
+  // *    If Windows (and not PA-E), the limits of the Windows CRT
+  //
+  // *    If sanitizer, the limits of the underlying allocator
+  //
+  // *    ...other not-immediately-obvious platform-specific pitfalls (e.g.
+  //      Mac, Fuchsia, and linux-chromeos failures)
+  //
+  // *    See https://crrev.com/c/7637373 for an example CL that almost
+  //      satisfies these constraints (but later fails on non-CQ bots).
   std::vector<uint8_t> read_buffer(100);
   base::span<uint8_t> big_span = UNSAFE_BUFFERS(base::span<uint8_t>(
-      read_buffer.data(), std::numeric_limits<size_t>::max()));
+      base::unchecked, read_buffer.data(), std::numeric_limits<size_t>::max()));
   size_t actually_read_bytes;
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_BUILDFLAG(CHECKED_SPAN) && !BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
+  // Even though we use `base::unchecked` to mint the bogus `big_span`,
+  // Mojo will blow this apart into a pointer+size, pass it through the
+  // C API layer, and reconstitute a (checked) span underneath --- where
+  // we would crash.
+  //
+  // Note: this reconstitution doesn't take place on non-ipcz Mojo Core,
+  // where this ends up being routed to
+  // `DataPipeProducerDispatcher::WriteData()`, using naked `memcpy()`.
+  EXPECT_DEATH_IF_SUPPORTED(
+      consumer_handle->ReadData(MOJO_READ_DATA_FLAG_NONE, big_span,
+                                actually_read_bytes),
+      "");
+#else
   ASSERT_EQ(consumer_handle->ReadData(MOJO_READ_DATA_FLAG_NONE, big_span,
                                       actually_read_bytes),
             MOJO_RESULT_OK);
   EXPECT_EQ(actually_read_bytes, 10u);
   EXPECT_EQ(base::as_byte_span(read_buffer).first(10u),
             base::as_byte_span(std::string_view(kData)));
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&
+        // PA_BUILDFLAG(CHECKED_SPAN) && !BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
 }
 
 TEST(DataPipeCppTest, EndReadDataErrorWhenSizeTooBig) {

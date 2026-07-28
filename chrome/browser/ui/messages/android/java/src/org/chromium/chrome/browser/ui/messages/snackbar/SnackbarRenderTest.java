@@ -83,7 +83,13 @@ public class SnackbarRenderTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mParent = mActivity.findViewById(android.R.id.content);
-                    mSnackbarManager = new SnackbarManager(mActivity, mParent, null);
+                    mSnackbarManager =
+                            new SnackbarManager(
+                                    mActivity,
+                                    mParent,
+                                    null,
+                                    null,
+                                    ((BlankUiTestActivity) mActivity).getModalDialogManager());
                     SnackbarManager.setDurationForTesting(10000);
                 });
         CriteriaHelper.pollUiThread(
@@ -95,7 +101,7 @@ public class SnackbarRenderTest {
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mSnackbarManager.dismissAllSnackbars();
+                    mSnackbarManager.destroy();
                 });
         CriteriaHelper.pollUiThread(
                 () -> !mSnackbarManager.isShowing(), "Snackbar should have been dismissed.");

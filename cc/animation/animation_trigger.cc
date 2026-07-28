@@ -4,11 +4,16 @@
 
 #include "cc/animation/animation_trigger.h"
 
+#include <memory>
 #include <vector>
 
+#include "base/check_op.h"
+#include "base/time/time.h"
 #include "cc/animation/animation_host.h"
 #include "cc/animation/animation_timeline.h"
+#include "cc/animation/animation_trigger_delegate.h"
 #include "cc/animation/keyframe_effect.h"
+#include "ui/gfx/animation/keyframe/keyframe_model.h"
 
 namespace cc {
 
@@ -75,6 +80,134 @@ void AnimationTrigger::SetAnimationData(std::vector<AnimationData>& data) {
   if (animation_data_.Read(*this) != data) {
     SetNeedsPushProperties();
     animation_data_.Write(*this) = data;
+  }
+}
+
+void AnimationTrigger::PerformActivate(AnimationEvents* events,
+                                       base::TimeTicks monotonic_time) {
+  DCHECK(events);
+  events->events().emplace_back(AnimationTriggerEvent(
+      id(), AnimationTriggerEvent::Type::kActivate, monotonic_time));
+
+  for (auto& animation_data : animation_data_.Write(*this)) {
+    AnimationTimeline* timeline =
+        animation_host_->GetTimelineById(animation_data.timeline_id);
+    Animation* animation =
+        timeline->GetAnimationById(animation_data.animation_id);
+    DCHECK(animation);
+    PerformBehavior(*animation, animation_data.activate_behavior,
+                    monotonic_time);
+  }
+}
+
+void AnimationTrigger::PerformDeactivate(AnimationEvents* events,
+                                         base::TimeTicks monotonic_time) {
+  DCHECK(events);
+  events->events().emplace_back(AnimationTriggerEvent(
+      id(), AnimationTriggerEvent::Type::kDeactivate, monotonic_time));
+
+  for (auto& animation_data : animation_data_.Write(*this)) {
+    AnimationTimeline* timeline =
+        animation_host_->GetTimelineById(animation_data.timeline_id);
+    Animation* animation =
+        timeline->GetAnimationById(animation_data.animation_id);
+    DCHECK(animation);
+    PerformBehavior(*animation, animation_data.deactivate_behavior,
+                    monotonic_time);
+  }
+}
+
+void AnimationTrigger::SetAnimationTriggerDelegate(
+    AnimationTriggerDelegate* delegate) {
+  animation_trigger_delegate_ = delegate;
+}
+
+void AnimationTrigger::DispatchAnimationTriggerEvent(
+    const AnimationTriggerEvent& event) {
+  if (animation_trigger_delegate_) {
+    switch (event.type) {
+      case AnimationTriggerEvent::Type::kActivate:
+        animation_trigger_delegate_->NotifyActivated(event.time);
+        break;
+      case AnimationTriggerEvent::Type::kDeactivate:
+        animation_trigger_delegate_->NotifyDeactivated(event.time);
+    }
+  }
+}
+
+void AnimationTrigger::PerformPlay(Animation& animation,
+                                   base::TimeTicks monotonic_time) {
+  animation.Play(monotonic_time, Animation::AutoRewind::kDisabled);
+}
+
+void AnimationTrigger::PerformPause(Animation& animation,
+                                    base::TimeTicks monotonic_time) {
+  if (animation.IsPaused() || animation.IsFinished()) {
+    return;
+  }
+
+  animation.Pause(animation.CalculateCurrentTime(monotonic_time));
+}
+
+void AnimationTrigger::PerformReplay(Animation& animation,
+                                     base::TimeTicks monotonic_time) {
+  animation.Play(monotonic_time, Animation::AutoRewind::kForced);
+}
+
+void AnimationTrigger::PerformPlayOnce(Animation& animation,
+                                       base::TimeTicks monotonic_time) {
+  if (animation.IsFinished()) {
+    return;
+  }
+  animation.Play(monotonic_time);
+}
+
+void AnimationTrigger::PerformPlayForwards(Animation& animation,
+                                           base::TimeTicks monotonic_time) {
+  if (animation.GetPlaybackRate() > 0) {
+    animation.Play(monotonic_time, Animation::AutoRewind::kDisabled);
+  } else {
+    animation.Reverse(monotonic_time, Animation::AutoRewind::kDisabled);
+  }
+}
+
+void AnimationTrigger::PerformPlayBackwards(Animation& animation,
+                                            base::TimeTicks monotonic_time) {
+  if (animation.GetPlaybackRate() < 0) {
+    animation.Play(monotonic_time, Animation::AutoRewind::kDisabled);
+  } else {
+    animation.Reverse(monotonic_time, Animation::AutoRewind::kDisabled);
+  }
+}
+
+void AnimationTrigger::PerformBehavior(Animation& animation,
+                                       Behavior behavior,
+                                       base::TimeTicks monotonic_time) {
+  switch (behavior) {
+    case Behavior::kPlay:
+      PerformPlay(animation, monotonic_time);
+      break;
+    case Behavior::kPause:
+      PerformPause(animation, monotonic_time);
+      break;
+    case Behavior::kReplay:
+      PerformReplay(animation, monotonic_time);
+      break;
+    case Behavior::kPlayOnce:
+      PerformPlayOnce(animation, monotonic_time);
+      break;
+    case Behavior::kPlayForwards:
+      PerformPlayForwards(animation, monotonic_time);
+      break;
+    case Behavior::kPlayBackwards:
+      PerformPlayBackwards(animation, monotonic_time);
+      break;
+    case Behavior::kReset:
+      // TODO(crbug.com/451238244): Reset is not supported on the compositor
+      // thread yet and is handled on the main thread.
+      break;
+    case Behavior::kNone:
+      break;
   }
 }
 

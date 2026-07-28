@@ -18,6 +18,7 @@
 
 namespace cc::slim {
 class Layer;
+class NinePatchLayer;
 class SolidColorLayer;
 class UIResourceLayer;
 }  // namespace cc::slim
@@ -44,7 +45,10 @@ class TabStripSceneLayer : public SceneLayer {
                     int32_t reorder_background_bottom_margin,
                     int32_t reorder_background_padding_short,
                     int32_t reorder_background_padding_long,
-                    int32_t reorder_background_corner_radius);
+                    int32_t reorder_background_corner_radius,
+                    float tab_underline_thickness,
+                    float tab_underline_corner_radius,
+                    float tab_underline_bottom_margin);
 
   void SetContentTree(JNIEnv* env,
                       const base::android::JavaRef<jobject>& jcontent_tree);
@@ -69,7 +73,11 @@ class TabStripSceneLayer : public SceneLayer {
                            float scrim_opacity,
                            float left_padding,
                            float right_padding,
-                           float top_padding);
+                           float top_padding,
+                           float divider_y,
+                           bool should_show_divider,
+                           int32_t divider_resource_id,
+                           int32_t divider_tint);
 
   void UpdateNewTabButton(JNIEnv* env,
                           int32_t resource_id,
@@ -86,6 +94,58 @@ class TabStripSceneLayer : public SceneLayer {
                           int32_t keyboard_focus_ring_resource_id,
                           int32_t keyboard_focus_ring_color);
 
+  void UpdateGlicButton(JNIEnv* env,
+                        int32_t resource_id,
+                        float x,
+                        float y,
+                        float button_width,
+                        float button_height,
+                        bool visible,
+                        bool should_apply_hover_highlight,
+                        int32_t tint,
+                        bool should_tint,
+                        int32_t background_tint,
+                        float button_alpha,
+                        bool is_keyboard_focused,
+                        int32_t keyboard_focus_ring_resource_id,
+                        int32_t keyboard_focus_ring_color,
+                        float keyboard_focus_ring_offset,
+                        int32_t text_texture_id,
+                        float button_start_padding,
+                        float icon_text_padding,
+                        float corner_radius_outer,
+                        float corner_radius_inner,
+                        int32_t dismiss_resource_id,
+                        float dismiss_x,
+                        float dismiss_y,
+                        bool dismiss_visible,
+                        int32_t dismiss_tint,
+                        bool dismiss_is_keyboard_focused,
+                        int32_t dismiss_keyboard_focus_ring_resource_id,
+                        int32_t dismiss_keyboard_focus_ring_color);
+
+  void UpdateGlicActorButton(JNIEnv* env,
+                             int32_t resource_id,
+                             float x,
+                             float y,
+                             float button_width,
+                             float button_height,
+                             bool visible,
+                             bool should_apply_hover_highlight,
+                             int32_t tint,
+                             bool should_tint,
+                             int32_t background_tint,
+                             float button_alpha,
+                             bool is_keyboard_focused,
+                             int32_t keyboard_focus_ring_resource_id,
+                             int32_t keyboard_focus_ring_color,
+                             float keyboard_focus_ring_offset,
+                             int32_t text_texture_id,
+                             float button_start_padding,
+                             float icon_text_padding,
+                             float corner_radius_outer,
+                             float corner_radius_inner);
+
   void UpdateModelSelectorButton(JNIEnv* env,
                                  int32_t resource_id,
                                  int32_t bg_resource_id,
@@ -100,17 +160,27 @@ class TabStripSceneLayer : public SceneLayer {
                                  int32_t keyboard_focus_ring_resource_id,
                                  int32_t keyboard_focus_ring_color);
 
-  void UpdateTabStripLeftFade(JNIEnv* env,
-                              int32_t resource_id,
-                              float opacity,
-                              int32_t leftFadeColor,
-                              float left_padding);
+  void UpdateTabSearchButton(JNIEnv* env,
+                             int32_t resource_id,
+                             int32_t bg_resource_id,
+                             float x,
+                             float y,
+                             bool visible,
+                             bool should_apply_hover_highlight,
+                             int32_t tint,
+                             int32_t background_tint,
+                             float button_alpha,
+                             bool is_keyboard_focused,
+                             int32_t keyboard_focus_ring_resource_id,
+                             int32_t keyboard_focus_ring_color);
 
-  void UpdateTabStripRightFade(JNIEnv* env,
-                               int32_t resource_id,
-                               float opacity,
-                               int32_t rightFadeColor,
-                               float right_padding);
+  void UpdateTabStripFade(JNIEnv* env,
+                          bool is_left,
+                          int32_t fade_color,
+                          float opacity,
+                          float gradient_width,
+                          float opaque_width,
+                          float padding);
 
   void PutStripTabLayer(JNIEnv* env,
                         int32_t id,
@@ -134,6 +204,12 @@ class TabStripSceneLayer : public SceneLayer {
                         int32_t media_indicator_resource_id,
                         int32_t media_indicator_tint,
                         float media_indicator_width,
+                        float media_indicator_spacing,
+                        float media_indicator_internal_padding,
+                        float title_to_media_indicator_spacing,
+                        int32_t tab_indicator_overlay_resource_id,
+                        float tab_indicator_overlay_rotation,
+                        float tab_indicator_overlay_width,
                         float toolbar_width,
                         float x,
                         float y,
@@ -157,7 +233,13 @@ class TabStripSceneLayer : public SceneLayer {
                         int32_t keyboard_focus_ring_offset,
                         int32_t stroke_width,
                         float folio_foot_length,
-                        bool is_pinned);
+                        bool is_pinned,
+                        float pinned_icon_offset_x,
+                        float underline_opacity,
+                        float underline_shimmer_offset,
+                        int32_t underline_start_color,
+                        int32_t underline_end_color,
+                        int32_t underline_width_threshold);
 
   void PutGroupIndicatorLayer(
       JNIEnv* env,
@@ -210,6 +292,33 @@ class TabStripSceneLayer : public SceneLayer {
       bool is_keyboard_focused,
       ui::Resource* keyboard_focus_ring_drawable);
 
+  void UpdateGlicButtonInternal(
+      scoped_refptr<cc::slim::Layer> container_layer,
+      scoped_refptr<cc::slim::SolidColorLayer> background_layer,
+      scoped_refptr<cc::slim::UIResourceLayer> icon_layer,
+      scoped_refptr<cc::slim::UIResourceLayer> text_layer,
+      scoped_refptr<cc::slim::NinePatchLayer> focus_ring_layer,
+      int32_t resource_id,
+      float x,
+      float y,
+      float button_width,
+      float button_height,
+      bool visible,
+      int32_t tint,
+      bool should_tint,
+      int32_t background_tint,
+      float button_alpha,
+      bool is_keyboard_focused,
+      int32_t keyboard_focus_ring_resource_id,
+      int32_t keyboard_focus_ring_color,
+      float keyboard_focus_ring_offset,
+      bool should_flip_keyboard_focus_ring,
+      int32_t text_texture_id,
+      float button_start_padding,
+      float icon_text_padding,
+      float corner_radius_outer,
+      float corner_radius_inner);
+
   typedef std::vector<scoped_refptr<TabHandleLayer>> TabHandleLayerList;
 
   scoped_refptr<cc::slim::SolidColorLayer> background_layer_;
@@ -223,18 +332,40 @@ class TabStripSceneLayer : public SceneLayer {
   scoped_refptr<cc::slim::UIResourceLayer> new_tab_button_;
   scoped_refptr<cc::slim::UIResourceLayer> new_tab_button_background_;
   scoped_refptr<cc::slim::UIResourceLayer> new_tab_button_keyboard_focus_ring_;
-  scoped_refptr<cc::slim::UIResourceLayer> left_fade_;
-  scoped_refptr<cc::slim::UIResourceLayer> right_fade_;
+  scoped_refptr<cc::slim::SolidColorLayer> left_fade_;
+  scoped_refptr<cc::slim::SolidColorLayer> right_fade_;
 
   // Layers covering the tab strip padding area, used as an visual extension of
   // fading.
   scoped_refptr<cc::slim::SolidColorLayer> left_padding_layer_;
   scoped_refptr<cc::slim::SolidColorLayer> right_padding_layer_;
+  scoped_refptr<cc::slim::UIResourceLayer> window_controls_divider_;
+
+  scoped_refptr<cc::slim::Layer> glic_button_container_;
+  scoped_refptr<cc::slim::UIResourceLayer> glic_button_;
+  scoped_refptr<cc::slim::SolidColorLayer> glic_button_background_;
+  scoped_refptr<cc::slim::UIResourceLayer> glic_button_text_;
+  scoped_refptr<cc::slim::UIResourceLayer> glic_dismiss_nudge_button_;
+  scoped_refptr<cc::slim::UIResourceLayer>
+      glic_dismiss_nudge_button_keyboard_focus_ring_;
+  scoped_refptr<cc::slim::NinePatchLayer> glic_button_keyboard_focus_ring_;
+
+  scoped_refptr<cc::slim::Layer> glic_actor_button_container_;
+  scoped_refptr<cc::slim::UIResourceLayer> glic_actor_button_;
+  scoped_refptr<cc::slim::SolidColorLayer> glic_actor_button_background_;
+  scoped_refptr<cc::slim::UIResourceLayer> glic_actor_button_text_;
+  scoped_refptr<cc::slim::NinePatchLayer>
+      glic_actor_button_keyboard_focus_ring_;
 
   scoped_refptr<cc::slim::UIResourceLayer> model_selector_button_;
   scoped_refptr<cc::slim::UIResourceLayer> model_selector_button_background_;
   scoped_refptr<cc::slim::UIResourceLayer>
       model_selector_button_keyboard_focus_ring_;
+
+  scoped_refptr<cc::slim::UIResourceLayer> tab_search_button_;
+  scoped_refptr<cc::slim::UIResourceLayer> tab_search_button_background_;
+  scoped_refptr<cc::slim::UIResourceLayer>
+      tab_search_button_keyboard_focus_ring_;
   scoped_refptr<cc::slim::SolidColorLayer> scrim_layer_;
 
   unsigned write_index_ = 0;

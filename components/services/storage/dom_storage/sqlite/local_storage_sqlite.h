@@ -6,11 +6,13 @@
 #define COMPONENTS_SERVICES_STORAGE_DOM_STORAGE_SQLITE_LOCAL_STORAGE_SQLITE_H_
 
 #include "base/trace_event/memory_allocator_dump_guid.h"
+#include "base/trace_event/memory_dump_provider.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
 
 namespace sql {
 class Database;
 class MetaTable;
+class Statement;
 }  // namespace sql
 
 namespace storage {
@@ -34,7 +36,8 @@ class MapEntriesTable;
 // The `maps_by_storage_key` index supports query by `storage_key` to find the
 // map ID efficiently.  Each `storage_key` in `maps` must be unique, limiting
 // each `storage_key` to a single persisted map.
-class LocalStorageSqlite : public DomStorageDatabase {
+class LocalStorageSqlite : public DomStorageDatabase,
+                           private base::trace_event::MemoryDumpProvider {
  private:
   using PassKey = base::PassKey<DomStorageDatabaseFactory>;
 
@@ -47,12 +50,10 @@ class LocalStorageSqlite : public DomStorageDatabase {
   LocalStorageSqlite(const LocalStorageSqlite&) = delete;
   LocalStorageSqlite& operator=(const LocalStorageSqlite&) = delete;
 
-  DbStatus Open(PassKey,
-                const base::FilePath& database_path,
-                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
-                    memory_dump_id);
-
   // The `DomStorageDatabase` interface:
+  DbStatus Open(const base::FilePath& database_path,
+                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
+                    memory_dump_id) override;
   StatusOr<std::map<Key, Value>> ReadMapKeyValues(
       MapLocator map_locator) override;
   DbStatus UpdateMaps(std::vector<MapBatchUpdate> map_updates) override;
@@ -66,16 +67,52 @@ class LocalStorageSqlite : public DomStorageDatabase {
   DbStatus DeleteSessions(std::vector<std::string> session_ids,
                           std::vector<MapLocator> maps_to_delete) override;
   DbStatus PurgeOrigins(std::set<url::Origin> origins) override;
-  DbStatus RewriteDB() override;
+  DbStatus CleanUpStaleData() override;
   void MakeAllCommitsFailForTesting() override;
   void SetDestructionCallbackForTesting(base::OnceClosure callback) override;
   DbStatus PutVersionForTesting(int64_t version) override;
 
  private:
+  // Looks up the `map_id` (which is the `row_id` in the `maps` table) for the
+  // given `storage_key`. Returns `std::nullopt` if no map exists for
+  // `storage_key`.
+  StatusOr<std::optional<int64_t>> FindMapId(
+      const blink::StorageKey& storage_key);
+
+  // Inserts or updates the metadata for the map identified by `storage_key` in
+  // the `maps` table. If a row for `storage_key` already exists, only non-null
+  // parameters are updated (existing values are preserved for null parameters).
+  // If no row exists, a new row is inserted with all provided values.  The
+  // caller must begin a database transaction before calling this function.
+  DbStatus PutMapMetadata(const blink::StorageKey& storage_key,
+                          std::optional<base::Time> last_accessed,
+                          std::optional<base::Time> last_modified,
+                          std::optional<base::ByteSize> total_size);
+
+  // Deletes the metadata rows from the `maps` table for each storage key in
+  // `metadata_to_delete`. The caller must begin a database transaction before
+  // calling this function.
+  DbStatus DeleteMapMetadata(
+      const std::vector<blink::StorageKey>& metadata_to_delete);
+
+  // base::trace_event::MemoryDumpProvider implementation:
+  bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
+                    base::trace_event::ProcessMemoryDump* pmd) override;
+
+  void OnSqlError(int error, sql::Statement* statement);
+
   // `Open()` creates `database_`, `meta_table_` and `map_entries_table_`.
   std::unique_ptr<sql::Database> database_;
   std::unique_ptr<sql::MetaTable> meta_table_;
   std::unique_ptr<MapEntriesTable> map_entries_table_;
+
+  std::optional<base::trace_event::MemoryAllocatorDumpGuid> memory_dump_id_;
+
+  // Simulates I/O failure in `PutMetadata()` and `UpdateMaps()` by force
+  // returning an IOError. Set to true by `MakeAllCommitsFailForTesting()`.
+  bool should_fail_commits_for_testing_ = false;
+
+  base::OnceClosure destruction_callback_for_testing_;
 };
 
 }  // namespace storage

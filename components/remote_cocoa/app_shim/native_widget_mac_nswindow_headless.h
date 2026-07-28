@@ -13,8 +13,17 @@
 struct NativeWidgetMacNSWindowHeadlessInfo {
   NativeWidgetMacNSWindowHeadlessInfo();
 
-  bool is_zoomed = false;
+  enum class WindowState {
+    kNormal,
+    kZoomed,
+    kFullscreen,
+    kMiniaturized,
+  } window_state = WindowState::kNormal;
+
+  bool is_visible = false;
+  bool is_key = false;
   std::optional<gfx::Rect> restored_bounds;
+  std::optional<gfx::Rect> headless_frame;
 };
 
 #endif  // COMPONENTS_REMOTE_COCOA_APP_SHIM_NATIVE_WIDGET_MAC_NSWINDOW_HEADLESS_H_

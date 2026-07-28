@@ -55,6 +55,7 @@ import org.chromium.chrome.browser.tab.TabBrowserControlsConstraintsHelper;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.UiAndroidFeatures;
 
 import java.util.HashMap;
 
@@ -64,7 +65,8 @@ import java.util.HashMap;
  */
 @Features.EnableFeatures({
     ChromeFeatureList.DISPLAY_EDGE_TO_EDGE_FULLSCREEN,
-    ChromeFeatureList.ENABLE_FULLSCREEN_TO_ANY_SCREEN_ANDROID
+    ChromeFeatureList.ENABLE_FULLSCREEN_TO_ANY_SCREEN_ANDROID,
+    UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION
 })
 @Features.DisableFeatures({ChromeFeatureList.ENABLE_EXCLUSIVE_ACCESS_MANAGER})
 @RunWith(BaseRobolectricTestRunner.class)
@@ -97,6 +99,9 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
                     .setInsets(WindowInsetsCompat.Type.navigationBars(), NAVIGATION_BAR_INSETS)
                     .setInsets(WindowInsetsCompat.Type.statusBars(), STATUS_BAR_INSETS)
                     .setInsets(WindowInsetsCompat.Type.systemBars(), SYSTEM_BAR_INSETS)
+                    .setVisible(WindowInsetsCompat.Type.navigationBars(), true)
+                    .setVisible(WindowInsetsCompat.Type.statusBars(), true)
+                    .setVisible(WindowInsetsCompat.Type.systemBars(), true)
                     .build();
 
     @Implements(Activity.class)
@@ -142,6 +147,9 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
 
         mHost = new UserDataHost();
         doReturn(mHost).when(mTab).getUserDataHost();
+        doReturn(ObservableSuppliers.createMonotonic())
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
 
         mAreControlsHidden = ObservableSuppliers.createNonNull(false);
         mMultiWindowModeStateDispatcher = new MultiWindowModeStateDispatcherImpl(mActivity);
@@ -395,8 +403,6 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
         assertEqualNumberOfEnterAndExitActivityFullscreenMode(1);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void testToastIsShownInFullscreenButNotPictureInPicture() {
         doReturn(mWebContents).when(mTab).getWebContents();
@@ -458,8 +464,6 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
                 !mFullscreenHtmlApiHandlerCompat.isToastVisibleForTesting());
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     @Features.EnableFeatures({ChromeFeatureList.ENABLE_EXCLUSIVE_ACCESS_MANAGER})
     public void
@@ -526,8 +530,6 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
                 !mFullscreenHtmlApiHandlerCompat.isToastVisibleForTesting());
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void testToastIsShownAtLayoutChangeWithRotation() {
         doReturn(mWebContents).when(mTab).getWebContents();

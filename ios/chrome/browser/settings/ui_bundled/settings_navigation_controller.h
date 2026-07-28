@@ -44,6 +44,8 @@ extern NSString* const kSettingsDoneButtonId;
 
 @end
 
+// TODO(crbug.com/516717892): Refactor to remove all delegate arguments from
+// creation methods.
 // Controller to modify user settings.
 @interface SettingsNavigationController
     : UINavigationController <KeyCommandActions, SettingsCommands>
@@ -93,9 +95,10 @@ extern NSString* const kSettingsDoneButtonId;
                                   (id<SettingsNavigationControllerDelegate>)
                                       delegate;
 
-// Creates a new SettingsNavigationController that displays the sync management
-// UI. `browser` is the browser where settings are being displayed and
-// should not be nil. `delegate` may be nil.
+// Creates a new SettingsNavigationController that contains only the sync
+// management UI. `browser` is the browser where settings are being displayed
+// and should not be nil. `delegate` may be nil. The user must be signed-in and
+// sign-in must be enabled.
 + (instancetype)
     syncSettingsControllerForBrowser:(Browser*)browser
                             delegate:(id<SettingsNavigationControllerDelegate>)
@@ -125,8 +128,18 @@ extern NSString* const kSettingsDoneButtonId;
 // and should not be nil. `delegate` may be nil.
 + (instancetype)
     savePasswordsControllerForBrowser:(Browser*)browser
+      shouldShowLevelUpWalkthroughIPH:(BOOL)shouldShowLevelUpWalkthroughIPH
                              delegate:(id<SettingsNavigationControllerDelegate>)
                                           delegate;
+
+// Creates a new view controller presenting the Autofill and Passwords settings
+// and the chrome around it. `browser` is the browser where settings are being
+// displayed and should not be nil. `delegate` may be nil.
++ (instancetype)
+    autofillAndPasswordsControllerForBrowser:(Browser*)browser
+                                    delegate:
+                                        (id<SettingsNavigationControllerDelegate>)
+                                            delegate;
 
 // Creates a new PasswordManagerViewController in search mode and the chrome
 // around it. `browser` is the browser where settings are being displayed and
@@ -160,18 +173,7 @@ extern NSString* const kSettingsDoneButtonId;
                                 delegate:
                                     (id<SettingsNavigationControllerDelegate>)
                                         delegate
-                                    UUID:(NSUUID*)UUID;
-
-// Creates and displays a new UIViewController for user to report an issue.
-// `browser` is the browser where settings are being displayed and should not be
-// nil. `dataSource` is used to populate the UIViewController. `dispatcher`,
-// which can be nil, is an object that can perform operations for the view
-// controller. `delegate` may be nil.
-+ (instancetype)
-    userFeedbackControllerForBrowser:(Browser*)browser
-                            delegate:(id<SettingsNavigationControllerDelegate>)
-                                         delegate
-                    userFeedbackData:(UserFeedbackData*)userFeedbackData;
+                                    UUID:(NSUUID*)UUID API_AVAILABLE(ios(26.0));
 
 // Creates a new AutofillProfileEditTableViewHelper and the
 // chrome around it. `browser` is the browser where settings are being displayed
@@ -231,6 +233,15 @@ extern NSString* const kSettingsDoneButtonId;
                                   (id<SettingsNavigationControllerDelegate>)
                                       delegate
                           sourceForUMA:(DefaultBrowserSettingsPageSource)source;
+
+// Creates a new SearchEngineTableViewController to select the default search
+// engine used by Chrome. `browser` is the browser where settings are being
+// displayed and should not be nil. `delegate` may be nil.
++ (instancetype)
+    defaultSearchEngineControllerForBrowser:(Browser*)browser
+                                   delegate:
+                                       (id<SettingsNavigationControllerDelegate>)
+                                           delegate;
 
 // Creates a new SafetyCheckTableViewController and the chrome
 // around it. `browser` is the browser where settings are being displayed and

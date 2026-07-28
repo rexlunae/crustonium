@@ -45,13 +45,12 @@
 #include "components/subresource_filter/core/common/test_ruleset_creator.h"
 #include "components/subresource_filter/core/common/test_ruleset_utils.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
-#include "content/browser/aggregation_service/aggregation_service.h"
-#include "content/browser/attribution_reporting/attribution_manager.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/in_memory_federated_permission_context.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/navigation_request.h"
+#include "content/browser/screen_orientation/screen_orientation_provider.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_termination_info.h"
@@ -79,6 +78,7 @@
 #include "content/shell/browser/shell_content_browser_client.h"
 #include "content/shell/browser/shell_content_index_provider.h"
 #include "content/shell/browser/shell_devtools_frontend.h"
+#include "content/test/mock_clipboard_host.h"
 #include "content/test/mock_platform_notification_service.h"
 #include "content/test/storage_partition_test_helpers.h"
 #include "content/web_test/browser/devtools_protocol_test_bindings.h"
@@ -775,30 +775,12 @@ void WebTestControlHost::ResetBrowserAfterWebTest() {
   }
 #endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
 
-  // Delete all cookies, Attribution Reporting data and Aggregation service data
+  // Delete all cookies.
   {
     StoragePartition* storage_partition =
         browser_context->GetDefaultStoragePartition();
     storage_partition->GetCookieManagerForBrowserProcess()->DeleteCookies(
         network::mojom::CookieDeletionFilter::New(), base::DoNothing());
-
-    if (auto* attribution_manager =
-            AttributionManager::FromBrowserContext(browser_context)) {
-      attribution_manager->ClearData(
-          /*delete_begin=*/base::Time::Min(), /*delete_end=*/base::Time::Max(),
-          /*filter=*/StoragePartition::StorageKeyMatcherFunction(),
-          /*filter_builder=*/nullptr,
-          /*delete_rate_limit_data=*/true,
-          /*done=*/base::DoNothing());
-    }
-
-    if (auto* aggregation_service =
-            AggregationService::GetService(browser_context)) {
-      aggregation_service->ClearData(
-          /*delete_begin=*/base::Time::Min(), /*delete_end=*/base::Time::Max(),
-          /*filter=*/StoragePartition::StorageKeyMatcherFunction(),
-          /*done=*/base::DoNothing());
-    }
   }
 
   ui::SelectFileDialog::SetFactory(nullptr);
@@ -1109,7 +1091,8 @@ void WebTestControlHost::WebContentsDestroyed() {
 
 void WebTestControlHost::DidUpdateFaviconURL(
     RenderFrameHost* render_frame_host,
-    const std::vector<blink::mojom::FaviconURLPtr>& candidates) {
+    const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+    blink::mojom::FaviconUpdateReason reason) {
   if (web_test_runtime_flags_.dump_icon_changes()) {
     std::string log = IsMainWindow(web_contents()) ? "main frame " : "frame ";
     printer_->AddMessageRaw(log + "- didChangeIcons\n");
@@ -1131,7 +1114,7 @@ void WebTestControlHost::RenderViewDeleted(RenderViewHost* render_view_host) {
 void WebTestControlHost::DidStartNavigation(
     NavigationHandle* navigation_handle) {
   if (lcpp_hint_) {
-    navigation_handle->SetLCPPNavigationHint(lcpp_hint_.value());
+    navigation_handle->SetLCPPNavigationHint(lcpp_hint_->Clone());
   }
 }
 
@@ -1340,8 +1323,6 @@ void WebTestControlHost::OnTestFinished() {
       content::StoragePartition::REMOVE_DATA_MASK_MEDIA_LICENSES |
       // Internal flags manage browser-internal state, not website data, and
       // should not be cleared.
-      content::StoragePartition::
-          REMOVE_DATA_MASK_ATTRIBUTION_REPORTING_INTERNAL |
       content::StoragePartition::REMOVE_DATA_MASK_PRIVATE_AGGREGATION_INTERNAL |
       content::StoragePartition::REMOVE_DATA_MASK_INTEREST_GROUPS_INTERNAL |
       // These flags are designed for explicit user actions in settings.
@@ -1355,7 +1336,7 @@ void WebTestControlHost::OnTestFinished() {
       content::StoragePartition::REMOVE_DATA_MASK_ALL & ~exclusion_mask;
 
   storage_partition->ClearData(
-      removal_mask, content::StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL,
+      removal_mask,
       /*filter_builder=*/nullptr,
       content::StoragePartition::StorageKeyPolicyMatcherFunction(),
       /*cookie_deletion_filter=*/nullptr,
@@ -1539,6 +1520,27 @@ void WebTestControlHost::SimulateScreenOrientationChanged() {
   content::WebContentsImpl* web_contents =
       static_cast<WebContentsImpl*>(main_window_->web_contents());
   web_contents->DidChangeScreenOrientation();
+}
+
+void WebTestControlHost::SimulateScreenOrientationLockChanged(
+    const blink::LocalFrameToken& frame_token,
+    bool locked,
+    device::mojom::ScreenOrientationLockType orientation) {
+  auto* web_contents = static_cast<WebContentsImpl*>(
+      GetWebContentsFromCurrentContext(frame_token));
+  if (!web_contents) {
+    return;
+  }
+
+  auto* provider = web_contents->GetScreenOrientationProviderForTesting();
+  if (!provider) {
+    return;
+  }
+
+  provider->NotifyOrientationLockChanged(
+      locked, locked
+                  ? std::make_optional(orientation)
+                  : std::optional<device::mojom::ScreenOrientationLockType>());
 }
 
 void WebTestControlHost::SetPermission(const std::string& name,
@@ -1870,6 +1872,28 @@ void WebTestControlHost::DisableAutoResize(const gfx::Size& new_size) {
   main_window_->ResizeWebContentForTests(new_size);
 }
 
+void WebTestControlHost::GetClipboardReadState(
+    GetClipboardReadStateCallback callback) {
+  MockClipboardHost* mock =
+      WebTestContentBrowserClient::Get()->GetMockClipboardHost();
+  if (mock) {
+    std::move(callback).Run(
+        mock->read_text_called(), mock->read_html_called(),
+        mock->read_unsanitized_custom_format_called(),
+        mock->read_available_custom_and_standard_formats_called());
+  } else {
+    std::move(callback).Run(false, false, false, false);
+  }
+}
+
+void WebTestControlHost::ResetClipboardReadTracking() {
+  MockClipboardHost* mock =
+      WebTestContentBrowserClient::Get()->GetMockClipboardHost();
+  if (mock) {
+    mock->ResetReadTracking();
+  }
+}
+
 void WebTestControlHost::SetLCPPNavigationHint(
     blink::mojom::LCPCriticalPathPredictorNavigationTimeHintPtr hint) {
   lcpp_hint_ = *hint.get();
@@ -2191,16 +2215,16 @@ mojo::AssociatedRemote<mojom::WebTestRenderFrame>&
 WebTestControlHost::GetWebTestRenderFrameRemote(RenderFrameHost* frame) {
   GlobalRenderFrameHostId key(frame->GetProcess()->GetDeprecatedID(),
                               frame->GetRoutingID());
-  if (!web_test_render_frame_map_.contains(key)) {
-    mojo::AssociatedRemote<mojom::WebTestRenderFrame>& new_ptr =
-        web_test_render_frame_map_[key];
+  auto [it, inserted] = web_test_render_frame_map_.try_emplace(key);
+  if (inserted) {
+    mojo::AssociatedRemote<mojom::WebTestRenderFrame>& new_ptr = it->second;
     frame->GetRemoteAssociatedInterfaces()->GetInterface(&new_ptr);
     new_ptr.set_disconnect_handler(
         base::BindOnce(&WebTestControlHost::HandleWebTestRenderFrameRemoteError,
                        weak_factory_.GetWeakPtr(), key));
   }
-  DCHECK(web_test_render_frame_map_[key].get());
-  return web_test_render_frame_map_[key];
+  DCHECK(it->second.get());
+  return it->second;
 }
 
 void WebTestControlHost::HandleWebTestRenderFrameRemoteError(

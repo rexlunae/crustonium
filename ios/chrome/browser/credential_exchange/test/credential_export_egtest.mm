@@ -3,11 +3,13 @@
 // found in the LICENSE file.
 
 #import "base/strings/sys_string_conversions.h"
+#import "base/test/ios/wait_util.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/credential_exchange/public/metrics.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_constants.h"
 #import "ios/chrome/browser/credential_provider/model/credential_provider_buildflags.h"
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_egtest_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_settings/password_settings_constants.h"
@@ -28,7 +30,6 @@ using ::password_manager_test_utils::OpenPasswordManager;
 using ::password_manager_test_utils::SaveExamplePasskeyToStore;
 using ::password_manager_test_utils::SavePasswordFormToAccountStore;
 
-#if BUILDFLAG(IOS_CREDENTIAL_EXCHANGE_ENABLED)
 // Matcher for the continue button.
 id<GREYMatcher> ContinueButton() {
   return grey_accessibilityID(
@@ -103,7 +104,6 @@ void CheckCredentialExportScreenActionMetric(
                                        forHistogram:histogram];
   GREYAssertNil(error, @"Failed to record credential export screen histogram.");
 }
-#endif
 
 }  // namespace
 
@@ -119,14 +119,14 @@ void CheckCredentialExportScreenActionMetric(
   chrome_test_util::GREYAssertErrorNil(
       [MetricsAppInterface setupHistogramTester]);
 
-  [PasswordSettingsAppInterface setUpMockReauthenticationModule];
-  [PasswordSettingsAppInterface mockReauthenticationModuleExpectedResult:
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                     ReauthenticationResult::kSuccess];
 
   [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
 }
 
 - (void)tearDownHelper {
+  [PasswordSettingsAppInterface clearPasskeyStore];
   chrome_test_util::GREYAssertErrorNil(
       [MetricsAppInterface releaseHistogramTester]);
   [super tearDownHelper];
@@ -134,18 +134,16 @@ void CheckCredentialExportScreenActionMetric(
 
 #pragma mark - Tests
 
-#if BUILDFLAG(IOS_CREDENTIAL_EXCHANGE_ENABLED)
-// Tests that tapping the Continue button proceeds with the export process.
-// TODO(crbug.com/454566693): The OS bottom sheet doesn't seem to appear.
-- (void)DISABLED_testTapContinueButton {
+// Tests that tapping the Continue button logs the metrics.
+- (void)testTapContinueButton {
+  if (!@available(iOS 26, *)) {
+    EARL_GREY_TEST_SKIPPED(@"This feature works only for iOS 26 and higher.");
+  }
   SavePasswordFormToAccountStore(@"password", @"user", @"https://example.com");
   OpenExportCredentialsPage();
 
   [[EarlGrey selectElementWithMatcher:ContinueButton()]
       performAction:grey_tap()];
-
-  [[EarlGrey selectElementWithMatcher:ContinueButton()]
-      assertWithMatcher:grey_notVisible()];
 
   CheckCredentialExportScreenActionMetric(
       CredentialExportScreenAction::kContinuePressed);
@@ -358,6 +356,42 @@ void CheckCredentialExportScreenActionMetric(
                                           expectedLabelForTwoSelected)]
       assertWithMatcher:grey_sufficientlyVisible()];
 }
-#endif
+
+// Tests the export flow to CSV, verifying that the activity sheet is shown and
+// can be closed.
+- (void)testExportFlow {
+  if (!@available(iOS 26, *)) {
+    EARL_GREY_TEST_SKIPPED(@"This feature works only for iOS 26 and higher.");
+  }
+  SavePasswordFormToAccountStore(@"password1", @"user1",
+                                 @"https://example1.com");
+  OpenExportCredentialsPage();
+
+  [[EarlGrey selectElementWithMatcher:ExportOptionsButton()]
+      performAction:grey_tap()];
+
+  [[EarlGrey selectElementWithMatcher:DownloadCsvMenuAction()]
+      performAction:grey_tap()];
+
+  // Wait until the alerts are dismissed.
+  [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:
+                      grey_accessibilityLabel(l10n_util::GetNSString(
+                          IDS_IOS_EXPORT_PASSWORDS_PREPARING_ALERT_TITLE))];
+
+  // Wait for the activity sheet to be visible.
+  bool activitySheetVisible = base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForUIElementTimeout, ^{
+        NSError* error = nil;
+        return [EarlGrey activitySheetPresentWithError:&error];
+      });
+  GREYAssertTrue(activitySheetVisible,
+                 @"Activity sheet did not become visible.");
+
+  [ChromeEarlGrey verifyActivitySheetVisible];
+  [ChromeEarlGrey closeActivitySheet];
+
+  // Wait until the activity view is dismissed.
+  [ChromeEarlGrey verifyActivitySheetNotVisible];
+}
 
 @end

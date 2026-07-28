@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -20,25 +21,28 @@ import android.app.Dialog;
 import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.view.View;
 
 import androidx.annotation.Nullable;
 import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.core.graphics.Insets;
+import androidx.core.view.WindowInsetsCompat;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.shadows.ShadowDialog;
 
-import org.chromium.base.Callback;
-import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
 import org.chromium.chrome.browser.composeplate.ComposeplateUtilsJni;
@@ -46,21 +50,30 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.logo.LogoUtils;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
-import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link UploadImagePreviewCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class UploadImagePreviewCoordinatorUnitTest {
+    private static final String TEST_FILE_ID_HASH = "test_file_id_hash";
+    private static final Point PORTRAIT_POINT = new Point(1080, 1920);
+    private static final Point LANDSCAPE_POINT = new Point(2000, 1080);
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private Callback<Boolean> mOnClickedCallback;
+    @Mock
+    private UploadImagePreviewCoordinator.UploadImagePreviewClickedCallback mOnClickedCallback;
+
     @Mock private CropImageView mCropImageView;
     @Mock private TemplateUrlService mTemplateUrlService;
     @Mock private Profile mProfile;
@@ -77,6 +90,7 @@ public class UploadImagePreviewCoordinatorUnitTest {
     private Matrix mLandscapeMatrix;
     private Bitmap mLogoBitmap;
     private PropertyModel mPropertyModel;
+    private int mToolbarHeight;
 
     @Before
     public void setUp() {
@@ -94,16 +108,19 @@ public class UploadImagePreviewCoordinatorUnitTest {
         when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
 
         mUploadImagePreviewCoordinator =
-                new UploadImagePreviewCoordinator(mActivity, mProfile, mBitmap, mOnClickedCallback);
+                new UploadImagePreviewCoordinator(
+                        mActivity, mProfile, mBitmap, TEST_FILE_ID_HASH, mOnClickedCallback);
         mDialog = ShadowDialog.getLatestDialog();
         View contentView = mDialog.findViewById(android.R.id.content);
         mSaveButton = contentView.findViewById(R.id.save_button);
         mCancelButton = contentView.findViewById(R.id.cancel_button);
         mLogoBitmap = Bitmap.createBitmap(5, 5, Bitmap.Config.ARGB_8888);
+        mToolbarHeight =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.toolbar_height_no_shadow);
 
         mConfigManager = NtpCustomizationConfigManager.getInstance();
         ChromeFeatureList.sNewTabPageCustomizationV2ShowLogoAndSearchBox.setForTesting(true);
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @After
@@ -124,7 +141,8 @@ public class UploadImagePreviewCoordinatorUnitTest {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(histogramName, true);
         mUploadImagePreviewCoordinator =
-                new UploadImagePreviewCoordinator(mActivity, mProfile, mBitmap, mOnClickedCallback);
+                new UploadImagePreviewCoordinator(
+                        mActivity, mProfile, mBitmap, TEST_FILE_ID_HASH, mOnClickedCallback);
 
         histogramWatcher.assertExpected();
     }
@@ -267,8 +285,8 @@ public class UploadImagePreviewCoordinatorUnitTest {
         when(mCropImageView.getPortraitMatrix()).thenReturn(mPortraitMatrix);
         when(mCropImageView.getLandscapeMatrix()).thenReturn(mLandscapeMatrix);
 
-        when(mCropImageView.getPortraitWindowSize()).thenReturn(new Point(1080, 1920));
-        when(mCropImageView.getLandscapeWindowSize()).thenReturn(new Point(2000, 1080));
+        when(mCropImageView.getPortraitWindowSize()).thenReturn(PORTRAIT_POINT);
+        when(mCropImageView.getLandscapeWindowSize()).thenReturn(LANDSCAPE_POINT);
     }
 
     private void setupCropImageView_pinchToResize() {
@@ -295,7 +313,7 @@ public class UploadImagePreviewCoordinatorUnitTest {
         mSaveButton.performClick();
 
         // Allows background tasks (like file saving) to complete.
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         BackgroundImageInfo savedInfo = NtpCustomizationUtils.readNtpBackgroundImageInfo();
 
@@ -317,14 +335,15 @@ public class UploadImagePreviewCoordinatorUnitTest {
 
         assertEquals(
                 "Background type should be updated to IMAGE_FROM_DISK.",
-                NtpBackgroundImageType.IMAGE_FROM_DISK,
-                mConfigManager.getBackgroundImageType());
+                NtpBackgroundType.IMAGE_FROM_DISK,
+                mConfigManager.getBackgroundType());
         assertTrue(
                 "The background image file should have been saved.",
-                NtpCustomizationUtils.createBackgroundImageFile().exists());
+                NtpCustomizationUtils.createUploadImageFileInDirForTesting(TEST_FILE_ID_HASH)
+                        .exists());
 
         // Verifies the on clicked callback was invoked.
-        verify(mOnClickedCallback).onResult(eq(true));
+        verify(mOnClickedCallback).onPreviewClicked(eq(true), eq(true));
 
         // Verifies the bitmap is still present and was not set to null.
         assertEquals(
@@ -342,10 +361,11 @@ public class UploadImagePreviewCoordinatorUnitTest {
         mCancelButton.performClick();
 
         // Verifies the on clicked callback was invoked.
-        verify(mOnClickedCallback).onResult(eq(false));
+        verify(mOnClickedCallback).onPreviewClicked(eq(false), eq(false));
         assertFalse(
                 "The background image file should not have been saved.",
-                NtpCustomizationUtils.createBackgroundImageFile().exists());
+                NtpCustomizationUtils.createUploadImageFileInDirForTesting(TEST_FILE_ID_HASH)
+                        .exists());
         assertNull(
                 "The matrices should not have been saved.",
                 NtpCustomizationUtils.readNtpBackgroundImageInfo());
@@ -434,26 +454,24 @@ public class UploadImagePreviewCoordinatorUnitTest {
     }
 
     @Test
-    public void testSearchBoxHeight_ComposeplateV2() {
-        // Forces the ComposeplateV2 state
+    public void testSearchBoxHeight_ComposeplateEnabled() {
+        // Forces the Composeplate enabled state
         when(mComposeplateUtilsJni.isAimEntrypointEligible(any())).thenReturn(true);
-        ChromeFeatureList.sAndroidComposeplateV2Enabled.setForTesting(true);
 
         mUploadImagePreviewCoordinator =
-                new UploadImagePreviewCoordinator(mActivity, mProfile, mBitmap, mOnClickedCallback);
+                new UploadImagePreviewCoordinator(
+                        mActivity, mProfile, mBitmap, TEST_FILE_ID_HASH, mOnClickedCallback);
 
         PropertyModel model = mUploadImagePreviewCoordinator.getPropertyModelForTesting();
 
         int expectedTallHeight =
-                NtpCustomizationUtils.getSearchBoxHeightWithShadows(
-                        mActivity.getResources(),
-                        /* showSearchBoxTall= */ true,
-                        /* hasShadowApplied= */ true);
+                NtpCustomizationUtils.getSearchBoxHeight(
+                        mActivity.getResources(), /* showSearchBoxTall= */ true);
 
         // Verifies the height passed to the model
         assertEquals(
                 "The height passed to the property model should be the one returned by"
-                        + " getSearchBoxHeightWithShadows()",
+                        + " getSearchBoxHeight()",
                 expectedTallHeight,
                 model.get(NtpThemeProperty.SEARCH_BOX_HEIGHT));
 
@@ -461,7 +479,7 @@ public class UploadImagePreviewCoordinatorUnitTest {
         ConstraintLayout.LayoutParams layoutParams = getSearchBoxLayoutParams();
         assertEquals(
                 "The height of the real search box view should be the one returned by"
-                        + " getSearchBoxHeightWithShadows()",
+                        + " getSearchBoxHeight()",
                 expectedTallHeight,
                 layoutParams.height);
     }
@@ -483,9 +501,11 @@ public class UploadImagePreviewCoordinatorUnitTest {
         // 2. Verifies the top margin of the real search box view
         ConstraintLayout.LayoutParams layoutParams = getSearchBoxLayoutParams();
         int expectedGoneMargin =
-                mActivity.getResources().getDimensionPixelSize(R.dimen.mvt_container_top_margin);
+                mActivity
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.ntp_search_box_top_margin_if_no_logo);
         assertEquals(
-                "The real view should use mvt_container_top_margin for goneTopMargin",
+                "The real view should use ntp_search_box_top_margin_if_no_logo for goneTopMargin",
                 expectedGoneMargin,
                 layoutParams.goneTopMargin);
     }
@@ -518,12 +538,153 @@ public class UploadImagePreviewCoordinatorUnitTest {
         // 3. Verifies the top margin of the real search box view
         ConstraintLayout.LayoutParams layoutParams = getSearchBoxLayoutParams();
         int expectedTopMargin =
-                NtpCustomizationUtils.getLogoViewBottomMarginPx(
-                        mActivity.getResources(), /* applyShadow= */ true);
+                NtpCustomizationUtils.getLogoViewBottomMarginPx(mActivity.getResources());
         assertEquals(
                 "The real view should use logo bottom margin as top margin",
                 expectedTopMargin,
                 layoutParams.topMargin);
+    }
+
+    @Test
+    public void testOnApplyWindowInsets_ThreeButtonNavigation_Portrait() {
+        // Setup insets representing 3-button navigation (tappable bottom bar)
+        verifyWindowInsetsApplied(
+                /* topInset= */ 20,
+                /* bottomInset= */ 100,
+                /* leftInset= */ 0,
+                /* rightInset= */ 0,
+                /* navigationBars= */ Insets.of(0, 0, 0, 100),
+                /* tappableElement= */ Insets.of(0, 20, 0, 100),
+                /* expectTappable= */ true);
+    }
+
+    @Test
+    public void testOnApplyWindowInsets_GestureNavigation_Portrait() {
+        // Setup insets representing Gesture navigation
+        verifyWindowInsetsApplied(
+                /* topInset= */ 20,
+                /* bottomInset= */ 40,
+                /* leftInset= */ 0,
+                /* rightInset= */ 0,
+                /* navigationBars= */ Insets.of(0, 0, 0, 40),
+                /* tappableElement= */ Insets.of(0, 20, 0, 0),
+                /* expectTappable= */ false);
+    }
+
+    @Test
+    public void testOnApplyWindowInsets_ThreeButtonNavigation_Landscape() {
+        // Setup insets representing 3-button navigation in Landscape (Nav bar on the Right)
+        verifyWindowInsetsApplied(
+                /* topInset= */ 20,
+                /* bottomInset= */ 0,
+                /* leftInset= */ 0,
+                /* rightInset= */ 100,
+                /* navigationBars= */ Insets.of(0, 0, 100, 0),
+                /* tappableElement= */ Insets.of(0, 20, 100, 0),
+                /* expectTappable= */ true);
+    }
+
+    @Test
+    public void testOnApplyWindowInsets_GestureNavigation_Landscape() {
+        // Setup insets representing Gesture navigation in Landscape
+        verifyWindowInsetsApplied(
+                /* topInset= */ 20,
+                /* bottomInset= */ 20,
+                /* leftInset= */ 0,
+                /* rightInset= */ 0,
+                /* navigationBars= */ Insets.of(0, 0, 0, 20),
+                /* tappableElement= */ Insets.of(0, 20, 0, 0),
+                /* expectTappable= */ false);
+    }
+
+    @Test
+    public void testOnSaveButtonClicked_NonNullFileIdHash() {
+        testOnSaveButtonClickedImpl(/* hasFileIdHash= */ true);
+    }
+
+    @Test
+    public void testOnSaveButtonClicked_NullFileIdHash() {
+        testOnSaveButtonClickedImpl(/* hasFileIdHash= */ false);
+    }
+
+    @Test
+    public void testOnSaveButtonClicked_SameUploadImage() {
+        testOnSaveButtonClicked_ExistingUploadImageImpl(/* isSameImage= */ true);
+    }
+
+    @Test
+    public void testOnSaveButtonClicked_DifferentUploadImage() {
+        testOnSaveButtonClicked_ExistingUploadImageImpl(/* isSameImage= */ false);
+    }
+
+    /** Helper method that centralizes the Arrange/Act/Assert for window insets testing. */
+    private void verifyWindowInsetsApplied(
+            int topInset,
+            int bottomInset,
+            int leftInset,
+            int rightInset,
+            Insets navigationBars,
+            Insets tappableElement,
+            boolean expectTappable) {
+
+        Insets systemBars = Insets.of(leftInset, topInset, rightInset, bottomInset);
+        WindowInsetsCompat insets =
+                new WindowInsetsCompat.Builder()
+                        .setInsets(WindowInsetsCompat.Type.systemBars(), systemBars)
+                        .setInsets(WindowInsetsCompat.Type.navigationBars(), navigationBars)
+                        .setInsets(WindowInsetsCompat.Type.tappableElement(), tappableElement)
+                        .build();
+
+        PropertyModel model = mUploadImagePreviewCoordinator.getPropertyModelForTesting();
+        int buttonBottomMargin = model.get(NtpThemeProperty.BUTTON_BOTTOM_MARGIN);
+
+        WindowInsetsCompat result =
+                mUploadImagePreviewCoordinator.onApplyWindowInsets(mCropImageView, insets);
+
+        // Verifies the edge-to-edge behavior
+        assertEquals(
+                "Tappable navigation bar evaluation failed.",
+                expectTappable,
+                EdgeToEdgeUtils.hasTappableNavigationBarFromInsets(insets));
+
+        // Verifies inset consumption
+        assertEquals(Insets.NONE, result.getInsets(WindowInsetsCompat.Type.statusBars()));
+        assertEquals(Insets.NONE, result.getInsets(WindowInsetsCompat.Type.navigationBars()));
+        assertEquals(Insets.NONE, result.getInsets(WindowInsetsCompat.Type.displayCutout()));
+
+        // Verifies the paddings
+        int expectedTopGuideline = mToolbarHeight + topInset;
+        int expectedBottomPadding = expectTappable ? bottomInset : 0;
+        Rect expectedSideAndBottom = new Rect(leftInset, 0, rightInset, expectedBottomPadding);
+
+        assertEquals(
+                "Top guideline should include toolbar height + top inset",
+                expectedTopGuideline,
+                model.get(NtpThemeProperty.TOP_GUIDELINE_BEGIN));
+
+        assertEquals(
+                "Padding rect should match expected side and bottom logic",
+                expectedSideAndBottom,
+                model.get(NtpThemeProperty.SIDE_AND_BOTTOM_INSETS));
+
+        // Verifies the bottom margin of buttons
+        if (expectTappable) {
+            assertEquals(
+                    "Button margin should remain unchanged for 3-button nav, as padding pushes it"
+                        + " up.",
+                    buttonBottomMargin,
+                    model.get(NtpThemeProperty.BUTTON_BOTTOM_MARGIN));
+        } else {
+            int baseButtonBottomMargin =
+                    mActivity
+                            .getResources()
+                            .getDimensionPixelSize(
+                                    R.dimen.ntp_customization_back_button_margin_start);
+            assertEquals(
+                    "Button margin should be elevated by the inset for gesture nav.",
+                    baseButtonBottomMargin + bottomInset,
+                    model.get(NtpThemeProperty.BUTTON_BOTTOM_MARGIN));
+        }
     }
 
     /**
@@ -538,15 +699,15 @@ public class UploadImagePreviewCoordinatorUnitTest {
 
         // Re-create coordinator to run constructor logic
         mUploadImagePreviewCoordinator =
-                new UploadImagePreviewCoordinator(mActivity, mProfile, mBitmap, mOnClickedCallback);
+                new UploadImagePreviewCoordinator(
+                        mActivity, mProfile, mBitmap, TEST_FILE_ID_HASH, mOnClickedCallback);
 
         mPropertyModel = mUploadImagePreviewCoordinator.getPropertyModelForTesting();
 
         // Verifies the value of SEARCH_BOX_TOP_MARGIN which is shared
         // by both visible and hidden logo states.
         int expectedModelMargin =
-                NtpCustomizationUtils.getLogoViewBottomMarginPx(
-                        mActivity.getResources(), /* applyShadow= */ true);
+                NtpCustomizationUtils.getLogoViewBottomMarginPx(mActivity.getResources());
         assertEquals(
                 "The model should hold the shadow-adjusted margin",
                 expectedModelMargin,
@@ -558,5 +719,56 @@ public class UploadImagePreviewCoordinatorUnitTest {
         View searchBoxContainer =
                 ShadowDialog.getLatestDialog().findViewById(R.id.search_box_container);
         return (ConstraintLayout.LayoutParams) searchBoxContainer.getLayoutParams();
+    }
+
+    private void testOnSaveButtonClickedImpl(boolean hasFileIdHash) {
+        String fileIdHash = hasFileIdHash ? TEST_FILE_ID_HASH : null;
+        NtpCustomizationConfigManager configManager = mock(NtpCustomizationConfigManager.class);
+        NtpCustomizationConfigManager.setInstanceForTesting(configManager);
+        try {
+            new UploadImagePreviewCoordinator(
+                    mActivity, mProfile, mBitmap, fileIdHash, mOnClickedCallback);
+
+            Dialog dialog = ShadowDialog.getLatestDialog();
+            View saveButton = dialog.findViewById(R.id.save_button);
+            saveButton.performClick();
+
+            verify(mOnClickedCallback).onPreviewClicked(eq(true), eq(true));
+
+            ArgumentCaptor<NtpBackgroundDataBase> captor =
+                    ArgumentCaptor.forClass(NtpBackgroundDataBase.class);
+            verify(configManager).onBackgroundDataChanged(eq(mActivity), captor.capture());
+            assertTrue(captor.getValue() instanceof NtpBackgroundDataUploadImage);
+            NtpBackgroundDataUploadImage uploadImage =
+                    (NtpBackgroundDataUploadImage) captor.getValue();
+            assertEquals(fileIdHash, uploadImage.getFileIdHash());
+        } finally {
+            NtpCustomizationConfigManager.setInstanceForTesting(null);
+        }
+    }
+
+    private void testOnSaveButtonClicked_ExistingUploadImageImpl(boolean isSameImage) {
+        String currentFileIdHash = isSameImage ? TEST_FILE_ID_HASH : "other_file_id_hash";
+        NtpCustomizationConfigManager configManager = mock(NtpCustomizationConfigManager.class);
+        NtpCustomizationConfigManager.setInstanceForTesting(configManager);
+        setupCropImageView();
+
+        BackgroundImageInfo info =
+                new BackgroundImageInfo(
+                        mPortraitMatrix, mLandscapeMatrix, PORTRAIT_POINT, LANDSCAPE_POINT);
+        NtpBackgroundDataUploadImage currentUploadImage =
+                new NtpBackgroundDataUploadImage(
+                        PlatformType.ANDROID,
+                        info,
+                        mBitmap,
+                        /* primaryColor= */ null,
+                        currentFileIdHash);
+        when(configManager.getNtpBackgroundData()).thenReturn(currentUploadImage);
+
+        mSaveButton.performClick();
+
+        verify(mOnClickedCallback)
+                .onPreviewClicked(
+                        eq(/* isImageSelected= */ true), eq(/* isDifferentColor= */ !isSameImage));
     }
 }

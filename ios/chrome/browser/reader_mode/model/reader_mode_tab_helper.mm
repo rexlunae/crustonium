@@ -109,6 +109,34 @@ void RemoveTranslateInfobarIfExists(web::WebState* web_state) {
       ->StartLanguageDetection();
 }
 
+// Returns true if there was an automated translation.
+bool IsAutomaticTranslationType(translate::TranslationType type) {
+  return type == translate::TranslationType::kAutomaticTranslationByHref ||
+         type == translate::TranslationType::kAutomaticTranslationByLink ||
+         type == translate::TranslationType::kAutomaticTranslationByPref ||
+         type == translate::TranslationType::
+                     kAutomaticTranslationToPredefinedTarget ||
+         type == translate::TranslationType::kForcedTranslationByCommandline;
+}
+
+// Returns the state of the translation for the specified client.
+ReaderModeTranslationState GenerateTranslationState(
+    ChromeIOSTranslateClient* translate_client,
+    web::WebState* web_state) {
+  ReaderModeTranslationState translation_state;
+  translation_state.is_page_translated = IsTranslateEnabled(translate_client);
+  if (translation_state.is_page_translated) {
+    translation_state.source_code = GetSourceLanguageCode(translate_client);
+    translation_state.target_code =
+        GetTargetLanguageCode(translate_client, web_state);
+    translation_state.is_automated_translation =
+        IsAutomaticTranslationType(translate_client->GetTranslateManager()
+                                       ->GetLanguageState()
+                                       ->translation_type());
+  }
+  return translation_state;
+}
+
 }  // namespace
 
 ReaderModeTabHelper::ReaderModeTabHelper(web::WebState* web_state,
@@ -300,7 +328,7 @@ void ReaderModeTabHelper::ReaderModeContentDidLoadData(
         InfobarType::kInfobarTypeTranslate);
   }
 
-  if (source_translation_state_.is_original_source_translated) {
+  if (source_translation_state_.is_page_translated) {
     reader_mode_content_tab_helper->ActivateTranslateOnPage(
         source_translation_state_.source_code,
         source_translation_state_.target_code);
@@ -313,8 +341,12 @@ void ReaderModeTabHelper::ReaderModeContentDidLoadData(
   WebViewProxyTabHelper* tab_helper =
       WebViewProxyTabHelper::FromWebState(web_state_);
   if (tab_helper) {
-    tab_helper->SetOverridingWebViewProxy(
-        reader_mode_web_state_->GetWebViewProxy());
+    id<CRWWebViewProxy> reader_mode_web_view_proxy =
+        reader_mode_web_state_->GetWebViewProxy();
+    // Ensure the web view ignores the obscured insets, as the Reader mode web
+    // view is instead constrained to the content area.
+    reader_mode_web_view_proxy.ignoreObscuredInsets = YES;
+    tab_helper->SetOverridingWebViewProxy(reader_mode_web_view_proxy);
   }
   metrics_helper_.RecordReaderShown();
 
@@ -350,9 +382,10 @@ void ReaderModeTabHelper::ReaderModeContentDidCancelRequest(
   if (referrer_value) {
     NSURL* referrer_url = [NSURL URLWithString:referrer_value];
     params.referrer.url = net::GURLWithNSURL(referrer_url);
-    params.referrer.policy = web::ReferrerPolicyDefault;
+    params.referrer.policy = web::ReferrerPolicyStrictOriginWhenCrossOrigin;
   }
   params.transition_type = request_info.transition_type;
+  params.is_renderer_initiated = true;
   web_state_->GetNavigationManager()->LoadURLWithParams(params);
 }
 
@@ -519,6 +552,12 @@ void ReaderModeTabHelper::DestroyReaderModeContent(
       break;
     }
   }
+  ChromeIOSTranslateClient* content_translate_client =
+      ChromeIOSTranslateClient::FromWebState(reader_mode_web_state_.get());
+  metrics_helper_.RecordTranslationState(
+      source_translation_state_,
+      GenerateTranslationState(content_translate_client,
+                               reader_mode_web_state_.get()));
   source_translation_state_ = {};
 
   SnapshotSourceTabHelper::FromWebState(web_state_)
@@ -566,7 +605,7 @@ void ReaderModeTabHelper::ApplyLanguageSettingsFromClient(
 void ReaderModeTabHelper::ApplyLanguageSettingsFromSource() {
   ChromeIOSTranslateClient* translate_client =
       ChromeIOSTranslateClient::FromWebState(web_state_.get());
-  if (source_translation_state_.is_original_source_translated) {
+  if (source_translation_state_.is_page_translated) {
     // Suppresses the translate infobar that would be displayed following the
     // translation of the page.
     InfobarOverlayRequestInserter::FromWebState(web_state_.get())
@@ -589,19 +628,12 @@ void ReaderModeTabHelper::CompleteDistillation(
     ReaderModeAccessPoint access_point) {
   ChromeIOSTranslateClient* translate_client =
       ChromeIOSTranslateClient::FromWebState(web_state_.get());
-  TranslationState source_translation_state;
-  source_translation_state.is_original_source_translated =
-      IsTranslateEnabled(translate_client);
-  if (source_translation_state.is_original_source_translated) {
-    source_translation_state.source_code =
-        GetSourceLanguageCode(translate_client);
-    source_translation_state.target_code =
-        GetTargetLanguageCode(translate_client, web_state_.get());
-    if (base::FeatureList::IsEnabled(kEnableReaderModeTranslationWithInfobar)) {
-      translate_client->GetTranslateManager()->RevertTranslation();
-    }
+  source_translation_state_ =
+      GenerateTranslationState(translate_client, web_state_.get());
+  if (source_translation_state_.is_page_translated &&
+      base::FeatureList::IsEnabled(kEnableReaderModeTranslationWithInfobar)) {
+    translate_client->GetTranslateManager()->RevertTranslation();
   }
-  source_translation_state_ = source_translation_state;
 
   std::unique_ptr<ReaderModeDistillerPage> distiller_page =
       std::make_unique<ReaderModeDistillerPage>(web_state_);

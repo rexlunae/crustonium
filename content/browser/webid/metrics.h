@@ -11,7 +11,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/mojom/credentialmanagement/credential_manager.mojom.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace base {
 class TimeDelta;
@@ -20,10 +20,6 @@ class TimeDelta;
 namespace content {
 
 namespace webid {
-
-using IdentityProviderDataPtr = scoped_refptr<IdentityProviderData>;
-using MediationRequirement = ::password_manager::CredentialMediationRequirement;
-using RpMode = blink::mojom::RpMode;
 
 // This enum describes the status of a request id token call to the FedCM API.
 // These values are persisted to logs. Entries should not be renumbered and
@@ -35,10 +31,10 @@ enum class RequestIdTokenStatus {
   // being recorded in metrics and in sync with the counterpart in enums.xml.
   kSuccessUsingTokenInHttpResponse = 0,
   kTooManyRequests = 1,
-  kAborted = 2,
-  kUnhandledRequest = 3,
+  kAborted = 2,  // Can be before OR after the UI display. If after, no cooldown
+  kUnhandledRequest = 3,  // UI closed without cooldown. e.g. top level redirect
   kIdpNotPotentiallyTrustworthy = 4,
-  kNotSelectAccount = 5,
+  kNotSelectAccount = 5,  // UI closed without cooldown. e.g. tab is closed
   kConfigHttpNotFound = 6,
   kConfigNoResponse = 7,
   kConfigInvalidResponse = 8,
@@ -64,7 +60,7 @@ enum class RequestIdTokenStatus {
   kDisabledEmbargo = 28,
   kUserInterfaceTimedOut = 29,  // obsolete
   kRpPageNotVisible = 30,
-  kShouldEmbargo = 31,
+  kShouldEmbargo = 31,  // UI closed with cooldown. e.g. UI dismissed by user
   kNotSignedInWithIdp = 32,
   kAccountsListEmpty = 33,
   kWellKnownListEmpty = 34,
@@ -81,12 +77,13 @@ enum class RequestIdTokenStatus {
   kContinuationPopupClosedByUser = 45,
   kSuccessUsingIdentityProviderResolve = 46,
   kContinuationPopupClosedByIdentityProviderClose = 47,
-  kInvalidFieldsSpecified = 48,
+  kInvalidFieldsSpecified = 48,  // obsolete
   kRpOriginIsOpaque = 49,
   kConfigNotMatchingType = 50,
   kLoginPopupClosedWithoutSignin = 51,
   kSuppressedBySegmentationPlatform = 52,
-  kMaxValue = kSuppressedBySegmentationPlatform
+  kSuccessUsingRedirectTo = 53,
+  kMaxValue = kSuccessUsingRedirectTo
 };
 
 // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmRequestIdTokenStatus)
@@ -384,7 +381,7 @@ class CONTENT_EXPORT Metrics {
   // dialog is shown. This does not include flows that involve LoginToIdP. e.g.
   // mismatch flow or active flow with users whose login status is "logged-out".
   void RecordShowAccountsDialogTime(
-      const std::vector<IdentityProviderDataPtr>& providers,
+      const std::vector<scoped_refptr<IdentityProviderData>>& providers,
       base::TimeDelta duration);
 
   // Records the time from when a call to the API was made to when the accounts
@@ -410,19 +407,19 @@ class CONTENT_EXPORT Metrics {
   // selecting any accounts. `duration` is the time from when the accounts
   // dialog was shown to when the user closed the dialog.
   void RecordCancelOnDialogTime(
-      const std::vector<IdentityProviderDataPtr>& providers,
+      const std::vector<scoped_refptr<IdentityProviderData>>& providers,
       base::TimeDelta duration);
 
   // Records the duration from when an accounts dialog is shown to when it is
   // destroyed.
   void RecordAccountsDialogShownDuration(
-      const std::vector<IdentityProviderDataPtr>& providers,
+      const std::vector<scoped_refptr<IdentityProviderData>>& providers,
       base::TimeDelta duration);
 
   // Records the duration from when a mismatch dialog is shown to when it is
   // destroyed or user triggers IDP sign-in pop-up window.
   void RecordMismatchDialogShownDuration(
-      const std::vector<IdentityProviderDataPtr>& providers,
+      const std::vector<scoped_refptr<IdentityProviderData>>& providers,
       base::TimeDelta duration);
 
   // Records the reason that closed accounts dialog without selecting any
@@ -452,11 +449,11 @@ class CONTENT_EXPORT Metrics {
   // call.
   void RecordRequestTokenStatus(
       RequestIdTokenStatus status,
-      MediationRequirement requirement,
+      ::password_manager::CredentialMediationRequirement requirement,
       const std::vector<GURL>& requested_providers,
       int num_idps_mismatch,
       const std::optional<GURL>& selected_idp_config_url,
-      const RpMode& rp_mode,
+      const blink::mojom::RpMode& rp_mode,
       std::optional<UseOtherAccountResult> use_other_account_result,
       std::optional<VerifyingDialogResult> verifying_dialog_result,
       ThirdPartyCookiesStatus tpc_status,
@@ -468,6 +465,10 @@ class CONTENT_EXPORT Metrics {
   void RecordHasNonce(const std::set<GURL>& idps_with_nonce);
   void RecordHasNonceOutsideParamsOnly(
       const std::set<GURL>& idps_with_nonce_outside_params_only);
+
+  // Records when the well-known file does not have the required endpoints due
+  // to client_metadata being used.
+  void RecordWellKnownInvalidDueToClientMetadata(const GURL& provider);
 
   // Records whether user sign-in states between IDP and browser match.
   void RecordSignInStateMatchStatus(const GURL& provider,
@@ -497,6 +498,7 @@ class CONTENT_EXPORT Metrics {
   // Records several auto reauthn metrics using the given parameters.
   // |has_single_returning_account| is nullopt when we are recording the metrics
   // during a failure that happened before the accounts fetch.
+  // This is only recorded when `mediation` is not `required`.
   void RecordAutoReauthnMetrics(
       std::optional<bool> has_single_returning_account,
       const IdentityRequestAccount* auto_signin_account,
@@ -509,7 +511,7 @@ class CONTENT_EXPORT Metrics {
 
   // Records a sample when an accounts dialog is shown.
   void RecordAccountsDialogShown(
-      const std::vector<IdentityProviderDataPtr>& providers);
+      const std::vector<scoped_refptr<IdentityProviderData>>& providers);
 
   // This enum is used in histograms. Do not remove or modify existing entries.
   // You may add entries at the end, and update |kMaxValue|.
@@ -590,8 +592,16 @@ class CONTENT_EXPORT Metrics {
   // Records whether the RP's URL has a path.
   void RecordRpUrlHasPath(bool rp_url_has_path);
 
-  // Records the count of identity providers in the request
+  // Records the number of identity providers in the request
   void RecordIdentityProvidersCount(int count);
+
+  // Records the number of accounts received before applying filters such as
+  // login/domain hints.
+  void RecordRawAccountsSize(int size);
+
+  // Records the number of accounts received after applying filters such as
+  // login/domain hints. If no account is left, nothing will be recorded.
+  void RecordReadyToShowAccountsSize(int size);
 
   // Returns the session ID.
   int GetSessionID() const;
@@ -668,17 +678,9 @@ void RecordSetLoginStatusIgnoredReason(SetLoginStatusIgnoredReason reason);
 // being primary.
 void RecordLifecycleStateFailureReason(LifecycleStateFailureReason reason);
 
-// Records the number of accounts received before applying login/domain hints
-// filter.
-void RecordRawAccountsSize(int size);
-
-// Records the number of accounts received after applying login/domain hints
-// filter. If no account left, nothing will be recorded.
-void RecordReadyToShowAccountsSize(int size);
-
 // Records what kinds of fields we received in the accounts from the IDP.
 CONTENT_EXPORT void RecordAccountFieldsType(
-    const std::vector<IdentityRequestAccountPtr>& accounts);
+    const std::vector<scoped_refptr<IdentityRequestAccount>>& accounts);
 
 void RecordCrossSiteIframeType(CrossSiteIframeType type);
 

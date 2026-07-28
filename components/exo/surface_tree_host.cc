@@ -32,6 +32,7 @@
 #include "components/viz/common/surfaces/child_local_surface_id_allocator.h"
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "gpu/command_buffer/client/raster_interface.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
@@ -212,17 +213,6 @@ void SurfaceTreeHost::DidReceiveCompositorFrameAck() {
   frame_callbacks_.pop();
 }
 
-void SurfaceTreeHost::DidPresentCompositorFrame(
-    uint32_t presentation_token,
-    const gfx::PresentationFeedback& feedback) {
-  auto it = active_presentation_callbacks_.find(presentation_token);
-  if (it == active_presentation_callbacks_.end())
-    return;
-  for (auto callback : it->second)
-    callback.Run(feedback);
-  active_presentation_callbacks_.erase(it);
-}
-
 void SurfaceTreeHost::SetScaleFactor(float scale_factor) {
   pending_scale_factor_ = scale_factor;
 }
@@ -237,17 +227,22 @@ void SurfaceTreeHost::SubmitCompositorFrameForTesting(
   // Make sure that every submission has an entry pushed into
   // `frame_callbacks_`, which will be pop when ack is received.
   frame_callbacks_.emplace();
-  active_presentation_callbacks_[frame.metadata.frame_token] =
-      PresentationCallbacks();
-  layer_tree_frame_sink_holder_->SubmitCompositorFrame(std::move(frame));
+  layer_tree_frame_sink_holder_->SubmitCompositorFrame(std::move(frame),
+                                                       PresentationCallbacks());
 }
 
 void SurfaceTreeHost::SetLayerTreeFrameSinkHolderFactoryForTesting(
     LayerTreeFrameSinkHolderFactory frame_sink_holder_factory) {
-  DCHECK(frame_callbacks_.empty() && active_presentation_callbacks_.empty());
+  DCHECK(frame_callbacks_.empty());
 
   frame_sink_holder_factory_ = std::move(frame_sink_holder_factory);
   layer_tree_frame_sink_holder_ = frame_sink_holder_factory_.Run();
+}
+
+base::flat_map<uint32_t, SurfaceTreeHost::PresentationCallbacks>&
+SurfaceTreeHost::GetActivePresentationCallbacksForTesting() {
+  return layer_tree_frame_sink_holder_
+      ->GetActivePresentationCallbacksForTesting();  // IN-TEST
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -273,7 +268,6 @@ void SurfaceTreeHost::OnNewOutputAdded() {
 }
 
 SecurityDelegate* SurfaceTreeHost::GetSecurityDelegate() {
-  DCHECK(security_delegate_);
   return security_delegate_;
 }
 
@@ -363,12 +357,6 @@ void SurfaceTreeHost::SubmitCompositorFrame() {
 
   frame_callbacks_.push(std::move(current_frame_callbacks));
 
-  const uint32_t frame_token = frame.metadata.frame_token;
-
-  DCHECK_EQ(active_presentation_callbacks_.count(frame_token), 0u);
-  active_presentation_callbacks_[frame_token] =
-      std::move(presentation_callbacks);
-
   root_surface_->AppendSurfaceHierarchyContentsToFrame(
       gfx::PointF(root_surface_origin_pixel_), /*to_parent_dp=*/gfx::PointF(),
       layer_tree_frame_sink_holder_->NeedsFullDamageForNextFrame(),
@@ -411,7 +399,8 @@ void SurfaceTreeHost::SubmitCompositorFrame() {
 
   frame.metadata.may_contain_video = root_surface_->ContainsVideo();
 
-  layer_tree_frame_sink_holder_->SubmitCompositorFrame(std::move(frame));
+  layer_tree_frame_sink_holder_->SubmitCompositorFrame(
+      std::move(frame), std::move(presentation_callbacks));
 }
 
 void SurfaceTreeHost::SubmitEmptyCompositorFrame() {
@@ -438,9 +427,8 @@ void SurfaceTreeHost::SubmitEmptyCompositorFrame() {
   // Make sure that every submission has an entry pushed into
   // `frame_callbacks_`, which will be pop when ack is received.
   frame_callbacks_.emplace();
-  active_presentation_callbacks_[frame.metadata.frame_token] =
-      PresentationCallbacks();
   layer_tree_frame_sink_holder_->SubmitCompositorFrame(std::move(frame),
+                                                       PresentationCallbacks(),
                                                        /*submit_now=*/true);
 }
 
@@ -513,9 +501,10 @@ bool SurfaceTreeHost::ContentsFillsHostWindowOpaquely() const {
 
 void SurfaceTreeHost::InitHostWindow(const std::string& window_name) {
   host_window_->SetName(window_name);
-  host_window_->Init(ui::LAYER_SOLID_COLOR);
+  host_window_->Init(ui::LAYER_SURFACE);
   host_window_->set_owned_by_parent(false);
   host_window_->SetTransparent(true);
+  host_window_->layer()->AsSurface()->SetBackgroundColor(SkColors::kWhite);
 
   // The host window is a container of surface tree. It doesn't handle pointer
   // events.
@@ -584,18 +573,18 @@ void SurfaceTreeHost::MaybeActivateSurface() {
     return;
   }
 
-  if (commit_target_layer->GetSurfaceId() &&
+  auto* surface = commit_target_layer->AsSurface();
+  if (surface->GetSurfaceId() &&
       !GetCurrentLocalSurfaceId().IsNewerThan(
-          commit_target_layer->GetSurfaceId()->local_surface_id())) {
+          surface->GetSurfaceId()->local_surface_id())) {
     return;
   }
 
   host_window_->UpdateLocalSurfaceIdFromEmbeddedClient(
       GetCurrentLocalSurfaceId());
-  commit_target_layer->SetShowSurface(
-      GetSurfaceId(), commit_target_layer->bounds().size(), SK_ColorWHITE,
-      cc::DeadlinePolicy::UseDefaultDeadline(),
-      false /* stretch_content_to_fill_bounds */);
+  surface->SetShowSurface(GetSurfaceId(), commit_target_layer->bounds().size(),
+                          cc::DeadlinePolicy::UseDefaultDeadline(),
+                          /*stretch_content_to_fill_bounds=*/false);
 }
 
 viz::SurfaceId SurfaceTreeHost::GetSurfaceId() const {
@@ -634,7 +623,6 @@ viz::CompositorFrame SurfaceTreeHost::PrepareToSubmitCompositorFrame() {
   viz::CompositorFrame frame;
   frame.metadata.begin_frame_ack =
       viz::BeginFrameAck::CreateManualAckWithDamage();
-  frame.metadata.frame_token = GenerateNextFrameToken();
   frame.render_pass_list.push_back(viz::CompositorRenderPass::Create());
   const std::unique_ptr<viz::CompositorRenderPass>& render_pass =
       frame.render_pass_list.back();
@@ -741,13 +729,9 @@ void SurfaceTreeHost::CleanUpCallbacks() {
     frame_callbacks_.pop();
   }
 
-  for (auto entry : active_presentation_callbacks_) {
-    while (!entry.second.empty()) {
-      entry.second.front().Run(gfx::PresentationFeedback());
-      entry.second.pop_front();
-    }
+  if (layer_tree_frame_sink_holder_) {
+    layer_tree_frame_sink_holder_->ClearPendingCallbacks();
   }
-  active_presentation_callbacks_.clear();
 }
 
 std::unique_ptr<LayerTreeFrameSinkHolder>

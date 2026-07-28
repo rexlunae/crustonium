@@ -341,15 +341,6 @@ enum ContentSettingsType {
   // Stores per origin metadata for cookie controls.
   COOKIE_CONTROLS_METADATA,
 
-  // Content Setting for temporary 3PC accesses granted by user behavior
-  // heuristics.
-  TPCD_HEURISTICS_GRANTS,
-
-  // Content Setting for 3PC accesses granted by metadata delivered via the
-  // component updater service. This type will only be used when
-  // `net::features::kTpcdMetadataGrants` is enabled.
-  TPCD_METADATA_GRANTS,
-
   // Content setting used to indicate whether entering picture-in-picture
   // automatically should be enabled.
   AUTO_PICTURE_IN_PICTURE,
@@ -487,5 +478,20 @@ enum ContentSettingsType {
   // when suspicious warning is shown. If the user has selected this, the
   // notification permission will not be revoked based on suspicious verdict.
   SUSPICIOUS_NOTIFICATION_SHOW_ORIGINAL,
+
+  // Setting to control whether an Isolated Web App (IWA) can add Sub
+  // Apps without prompting users.
+  // https://github.com/explainers-by-googlers/sub-apps
+  // Possible values:
+  // - ASK: Prompt the user for confirmation (default).
+  // - ALLOW: Skip the prompt and allow adding sub apps.
+  // - BLOCK: Skip the prompt and block adding sub apps.
+  SUB_APPS_WITHOUT_PROMPTS,
+
+  // Controls the display of the inline cue menu in a website.
+  INLINE_CUE_MENU,
+
+  // Stores allowlist decisions for Suspicious Site Warnings.
+  SUSPICIOUS_SITE_WARNING_DATA,
 };
-// LINT.ThenChange(//components/content_settings/core/browser/content_settings_uma_util.cc:kHistogramValue)
+// LINT.ThenChange(//components/content_settings/core/common/content_settings_uma_constants.h:kContentSettingsTypeToHistogramValue)

@@ -8,11 +8,6 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #ifndef UI_GL_GL_ENUMS_IMPLEMENTATION_AUTOGEN_H_
 #define UI_GL_GL_ENUMS_IMPLEMENTATION_AUTOGEN_H_
 
@@ -623,6 +618,10 @@ static constexpr EnumToString kEnumToStringTable[] = {
     {
         0x0F,
         "GL_RELATIVE_SMOOTH_QUADRATIC_CURVE_TO_NV",
+    },
+    {
+        0x1,
+        "GL_PIXEL_LOCAL_USAGE_ALWAYS_NONCOHERENT_BIT_ANGLE",
     },
     {
         0x10,
@@ -6997,7 +6996,7 @@ static constexpr EnumToString kEnumToStringTable[] = {
     },
     {
         0x96E7,
-        "GL_PIXEL_LOCAL_FORMAT_ANGLE",
+        "GL_PIXEL_LOCAL_INTERNAL_FORMAT_ANGLE",
     },
     {
         0x96E8,
@@ -7013,14 +7012,18 @@ static constexpr EnumToString kEnumToStringTable[] = {
     },
     {
         0x96EB,
-        "GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE",
+        "GL_PIXEL_LOCAL_USAGE_ANGLE",
     },
     {
         0x96EC,
-        "GL_PIXEL_LOCAL_CLEAR_VALUE_INT_ANGLE",
+        "GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE",
     },
     {
         0x96ED,
+        "GL_PIXEL_LOCAL_CLEAR_VALUE_INT_ANGLE",
+    },
+    {
+        0x96EE,
         "GL_PIXEL_LOCAL_CLEAR_VALUE_UNSIGNED_INT_ANGLE",
     },
     {
@@ -7169,11 +7172,11 @@ static constexpr EnumToString kEnumToStringTable[] = {
     },
     {
         0x9770,
-        "GL_HUAWEI_SHADER_BINARY",
+        "GL_SHADER_BINARY_HUAWEI",
     },
     {
         0x9771,
-        "GL_HUAWEI_PROGRAM_BINARY",
+        "GL_PROGRAM_BINARY_HUAWEI",
     },
     {
         0xC0,

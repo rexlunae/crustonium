@@ -23,7 +23,6 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.components.payments.CSPChecker;
 import org.chromium.components.payments.PackageManagerDelegate;
 import org.chromium.components.payments.PaymentManifestDownloader;
@@ -33,6 +32,7 @@ import org.chromium.components.payments.PaymentManifestVerifier.ManifestVerifyCa
 import org.chromium.components.payments.WebAppManifestSection;
 import org.chromium.components.payments.WebPaymentsWebDataService;
 import org.chromium.components.payments.WebPaymentsWebDataService.WebPaymentsWebDataServiceCallback;
+import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.url.GURL;
@@ -95,7 +95,6 @@ public class PaymentManifestVerifierTest {
     public static final Signature BOB_PAY_SIGNATURE = new Signature("01020304050607080900");
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Rule public ChromeBrowserTestRule mTestRule = new ChromeBrowserTestRule();
 
     @Mock private WebPaymentsWebDataService mWebDataService;
     @Mock private PackageManagerDelegate mPackageManagerDelegate;
@@ -123,7 +122,10 @@ public class PaymentManifestVerifierTest {
         mDownloader =
                 new PaymentManifestDownloader() {
                     @Override
-                    public void initialize(WebContents webContents, CSPChecker cspChecker) {}
+                    public void initialize(
+                            WebContents webContents,
+                            RenderFrameHost renderFrameHost,
+                            CSPChecker cspChecker) {}
 
                     @Override
                     public void downloadPaymentMethodManifest(
@@ -203,7 +205,9 @@ public class PaymentManifestVerifierTest {
                         new PaymentManifestDownloader() {
                             @Override
                             public void initialize(
-                                    WebContents webContents, CSPChecker cspChecker) {}
+                                    WebContents webContents,
+                                    RenderFrameHost renderFrameHost,
+                                    CSPChecker cspChecker) {}
 
                             @Override
                             public void downloadPaymentMethodManifest(
@@ -239,7 +243,9 @@ public class PaymentManifestVerifierTest {
                         new PaymentManifestDownloader() {
                             @Override
                             public void initialize(
-                                    WebContents webContents, CSPChecker cspChecker) {}
+                                    WebContents webContents,
+                                    RenderFrameHost renderFrameHost,
+                                    CSPChecker cspChecker) {}
 
                             @Override
                             public void downloadPaymentMethodManifest(

@@ -12,7 +12,8 @@ from telemetry.web_perf import timeline_based_measurement
 
 from page_sets.desktop_ui import omnibox_story
 from page_sets.desktop_ui.ui_devtools_utils import (ClickOn, PressKey,
-                                                    PLATFORM_ACCELERATOR)
+                                                    PLATFORM_ACCELERATOR,
+                                                    InputText)
 from page_sets.desktop_ui.browser_element_identifiers import (
     kAiModePageActionIconElementId, kOmniboxElementId)
 
@@ -21,7 +22,8 @@ import py_utils
 AI_MODE_INPUT_ELEMENT_FUNCTION = '''
 (function() {
   return document.querySelector('omnibox-aim-app').shadowRoot
-        .querySelector('cr-composebox').shadowRoot
+        .querySelector('#composebox').shadowRoot
+        .querySelector('cr-composebox-input').shadowRoot
         .querySelector('#input');
 })()
 '''
@@ -37,6 +39,17 @@ WEB_CONTENTS_UMA = [
     'Graphics.Smoothness.PercentDroppedFrames4.AllAnimations',
     'Graphics.Smoothness.PercentDroppedFrames4.AllInteractions',
     'Graphics.Smoothness.PercentDroppedFrames4.AllSequences',
+    'Omnibox.Popup.WebUI.ConstructionToFirstShownDuration',
+    'Omnibox.Popup.WebUI.CrashRecovery',
+    'Omnibox.Popup.WebUI.PageRemoteIsBoundOnFirstCall',
+    'Omnibox.Popup.WebUI.PresenterShowLatency.ToPaint',
+    'Omnibox.Popup.WebUI.RendererProcessGoneStatus',
+    'Omnibox.Popup.WebUI.ResultChangedToRepaintLatency.ToPaint',
+    'Omnibox.Popup.Aim.ConstructionToFirstShownDuration',
+    'Omnibox.Popup.Aim.CrashRecovery',
+    'Omnibox.Popup.Aim.PresenterShowLatency.ToPaint',
+    'Omnibox.Popup.Aim.RendererProcessGoneStatus',
+    'Omnibox.WebUI.CharTypedToRepaintLatency.ToPaint',
 ]
 
 
@@ -54,8 +67,14 @@ class OmniboxAIModePopupStory(omnibox_story.OmniboxStory):
     # Explicitly focus the omnibox.
     ClickOn(self._devtools, element_id=kOmniboxElementId)
 
-    # Clear the omnibox by selecting all and backspacing.
+    # Enter text into the omnibox.
     node_id = self.GetOmniboxNodeID()
+    PressKey(self._devtools, node_id, 'Home')
+    PressKey(self._devtools, node_id, 'A', PLATFORM_ACCELERATOR)
+    InputText(self._devtools, node_id,
+              'Entering some text to exercise the metrics')
+
+    # Clear the omnibox by selecting all and backspacing.
     PressKey(self._devtools, node_id, 'Home')
     PressKey(self._devtools, node_id, 'A', PLATFORM_ACCELERATOR)
     PressKey(self._devtools, node_id, 'Backspace')
@@ -127,14 +146,15 @@ class OmniboxPerf(perf_benchmark.PerfBenchmark):
   def SetExtraBrowserOptions(self, options):
     options.AppendExtraBrowserArgs('--enable-ui-devtools=0')
     options.AppendExtraBrowserArgs('--disable-field-trial-config')
-    options.RemoveExtraBrowserArg('--enable-field-trial-config')
+    self.RemoveExtraBrowserArgWithValues(options, '--enable-field-trial-config')
     options.AppendExtraBrowserArgs(
         '--enable-features=ui-debug-tools-enable-synthetic-events,'
         'WebUIOmniboxPopup,'
         'WebUIOmniboxAimPopup:AddContextButtonVariant/below_results,'
         'AiModeOmniboxEntryPoint')
     options.AppendExtraBrowserArgs(
-        '--disable-features=AimServerEligibilityEnabled')
+        '--disable-features=AimServerEligibilityEnabled,'
+        'AimFuseboxEligibilityCheckEnabled')
 
   @classmethod
   def Name(cls):

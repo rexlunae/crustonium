@@ -29,7 +29,7 @@ namespace {
 constexpr double kTimelineTriggerBoundaryTolerance =
     1.f / LayoutUnit::kFixedPointDenominator;
 
-constexpr char kEntryBoundaryDefault[] = "normal";
+constexpr char kActivationBoundaryDefault[] = "normal";
 constexpr char kActiveBoundaryDefault[] = "auto";
 
 bool ValidateBoundary(ExecutionContext* execution_context,
@@ -39,8 +39,11 @@ bool ValidateBoundary(ExecutionContext* execution_context,
                       bool allow_auto) {
   if (boundary->IsString()) {
     CSSParserTokenStream stream(boundary->GetAsString());
+    // We don't compute CSS random() function here, only check the grammar
+    // while parsing, since `value` is not used later. Hence we don't need
+    // property context here.
     CSSParserLocalContext local_context =
-        CSSParserLocalContext::CreateWithoutPropertyForAnimations();
+        CSSParserLocalContext::CreateWithoutPropertyForSyntaxParsing();
     const CSSValue* value = css_parsing_utils::ConsumeAnimationRange(
         stream,
         *To<LocalDOMWindow>(execution_context)
@@ -88,7 +91,7 @@ double ComputeTriggerBoundary(std::optional<TimelineOffset> offset,
                               double default_value,
                               const ScrollTimeline& timeline,
                               const TimelineRange::ScrollOffsets& range_offsets,
-                              Element& timeline_source) {
+                              const Node& timeline_source) {
   if (offset) {
     // |range_offsets| is in physical pixels. Get the range values in CSS
     // pixels.
@@ -124,60 +127,64 @@ double ComputeTriggerBoundary(std::optional<TimelineOffset> offset,
 }
 
 void InitializeUnsetBoundaryValues(
-    V8UnionStringOrTimelineRangeOffsetOrUndefined* entry,
+    V8UnionStringOrTimelineRangeOffsetOrUndefined* activation,
     V8UnionStringOrTimelineRangeOffsetOrUndefined* active,
-    TimelineTriggerRange::Boundary** entry_boundary_out,
+    TimelineTriggerRange::Boundary** activation_boundary_out,
     TimelineTriggerRange::Boundary** active_boundary_out) {
   using Boundary = TimelineTriggerRange::Boundary;
 
-  bool entry_undefined = !entry || entry->IsUndefined();
+  bool activation_undefined = !activation || activation->IsUndefined();
   bool active_undefined = !active || active->IsUndefined();
 
-  const String entry_default(kEntryBoundaryDefault);
+  const String activation_default(kActivationBoundaryDefault);
   const String active_default(kActiveBoundaryDefault);
 
-  if (entry_undefined && active_undefined) {
+  if (activation_undefined && active_undefined) {
     // Both are undefined: normal auto.
-    *entry_boundary_out = MakeGarbageCollected<Boundary>(entry_default);
+    *activation_boundary_out =
+        MakeGarbageCollected<Boundary>(activation_default);
     *active_boundary_out = MakeGarbageCollected<Boundary>(active_default);
-  } else if (entry_undefined) {
-    // The entry boundary is undefined. If the active boundary is its default
-    // value (auto), the entry boundary should also be its default value
-    // (normal). Otherwise, it should be whatever the active boundary is.
+  } else if (activation_undefined) {
+    // The activation boundary is undefined. If the active boundary is its
+    // default value (auto), the activation boundary should also be its default
+    // value (normal). Otherwise, it should be whatever the active boundary is.
     if (active->IsString()) {
       *active_boundary_out =
           MakeGarbageCollected<Boundary>(active->GetAsString());
-      *entry_boundary_out = active->GetAsString() == active_default
-                                ? MakeGarbageCollected<Boundary>(entry_default)
-                                : *active_boundary_out;
+      *activation_boundary_out =
+          active->GetAsString() == active_default
+              ? MakeGarbageCollected<Boundary>(activation_default)
+              : *active_boundary_out;
     } else {
       *active_boundary_out =
           MakeGarbageCollected<Boundary>(active->GetAsTimelineRangeOffset());
-      *entry_boundary_out = *active_boundary_out;
+      *activation_boundary_out = *active_boundary_out;
     }
   } else if (active_undefined) {
-    // The active boundary is undefined. If the entry boundary is its default
-    // value (normal), the active boundary should also be its default value
-    // (auto). Otherwise, it should be whatever the entry boundary is.
-    if (entry->IsString()) {
-      *entry_boundary_out =
-          MakeGarbageCollected<Boundary>(entry->GetAsString());
+    // The active boundary is undefined. If the activation boundary is its
+    // default value (normal), the active boundary should also be its default
+    // value (auto). Otherwise, it should be whatever the activation boundary
+    // is.
+    if (activation->IsString()) {
+      *activation_boundary_out =
+          MakeGarbageCollected<Boundary>(activation->GetAsString());
       *active_boundary_out =
-          entry->GetAsString() == entry_default
+          activation->GetAsString() == activation_default
               ? MakeGarbageCollected<Boundary>(active_default)
-              : *entry_boundary_out;
+              : *activation_boundary_out;
     } else {
-      *entry_boundary_out =
-          MakeGarbageCollected<Boundary>(entry->GetAsTimelineRangeOffset());
-      *active_boundary_out = *entry_boundary_out;
+      *activation_boundary_out = MakeGarbageCollected<Boundary>(
+          activation->GetAsTimelineRangeOffset());
+      *active_boundary_out = *activation_boundary_out;
     }
   } else {
-    // Both values are set. They should be consstructed from their respective
+    // Both values are set. They should be constructed from their respective
     // values.
-    *entry_boundary_out =
-        entry->IsString()
-            ? MakeGarbageCollected<Boundary>(entry->GetAsString())
-            : MakeGarbageCollected<Boundary>(entry->GetAsTimelineRangeOffset());
+    *activation_boundary_out =
+        activation->IsString()
+            ? MakeGarbageCollected<Boundary>(activation->GetAsString())
+            : MakeGarbageCollected<Boundary>(
+                  activation->GetAsTimelineRangeOffset());
     *active_boundary_out =
         active->IsString()
             ? MakeGarbageCollected<Boundary>(active->GetAsString())
@@ -186,31 +193,34 @@ void InitializeUnsetBoundaryValues(
   }
 }
 
-void InitializeBoundaryValues(const TimelineTriggerOptions* options,
-                              TimelineTriggerRange::Boundary** entry_start_out,
-                              TimelineTriggerRange::Boundary** active_start_out,
-                              TimelineTriggerRange::Boundary** entry_end_out,
-                              TimelineTriggerRange::Boundary** active_end_out) {
+void InitializeBoundaryValues(
+    const TimelineTriggerOptions* options,
+    TimelineTriggerRange::Boundary** activation_start_out,
+    TimelineTriggerRange::Boundary** active_start_out,
+    TimelineTriggerRange::Boundary** activation_end_out,
+    TimelineTriggerRange::Boundary** active_end_out) {
   InitializeUnsetBoundaryValues(
-      options->hasEntryRangeStart() ? options->entryRangeStart() : nullptr,
+      options->hasActivationRangeStart() ? options->activationRangeStart()
+                                         : nullptr,
       options->hasActiveRangeStart() ? options->activeRangeStart() : nullptr,
-      entry_start_out, active_start_out);
+      activation_start_out, active_start_out);
   InitializeUnsetBoundaryValues(
-      options->hasEntryRangeEnd() ? options->entryRangeEnd() : nullptr,
+      options->hasActivationRangeEnd() ? options->activationRangeEnd()
+                                       : nullptr,
       options->hasActiveRangeEnd() ? options->activeRangeEnd() : nullptr,
-      entry_end_out, active_end_out);
+      activation_end_out, active_end_out);
 }
 
 }  // namespace
 
 TimelineTriggerRange::TimelineTriggerRange(AnimationTimeline* timeline,
-                                           Boundary* entry_range_start,
-                                           Boundary* entry_range_end,
+                                           Boundary* activation_range_start,
+                                           Boundary* activation_range_end,
                                            Boundary* active_range_start,
                                            Boundary* active_range_end)
     : timeline_(timeline),
-      entry_range_start_(entry_range_start),
-      entry_range_end_(entry_range_end),
+      activation_range_start_(activation_range_start),
+      activation_range_end_(activation_range_end),
       active_range_start_(active_range_start),
       active_range_end_(active_range_end) {}
 
@@ -220,16 +230,16 @@ TimelineTriggerRange* TimelineTriggerRange::Create(
     const TimelineTriggerOptions* options,
     ExceptionState& exception_state) {
   Boundary* active_start = nullptr;
-  Boundary* entry_start = nullptr;
-  Boundary* entry_end = nullptr;
+  Boundary* activation_start = nullptr;
+  Boundary* activation_end = nullptr;
   Boundary* active_end = nullptr;
 
-  InitializeBoundaryValues(options, &entry_start, &active_start, &entry_end,
-                           &active_end);
+  InitializeBoundaryValues(options, &activation_start, &active_start,
+                           &activation_end, &active_end);
 
-  if (!ValidateBoundary(execution_context, entry_start, exception_state, 0,
+  if (!ValidateBoundary(execution_context, activation_start, exception_state, 0,
                         /*allow_auto=*/false) ||
-      !ValidateBoundary(execution_context, entry_end, exception_state, 100,
+      !ValidateBoundary(execution_context, activation_end, exception_state, 100,
                         /*allow_auto=*/false) ||
       !ValidateBoundary(execution_context, active_start, exception_state, 0,
                         /*allow_auto=*/true) ||
@@ -244,19 +254,20 @@ TimelineTriggerRange* TimelineTriggerRange::Create(
     timeline = &To<LocalDOMWindow>(execution_context)->document()->Timeline();
   }
   return MakeGarbageCollected<TimelineTriggerRange>(
-      timeline, entry_start, entry_end, active_start, active_end);
+      timeline, activation_start, activation_end, active_start, active_end);
 }
 
 AnimationTimeline* TimelineTriggerRange::timeline() {
   return timeline_.Get() ? timeline_.Get()->ExposedTimeline() : nullptr;
 }
-const TimelineTriggerRange::Boundary* TimelineTriggerRange::entryRangeStart(
+const TimelineTriggerRange::Boundary*
+TimelineTriggerRange::activationRangeStart(
     ExecutionContext* execution_context) {
-  return entry_range_start_;
+  return activation_range_start_;
 }
-const TimelineTriggerRange::Boundary* TimelineTriggerRange::entryRangeEnd(
+const TimelineTriggerRange::Boundary* TimelineTriggerRange::activationRangeEnd(
     ExecutionContext* execution_context) {
-  return entry_range_end_;
+  return activation_range_end_;
 }
 const TimelineTriggerRange::Boundary* TimelineTriggerRange::activeRangeStart(
     ExecutionContext* execution_context) {
@@ -265,6 +276,22 @@ const TimelineTriggerRange::Boundary* TimelineTriggerRange::activeRangeStart(
 const TimelineTriggerRange::Boundary* TimelineTriggerRange::activeRangeEnd(
     ExecutionContext* execution_context) {
   return active_range_end_;
+}
+
+Node* TimelineTriggerRange::ComputeBoundariesSource(
+    const ScrollTimeline& timeline) {
+  Node* timeline_source = timeline.ComputeResolvedSource();
+  if (!timeline_source) {
+    return nullptr;
+  }
+
+  if (IsA<LayoutView>(timeline_source->GetLayoutObject())) {
+    // If the source is the root document, it isn't an "Element", so we need
+    // to work with its scrollingElement
+    timeline_source = To<Document>(timeline_source)->ScrollingElementNoLayout();
+  }
+
+  return timeline_source;
 }
 
 TimelineTriggerRange::TriggerBoundaries
@@ -276,10 +303,10 @@ TimelineTriggerRange::ComputeTriggerBoundaries(double current_offset,
   TriggerBoundaries boundaries;
 
   ExceptionState exception_state(nullptr);
-  std::optional<TimelineOffset> entry_start = TimelineOffset::Create(
-      &timeline_source, entry_range_start_, 0, ASSERT_NO_EXCEPTION);
-  std::optional<TimelineOffset> entry_end = TimelineOffset::Create(
-      &timeline_source, entry_range_end_, 1, ASSERT_NO_EXCEPTION);
+  std::optional<TimelineOffset> activation_start = TimelineOffset::Create(
+      &timeline_source, activation_range_start_, 0, ASSERT_NO_EXCEPTION);
+  std::optional<TimelineOffset> activation_end = TimelineOffset::Create(
+      &timeline_source, activation_range_end_, 1, ASSERT_NO_EXCEPTION);
   TimelineOffsetOrAuto active_start = TimelineOffsetOrAuto::Create(
       &timeline_source, active_range_start_, 0, ASSERT_NO_EXCEPTION);
   TimelineOffsetOrAuto active_end = TimelineOffsetOrAuto::Create(
@@ -294,16 +321,16 @@ TimelineTriggerRange::ComputeTriggerBoundaries(double current_offset,
   const double default_end_position = AdjustForAbsoluteZoom::AdjustScroll(
       timeline_state.scroll_offsets->end, *timeline_source.GetLayoutBox());
 
-  boundaries.entry_start =
-      ComputeTriggerBoundary(entry_start, default_start_position, timeline,
+  boundaries.activation_start =
+      ComputeTriggerBoundary(activation_start, default_start_position, timeline,
                              *timeline_state.scroll_offsets, timeline_source);
-  boundaries.entry_end =
-      ComputeTriggerBoundary(entry_end, default_end_position, timeline,
+  boundaries.activation_end =
+      ComputeTriggerBoundary(activation_end, default_end_position, timeline,
                              *timeline_state.scroll_offsets, timeline_source);
 
   if (active_start.IsAuto()) {
     // auto behavior: match the trigger range.
-    boundaries.active_start = boundaries.entry_start;
+    boundaries.active_start = boundaries.activation_start;
   } else {
     // Note: a nullopt |offset| implies normal, which corresponds to the start
     // of the timeline's range: |timeline_state.scroll_offsets->start|.
@@ -315,7 +342,7 @@ TimelineTriggerRange::ComputeTriggerBoundaries(double current_offset,
   }
 
   if (active_end.IsAuto()) {
-    boundaries.active_end = boundaries.entry_end;
+    boundaries.active_end = boundaries.activation_end;
   } else {
     std::optional<TimelineOffset> offset = active_end.GetTimelineOffset();
     double default_active_end_offset = timeline_state.scroll_offsets->end;
@@ -329,12 +356,13 @@ TimelineTriggerRange::ComputeTriggerBoundaries(double current_offset,
   return boundaries;
 }
 
-std::optional<TimelineTriggerState> TimelineTriggerRange::UpdateState() {
-  last_snapshot_state_ = ComputeState().value_or(last_snapshot_state_);
-  return last_snapshot_state_;
+std::optional<TimelineTriggerRange::State> TimelineTriggerRange::UpdateState() {
+  state_ = ComputeState().value_or(state_);
+  return state_;
 }
 
-std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
+std::optional<TimelineTriggerRange::State>
+TimelineTriggerRange::ComputeState() {
   if (!timeline_ || !timeline_->IsActive()) {
     return std::nullopt;
   }
@@ -352,23 +380,10 @@ std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
       return std::nullopt;
     }
 
-    Node* timeline_source = timeline->ComputeResolvedSource();
-    if (!timeline_source) {
-      return std::nullopt;
-    }
+    Node* timeline_source = ComputeBoundariesSource(*timeline);
 
     current_offset = AdjustForAbsoluteZoom::AdjustScroll(
         *current_offset, *timeline_source->GetLayoutObject());
-
-    if (IsA<LayoutView>(timeline_source->GetLayoutObject())) {
-      // If the source is the root document, it isn't an "Element", so we need
-      // to work with its scrollingElement
-      timeline_source =
-          To<Document>(timeline_source)->ScrollingElementNoLayout();
-      if (!timeline_source) {
-        return std::nullopt;
-      }
-    }
 
     boundaries = ComputeTriggerBoundaries(
         *current_offset, *To<Element>(timeline_source), *timeline);
@@ -377,21 +392,22 @@ std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
     // Return values that indicate that the a trigger with the document timeline
     // is always tripped.
     // return std::nullopt;
-    boundaries = {.entry_start = -std::numeric_limits<double>::infinity(),
-                  .entry_end = std::numeric_limits<double>::infinity(),
+    boundaries = {.activation_start = -std::numeric_limits<double>::infinity(),
+                  .activation_end = std::numeric_limits<double>::infinity(),
                   .current_offset = 0};
   }
 
-  bool within_entry_range = WithinRange(
-      boundaries.current_offset, boundaries.entry_start, boundaries.entry_end);
+  bool within_activation_range =
+      WithinRange(boundaries.current_offset, boundaries.activation_start,
+                  boundaries.activation_end);
   bool within_active_range =
       WithinRange(boundaries.current_offset, boundaries.active_start,
                   boundaries.active_end);
 
-  State previous_state = last_snapshot_state_;
+  State previous_state = state_;
   State new_state = previous_state;
 
-  if (within_entry_range) {
+  if (within_activation_range) {
     new_state = State::kPrimary;
   } else if (!within_active_range) {
     new_state = State::kInverse;
@@ -409,10 +425,74 @@ std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
   return new_state;
 }
 
+std::optional<TimelineTriggerRange::CcBoundaries>
+TimelineTriggerRange::ComputeCcBoundaries(cc::AnimationTimeline* cc_timeline) {
+  if (!timeline_->IsProgressBased()) {
+    // Non progress based triggers are always in a tripped state,
+    // no need to composite the trigger so we should not be in this function.
+    return std::nullopt;
+  }
+
+  ScrollTimeline* timeline =
+      DynamicTo<ScrollTimeline>(timeline_->ExposedTimeline());
+  if (!timeline) {
+    return std::nullopt;
+  }
+
+  Node* timeline_source = ComputeBoundariesSource(*timeline);
+  if (!timeline_source) {
+    return std::nullopt;
+  }
+
+  TriggerBoundaries boundaries = ComputeTriggerBoundaries(
+      /*(unused) current_offset=*/0, *To<Element>(timeline_source), *timeline);
+
+  // Blink boundaries are calculated in CSS pixels, but cc ScrollTimeline
+  // offsets are in physical pixels. So, scale the blink boundaries into
+  // physical pixels.
+  // TODO(451238244): Update boundaries whenever zoom factor changes.
+  double zoom_factor =
+      timeline_source->GetLayoutBox()->StyleRef().EffectiveZoom();
+  boundaries.activation_start = boundaries.activation_start * zoom_factor;
+  boundaries.activation_end = boundaries.activation_end * zoom_factor;
+  boundaries.active_start = boundaries.active_start * zoom_factor;
+  boundaries.active_end = boundaries.active_end * zoom_factor;
+
+  const double ms_per_pixel_multiplier =
+      cc::ScrollTimeline::kScrollTimelineMicrosecondsPerPixel;
+
+  // In cc, we evaluate "enter" and "exit" using the current time of the
+  // timeline. The current time of the timeline is measured relative to the
+  // start of the timeline's range which, in the case of a view timeline, is the
+  // start of its cover range.
+  double timeline_start_offset =
+      static_cast<cc::ScrollTimeline*>(cc_timeline)->pending_offsets()->start;
+
+  CcBoundaries cc_boundaries;
+  cc_boundaries.activation_start_time =
+      base::TimeTicks() +
+      base::Microseconds((boundaries.activation_start - timeline_start_offset) *
+                         ms_per_pixel_multiplier);
+  cc_boundaries.activation_end_time =
+      base::TimeTicks() +
+      base::Microseconds((boundaries.activation_end - timeline_start_offset) *
+                         ms_per_pixel_multiplier);
+  cc_boundaries.active_start_time =
+      base::TimeTicks() +
+      base::Microseconds((boundaries.active_start - timeline_start_offset) *
+                         ms_per_pixel_multiplier);
+  cc_boundaries.active_end_time =
+      base::TimeTicks() +
+      base::Microseconds((boundaries.active_end - timeline_start_offset) *
+                         ms_per_pixel_multiplier);
+
+  return cc_boundaries;
+}
+
 void TimelineTriggerRange::Trace(Visitor* visitor) const {
   visitor->Trace(timeline_);
-  visitor->Trace(entry_range_start_);
-  visitor->Trace(entry_range_end_);
+  visitor->Trace(activation_range_start_);
+  visitor->Trace(activation_range_end_);
   visitor->Trace(active_range_start_);
   visitor->Trace(active_range_end_);
   ScriptWrappable::Trace(visitor);

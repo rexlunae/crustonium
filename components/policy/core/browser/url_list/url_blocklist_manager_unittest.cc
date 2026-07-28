@@ -15,10 +15,13 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -554,6 +557,70 @@ TEST_F(URLBlocklistManagerTest, DefaultBlocklistExceptions) {
   EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome-native://ntp")));
 }
 
+// TODO(crbug.com/487922969): Move these test cases to
+// DefaultBlocklistExceptions once the feature flag is cleaned up and the bypass
+// is enabled by default.
+TEST_F(URLBlocklistManagerTest, BypassBlocklistWildcardForInternalChromeUrls) {
+  // Test that the "*" in the blocklist is bypassed for internal chrome:// URLs
+  // when the feature flag is enabled.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      policy::features::kBypassURLBlocklistWildcardForInternalChromeUrls);
+
+  URLBlocklist blocklist;
+  base::ListValue blocked;
+  blocked.Append("*");
+  blocklist.Block(blocked);
+  EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome://newtab")));
+  EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome://settings")));
+  EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome://print")));
+  EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome://settings/privacy")));
+  EXPECT_FALSE(
+      blocklist.IsURLBlocked(GURL("chrome://omnibox-popup.top-chrome")));
+
+  // chrome://* URLs can still be blocked explicitly.
+  blocked.Append("chrome://*");
+  blocklist.Block(blocked);
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://new-tab-page")));
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://settings")));
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://settings/privacy")));
+
+  // chrome://* URLs can still be allowed explicitly.
+  base::ListValue allowed;
+  allowed.Append("chrome://settings");
+  blocklist.Allow(allowed);
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://new-tab-page")));
+  EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome://settings")));
+  EXPECT_FALSE(blocklist.IsURLBlocked(GURL("chrome://settings/privacy")));
+}
+
+// TODO(crbug.com/487922969): Remove this test case once the feature flag is
+// cleaned up and the bypass is enabled by default.
+TEST_F(URLBlocklistManagerTest,
+       BypassBlocklistWildcardForInternalChromeUrlsDisabled) {
+  // Test that the "*" in the blocklist is not bypassed for internal chrome://
+  // URLs when the feature flag is disabled.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      policy::features::kBypassURLBlocklistWildcardForInternalChromeUrls);
+
+  URLBlocklist blocklist;
+  base::ListValue blocked;
+  blocked.Append("*");
+  blocklist.Block(blocked);
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://settings")));
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://print")));
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://settings/privacy")));
+  EXPECT_TRUE(
+      blocklist.IsURLBlocked(GURL("chrome://omnibox-popup.top-chrome")));
+  // The NTP on iOS was an exception to the wildcard blocklist before the
+  // feature flag was introduced. It remains an exception even when the
+  // flag is disabled.
+#if !BUILDFLAG(IS_IOS)
+  EXPECT_TRUE(blocklist.IsURLBlocked(GURL("chrome://newtab")));
+#endif
+}
+
 TEST_F(URLBlocklistManagerTest, BlocklistBasicCoverage) {
   // Tests to cover the documentation from
   // http://www.chromium.org/administrators/url-blocklist-filter-format
@@ -697,6 +764,68 @@ TEST_F(URLBlocklistManagerTest, UseBlocklistState) {
                                           "https://*", "http://example.com"));
 }
 
+TEST_F(URLBlocklistManagerTest, DowngradeURLAllowlistWildcardToNeutralEnabled) {
+  using State = URLBlocklist::URLBlocklistState;
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kDowngradeURLAllowlistWildcardToNeutral);
+
+  // Wildcard allowlist alone returns neutral.
+  EXPECT_EQ(State::URL_NEUTRAL_STATE,
+            GetUrlBlocklistStateAfterAllowing("*", "http://example.com"));
+
+  // When both "*" and "example.com" are in the allowlist.
+  URLBlocklist blocklist;
+  base::ListValue allowed;
+  allowed.Append("*");
+  allowed.Append("example.com");
+  blocklist.Allow(allowed);
+
+  // "google.com" only matches "*" and is downgraded to neutral.
+  EXPECT_EQ(State::URL_NEUTRAL_STATE,
+            blocklist.GetURLBlocklistState(GURL("http://google.com")));
+
+  // "example.com" matches the more specific filter and returns allowed.
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://example.com")));
+
+  // Explicitly disable downgrading.
+  blocklist.SetDowngradeAllowlistWildcardToNeutral(false);
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://google.com")));
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://example.com")));
+}
+
+TEST_F(URLBlocklistManagerTest,
+       DowngradeURLAllowlistWildcardToNeutralDisabled) {
+  using State = URLBlocklist::URLBlocklistState;
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kDowngradeURLAllowlistWildcardToNeutral);
+
+  // When both "*" and "example.com" are in the allowlist.
+  URLBlocklist blocklist;
+
+  base::ListValue allowed;
+  allowed.Append("*");
+  allowed.Append("example.com");
+  blocklist.Allow(allowed);
+
+  // When disabled, both match and return allowed.
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://google.com")));
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://example.com")));
+
+  // Explicitly disable downgrading.
+  blocklist.SetDowngradeAllowlistWildcardToNeutral(false);
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://google.com")));
+  EXPECT_EQ(State::URL_IN_ALLOWLIST,
+            blocklist.GetURLBlocklistState(GURL("http://example.com")));
+}
+
 #if BUILDFLAG(IS_CHROMEOS)
 // Custom BlocklistSource implementation.
 // Custom BlocklistSource implementation.
@@ -715,6 +844,10 @@ class CustomBlocklistSource : public BlocklistSource {
     return &allowlist_;
   }
 
+  bool DowngradeAllowlistWildcardToNeutral() const override {
+    return downgrade_allowlist_wildcard_to_neutral_;
+  }
+
   void SetBlocklistObserver(base::RepeatingClosure observer) override {
     blocklist_observer_ = std::move(observer);
   }
@@ -729,6 +862,11 @@ class CustomBlocklistSource : public BlocklistSource {
     TriggerObserver();
   }
 
+  void SetDowngradeAllowlistWildcardToNeutral(bool downgrade) {
+    downgrade_allowlist_wildcard_to_neutral_ = downgrade;
+    TriggerObserver();
+  }
+
  private:
   void TriggerObserver() {
     if (!blocklist_observer_) {
@@ -740,6 +878,7 @@ class CustomBlocklistSource : public BlocklistSource {
   base::ListValue blocklist_;
   base::ListValue allowlist_;
   base::RepeatingClosure blocklist_observer_;
+  bool downgrade_allowlist_wildcard_to_neutral_ = true;
 };
 
 TEST_F(URLBlocklistManagerTest, SetAndUnsetOverrideBlockListSource) {
@@ -812,6 +951,25 @@ TEST_F(URLBlocklistManagerTest, BlockListSourceUpdates) {
   EXPECT_EQ(
       URLBlocklist::URL_NEUTRAL_STATE,
       blocklist_manager()->GetURLBlocklistState(GURL("http://preconnect.com")));
+}
+
+TEST_F(URLBlocklistManagerTest, SetDowngradeAllowlistWildcardToNeutral) {
+  using State = URLBlocklist::URLBlocklistState;
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kDowngradeURLAllowlistWildcardToNeutral);
+
+  std::unique_ptr<CustomBlocklistSource> custom_blocklist =
+      std::make_unique<CustomBlocklistSource>();
+  custom_blocklist->SetAllowlistSpec(base::ListValue().Append("*"));
+  custom_blocklist->SetDowngradeAllowlistWildcardToNeutral(false);
+
+  blocklist_manager()->SetOverrideBlockListSource(std::move(custom_blocklist));
+  task_environment()->RunUntilIdle();
+
+  // Wildcard is not downgraded because BlocklistSource configured it to false.
+  EXPECT_EQ(State::URL_IN_ALLOWLIST, blocklist_manager()->GetURLBlocklistState(
+                                         GURL("http://example.com")));
 }
 #endif
 }  // namespace policy

@@ -298,6 +298,10 @@ int UnpackedInstaller::GetFlags() {
     result |= Extension::WITHHOLD_PERMISSIONS;
   }
 
+  if (installed_via_cdp_) {
+    result |= Extension::INSTALLED_VIA_CDP;
+  }
+
   return result;
 }
 
@@ -311,7 +315,7 @@ bool UnpackedInstaller::LoadExtension(mojom::ManifestLocation location,
 
   // Treat presence of illegal filenames as a hard error for unpacked
   // extensions. Don't do so for command line extensions since this breaks
-  // Chrome OS autotests (crbug.com/764787).
+  // Chrome OS autotests (crbug.com/40539874).
   if (location == mojom::ManifestLocation::kUnpacked &&
       !file_util::CheckForIllegalFilenames(extension_path_, error)) {
     return false;

@@ -13,8 +13,10 @@ import './your_saved_info_page.js';
 import '../settings_shared.css.js';
 
 import type {CrViewManagerElement} from 'chrome://resources/cr_elements/cr_view_manager/cr_view_manager.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {loadTimeData} from '../i18n_setup.js';
 import {routes} from '../route.js';
 import {RouteObserverMixin} from '../router.js';
 import type {Route} from '../router.js';
@@ -47,10 +49,26 @@ export class SettingsYourSavedInfoPageIndexElement extends
   static get properties() {
     return {
       prefs: Object,
+
+      isShoppingEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('shoppingIntegrationEnabled');
+        },
+      },
+
+      showSuggestionsFromGeminiSettings_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('showSuggestionsFromGeminiSettings');
+        },
+      },
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
+  declare private isShoppingEnabled_: boolean;
+  declare private showSuggestionsFromGeminiSettings_: boolean;
 
   override currentRouteChanged(newRoute: Route, oldRoute?: Route) {
     super.currentRouteChanged(newRoute, oldRoute);
@@ -101,6 +119,16 @@ export class SettingsYourSavedInfoPageIndexElement extends
               'travel', 'no-animation', 'no-animation');
           SavedInfoHandlerImpl.getInstance().requestDataManagementSurvey(
               DataManagementSurvey.TRAVEL, isFromHomePage);
+          break;
+        case routes.YOUR_SAVED_INFO_SHOPPING:
+          assert(this.isShoppingEnabled_);
+          this.$.viewManager.switchView(
+              'shopping', 'no-animation', 'no-animation');
+          break;
+        case routes.SUGGESTIONS_FROM_GEMINI:
+          assert(this.showSuggestionsFromGeminiSettings_);
+          this.$.viewManager.switchView(
+              'suggestionsFromGemini', 'no-animation', 'no-animation');
           break;
         default:
           // Nothing to do. Other parent elements are responsible for updating

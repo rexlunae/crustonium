@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/memory/ptr_util.h"
@@ -16,6 +17,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/power_monitor/power_monitor.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
@@ -24,15 +26,19 @@
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
 #include "components/optimization_guide/core/model_execution/model_execution_util.h"
+#include "components/optimization_guide/core/model_execution/on_device_features.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_names.h"
 #include "components/optimization_guide/core/model_execution/performance_class.h"
 #include "components/optimization_guide/core/model_execution/usage_tracker.h"
 #include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
+#include "components/optimization_guide/public/mojom/model_broker_debug.mojom.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
+#include "net/base/network_change_notifier.h"
 #include "services/on_device_model/public/cpp/cpu.h"
 #include "services/on_device_model/public/cpp/features.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
@@ -77,6 +83,12 @@ void LogInstallCriteria(
                      criteria.enabled_by_user_setting);
   LogInstallCriteria(event_name, "All",
                      criteria.get_install_mode().has_value());
+  if (criteria.get_install_mode().has_value() &&
+      !criteria.is_already_installing) {
+    LogInstallCriteria(
+        "InitialInstall", "IsBackground",
+        criteria.get_install_mode() == ModelInstallMode::kRegisterOnly);
+  }
 }
 
 // Returns the best performance hint for this device based on the supported
@@ -152,6 +164,25 @@ base::DictValue MakeOverrideManifest() {
           .Set("supported_performance_hints", std::move(hints)));
 }
 
+// `BaseModel` is deliberately made to be the same as an enum class of the same
+// name in
+// components/optimization_guide/core/model_execution/manifest_broker/manifest_asset_manager.cc.
+// This is to allow logging of new model installations regardless of which model
+// management scheme is used.
+std::string GetUmaModelNameFromState(OnDeviceModelComponentState* state) {
+  if (!state) {
+    return "V3Nano";
+  }
+  return ConvertModelNameToUmaModelName(state->GetBaseModelSpec().model_name);
+}
+
+bool WasOnDeviceModelRecentlyUsed(UsageTracker* usage_tracker) {
+  return std::ranges::any_of(
+      OnDeviceFeatureSet::All(), [&](mojom::OnDeviceFeature feature) {
+        return usage_tracker->WasUseCaseRecentlyUsed(ToUseCaseName(feature));
+      });
+}
+
 }  // namespace
 
 std::ostream& operator<<(std::ostream& out, OnDeviceModelStatus status) {
@@ -205,7 +236,7 @@ OnDeviceModelComponentState::OnDeviceModelComponentState(
 OnDeviceModelComponentState::~OnDeviceModelComponentState() = default;
 
 OnDeviceModelRegistrationAttributes::OnDeviceModelRegistrationAttributes(
-    std::vector<proto::OnDeviceModelPerformanceHint> supported_hints)
+    base::flat_set<proto::OnDeviceModelPerformanceHint> supported_hints)
     : supported_hints(std::move(supported_hints)) {}
 OnDeviceModelRegistrationAttributes::OnDeviceModelRegistrationAttributes(
     const OnDeviceModelRegistrationAttributes&) = default;
@@ -219,6 +250,21 @@ OnDeviceModelRegistrationAttributes::operator=(
     OnDeviceModelRegistrationAttributes&&) = default;
 OnDeviceModelRegistrationAttributes::~OnDeviceModelRegistrationAttributes() =
     default;
+
+OnDeviceModelComponentStateManager::RegistrationCriteria::
+    RegistrationCriteria() = default;
+OnDeviceModelComponentStateManager::RegistrationCriteria::
+    ~RegistrationCriteria() = default;
+OnDeviceModelComponentStateManager::RegistrationCriteria::RegistrationCriteria(
+    const RegistrationCriteria&) = default;
+OnDeviceModelComponentStateManager::RegistrationCriteria&
+OnDeviceModelComponentStateManager::RegistrationCriteria::operator=(
+    const RegistrationCriteria&) = default;
+OnDeviceModelComponentStateManager::RegistrationCriteria::RegistrationCriteria(
+    RegistrationCriteria&&) = default;
+OnDeviceModelComponentStateManager::RegistrationCriteria&
+OnDeviceModelComponentStateManager::RegistrationCriteria::operator=(
+    RegistrationCriteria&&) = default;
 
 OnDeviceModelComponentStateManager::OnDeviceModelComponentStateManager(
     PrefService* local_state,
@@ -248,6 +294,9 @@ OnDeviceModelComponentStateManager::OnDeviceModelComponentStateManager(
   performance_classifier_->ListenForPerformanceClassAvailable(base::BindOnce(
       &OnDeviceModelComponentStateManager::OnPerformanceClassAvailable,
       weak_ptr_factory_.GetWeakPtr()));
+  base::UmaHistogramBoolean(
+      "OptimizationGuide.OnDeviceModel.OnDeviceModelComponentInstantiated",
+      true);
 }
 
 OnDeviceModelComponentStateManager::~OnDeviceModelComponentStateManager() =
@@ -299,11 +348,81 @@ OnDeviceModelComponentStateManager::GetDebugState() {
   debug.criteria_ = registration_criteria_.get();
   debug.disk_space_available_ = registration_criteria_
                                     ? registration_criteria_->disk_space_free
-                                    : base::ByteCount(-1);
+                                    : std::nullopt;
   debug.status_ = GetOnDeviceModelStatus();
   debug.has_override_ = !!switches::GetOnDeviceModelExecutionOverride();
   debug.state_ = state_.get();
   return debug;
+}
+
+std::vector<mojom::BrokerPropertyInfoPtr>
+OnDeviceModelComponentStateManager::GetBrokerProperties() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<mojom::BrokerPropertyInfoPtr> props;
+  if (registration_criteria_) {
+    props.push_back(mojom::BrokerPropertyInfo::New(
+        "Feature recently used",
+        base::ToString(
+            registration_criteria_->on_device_feature_recently_used)));
+    props.push_back(mojom::BrokerPropertyInfo::New(
+        "Enabled by feature flag",
+        base::ToString(registration_criteria_->enabled_by_feature)));
+    props.push_back(mojom::BrokerPropertyInfo::New(
+        "Enabled by enterprise policy",
+        base::ToString(registration_criteria_->enabled_by_enterprise_policy)));
+    props.push_back(mojom::BrokerPropertyInfo::New(
+        "Enabled by user setting",
+        base::ToString(registration_criteria_->enabled_by_user_setting)));
+    props.push_back(mojom::BrokerPropertyInfo::New(
+        "On external power",
+        base::ToString(registration_criteria_->is_on_external_power)));
+    int64_t disk_space_free =
+        registration_criteria_->disk_space_free
+            ? registration_criteria_->disk_space_free->InMiB()
+            : -1;
+    props.push_back(mojom::BrokerPropertyInfo::New(
+        "Disk space free", base::ToString(disk_space_free) + " MiB"));
+  }
+  return props;
+}
+
+std::vector<mojom::BrokerAssetInfoPtr>
+OnDeviceModelComponentStateManager::GetBrokerAssets() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<mojom::BrokerAssetInfoPtr> assets;
+  auto asset = mojom::BrokerAssetInfo::New();
+  asset->name = "Base Model";
+  if (state_) {
+    asset->version = state_->GetComponentVersion().GetString();
+  }
+  switch (component_installer_state_) {
+    case ComponentInstallerState::kNotRegistered:
+      asset->state = mojom::BrokerAssetState::kNotInstalled;
+      break;
+    case ComponentInstallerState::kRegistering:
+      asset->state = mojom::BrokerAssetState::kRegistering;
+      break;
+    case ComponentInstallerState::kRegistered:
+      asset->state = mojom::BrokerAssetState::kBackgroundInstalling;
+      break;
+    case ComponentInstallerState::kOnDemandDownloading:
+      asset->state = mojom::BrokerAssetState::kForegroundInstalling;
+      break;
+    case ComponentInstallerState::kInstalled:
+      asset->state = mojom::BrokerAssetState::kReady;
+      break;
+    case ComponentInstallerState::kUninstalling:
+      asset->state = mojom::BrokerAssetState::kUninstalling;
+      break;
+  }
+  assets.push_back(std::move(asset));
+  return assets;
+}
+
+base::SafeRef<PerformanceClassifier>
+OnDeviceModelComponentStateManager::performance_classifier() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return performance_classifier_;
 }
 
 void OnDeviceModelComponentStateManager::SetReady(
@@ -317,7 +436,19 @@ void OnDeviceModelComponentStateManager::SetReady(
           manifest, performance_classifier_->GetPossibleHints())) {
     state_ = std::make_unique<OnDeviceModelComponentState>(install_dir, version,
                                                            *model_spec);
+    bool is_new_installation =
+        (component_installer_state_ == ComponentInstallerState::kRegistered ||
+         component_installer_state_ ==
+             ComponentInstallerState::kOnDemandDownloading);
     component_installer_state_ = ComponentInstallerState::kInstalled;
+    base::UmaHistogramEnumeration(
+        "OptimizationGuide.OnDeviceModel.InstalledModel",
+        ConvertModelNameToEnum(model_spec->model_name));
+    if (is_new_installation) {
+      base::UmaHistogramEnumeration(
+          "OptimizationGuide.OnDeviceModel.NewModelInstalled",
+          ConvertModelNameToEnum(model_spec->model_name));
+    }
   }
 
   NotifyStateChanged();
@@ -329,12 +460,12 @@ void OnDeviceModelComponentStateManager::InstallerRegistered(
   if (is_already_installed) {
     component_installer_state_ = ComponentInstallerState::kInstalled;
   } else {
-    component_installer_state_ =
-        ComponentInstallerState::kBackgroundDownloading;
+    component_installer_state_ = ComponentInstallerState::kRegistered;
   }
   base::UmaHistogramBoolean(
       "OptimizationGuide.ModelExecution."
-      "OnDeviceModelInstalledAtRegistrationTime",
+      "OnDeviceModelInstalledAtRegistrationTime." +
+          GetUmaModelNameFromState(state_.get()),
       state_ != nullptr);
   UpdateRegistration();
 }
@@ -348,7 +479,7 @@ void OnDeviceModelComponentStateManager::UninstallComplete() {
 
 void OnDeviceModelComponentStateManager::OnPerformanceClassAvailable() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  BeginUpdateRegistration();
+  MaybeBeginBackgroundModelDownload();
 }
 
 void OnDeviceModelComponentStateManager::
@@ -363,9 +494,15 @@ void OnDeviceModelComponentStateManager::
   BeginUpdateRegistration();
 }
 
-void OnDeviceModelComponentStateManager::OnDeviceEligibleFeatureUsed(
-    mojom::OnDeviceFeature feature) {
+void OnDeviceModelComponentStateManager::OnDeviceEligibleUseCaseUsed(
+    const std::string& use_case_name,
+    bool is_first_usage) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto feature = GetFeatureForUseCase(use_case_name);
+  if (!feature) {
+    return;
+  }
 
   base::UmaHistogramEnumeration(
       "OptimizationGuide.ModelExecution.OnDeviceModelStatusAtUseTime",
@@ -382,6 +519,13 @@ void OnDeviceModelComponentStateManager::MaybeBeginBackgroundModelDownload() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   background_download_requested_ = true;
   BeginUpdateRegistration();
+}
+
+void OnDeviceModelComponentStateManager::GetFreeDiskSpaceForLogging(
+    base::OnceCallback<void(std::optional<base::ByteSize>)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  delegate_->GetFreeDiskSpace(delegate_->GetInstallDirectory(),
+                              std::move(callback));
 }
 
 void OnDeviceModelComponentStateManager::BeginUpdateRegistration() {
@@ -414,14 +558,14 @@ void OnDeviceModelComponentStateManager::BeginUpdateRegistration() {
 
 OnDeviceModelComponentStateManager::RegistrationCriteria
 OnDeviceModelComponentStateManager::ComputeRegistrationCriteria(
-    base::ByteCount disk_space_free_bytes) {
+    std::optional<base::ByteSize> disk_space_free) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RegistrationCriteria result;
   result.background_download_requested = background_download_requested_;
-  result.disk_space_free = disk_space_free_bytes;
+  result.disk_space_free = disk_space_free;
   result.device_capable = performance_classifier_->IsDeviceCapable();
   result.on_device_feature_recently_used =
-      usage_tracker_->WasAnyOnDeviceEligibleFeatureRecentlyUsed();
+      WasOnDeviceModelRecentlyUsed(&usage_tracker_.get());
   result.enabled_by_feature = features::IsOnDeviceExecutionEnabled();
   result.enabled_by_enterprise_policy =
       GetGenAILocalFoundationalModelEnterprisePolicySettings(local_state_) ==
@@ -429,6 +573,11 @@ OnDeviceModelComponentStateManager::ComputeRegistrationCriteria(
           GenAILocalFoundationalModelEnterprisePolicySettings::kAllowed;
   result.enabled_by_user_setting = local_state_->GetBoolean(
       model_execution::prefs::localstate::kOnDeviceAiUserSettingsEnabled);
+
+  // Treat a null PowerMonitor (for some tests) as being on battery power.
+  result.is_on_external_power =
+      base::PowerMonitor::GetInstance()->IsInitialized() &&
+      !base::PowerMonitor::GetInstance()->IsOnBatteryPower();
 
   auto last_time_eligible =
       local_state_->GetTime(model_execution::prefs::localstate::
@@ -446,11 +595,10 @@ OnDeviceModelComponentStateManager::ComputeRegistrationCriteria(
 }
 
 void OnDeviceModelComponentStateManager::UpdateRegistrationCriteria(
-    std::optional<base::ByteCount> disk_space_free) {
+    std::optional<base::ByteSize> disk_space_free) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // TODO(https://crbug.com/438265416): Handle failure to get free disk space.
-  RegistrationCriteria criteria = ComputeRegistrationCriteria(
-      disk_space_free.value_or(base::ByteCount(-1)));
+
+  RegistrationCriteria criteria = ComputeRegistrationCriteria(disk_space_free);
   bool first_registration_attempt = !registration_criteria_;
 
   OnDeviceModelStatus status = GetOnDeviceModelStatus();
@@ -468,7 +616,7 @@ void OnDeviceModelComponentStateManager::UpdateRegistrationCriteria(
   // Log metrics only for first registration attempt.
   if (first_registration_attempt) {
     LogInstallCriteria(criteria, "AtRegistration",
-                       disk_space_free.value_or(base::ByteCount(-1)).InGiB());
+                       disk_space_free ? disk_space_free->InGiB() : -1);
   }
 
   UpdateRegistration();
@@ -484,7 +632,17 @@ void OnDeviceModelComponentStateManager::UpdateRegistration() {
     // UninstallComplete() for next action.
     return;
   }
-  if (registration_criteria_->should_uninstall()) {
+  std::optional<RegistrationCriteria::UninstallReason> uninstall_reason =
+      registration_criteria_->should_uninstall();
+  if (uninstall_reason.has_value()) {
+    // If `state_` is null, the uninstallation is happening before the model is
+    // ready, so `Unknown` is logged.
+    std::string uma_model_name = GetUmaModelNameFromState(state_.get());
+    base::UmaHistogramEnumeration(
+        "OptimizationGuide.ModelExecution.OnDeviceModelUninstallReason." +
+            uma_model_name,
+        *uninstall_reason);
+
     component_installer_state_ = ComponentInstallerState::kUninstalling;
     // Uninstall the component which will delete the model files, after a
     // short delay to give time for the consumers to unload the model.
@@ -502,18 +660,18 @@ void OnDeviceModelComponentStateManager::UpdateRegistration() {
       component_installer_state_ = ComponentInstallerState::kRegistering;
       delegate_->RegisterInstaller(
           GetWeakPtr(), OnDeviceModelRegistrationAttributes(
-                            performance_classifier_->GetPossibleHints()));
+                            base::flat_set<proto::OnDeviceModelPerformanceHint>(
+                                performance_classifier_->GetPossibleHints())));
     }
     return;
   }
 
-  if (component_installer_state_ ==
-      ComponentInstallerState::kBackgroundDownloading) {
+  if (component_installer_state_ == ComponentInstallerState::kRegistered) {
     if (registration_criteria_->get_install_mode() ==
         ModelInstallMode::kOnDemand) {
       component_installer_state_ =
           ComponentInstallerState::kOnDemandDownloading;
-      delegate_->RequestUpdate();
+      delegate_->RequestUpdate(/*is_background=*/false);
     }
     return;
   }

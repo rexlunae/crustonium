@@ -29,9 +29,11 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_observer.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/api_activity_monitor.h"
@@ -39,6 +41,7 @@
 #include "extensions/browser/extension_function_registry.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_user_activation_service.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/process_manager.h"
@@ -46,6 +49,7 @@
 #include "extensions/browser/quota_service.h"
 #include "extensions/browser/script_injection_tracker.h"
 #include "extensions/browser/service_worker/service_worker_keepalive.h"
+#include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_api.h"
 #include "extensions/common/extension_features.h"
@@ -157,8 +161,7 @@ ExtensionFunctionDispatcher::ExtensionFunctionDispatcher(
     content::BrowserContext* browser_context)
     : browser_context_(browser_context), delegate_(nullptr) {}
 
-ExtensionFunctionDispatcher::~ExtensionFunctionDispatcher() {
-}
+ExtensionFunctionDispatcher::~ExtensionFunctionDispatcher() = default;
 
 void ExtensionFunctionDispatcher::Dispatch(
     mojom::RequestParamsPtr params,
@@ -171,9 +174,11 @@ void ExtensionFunctionDispatcher::Dispatch(
               ExtensionIdForTracing(params->extension_id));
 
   ScopedRequestParamsCrashKeys request_params_crash_keys(*params);
-  SCOPED_CRASH_KEY_STRING256(
-      "extensions", "frame.GetSiteInstance()",
-      frame.GetSiteInstance()->GetSiteURL().possibly_invalid_spec());
+  SCOPED_CRASH_KEY_STRING256("extensions", "frame.GetSiteInstance()",
+                             frame.GetSiteInstance()
+                                 ->GetSecurityPrincipal()
+                                 .GetDeprecatedSiteURL()
+                                 .possibly_invalid_spec());
 
   if (auto bad_message_code = ValidateRequest(*params, &frame, process)) {
     // Kill the renderer if it's an invalid request.
@@ -232,9 +237,10 @@ void ExtensionFunctionDispatcher::DispatchForServiceWorker(
     return;
   }
 
-  WorkerId worker_id{params->extension_id, render_process_id,
-                     params->service_worker_version_id,
-                     params->worker_thread_id};
+  WorkerId worker_id{
+      params->extension_id,
+      content::ChildProcessId::FromUnsafeValue(render_process_id),
+      params->service_worker_version_id, params->worker_thread_id};
   // Ignore if the worker has already stopped.
   if (!ProcessManager::Get(browser_context_)->HasServiceWorker(worker_id)) {
     std::move(callback).Run(/*kFailed=*/true, base::ListValue(), "No SW",
@@ -275,6 +281,20 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
 
   const GURL* render_frame_host_url = nullptr;
   if (render_frame_host) {
+    // Error pages commit with the target URL and in their parents' process, but
+    // aren't actually on the page indicated by the committed URL.
+    // Bail out in this case. Error pages don't use extension APIs.
+    // If we had perfect timing and no race conditions, this could be a sign of
+    // a bad message; however, it's possible a page commits to an error page
+    // after a legitimate message is sent.
+    if (render_frame_host->IsErrorDocument()) {
+      constexpr char kCannotUseExtensionAPIsInErrorPages[] =
+          "Cannot call extension APIs from error pages.";
+      ResponseCallbackOnError(std::move(callback),
+                              ExtensionFunction::ResponseType::kFailed,
+                              kCannotUseExtensionAPIsInErrorPages);
+      return;
+    }
     render_frame_host_url = &render_frame_host->GetLastCommittedURL();
     DCHECK_EQ(render_process_id,
               render_frame_host->GetProcess()->GetDeprecatedID());
@@ -341,9 +361,8 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
     return;
   }
 
-  if (extension &&
-      ExtensionsBrowserClient::Get()->CanExtensionCrossIncognito(
-          extension, browser_context_)) {
+  if (extension && ExtensionsBrowserClient::Get()->CanExtensionCrossIncognito(
+                       extension, browser_context_)) {
     function->set_include_incognito_information(true);
   }
 
@@ -571,6 +590,12 @@ ExtensionFunctionDispatcher::CreateExtensionFunction(
     function->set_source_url(*render_frame_host_url);
   }
 
+  if (params_without_args.user_gesture &&
+      !params_without_args.extension_id.empty()) {
+    ExtensionUserActivationService::Get(browser_context_)
+        ->NotifyUserActivation(params_without_args.extension_id);
+  }
+
   function->set_has_callback(params_without_args.has_callback);
   function->set_user_gesture(params_without_args.user_gesture);
   function->set_extension(extension);
@@ -585,7 +610,8 @@ ExtensionFunctionDispatcher::CreateExtensionFunction(
     WorkerId worker_id;
     worker_id.thread_id = params_without_args.worker_thread_id;
     worker_id.version_id = params_without_args.service_worker_version_id;
-    worker_id.render_process_id = requesting_process_id;
+    worker_id.render_process_id =
+        content::ChildProcessId::FromUnsafeValue(requesting_process_id);
     worker_id.extension_id = extension->id();
     function->set_worker_id(std::move(worker_id));
   } else {

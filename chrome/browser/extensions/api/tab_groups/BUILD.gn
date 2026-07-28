@@ -28,10 +28,10 @@ source_set("tab_groups") {
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/tab_group_sync:factories",
+    "//chrome/browser/tab_list",
     "//chrome/browser/ui",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
-    "//chrome/browser/ui/tabs:tab_list_interface",
     "//chrome/common/extensions",
     "//chrome/common/extensions/api",
     "//components/tab_groups",
@@ -56,5 +56,9 @@ source_set("tab_groups") {
 
   if (is_mac || is_win || is_linux || is_chromeos) {
     deps += [ "//components/webapps/isolated_web_apps:scheme" ]
+  }
+
+  if (!is_android) {
+    deps += [ "//chrome/browser/ui:browser_tab_strip_tracker" ]
   }
 }

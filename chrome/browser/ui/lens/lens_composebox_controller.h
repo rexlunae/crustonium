@@ -42,7 +42,6 @@ class LensComposeboxController {
   // executing javascript and has bound the handler.
   virtual void BindComposebox(
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
           pending_searchbox_handler);
@@ -52,7 +51,8 @@ class LensComposeboxController {
   // session query.
   void IssueComposeboxQuery(
       const std::string& query_text,
-      const std::map<std::string, std::string>& additional_query_params);
+      const std::map<std::string, std::string>& additional_query_params,
+      bool is_voice_search);
 
   // Called when the focus state of the composebox changes.
   void OnFocusChanged(bool focused);
@@ -115,11 +115,10 @@ class LensComposeboxController {
     searchbox::mojom::SelectedFileInfoPtr file_info;
   };
 
-  // Builds a SubmitQuery ClientToAimMessage message to send to the side panel
-  // remote UI.
   lens::ClientToAimMessage BuildSubmitQueryMessage(
       const std::string& query_text,
-      const std::map<std::string, std::string>& additional_query_params);
+      const std::map<std::string, std::string>& additional_query_params,
+      bool is_voice_search);
 
   // Creates a SelectedFileInfo struct to send to the composebox for the visual
   // selection context.
@@ -144,6 +143,7 @@ class LensComposeboxController {
   // once the handshake completes.
   std::optional<std::string> pending_query_text_;
   std::map<std::string, std::string> pending_additional_query_params_;
+  bool pending_is_voice_search_ = false;
 
   // The class responsible for handling messages between the compose box and
   // the WebUI.

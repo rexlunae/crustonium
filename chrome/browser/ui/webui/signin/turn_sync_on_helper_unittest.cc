@@ -341,8 +341,11 @@ class TurnSyncOnHelperTest : public testing::Test {
 
   void SetUp() override {
     // TurnSyncOnHelperTest is no longer used when the feature is enabled.
-    scoped_feature_list_.InitAndDisableFeature(
-        syncer::kReplaceSyncPromosWithSignInPromos);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            syncer::kReplaceSyncPromosWithSignInPromos,
+            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
     const base::FilePath temp_user_data_dir =
         base::CreateUniqueTempDirectoryScopedToTest();
     TestingBrowserProcess::GetGlobal()->SetProfileManager(
@@ -481,7 +484,7 @@ class TurnSyncOnHelperTest : public testing::Test {
         weak_closure.Get().Then(flow_completion_loop_.QuitClosure()));
 
     // In no circumstance should the flow complete synchronously. It can cause
-    // some crashes, see https://crbug.com/1367078.
+    // some crashes, see https://crbug.com/40867387.
     EXPECT_FALSE(weak_closure.did_run());
 
     return helper;
@@ -502,7 +505,7 @@ class TurnSyncOnHelperTest : public testing::Test {
     account_info = AccountInfo::Builder(account_info)
                        .SetHostedDomain(kEnterpriseHostedDomain)
                        .Build();
-    AccountCapabilitiesTestMutator(&account_info.capabilities)
+    AccountCapabilitiesTestMutator(&account_info)
         .set_is_subject_to_enterprise_features(true);
     signin::UpdateAccountInfoForAccount(identity_manager(), account_info);
   }
@@ -545,8 +548,7 @@ class TurnSyncOnHelperTest : public testing::Test {
 
   void SetExpectationsForSyncAborted() {
     EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-                SetInitialSyncFeatureSetupComplete(
-                    syncer::SyncFirstSetupCompleteSource::BASIC_FLOW))
+                SetInitialSyncFeatureSetupComplete())
         .Times(0);
   }
 
@@ -1632,8 +1634,7 @@ TEST_F(TurnSyncOnHelperTest, ConfigureSync) {
   expected_sync_settings_shown_ = true;
   SetExpectationsForSyncStartupCompleted(profile());
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW))
+              SetInitialSyncFeatureSetupComplete())
       .Times(0);
 
   // Configure the test.
@@ -1663,8 +1664,7 @@ TEST_F(TurnSyncOnHelperTest, StartSync) {
   expected_sync_confirmation_shown_ = true;
   SetExpectationsForSyncStartupCompleted(profile());
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW));
+              SetInitialSyncFeatureSetupComplete());
   // Configure the test.
   sync_confirmation_result_ = LoginUIService::SyncConfirmationUIClosedResult::
       SYNC_WITH_DEFAULT_SETTINGS;
@@ -1687,7 +1687,7 @@ TEST_F(TurnSyncOnHelperTest, StartSync) {
 
 // Tests that the user is signed in and Sync configuration is complete.
 // Also tests that turning sync on enables URL-keyed anonymized data collection.
-// Regression test for http://crbug.com/812546
+// Regression test for http://crbug.com/41370767
 TEST_F(TurnSyncOnHelperTest, ShowSyncDialogForEndConsumerAccount) {
   // Set expectations.
   expected_sync_confirmation_shown_ = true;
@@ -1695,8 +1695,7 @@ TEST_F(TurnSyncOnHelperTest, ShowSyncDialogForEndConsumerAccount) {
       SYNC_WITH_DEFAULT_SETTINGS;
   SetExpectationsForSyncStartupCompleted(profile());
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW));
+              SetInitialSyncFeatureSetupComplete());
   PrefService* pref_service = profile()->GetPrefs();
   std::unique_ptr<unified_consent::UrlKeyedDataCollectionConsentHelper>
       url_keyed_collection_helper =
@@ -1720,7 +1719,7 @@ TEST_F(TurnSyncOnHelperTest, ShowSyncDialogForEndConsumerAccount) {
 
 // For users on a cloud managed device, tests that the user is signed in only
 // after Sync engine starts.
-// Regression test for http://crbug.com/812546
+// Regression test for http://crbug.com/41370767
 TEST_F(TurnSyncOnHelperTest,
        ShowSyncDialogBlockedUntilSyncStartupCompletedForCloudManagedDevices) {
   // Simulate a managed browser.
@@ -1751,12 +1750,11 @@ TEST_F(TurnSyncOnHelperTest,
   // Simulate that sync startup has completed.
   expected_sync_confirmation_shown_ = true;
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW));
+              SetInitialSyncFeatureSetupComplete());
   sync_confirmation_result_ = LoginUIService::SyncConfirmationUIClosedResult::
       SYNC_WITH_DEFAULT_SETTINGS;
   sync_starter->GetSyncStartupStateObserverForTesting()
-      ->OnSyncStartupStateChanged(
+      ->OnSyncStartupStateChangedForTesting(
           SyncStartupTracker::ServiceStartupState::kComplete);
   EXPECT_EQ(account_id(), identity_manager()->GetPrimaryAccountId(
                               signin::ConsentLevel::kSync));
@@ -1765,7 +1763,7 @@ TEST_F(TurnSyncOnHelperTest,
 
 // For enterprise user, tests that the user is signed in only after Sync engine
 // starts.
-// Regression test for http://crbug.com/812546
+// Regression test for http://crbug.com/41370767
 TEST_F(TurnSyncOnHelperTest,
        ShowSyncDialogBlockedUntilSyncStartupCompletedForEnterpriseAccount) {
   // Reset the account info to be an enterprise account.
@@ -1794,12 +1792,11 @@ TEST_F(TurnSyncOnHelperTest,
   // Simulate that sync startup has completed.
   expected_sync_confirmation_shown_ = true;
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW));
+              SetInitialSyncFeatureSetupComplete());
   sync_confirmation_result_ = LoginUIService::SyncConfirmationUIClosedResult::
       SYNC_WITH_DEFAULT_SETTINGS;
   sync_starter->GetSyncStartupStateObserverForTesting()
-      ->OnSyncStartupStateChanged(
+      ->OnSyncStartupStateChangedForTesting(
           SyncStartupTracker::ServiceStartupState::kComplete);
   EXPECT_EQ(account_id(), identity_manager()->GetPrimaryAccountId(
                               signin::ConsentLevel::kSync));
@@ -1808,7 +1805,7 @@ TEST_F(TurnSyncOnHelperTest,
 
 // For enterprise user, tests that the user is signed in only after Sync engine
 // fails to start.
-// Regression test for http://crbug.com/812546
+// Regression test for http://crbug.com/41370767
 TEST_F(TurnSyncOnHelperTest,
        ShowSyncDialogBlockedUntilSyncStartupFailedForEnterpriseAccount) {
   // Reset the account info to be an enterprise account.
@@ -1837,12 +1834,11 @@ TEST_F(TurnSyncOnHelperTest,
   // Simulate that sync startup has failed.
   expected_sync_confirmation_shown_ = true;
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW));
+              SetInitialSyncFeatureSetupComplete());
   sync_confirmation_result_ = LoginUIService::SyncConfirmationUIClosedResult::
       SYNC_WITH_DEFAULT_SETTINGS;
   sync_starter->GetSyncStartupStateObserverForTesting()
-      ->OnSyncStartupStateChanged(
+      ->OnSyncStartupStateChangedForTesting(
           SyncStartupTracker::ServiceStartupState::kError);
   EXPECT_EQ(account_id(), identity_manager()->GetPrimaryAccountId(
                               signin::ConsentLevel::kSignin));
@@ -1851,7 +1847,7 @@ TEST_F(TurnSyncOnHelperTest,
 
 // For users on a cloud managed device, tests that the user is signed in only
 // after Sync engine fails to start.
-// Regression test for http://crbug.com/812546
+// Regression test for http://crbug.com/41370767
 TEST_F(TurnSyncOnHelperTest,
        ShowSyncDialogBlockedUntilSyncStartupFailedForCloudManagedDevices) {
   // Simulate a managed platform.
@@ -1880,12 +1876,11 @@ TEST_F(TurnSyncOnHelperTest,
   // Simulate that sync startup has failed.
   expected_sync_confirmation_shown_ = true;
   EXPECT_CALL(*GetMockSyncService()->GetMockUserSettings(),
-              SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::BASIC_FLOW));
+              SetInitialSyncFeatureSetupComplete());
   sync_confirmation_result_ = LoginUIService::SyncConfirmationUIClosedResult::
       SYNC_WITH_DEFAULT_SETTINGS;
   sync_starter->GetSyncStartupStateObserverForTesting()
-      ->OnSyncStartupStateChanged(
+      ->OnSyncStartupStateChangedForTesting(
           SyncStartupTracker::ServiceStartupState::kError);
   EXPECT_EQ(account_id(), identity_manager()->GetPrimaryAccountId(
                               signin::ConsentLevel::kSync));

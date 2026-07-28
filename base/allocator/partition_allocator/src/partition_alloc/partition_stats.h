@@ -38,7 +38,7 @@ struct ThreadCacheStats {
   uint32_t metadata_overhead;
 
 #if PA_CONFIG(THREAD_CACHE_ALLOC_STATS)
-  uint64_t allocs_per_bucket_[BucketIndexLookup::kNumBuckets + 1];
+  std::array<uint64_t, BucketIndexLookup::kNumBuckets + 1> allocs_per_bucket_;
 #endif  // PA_CONFIG(THREAD_CACHE_ALLOC_STATS)
 };
 
@@ -99,6 +99,8 @@ struct PartitionMemoryStats {
   // be reported on all platforms.
   uint64_t syscall_count;
   uint64_t syscall_total_time_ns;
+
+  uint64_t total_intended_leak_bytes;  // Total intended leaked memory.
 };
 
 // Struct used to retrieve memory statistics about a partition bucket. Used by
@@ -138,6 +140,9 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) PartitionStatsDumper {
   // Called to dump stats about buckets, for each bucket.
   virtual void PartitionsDumpBucketStats(const char* partition_name,
                                          const PartitionBucketMemoryStats*) = 0;
+
+  // Called to dump intended leak size per each type id.
+  virtual void DumpIntendedLeak(uint32_t type_id, size_t size) {}
 };
 
 // Simple version of PartitionStatsDumper, storing the returned stats in stats_.

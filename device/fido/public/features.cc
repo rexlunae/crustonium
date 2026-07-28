@@ -9,12 +9,6 @@
 
 namespace {
 
-// Default maximum number of immediate requests allowed per origin (eTLD+1).
-constexpr int kDefaultMaxRequests = 10;
-// Default time window (in seconds) for the immediate request rate limit.
-constexpr int kDefaultWindowSeconds = 60;
-// Default timeout for immediate mediation requests (in milliseconds).
-constexpr int kDefaultImmediateMediationTimeoutMs = 500;
 // Default ttl (in seconds) for keeping the cached opportunistically retrieved
 // key in case its Gaia Id doesn't match to primary signed-in account.
 constexpr int kDefaultOpportunisticRetrievalTimeToKeepCachedKeySeconds = 300;
@@ -42,9 +36,6 @@ namespace device {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
 // Not yet enabled by default.
-BASE_FEATURE(kPasskeyUnlockManager, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Not yet enabled by default.
 BASE_FEATURE(kPasskeyUnlockErrorUi, base::FEATURE_DISABLED_BY_DEFAULT);
 
 constexpr base::FeatureParam<PasskeyUnlockErrorUiExperimentArm>::Option
@@ -68,11 +59,6 @@ BASE_FEATURE(kWebAuthUseNativeWinApi,
              "WebAuthenticationUseNativeWinApi",
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
-
-// Permanent flag
-BASE_FEATURE(kWebAuthCableExtensionAnywhere,
-             "WebAuthenticationCableExtensionAnywhere",
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // This is used to enable an experiment to reject WebAuthn requests
 // when actor mode is on.
@@ -118,6 +104,19 @@ BASE_FEATURE(kWebAuthnAmbientSignin,
              "WebAuthenticationAmbientSignin",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+constexpr base::FeatureParam<WebAuthnAmbientSigninDisplay>::Option
+    kWebAuthnAmbientSigninDisplayOptions[] = {
+        {WebAuthnAmbientSigninDisplay::kSuggestionChip, "suggestion_chip"},
+        {WebAuthnAmbientSigninDisplay::kAnchoredMessage, "anchored_message"},
+};
+
+// Suggestion chip is the default, but can be overridden from chrome://flags.
+const base::FeatureParam<WebAuthnAmbientSigninDisplay>
+    kWebAuthnAmbientSigninDisplayParam{
+        &kWebAuthnAmbientSignin, "display",
+        WebAuthnAmbientSigninDisplay::kSuggestionChip,
+        &kWebAuthnAmbientSigninDisplayOptions};
+
 // Deprecation flag. Disabled by default in M145. Remove in or after M148.
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kWebAuthnPublishPrelinkingInfo,
@@ -130,13 +129,6 @@ BASE_FEATURE(kWebAuthnHelloSignal,
              "WebAuthenticationHelloSignal",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if BUILDFLAG(IS_ANDROID)
-// Enabled by default in M144 Remove in or after M146.
-BASE_FEATURE(kWebAuthnAndroidSignal,
-             "WebAuthenticationAndroidSignal",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_ANDROID)
-
 // Disabled by default.
 BASE_FEATURE(kDigitalCredentialsHybridLinking,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -146,64 +138,16 @@ BASE_FEATURE(kWebAuthnEnclaveAttestation,
              "WebAuthenticationEnclaveAttestation",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Default enabled in M144. Remove in or after M147.
-BASE_FEATURE(kWebAuthnSignalApiHidePasskeys,
-             "WebAuthenticationSignalApiHidePasskeys",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enabled by default as part of the WebAuthenticationImmediateGet feature. Do
-// not remove before WebAuthenticationImmediateGet is removed.
-BASE_FEATURE(kWebAuthnImmediateRequestRateLimit,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE_PARAM(int,
-                   kWebAuthnImmediateRequestRateLimitMaxRequests,
-                   &kWebAuthnImmediateRequestRateLimit,
-                   "max_requests",
-                   kDefaultMaxRequests);
-
-BASE_FEATURE_PARAM(int,
-                   kWebAuthnImmediateRequestRateLimitWindowSeconds,
-                   &kWebAuthnImmediateRequestRateLimit,
-                   "window_seconds",
-                   kDefaultWindowSeconds);
-
-// Not yet enabled by default.
-BASE_FEATURE(kWebAuthnImmediateGet,
-             "WebAuthenticationImmediateGet",
+BASE_FEATURE(kWebAuthnCrossDeviceFallbackUrl,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE_PARAM(int,
-                   kWebAuthnImmediateMediationTimeoutMilliseconds,
-                   &kWebAuthnImmediateGet,
-                   "timeout_ms",
-                   kDefaultImmediateMediationTimeoutMs);
-
-// Enabled by default. Remove the flag and the logic (as if the flag is in
-// disabled state) when the WebAuthenticationImmediateGet origin trial is over.
-BASE_FEATURE(kWebAuthnImmediateGetAutoselect,
-             "WebAuthenticationImmediateGetAutoselect",
+// Enabled by default in M149. Remove in or after M152.
+BASE_FEATURE(kWebAuthnIWARemoteDesktopAllowedOriginsPolicy,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Deprecation flag. Disabled by default in M142. Remove in or after M145.
-BASE_FEATURE(kWebAuthnSendPinGeneration,
-             "WebAuthenticationSendPinGeneration",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enabled by default in M145. Remove in or after M148.
-BASE_FEATURE(kAuthenticatorPasswordsOnlyImmediateRequests,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Not yet enabled by default.
-BASE_FEATURE(kWebAuthnNewRefreshFlow,
-             "WebAuthenticationNewRefreshFlow",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enabled by default in M142. Remove in or after M145.
-BASE_FEATURE(kWebAuthenticationHashClientDataJsonForEnclave,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enabled by default in M143. Remove in or after M146.
+// Enabled by default in M152. Remove in or after M155.
 BASE_FEATURE(kWebAuthnOpportunisticRetrieval, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE_PARAM(int,
@@ -212,14 +156,42 @@ BASE_FEATURE_PARAM(int,
                    "cached_key_ttl",
                    kDefaultOpportunisticRetrievalTimeToKeepCachedKeySeconds);
 
-// Enabled by default in M143. Remove in or after M146.
-BASE_FEATURE(kWebAuthenticationWindowsHints, base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enabled by default in M144. Remove in or after M147.
-BASE_FEATURE(kWebAuthnEnableRefreshingStateOfGpmEnclaveController,
+// Enabled by default in M148. Remove in or after M152.
+BASE_FEATURE(kWebAuthnDoNotAlwaysTerminateStateMachineDuringIdentityChange,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enabled by default in M146. Remove in or after M149.
-BASE_FEATURE(kWebAuthnHmacSecretMcExtension, base::FEATURE_ENABLED_BY_DEFAULT);
+// Enabled by default in M149. Remove in or after M152.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_FEATURE(kWebAuthnCreatePinWhenSystemUvDisabled,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Enabled by default in M150. Remove in or after M153.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_FEATURE(kWebAuthnGpmPinResetUsesAccountIndex,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_WIN)
+// Enabled by default in M147. Remove in or after M150.
+BASE_FEATURE(kWebAuthnWinPrfOnCreate, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN)
+
+// Enabled by default in M150. Remove in or after M153.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_FEATURE(kWebAuthnSocketMaxPriorityMode, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Enabled by default in M151. Remove in or after M154.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_FEATURE(kWebAuthnStripUnusedEnclaveParameters,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Disabled by default.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_FEATURE(kWebAuthnGpmPasskeyEmbeddedRecoveryUrl,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enabled by default in M152. Remove in or after M155.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_FEATURE(kWebAuthnEnclaveUseAuthDataFromEnclave,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace device

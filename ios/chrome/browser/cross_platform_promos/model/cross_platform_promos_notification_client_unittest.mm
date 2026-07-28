@@ -7,6 +7,7 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/task_environment.h"
 #import "components/desktop_to_mobile_promos/promos_types.h"
+#import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/cross_platform_promos/model/cross_platform_promos_service.h"
 #import "ios/chrome/browser/cross_platform_promos/model/cross_platform_promos_service_factory.h"
 #import "ios/chrome/browser/push_notification/model/constants.h"
@@ -49,9 +50,8 @@ class CrossPlatformPromosNotificationClientTest : public PlatformTest {
     profile_ = std::move(builder).Build();
 
     // Set up SceneState with activation level.
-    scene_state_ = OCMClassMock([SceneState class]);
-    OCMStub([scene_state_ activationLevel])
-        .andReturn(SceneActivationLevelForegroundActive);
+    scene_state_ = [[SceneState alloc] init];
+    scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
     client_ =
         std::make_unique<CrossPlatformPromosNotificationClient>(profile_.get());
@@ -96,7 +96,7 @@ class CrossPlatformPromosNotificationClientTest : public PlatformTest {
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
   std::unique_ptr<TestProfileIOS> profile_;
-  id scene_state_;
+  SceneState* scene_state_;
   std::unique_ptr<TestBrowser> browser_;
   std::unique_ptr<CrossPlatformPromosNotificationClient> client_;
 };
@@ -104,6 +104,15 @@ class CrossPlatformPromosNotificationClientTest : public PlatformTest {
 // Tests that the client can be instantiated.
 TEST_F(CrossPlatformPromosNotificationClientTest, Instantiate) {
   EXPECT_TRUE(client_);
+}
+
+// Tests that the constructor populates the notification permissions pref.
+TEST_F(CrossPlatformPromosNotificationClientTest, ConstructorPopulatesPref) {
+  PrefService* prefs = profile_->GetPrefs();
+  const base::DictValue& permissions =
+      prefs->GetDict(prefs::kFeaturePushNotificationPermissions);
+  EXPECT_TRUE(permissions.FindBool(kCrossPlatformPromosNotificationKey)
+                  .value_or(false));
 }
 
 // Tests that HandleNotificationInteraction shows the promo immediately if

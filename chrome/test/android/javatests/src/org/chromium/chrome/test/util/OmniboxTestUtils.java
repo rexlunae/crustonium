@@ -38,6 +38,7 @@ import org.chromium.base.test.transit.UiThreadCondition;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.KeyUtils;
+import org.chromium.base.ui.KeyboardUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omnibox.LocationBarLayout;
 import org.chromium.chrome.browser.omnibox.UrlBar;
@@ -51,6 +52,7 @@ import org.chromium.chrome.browser.searchwidget.SearchActivity;
 import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteResult;
+import org.chromium.components.omnibox.AutocompleteStopReason;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -105,7 +107,7 @@ public class OmniboxTestUtils {
      * Create a ViewAction that can be executed on a Suggestion with Action Chips.
      *
      * @param position the index of an {@link
-     *         org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxAction},
+     *     org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxAction},
      * @param action the action to perform.
      */
     public static ViewAction actionOnOmniboxActionAtPosition(int position, ViewAction action) {
@@ -141,9 +143,8 @@ public class OmniboxTestUtils {
     /**
      * Create a new OmniboxTestUtils instance from supplied activity.
      *
-     * This method should be called if the caller intends to retain the instance
-     * for a longer period of time.
-     * For short or single-time uses, consider calling static method below.
+     * <p>This method should be called if the caller intends to retain the instance for a longer
+     * period of time. For short or single-time uses, consider calling static method below.
      */
     public OmniboxTestUtils(@NonNull Activity activity) {
         mActivity = activity;
@@ -186,7 +187,11 @@ public class OmniboxTestUtils {
     public void checkFocus(boolean active) {
         noopTo().waitFor(
                         new UrlBarHasFocusCondition(mUrlBar, active),
-                        new InputMethodManagerIsActiveCondition(mUrlBar, active));
+                        active
+                                ? new InputMethodManagerIsActiveCondition(
+                                        mUrlBar, active) // Programmatic (Stable)
+                                : new SoftKeyboardShowingCondition(
+                                        mUrlBar, active)); // Physical (Bypasses Stickiness)
     }
 
     /**
@@ -249,12 +254,17 @@ public class OmniboxTestUtils {
 
     /** Waits for a non-empty list of omnibox suggestions to be shown. */
     public void checkSuggestionsShown() {
-        noopTo().waitFor(new SuggestionsShownCondition(mLocationBar));
+        noopTo().waitFor(new SuggestionsShownCondition(mLocationBar, /* shown= */ true));
+    }
+
+    /** Waits for an empty list of omnibox suggestions to be shown. */
+    public void checkSuggestionsNotShown() {
+        noopTo().waitFor(new SuggestionsShownCondition(mLocationBar, /* shown= */ false));
     }
 
     /**
-     * Stops any subsequent AutocompleteResults from being generated.
-     * Ensures that no subsequent asynchronous AutocompleteResults could tamper with test execution.
+     * Stops any subsequent AutocompleteResults from being generated. Ensures that no subsequent
+     * asynchronous AutocompleteResults could tamper with test execution.
      */
     public void waitForAutocomplete() {
         AtomicLong previousId = new AtomicLong(-1);
@@ -275,7 +285,7 @@ public class OmniboxTestUtils {
                     // arrives late. This guarantees that the suggestions will not change and the
                     // list can be used for testing purposes.
                     if (count.incrementAndGet() < 3) return false;
-                    mAutocomplete.stopAutocompleteForTest(false);
+                    mAutocomplete.stopAutocompleteForTest(AutocompleteStopReason.INTERACTION);
                     return true;
                 });
     }
@@ -323,6 +333,8 @@ public class OmniboxTestUtils {
                     ModelList currentModels = mAutocomplete.getSuggestionModelListForTest();
                     for (int i = 0; i < currentModels.size(); i++) {
                         DropdownItemViewInfo info = (DropdownItemViewInfo) currentModels.get(i);
+                        // Callers are responsible for ensuring the view type matches T.
+                        @SuppressWarnings("unchecked")
                         T view = (T) dropdown.getDropdownItemViewForTest(i);
                         if (filter.apply(info) && view != null) {
                             result.set(
@@ -411,7 +423,7 @@ public class OmniboxTestUtils {
                 () -> {
                     mUrlBar.setText(userText);
                     // Push this to the model as well.
-                    mUrlBar.setAutocompleteText(userText, "", null);
+                    mUrlBar.setAutocompleteText(userText, "", null, null);
                 });
         checkText(Matchers.equalTo(userText), null);
     }
@@ -450,7 +462,8 @@ public class OmniboxTestUtils {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     userText.set(mUrlBar.getTextWithoutAutocomplete());
-                    mUrlBar.setAutocompleteText(userText.get(), autocompleteText, additionalText);
+                    mUrlBar.setAutocompleteText(
+                            userText.get(), autocompleteText, additionalText, null);
                 });
         checkText(
                 Matchers.equalTo(userText.get()),
@@ -582,7 +595,7 @@ public class OmniboxTestUtils {
     /**
      * Verify the Composing text in the Omnibox.
      *
-     * Unlike Autocomplete, Composing text enables more finegrained control of the edited text.
+     * <p>Unlike Autocomplete, Composing text enables more finegrained control of the edited text.
      * This is particularly relevant to certain family of languages and input connections, where
      * individual characters or sequences are modified with subsequent keystrokes (eg. T9).
      *
@@ -658,9 +671,11 @@ public class OmniboxTestUtils {
     /** Checks that the suggestions dropdown is shown. */
     public static class SuggestionsShownCondition extends UiThreadCondition {
         private final LocationBarLayout mLocationBar;
+        private final boolean mSuggestionsShouldBeShown;
 
-        public SuggestionsShownCondition(LocationBarLayout locationBar) {
+        public SuggestionsShownCondition(LocationBarLayout locationBar, boolean shown) {
             mLocationBar = locationBar;
+            mSuggestionsShouldBeShown = shown;
         }
 
         @Override
@@ -668,15 +683,24 @@ public class OmniboxTestUtils {
             OmniboxSuggestionsContainer container =
                     mLocationBar.getAutocompleteCoordinator().getSuggestionsContainerForTest();
             OmniboxSuggestionsDropdown dropdown =
-                    mLocationBar.getAutocompleteCoordinator().getSuggestionsDropdownForTest();
+                    (OmniboxSuggestionsDropdown)
+                            mLocationBar.getAutocompleteCoordinator().getSuggestionsDropdown();
+            // Container and dropdown should be inflated whether we show suggestions or not.
             if (container == null || dropdown == null) {
                 return notFulfilled("suggestion list is null");
             }
-            if (!container.isShown() || !dropdown.isShown()) {
+            // Confirm container and dropdown are showing when we're expecting them to.
+            if (mSuggestionsShouldBeShown != (container.isShown() && dropdown.isShown())) {
                 return notFulfilled("suggestion list is not shown");
             }
+            // Use ex-or below to ensure that we either
+            // 1. don't want suggestions and count is 0, or
+            // 2. want suggestions and count is > 0.
             int count = dropdown.getDropdownItemViewCountForTest();
-            return whether(count > 0, "suggestion list has %d entries", count);
+            return whether(
+                    mSuggestionsShouldBeShown ^ (count == 0),
+                    "suggestion list has %d entries",
+                    count);
         }
 
         @Override
@@ -698,7 +722,8 @@ public class OmniboxTestUtils {
             OmniboxSuggestionsContainer container =
                     mLocationBar.getAutocompleteCoordinator().getSuggestionsContainerForTest();
             OmniboxSuggestionsDropdown dropdown =
-                    mLocationBar.getAutocompleteCoordinator().getSuggestionsDropdownForTest();
+                    (OmniboxSuggestionsDropdown)
+                            mLocationBar.getAutocompleteCoordinator().getSuggestionsDropdown();
             // Suggestions list can't be showing if it's not constructed.
             if (container == null || dropdown == null) {
                 return fulfilled();
@@ -769,6 +794,27 @@ public class OmniboxTestUtils {
             return mExpectActive
                     ? "InputMethodManager is active"
                     : "InputMethodManager is not active";
+        }
+    }
+
+    public static class SoftKeyboardShowingCondition extends UiThreadCondition {
+        private final View mView;
+        private final boolean mExpectShowing;
+
+        public SoftKeyboardShowingCondition(View view, boolean expectShowing) {
+            mView = view;
+            mExpectShowing = expectShowing;
+        }
+
+        @Override
+        protected ConditionStatus checkWithSuppliers() {
+            boolean isShowing = KeyboardUtils.isAndroidSoftKeyboardShowing(mView);
+            return whether(isShowing == mExpectShowing, "Keyboard showing is %b", isShowing);
+        }
+
+        @Override
+        public String buildDescription() {
+            return mExpectShowing ? "Soft keyboard is showing" : "Soft keyboard is not showing";
         }
     }
 }

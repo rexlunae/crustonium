@@ -18,7 +18,7 @@ class SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews
     : public AutofillLocationBarBubble {
  public:
   SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews(
-      views::View* anchor_view,
+      views::BubbleAnchor anchor,
       content::WebContents* web_contents,
       base::OnceCallback<void(PaymentsUiClosedReason)> controller_hide_callback,
       SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams ui_params);
@@ -37,7 +37,6 @@ class SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews
   void AddedToWidget() override;
   std::u16string GetWindowTitle() const override;
   void WindowClosing() override;
-  void OnWidgetInitialized() override;
 
  private:
   ~SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews() override;

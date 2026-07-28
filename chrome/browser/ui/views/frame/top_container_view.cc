@@ -6,25 +6,22 @@
 
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/frame/custom_corners_background.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
-#include "chrome/browser/ui/views/frame/top_container_background.h"
+#include "chrome/browser/ui/views/frame/themed_background.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_id.h"
-#include "ui/color/color_variant.h"
-#include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/scoped_canvas.h"
 #include "ui/views/paint_info.h"
 #include "ui/views/view_class_properties.h"
 
 TopContainerView::TopContainerView(BrowserView* browser_view)
     : browser_view_(browser_view) {
   SetProperty(views::kElementIdentifierKey, kTopContainerElementId);
+  SetProperty(views::kViewDoesNotLayOutChildren, true);
 
   // Note: The colors will be set during layout, so these don't matter.
   auto background = std::make_unique<CustomCornersBackground>(
@@ -35,28 +32,19 @@ TopContainerView::TopContainerView(BrowserView* browser_view)
 
 TopContainerView::~TopContainerView() = default;
 
-void TopContainerView::OnImmersiveRevealUpdated() {
-  SchedulePaint();
-
-  // TODO(crbug.com/41489962): Remove this once the View::SchedulePaint() API
-  // has been updated to correctly invalidate layer-backed child views.
-  for (auto& child : children()) {
-    if (child->layer()) {
-      child->layer()->SchedulePaint(
-          ConvertRectToTarget(this, child, GetLocalBounds()));
-    }
-  }
-}
-
 bool TopContainerView::IsPositionInWindowCaption(
     const gfx::Point& test_point) const {
-  const ToolbarView* const toolbar = browser_view_->toolbar();
+  ToolbarView* const toolbar = browser_view_->toolbar();
   for (auto& child : children()) {
-    if (child->bounds().Contains(test_point)) {
+    gfx::Point logical_test_point(GetMirroredXInView(test_point.x()),
+                                  test_point.y());
+    if (child->GetVisible() && child->bounds().Contains(logical_test_point)) {
       if (child == toolbar) {
         const auto in_toolbar =
             views::View::ConvertPointToTarget(this, toolbar, test_point);
-        if (in_toolbar.y() < toolbar->location_bar()->Bounds().y()) {
+        const bool is_caption = toolbar->IsPositionInWindowCaption(in_toolbar);
+        toolbar->RecordHitTestMetrics(is_caption);
+        if (is_caption) {
           return true;
         }
       }

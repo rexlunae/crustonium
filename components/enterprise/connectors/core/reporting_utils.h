@@ -81,7 +81,8 @@ GetPasswordReuseEvent(const GURL& url,
                       bool is_phishing_url,
                       bool warning_shown,
                       const std::string& profile_identifier,
-                      const std::string& profile_username);
+                      const std::string& profile_username,
+                      const ReferrerChain& referrer_chain);
 
 chrome::cros::reporting::proto::SafeBrowsingPasswordChangedEvent
 GetPasswordChangedEvent(const std::string& user_name,
@@ -125,11 +126,13 @@ chrome::cros::reporting::proto::UnscannedFileEvent GetUnscannedFileEvent(
     const std::string& download_digest_sha256,
     const std::string& mime_type,
     const std::string& trigger,
+    const std::string& scan_id,
     const std::string& reason,
     const std::string& content_transfer_method,
     const std::string& profile_identifier,
     const std::string& profile_username,
     const int64_t content_size,
+    const ReferrerChain& referrer_chain,
     EventResult event_result);
 
 chrome::cros::reporting::proto::DlpSensitiveDataEvent GetDlpSensitiveDataEvent(

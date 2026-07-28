@@ -8,16 +8,17 @@
 
 #include "base/check_deref.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "content/browser/back_forward_cache/back_forward_cache_subframe_navigation_throttle.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/picture_in_picture/document_picture_in_picture_navigation_throttle.h"
 #include "content/browser/preloading/prefetch/contamination_delay_navigation_throttle.h"
 #include "content/browser/preloading/prerender/prerender_navigation_throttle.h"
 #include "content/browser/preloading/prerender/prerender_subframe_navigation_throttle.h"
 #include "content/browser/renderer_host/ancestor_throttle.h"
-#include "content/browser/renderer_host/back_forward_cache_subframe_navigation_throttle.h"
 #include "content/browser/renderer_host/blocked_scheme_navigation_throttle.h"
 #include "content/browser/renderer_host/http_error_navigation_throttle.h"
 #include "content/browser/renderer_host/isolated_web_app_throttle.h"
@@ -60,7 +61,6 @@ NavigationThrottleRegistryBase::~NavigationThrottleRegistryBase() = default;
 NavigationThrottleRegistryImpl::NavigationThrottleRegistryImpl(
     NavigationRequest* navigation_request)
     : navigation_request_(CHECK_DEREF(navigation_request)),
-      weak_navigation_request_(navigation_request->GetWeakPtr()),
       navigation_throttle_runner_(CreateNavigationThrottleRunner(
           this,
           navigation_request->GetNavigationId(),
@@ -69,7 +69,7 @@ NavigationThrottleRegistryImpl::NavigationThrottleRegistryImpl(
 NavigationThrottleRegistryImpl::~NavigationThrottleRegistryImpl() = default;
 
 void NavigationThrottleRegistryImpl::RegisterNavigationThrottles() {
-  if (navigation_request_->IsInitialWebUISyncNavigation()) {
+  if (navigation_request_->IsInitialWebUINavigation()) {
     // Skip adding throttles for navigations to the initial WebUI.
     return;
   }
@@ -169,7 +169,7 @@ void NavigationThrottleRegistryImpl::RegisterNavigationThrottles() {
 
 void NavigationThrottleRegistryImpl::
     RegisterNavigationThrottlesForCommitWithoutUrlLoader() {
-  if (navigation_request_->IsInitialWebUISyncNavigation()) {
+  if (navigation_request_->IsInitialWebUINavigation()) {
     // Skip adding throttles for navigations to the initial WebUI.
     return;
   }
@@ -261,7 +261,7 @@ void NavigationThrottleRegistryImpl::OnDeferProcessingNavigationEvent(
   deferring_throttles_.insert(deferring_throttle);
 }
 
-const std::set<NavigationThrottle*>&
+const std::set<raw_ptr<NavigationThrottle>>&
 NavigationThrottleRegistryImpl::GetDeferringThrottles() const {
   return deferring_throttles_;
 }
@@ -279,9 +279,10 @@ NavigationHandle& NavigationThrottleRegistryImpl::GetNavigationHandle() {
 void NavigationThrottleRegistryImpl::AddThrottle(
     std::unique_ptr<NavigationThrottle> navigation_throttle) {
   CHECK(navigation_throttle);
-  TRACE_EVENT1("navigation", "NavigationThrottleRegistryImpl::AddThrottle",
-               "navigation_throttle", navigation_throttle->GetNameForLogging());
-  CHECK(!navigation_request_->IsInitialWebUISyncNavigation());
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("navigation"),
+              "NavigationThrottleRegistryImpl::AddThrottle",
+              "navigation_throttle", navigation_throttle->GetNameForLogging());
+  CHECK(!navigation_request_->IsInitialWebUINavigation());
   throttles_.push_back(std::move(navigation_throttle));
 }
 
@@ -298,30 +299,9 @@ bool NavigationThrottleRegistryImpl::EraseThrottleForTesting(
   });
 }
 
-bool NavigationThrottleRegistryImpl::IsHTTPOrHTTPS() {
-  static bool is_cache_enabled = base::FeatureList::IsEnabled(
-      features::kNavigationThrottleRegistryAttributeCache);
-  // The cached properties are only safe to access at throttle registration
-  // time, and not safe afterward because the URL could change (e.g., due to
-  // redirects).
-  CHECK_LE(navigation_request_->state(),
-           NavigationRequest::NavigationState::WILL_START_REQUEST);
-
-  if (!is_cache_enabled) {
-    return GetNavigationHandle().GetURL().SchemeIsHTTPOrHTTPS();
-  }
-  if (!is_http_or_https_.has_value()) {
-    is_http_or_https_ = GetNavigationHandle().GetURL().SchemeIsHTTPOrHTTPS();
-  }
-  return *is_http_or_https_;
-}
-
 void NavigationThrottleRegistryImpl::OnEventProcessed(
     NavigationThrottleEvent event,
     NavigationThrottle::ThrottleCheckResult result) {
-  if (!weak_navigation_request_) {
-    return;
-  }
   navigation_request_->OnNavigationEventProcessed(event, result);
 }
 

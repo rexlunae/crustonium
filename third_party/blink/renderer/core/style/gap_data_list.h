@@ -51,18 +51,6 @@ class CORE_EXPORT GapDataList {
     gap_data_list_.emplace_back(GapData<T>(value));
   }
 
-  explicit GapDataList(Vector<Length>& lengths) {
-    for (const auto& length : lengths) {
-      gap_data_list_.emplace_back(GapData<int>(length.Pixels()));
-    }
-  }
-
-  explicit GapDataList(HeapVector<StyleColor, 1>& colors) {
-    for (const auto& color : colors) {
-      gap_data_list_.emplace_back(GapData<StyleColor>(color));
-    }
-  }
-
   explicit GapDataList(wtf_size_t size) { gap_data_list_.reserve(size); }
 
   void AddGapData(const GapData<T>& gap_data) {
@@ -139,8 +127,8 @@ class CORE_EXPORT GapDataListIterator {
  public:
   using GapDataVector = GapDataList<T>::GapDataVector;
   using GapData = GapData<T>;
-  explicit GapDataListIterator(const GapDataVector& gap_data_list,
-                               wtf_size_t gap_count)
+
+  GapDataListIterator(const GapDataVector& gap_data_list, wtf_size_t gap_count)
       : gap_data_list_(gap_data_list), gap_count_(gap_count) {
     CHECK(!gap_data_list_.empty());
     BuildRegions();
@@ -160,6 +148,16 @@ class CORE_EXPORT GapDataListIterator {
   }
 
   bool HasNext() const { return current_gap_index_ < gap_count_; }
+
+  // Advances the cursor to just before `target_index`, hence subsequent
+  // `Next()` call returns the data at `target_index`.
+  void AdvanceUpTo(wtf_size_t target_index) {
+    CHECK_LE(current_gap_index_, target_index);
+    CHECK_LE(target_index, gap_count_);
+    while (current_gap_index_ < target_index) {
+      Next();
+    }
+  }
 
   T Next() {
     CHECK(HasNext());

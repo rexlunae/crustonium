@@ -171,7 +171,9 @@ void SimpleNetworkHintsHandlerImpl::Preconnect(const url::SchemeHostPort& url,
           /*num_streams=*/1, url.GetURL(),
           allow_credentials ? network::mojom::CredentialsMode::kInclude
                             : network::mojom::CredentialsMode::kOmit,
-          network_anonymization_key, net::MutableNetworkTrafficAnnotationTag(),
+          network_anonymization_key,
+          render_frame_host->GetNetworkRestrictionsID(),
+          net::MutableNetworkTrafficAnnotationTag(),
           /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
 

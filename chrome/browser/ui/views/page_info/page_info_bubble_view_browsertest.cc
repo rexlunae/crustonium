@@ -29,7 +29,6 @@
 #include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/file_system_access/file_system_access_ui_helpers.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
@@ -69,6 +68,8 @@
 #include "components/page_info/page_info.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/permissions/features.h"
+#include "components/permissions/permission_decision_auto_blocker.h"
+#include "components/permissions/permissions_client.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_test_util.h"
 #include "components/safe_browsing/core/common/features.h"
@@ -192,7 +193,8 @@ void AddHintForTesting(Browser* browser,
       optimization_guide::AnyWrapProto(metadata));
 
   auto* optimization_guide_decider =
-      OptimizationGuideKeyedServiceFactory::GetForProfile(browser->profile());
+      OptimizationGuideKeyedServiceFactory::GetForProfile(
+          browser->GetProfile());
   optimization_guide_decider->AddHintForTesting(
       url, optimization_guide::proto::ABOUT_THIS_SITE, optimization_metadata);
 }
@@ -225,6 +227,13 @@ class SecurityStyleTestObserver : public content::WebContentsObserver {
 // PageInfoBubbleViewBrowserTestCookiesSubpage.
 class PageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
  public:
+  PageInfoBubbleViewBrowserTest() {
+    feature_list_.InitWithFeatures(
+        {/*enabled_features=*/features::kFileSystemAccessPersistentPermissions},
+        {/*disabled_features=*/privacy_sandbox::
+             kPrivacySandboxAdPrivacyUxDeprecation});
+  }
+
   void SetUp() override {
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUp();
@@ -234,13 +243,30 @@ class PageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
     mock_sentiment_service_ = static_cast<MockTrustSafetySentimentService*>(
         TrustSafetySentimentServiceFactory::GetInstance()
             ->SetTestingFactoryAndUse(
-                browser()->profile(),
+                browser()->GetProfile(),
                 base::BindRepeating(&BuildMockTrustSafetySentimentService)));
+
+    host_resolver()->AddRule("*", "127.0.0.1");
+
+    bad_https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
+    bad_https_server_.AddDefaultHandlers(GetChromeTestDataDir());
+    ASSERT_TRUE(bad_https_server_.Start());
+
+    HttpsUpgradesInterceptor::SetHttpPortForTesting(
+        embedded_test_server()->port());
+    HttpsUpgradesInterceptor::SetHttpsPortForTesting(bad_https_server_.port());
+  }
+
+  void TearDownOnMainThread() override {
+    mock_sentiment_service_ = nullptr;
+    InProcessBrowserTest::TearDownOnMainThread();
   }
 
   content::WebContents* web_contents() {
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
+
+  net::EmbeddedTestServer* bad_https_server() { return &bad_https_server_; }
 
  protected:
   GURL GetSimplePageUrl() const {
@@ -339,14 +365,15 @@ class PageInfoBubbleViewBrowserTest : public InProcessBrowserTest {
     EXPECT_CALL(*mock_sentiment_service_, PageInfoClosed);
   }
 
-  raw_ptr<MockTrustSafetySentimentService, DanglingUntriaged>
-      mock_sentiment_service_;
+  raw_ptr<MockTrustSafetySentimentService> mock_sentiment_service_;
 
  private:
   std::vector<PageInfoViewFactory::PageInfoViewID> expected_identifiers_;
 
-  base::test::ScopedFeatureList feature_list_{
-      features::kFileSystemAccessPersistentPermissions};
+  base::test::ScopedFeatureList feature_list_;
+
+  net::EmbeddedTestServer bad_https_server_{
+      net::EmbeddedTestServer::TYPE_HTTPS};
 };
 
 IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, ShowBubble) {
@@ -461,7 +488,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
   // SB_THREAT_TYPE_ENTERPRISE_PASSWORD_REUSE.
   safe_browsing::ChromePasswordProtectionService* service =
       safe_browsing::ChromePasswordProtectionService::
-          GetPasswordProtectionService(browser()->profile());
+          GetPasswordProtectionService(browser()->GetProfile());
   safe_browsing::ReusedPasswordAccountType reused_password_account_type;
   reused_password_account_type.set_account_type(
       safe_browsing::ReusedPasswordAccountType::NON_GAIA_ENTERPRISE);
@@ -540,7 +567,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
   // SB_THREAT_TYPE_SAVED_PASSWORD_REUSE.
   safe_browsing::ChromePasswordProtectionService* service =
       safe_browsing::ChromePasswordProtectionService::
-          GetPasswordProtectionService(browser()->profile());
+          GetPasswordProtectionService(browser()->GetProfile());
   safe_browsing::ReusedPasswordAccountType reused_password_account_type;
   reused_password_account_type.set_account_type(
       safe_browsing::ReusedPasswordAccountType::SAVED_PASSWORD);
@@ -837,7 +864,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, BlockedAndInvalidCert) {
 }
 
 // Ensure a page that has an EV certificate *and* is blocked by Safe Browsing
-// shows the correct PageInfo UI. Regression test for crbug.com/1014240.
+// shows the correct PageInfo UI. Regression test for crbug.com/40653067.
 IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, MalwareAndEvCert) {
   net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
   https_server.AddDefaultHandlers(
@@ -970,46 +997,9 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest, UnwantedSoftwareStrings) {
                 u" " + l10n_util::GetStringUTF16(IDS_LEARN_MORE));
 }
 
-// Tests that the "reset warning decisions" button is shown if the user has
-// clicked through an SSL warning or the HTTP interstitial, but not for silent
-// fallback to HTTP under HTTPS-Upgrades.
-// TODO(crbug.com/40248833): Convert these tests to be normal
-// PageInfoBubbleViewBrowserTest when HTTPS-Upgrades is enabled-by-default.
-class PageInfoBubbleViewHttpsUpgradesBrowserTest
-    : public PageInfoBubbleViewBrowserTest {
- public:
-  PageInfoBubbleViewHttpsUpgradesBrowserTest() {
-    // TODO(crbug.com/351990829): Get these tests working with the new
-    // Ask-before-HTTP dialog UI and then re-enable the feature here.
-    feature_list_.InitWithFeatures(
-        {features::kHttpsUpgrades},
-        {security_interstitials::features::kHttpsFirstDialogUi});
-  }
-  ~PageInfoBubbleViewHttpsUpgradesBrowserTest() override = default;
-
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-
-    bad_https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
-    bad_https_server_.AddDefaultHandlers(GetChromeTestDataDir());
-    ASSERT_TRUE(bad_https_server_.Start());
-
-    HttpsUpgradesInterceptor::SetHttpPortForTesting(
-        embedded_test_server()->port());
-    HttpsUpgradesInterceptor::SetHttpsPortForTesting(bad_https_server_.port());
-  }
-
-  net::EmbeddedTestServer* bad_https_server() { return &bad_https_server_; }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-  net::EmbeddedTestServer bad_https_server_{
-      net::EmbeddedTestServer::TYPE_HTTPS};
-};
-
 // Navigate to a page with an SSL warning (but no malware status) and click
 // through the SSL warning. The "reset decisions" button should be shown.
-IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
                        ResetWarningDecisionsButtonCertWarningOnly) {
   GURL bad_https_url = bad_https_server()->GetURL("baz.com", "/simple.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), bad_https_url));
@@ -1031,7 +1021,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
 // Navigate to a malware page with an SSL warning and click through the warning.
 // The "reset decisions" button should not be displayed (otherwise it's
 // confusing which warning the user is re-enabling).
-IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
                        ResetWarningDecisionsButtonCertAndMalwareWarnings) {
   GURL bad_https_url = bad_https_server()->GetURL("baz.com", "/simple.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), bad_https_url));
@@ -1069,42 +1059,35 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
 
 // Navigate to an HTTP page with HTTPS-First Mode enabled and click through the
 // warning. The reset decisions button should be shown.
-IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
                        ResetWarningDecisionsButtonHttpsFirstMode) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
+                                                  true);
 
   GURL http_url = embedded_test_server()->GetURL("foo.com", "/simple.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), http_url));
   EXPECT_EQ(http_url, web_contents()->GetLastCommittedURL());
-  // TODO(crbug.com/351990829): Adapt this test to work with the new
-  // Ask-before-HTTP dialog UI, and then re-enable the HttpsFirstDialogUi
-  // feature on this test suite.
   ASSERT_TRUE(chrome_browser_interstitials::IsShowingHttpsFirstModeInterstitial(
       web_contents()));
-
-  // Proceed through the HTTPS-First Mode interstitial.
-  content::TestNavigationObserver nav_observer(web_contents(), 1);
-  std::string javascript = "window.certificateErrorPageController.proceed();";
-  ASSERT_TRUE(content::ExecJs(web_contents(), javascript));
-  nav_observer.Wait();
+  chrome_browser_interstitials::ProceedThroughHttpsFirstModeInterstitial(
+      web_contents());
 
   OpenPageInfoBubble(browser());
   views::View* reset_decisions_label =
       GetView(PageInfoViewFactory::VIEW_ID_PAGE_INFO_RESET_DECISIONS_LABEL);
   EXPECT_TRUE(reset_decisions_label->GetVisible());
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
+                                                  false);
 }
 
 // Navigate to an HTTP page with HTTPS-Upgrades enabled but not HTTPS-First
 // Mode (so no warning is shown). The reset decisions button should not be
 // shown.
-IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewHttpsUpgradesBrowserTest,
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
                        ResetWarningDecisionsButtonHttpsUpgrades) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
+                                                  false);
 
   GURL http_url = embedded_test_server()->GetURL("foo.com", "/simple.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), http_url));
@@ -1213,7 +1196,7 @@ class PageInfoBubbleViewAboutThisSiteBrowserTest : public InProcessBrowserTest {
   void TriggerSafeBrowsingWarning() {
     safe_browsing::ChromePasswordProtectionService* service =
         safe_browsing::ChromePasswordProtectionService::
-            GetPasswordProtectionService(browser()->profile());
+            GetPasswordProtectionService(browser()->GetProfile());
     safe_browsing::ReusedPasswordAccountType reused_password_account_type;
     reused_password_account_type.set_account_type(
         safe_browsing::ReusedPasswordAccountType::NON_GAIA_ENTERPRISE);
@@ -1455,10 +1438,14 @@ class PageInfoBubbleViewBrowserTestCookiesSubpage
   void SetUpOnMainThread() override {
     mock_privacy_sandbox_service_ = static_cast<MockPrivacySandboxService*>(
         PrivacySandboxServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(),
+            browser()->GetProfile(),
             base::BindRepeating(&BuildMockPrivacySandboxService)));
-    prefs_ = browser()->profile()->GetPrefs();
     PageInfoBubbleViewBrowserTest::SetUpOnMainThread();
+  }
+
+  void TearDownOnMainThread() override {
+    mock_privacy_sandbox_service_ = nullptr;
+    PageInfoBubbleViewBrowserTest::TearDownOnMainThread();
   }
 
   MockPrivacySandboxService* mock_service() {
@@ -1466,26 +1453,30 @@ class PageInfoBubbleViewBrowserTestCookiesSubpage
   }
 
   HostContentSettingsMap* host_content_settings_map() {
-    return HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+    return HostContentSettingsMapFactory::GetForProfile(
+        browser()->GetProfile());
   }
 
   void SetCookieControlsMode(content_settings::CookieControlsMode mode) {
-    prefs_->SetInteger(prefs::kCookieControlsMode, static_cast<int>(mode));
+    browser()->GetProfile()->GetPrefs()->SetInteger(prefs::kCookieControlsMode,
+                                                    static_cast<int>(mode));
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
   void EnableCookieSync() {
-    prefs_->SetBoolean(chromeos::prefs::kFloatingSsoEnabled, true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        chromeos::prefs::kFloatingSsoEnabled, true);
   }
 
   void SetBlockedDomainsForCookieSync(base::ListValue domains) {
-    prefs_->SetList(::prefs::kFloatingSsoDomainBlocklist, std::move(domains));
+    browser()->GetProfile()->GetPrefs()->SetList(
+        chromeos::prefs::kFloatingSsoDomainBlocklist, std::move(domains));
   }
 #endif
 
   void OpenPageInfoAndGoToCookiesSubpage(
       std::optional<std::u16string> rws_owner) {
-    EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+    EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
         prefs::kInContextCookieControlsOpened));
     EXPECT_CALL(*mock_service(),
                 GetRelatedWebsiteSetOwnerForDisplay(testing::_))
@@ -1513,20 +1504,19 @@ class PageInfoBubbleViewBrowserTestCookiesSubpage
 
     // The preference should only be recorded when blocking 3P cookies.
     const bool block_third_party =
-        prefs_->GetInteger(prefs::kCookieControlsMode) ==
+        browser()->GetProfile()->GetPrefs()->GetInteger(
+            prefs::kCookieControlsMode) ==
             static_cast<int>(
                 content_settings::CookieControlsMode::kBlockThirdParty) ||
-        browser()->profile()->IsIncognitoProfile();
-    EXPECT_EQ(browser()->profile()->GetPrefs()->GetBoolean(
+        browser()->GetProfile()->IsIncognitoProfile();
+    EXPECT_EQ(browser()->GetProfile()->GetPrefs()->GetBoolean(
                   prefs::kInContextCookieControlsOpened),
               block_third_party);
   }
 
  private:
   base::test::ScopedFeatureList feature_list_;
-  raw_ptr<PrefService, DanglingUntriaged> prefs_;
-  raw_ptr<MockPrivacySandboxService, DanglingUntriaged>
-      mock_privacy_sandbox_service_;
+  raw_ptr<MockPrivacySandboxService> mock_privacy_sandbox_service_;
 };
 
 // Checks if there is correct number of buttons in cookies subpage when rws are
@@ -1742,7 +1732,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTestAutoPip,
   const GURL url = embedded_test_server()->GetURL("/title1.html");
 
   // Set auto-pip permission to be allowed, so it shows up.
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetContentSettingDefaultScope(
           url, url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
           CONTENT_SETTING_ALLOW);
@@ -1764,4 +1754,35 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTestAutoPip,
       PageInfoViewFactory::VIEW_ID_PAGE_INFO_PERMISSION_SUBPAGE_MANAGE_BUTTON));
   EXPECT_EQ(chrome::GetSettingsUrl(chrome::kAutoPictureInPictureSubPage),
             new_tab_observer.GetWebContents()->GetVisibleURL());
+}
+
+IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewBrowserTest,
+                       NotificationsEmbargoStateLabel) {
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  permissions::PermissionDecisionAutoBlocker* autoblocker =
+      permissions::PermissionsClient::Get()->GetPermissionDecisionAutoBlocker(
+          browser()->GetProfile());
+  // Place under embargo for multiple dismissals.
+  autoblocker->RecordDismissAndEmbargo(url, ContentSettingsType::NOTIFICATIONS,
+                                       /*dismissed_prompt_was_quiet=*/false);
+  autoblocker->RecordDismissAndEmbargo(url, ContentSettingsType::NOTIFICATIONS,
+                                       /*dismissed_prompt_was_quiet=*/false);
+  autoblocker->RecordDismissAndEmbargo(url, ContentSettingsType::NOTIFICATIONS,
+                                       /*dismissed_prompt_was_quiet=*/false);
+
+  OpenPageInfoBubble(browser());
+
+  // Open the Notifications subpage view.
+  auto* page_info_bubble = static_cast<PageInfoBubbleView*>(
+      PageInfoBubbleView::GetPageInfoBubbleForTesting());
+  page_info_bubble->OpenPermissionPage(ContentSettingsType::NOTIFICATIONS);
+
+  // Verify that the state label shows the auto-blocked message.
+  views::Label* state_label = static_cast<views::Label*>(GetView(
+      PageInfoViewFactory::VIEW_ID_PAGE_INFO_PERMISSION_SUBTITLE_LABEL));
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_PERMISSION_AUTOMATICALLY_BLOCKED),
+      state_label->GetText());
 }

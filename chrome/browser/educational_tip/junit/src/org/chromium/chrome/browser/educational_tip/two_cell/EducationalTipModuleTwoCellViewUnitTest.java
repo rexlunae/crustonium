@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.educational_tip.two_cell;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
+import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -25,9 +26,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.educational_tip.R;
 
 @RunWith(BaseRobolectricTestRunner.class)
@@ -35,6 +36,7 @@ import org.chromium.chrome.browser.educational_tip.R;
 public class EducationalTipModuleTwoCellViewUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
+    @Mock private View.OnClickListener mSeeMoreClickListener;
     @Mock private View.OnClickListener mItem1ClickListener;
     @Mock private View.OnClickListener mItem2ClickListener;
 
@@ -62,6 +64,17 @@ public class EducationalTipModuleTwoCellViewUnitTest {
 
     @Test
     @SmallTest
+    public void testSetOnClickListenerSeeMore() {
+        TextView seeMoreTextView = mModuleView.findViewById(R.id.see_more);
+        mModuleView.setSeeMoreOnClickListener(mSeeMoreClickListener);
+
+        seeMoreTextView.performClick();
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(mSeeMoreClickListener).onClick(seeMoreTextView);
+    }
+
+    @Test
+    @SmallTest
     public void testSetItem1() {
         TextView item1TitleView = mModuleView.findViewById(R.id.two_cell_item_1_title);
         TextView item1DescriptionView = mModuleView.findViewById(R.id.two_cell_item_1_description);
@@ -84,7 +97,7 @@ public class EducationalTipModuleTwoCellViewUnitTest {
         Assert.assertNotNull(drawable);
 
         item1Layout.performClick();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mItem1ClickListener).onClick(item1Layout);
     }
 
@@ -112,7 +125,7 @@ public class EducationalTipModuleTwoCellViewUnitTest {
         Assert.assertNotNull(drawable);
 
         item2Layout.performClick();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mItem2ClickListener).onClick(item2Layout);
     }
 
@@ -127,14 +140,10 @@ public class EducationalTipModuleTwoCellViewUnitTest {
 
         int disabledColor = mContext.getColor(R.color.default_text_color_disabled_list);
         Assert.assertEquals(disabledColor, item1TitleView.getCurrentTextColor());
-        Assert.assertTrue(
-                (item1TitleView.getPaintFlags() & android.graphics.Paint.STRIKE_THRU_TEXT_FLAG)
-                        != 0);
+        Assert.assertTrue((item1TitleView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
         Assert.assertEquals(disabledColor, item1DescriptionView.getCurrentTextColor());
         Assert.assertTrue(
-                (item1DescriptionView.getPaintFlags()
-                                & android.graphics.Paint.STRIKE_THRU_TEXT_FLAG)
-                        != 0);
+                (item1DescriptionView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
         Assert.assertFalse(item1Layout.isClickable());
     }
 
@@ -149,14 +158,10 @@ public class EducationalTipModuleTwoCellViewUnitTest {
 
         int disabledColor = mContext.getColor(R.color.default_text_color_disabled_list);
         Assert.assertEquals(disabledColor, item2TitleView.getCurrentTextColor());
-        Assert.assertTrue(
-                (item2TitleView.getPaintFlags() & android.graphics.Paint.STRIKE_THRU_TEXT_FLAG)
-                        != 0);
+        Assert.assertTrue((item2TitleView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
         Assert.assertEquals(disabledColor, item2DescriptionView.getCurrentTextColor());
         Assert.assertTrue(
-                (item2DescriptionView.getPaintFlags()
-                                & android.graphics.Paint.STRIKE_THRU_TEXT_FLAG)
-                        != 0);
+                (item2DescriptionView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
         Assert.assertFalse(item2Layout.isClickable());
     }
 
@@ -176,16 +181,12 @@ public class EducationalTipModuleTwoCellViewUnitTest {
         Assert.assertNotEquals(
                 mContext.getColor(R.color.default_text_color_disabled_list),
                 item2TitleView.getCurrentTextColor());
-        Assert.assertFalse(
-                (item2TitleView.getPaintFlags() & android.graphics.Paint.STRIKE_THRU_TEXT_FLAG)
-                        != 0);
+        Assert.assertFalse((item2TitleView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
         Assert.assertNotEquals(
                 mContext.getColor(R.color.default_text_color_disabled_list),
                 item2DescriptionView.getCurrentTextColor());
         Assert.assertFalse(
-                (item2DescriptionView.getPaintFlags()
-                                & android.graphics.Paint.STRIKE_THRU_TEXT_FLAG)
-                        != 0);
+                (item2DescriptionView.getPaintFlags() & Paint.STRIKE_THRU_TEXT_FLAG) != 0);
         Assert.assertTrue(item2Layout.isClickable());
     }
 }

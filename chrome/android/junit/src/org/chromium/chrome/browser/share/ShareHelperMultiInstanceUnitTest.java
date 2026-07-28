@@ -20,6 +20,7 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.IntentSender;
 import android.content.IntentSender.SendIntentException;
+import android.os.Build;
 
 import androidx.annotation.Nullable;
 import androidx.lifecycle.Lifecycle.State;
@@ -34,10 +35,10 @@ import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivity;
 import org.robolectric.shadows.ShadowActivity.IntentForResult;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPendingIntent;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.components.browser_ui.share.ShareParams;
@@ -69,14 +70,13 @@ public class ShareHelperMultiInstanceUnitTest {
 
     @After
     public void tearDown() {
+        RobolectricUtil.runAllBackgroundAndUi();
         mWindowBar.closeWindow();
         mWindowFoo.closeWindow();
         ChromeSharedPreferences.getInstance()
                 .removeKey(ChromePreferenceKeys.SHARING_LAST_SHARED_COMPONENT_NAME);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_FinishInOrder() throws SendIntentException {
         mWindowFoo.startShare().verifyCallbackNotCalled();
@@ -89,8 +89,6 @@ public class ShareHelperMultiInstanceUnitTest {
         assertLastComponentRecorded(COMPONENT_NAME_2);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_FinishInReverseOrder() throws SendIntentException {
         mWindowFoo.startShare();
@@ -106,8 +104,6 @@ public class ShareHelperMultiInstanceUnitTest {
         assertLastComponentRecorded(COMPONENT_NAME_1);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_FinishFirstThenCancelSecond() throws SendIntentException {
         mWindowFoo.startShare();
@@ -117,8 +113,6 @@ public class ShareHelperMultiInstanceUnitTest {
         assertLastComponentRecorded(COMPONENT_NAME_1);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_FinishSecondThenCancelFirst() throws SendIntentException {
         mWindowFoo.startShare();
@@ -128,8 +122,6 @@ public class ShareHelperMultiInstanceUnitTest {
         assertLastComponentRecorded(COMPONENT_NAME_2);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_CancelFirstFinishSecond() throws SendIntentException {
         mWindowFoo.startShare();
@@ -140,13 +132,11 @@ public class ShareHelperMultiInstanceUnitTest {
         assertLastComponentRecorded(COMPONENT_NAME_2);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_KillFirstWindowThenCompleteSecond() throws SendIntentException {
         mWindowFoo.startShare();
         mWindowBar.startShare();
-        mWindowFoo.closeWindow().verifyCleanerIntentDispatched();
+        mWindowFoo.closeWindow().verifyCallbackCanceled();
         mWindowBar
                 .verifyCallbackNotCalled()
                 .completeShareWithComponent(COMPONENT_NAME_2)
@@ -155,12 +145,10 @@ public class ShareHelperMultiInstanceUnitTest {
         assertLastComponentRecorded(COMPONENT_NAME_2);
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
     @Test
     public void shareInTwoWindow_KillSecondWindowThenCompleteFirst() throws SendIntentException {
         mWindowFoo.startShare();
-        mWindowBar.startShare().closeWindow().verifyCleanerIntentDispatched();
+        mWindowBar.startShare().closeWindow().verifyCallbackCanceled();
         mWindowFoo
                 .verifyCallbackNotCalled()
                 .completeShareWithComponent(COMPONENT_NAME_1)
@@ -220,12 +208,12 @@ public class ShareHelperMultiInstanceUnitTest {
                             /* listenToActivityState= */ false,
                             mIntentRequestTracker,
                             /* insetObserver= */ null,
-                            /* trackOcclusion= */ true);
+                            /* occlusionTrackingAllowed= */ true);
         }
 
         public SingleWindowTestInstance startShare() {
             ShareHelper.shareWithSystemShareSheetUi(getTextParams(), null, true);
-            ShadowLooper.idleMainLooper();
+            RobolectricUtil.runAllBackgroundAndUi();
 
             mShareIntent = Shadows.shadowOf(mActivity).peekNextStartedActivityForResult();
             assertNotNull("Share activity is not launched.", mShareIntent);
@@ -237,16 +225,18 @@ public class ShareHelperMultiInstanceUnitTest {
             assertThat(mShareIntent).isNotNull();
             Intent sendBackIntent =
                     new Intent().putExtra(Intent.EXTRA_CHOSEN_COMPONENT, componentName);
-            IntentSender sender =
-                    mShareIntent.intent.getParcelableExtra(
-                            Intent.EXTRA_CHOSEN_COMPONENT_INTENT_SENDER);
+            String extraKey =
+                    Build.VERSION.SDK_INT >= 35
+                            ? Intent.EXTRA_CHOOSER_RESULT_INTENT_SENDER
+                            : Intent.EXTRA_CHOSEN_COMPONENT_INTENT_SENDER;
+            IntentSender sender = mShareIntent.intent.getParcelableExtra(extraKey);
             sender.sendIntent(
                     mActivity.getApplicationContext(),
                     Activity.RESULT_OK,
                     sendBackIntent,
                     null,
                     null);
-            ShadowLooper.idleMainLooper();
+            RobolectricUtil.runAllBackgroundAndUi();
             return this;
         }
 
@@ -255,7 +245,7 @@ public class ShareHelperMultiInstanceUnitTest {
 
             mIntentRequestTracker.onActivityResult(
                     mShareIntent.requestCode, Activity.RESULT_CANCELED, null);
-            ShadowLooper.idleMainLooper();
+            RobolectricUtil.runAllBackgroundAndUi();
             return this;
         }
 
@@ -272,16 +262,9 @@ public class ShareHelperMultiInstanceUnitTest {
             return this;
         }
 
-        public SingleWindowTestInstance verifyCleanerIntentDispatched() {
-            Intent intent = Shadows.shadowOf(mActivity).peekNextStartedActivity();
-            assertNotNull("Cleaner intent is not sent.", intent);
-            assertEquals(
-                    "Cleaner intent does not have the right class name.",
-                    intent.getComponent().getClassName(),
-                    mActivity.getClass().getName());
-            assertTrue(
-                    "FLAG_ACTIVITY_CLEAR_TOP is not set for cleaner intent.",
-                    (intent.getFlags() & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0);
+        public SingleWindowTestInstance verifyCallbackCanceled() {
+            assertTrue("Callback onCancel should be called.", mCallback.onCancelCalled);
+            verify(mActivity).unregisterReceiver(any());
             return this;
         }
 

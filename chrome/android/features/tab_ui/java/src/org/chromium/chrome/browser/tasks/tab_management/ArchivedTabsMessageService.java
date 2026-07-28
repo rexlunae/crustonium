@@ -40,12 +40,11 @@ import org.chromium.chrome.browser.tab.TabArchiveSettings;
 import org.chromium.chrome.browser.tab_ui.OnTabSelectingListener;
 import org.chromium.chrome.browser.tab_ui.RecyclerViewPosition;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
 import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListItemSizeChangedObserver;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
 import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
 import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageUpdateObserver;
@@ -119,15 +118,14 @@ public class ArchivedTabsMessageService
     private final @Nullable TabGroupSyncService mTabGroupSyncService;
     private final Supplier<PaneManager> mPaneManagerSupplier;
     private final Supplier<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier;
-    private final NullableObservableSupplier<TabGroupModelFilter>
-            mCurrentTabGroupModelFilterSupplier;
+    private final NullableObservableSupplier<TabModel> mCurrentTabModelSupplier;
     private final NonNullObservableSupplier<Integer> mTabCountSupplier;
     private final Supplier<LayoutStateProvider> mLayoutStateProviderSupplier;
     private final LayoutStateObserver mLayoutStateObserver =
             new LayoutStateObserver() {
                 @Override
                 public void onStartedHiding(@LayoutType int layoutType) {
-                    if (layoutType == LayoutType.TAB_SWITCHER) {
+                    if (layoutType == LayoutType.HUB) {
                         maybeDestroyArchivedTabsDialog();
                     }
                 }
@@ -160,7 +158,7 @@ public class ArchivedTabsMessageService
             @Nullable TabGroupSyncService tabGroupSyncService,
             Supplier<PaneManager> paneManagerSupplier,
             Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
-            NullableObservableSupplier<TabGroupModelFilter> currentTabGroupModelFilterSupplier,
+            NullableObservableSupplier<TabModel> currentTabModelSupplier,
             Supplier<LayoutStateProvider> layoutStateProviderSupplier) {
         super(
                 MessageType.ARCHIVED_TABS_MESSAGE,
@@ -185,29 +183,26 @@ public class ArchivedTabsMessageService
         mTabGroupSyncService = tabGroupSyncService;
         mPaneManagerSupplier = paneManagerSupplier;
         mTabGroupUiActionHandlerSupplier = tabGroupUiActionHandlerSupplier;
-        mCurrentTabGroupModelFilterSupplier = currentTabGroupModelFilterSupplier;
+        mCurrentTabModelSupplier = currentTabModelSupplier;
         mLayoutStateProviderSupplier = layoutStateProviderSupplier;
         var layoutStateProvider = mLayoutStateProviderSupplier.get();
         if (layoutStateProvider != null) {
             layoutStateProvider.addObserver(mLayoutStateObserver);
         }
 
-        mTabListCoordinatorSupplier.addObserver(
+        mTabListCoordinatorSupplier.addSyncObserverAndPostIfNonNull(
                 (tabListCoordinator) -> {
                     if (tabListCoordinator == null) return;
                     tabListCoordinator.addTabListItemSizeChangedObserver(
                             mTabListItemSizeChangedObserver);
-
                     tabListCoordinator.setOnDropOnArchivalMessageCardEventListener(
                             tabId -> {
-                                TabGroupModelFilter tabGroupModelFilter =
-                                        currentTabGroupModelFilterSupplier.get();
-                                assumeNonNull(tabGroupModelFilter);
-                                Tab tab = tabGroupModelFilter.getTabModel().getTabById(tabId);
-
+                                TabModel tabModel = currentTabModelSupplier.get();
+                                assumeNonNull(tabModel);
+                                Tab tab = tabModel.getTabById(tabId);
                                 mArchivedTabModelOrchestrator
                                         .getTabArchiver()
-                                        .archiveAndRemoveTabs(tabGroupModelFilter, List.of(tab));
+                                        .archiveAndRemoveTabs(tabModel, List.of(tab));
                             });
                 });
         ArchivedTabsMessageData data = new ArchivedTabsMessageData(this::openArchivedTabsDialog);
@@ -238,7 +233,7 @@ public class ArchivedTabsMessageService
         assert mTabArchiveSettings != null;
 
         mArchivedTabModel = archivedTabModel;
-        mTabCountSupplier.addObserver(mTabCountObserver);
+        mTabCountSupplier.addSyncObserverAndPostIfNonNull(mTabCountObserver);
 
         mModel.set(ICON_HIGHLIGHTED, mShowTwoStepIph);
     }
@@ -353,7 +348,7 @@ public class ArchivedTabsMessageService
                         mTabGroupSyncService,
                         mPaneManagerSupplier,
                         mTabGroupUiActionHandlerSupplier,
-                        mCurrentTabGroupModelFilterSupplier);
+                        mCurrentTabModelSupplier);
     }
 
     private void updateModelProperties(int tabCount) {

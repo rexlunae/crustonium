@@ -11,7 +11,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
@@ -81,7 +80,7 @@ class AcceleratorCommandsFullscreenBrowserTest
 IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
                        ToggleFullscreen) {
   // 1) Browser windows.
-  aura::Window* window = browser()->window()->GetNativeWindow();
+  aura::Window* window = browser()->GetWindow()->GetNativeWindow();
   views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
   ASSERT_TRUE(browser()->is_type_normal());
   ASSERT_TRUE(widget->IsActive());
@@ -105,14 +104,15 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
   // 3) Hosted apps.
   Browser::CreateParams browser_create_params(
       Browser::CreateParams::CreateForApp("Test", true /* trusted_source */,
-                                          gfx::Rect(), browser()->profile(),
+                                          gfx::Rect(), browser()->GetProfile(),
                                           true));
 
   Browser* app_host_browser = Browser::Create(browser_create_params);
   ASSERT_FALSE(app_host_browser->is_type_popup());
-  ASSERT_TRUE(app_host_browser->is_type_app());
+  ASSERT_EQ(app_host_browser->GetType(),
+            BrowserWindowInterface::Type::TYPE_APP);
   AddBlankTabAndShow(app_host_browser);
-  window = app_host_browser->window()->GetNativeWindow();
+  window = app_host_browser->GetWindow()->GetNativeWindow();
   widget = views::Widget::GetWidgetForNativeWindow(window);
   ASSERT_TRUE(widget->IsActive());
   SetToInitialShowState(widget);
@@ -127,12 +127,12 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
 
   // 4) Popup browser windows.
   browser_create_params =
-      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true);
+      Browser::CreateParams(Browser::TYPE_POPUP, browser()->GetProfile(), true);
   Browser* popup_browser = Browser::Create(browser_create_params);
   ASSERT_TRUE(popup_browser->is_type_popup());
-  ASSERT_FALSE(popup_browser->is_type_app());
+  ASSERT_NE(popup_browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
   AddBlankTabAndShow(popup_browser);
-  window = popup_browser->window()->GetNativeWindow();
+  window = popup_browser->GetWindow()->GetNativeWindow();
   widget = views::Widget::GetWidgetForNativeWindow(window);
   ASSERT_TRUE(widget->IsActive());
   SetToInitialShowState(widget);
@@ -147,7 +147,7 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
 
   // 5) Miscellaneous windows (e.g. task manager).
   views::Widget::InitParams params(
-      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   params.delegate =
       new views::WidgetDelegateView(views::WidgetDelegateView::CreatePassKey());
   params.delegate->SetCanMaximize(true);
@@ -230,7 +230,7 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsPlatformAppFullscreenBrowserTest,
     extensions::AppWindow::CreateParams params;
     params.frame = extensions::AppWindow::FRAME_CHROME;
     extensions::AppWindow* app_window =
-        CreateAppWindowFromParams(browser()->profile(), extension, params);
+        CreateAppWindowFromParams(browser()->GetProfile(), extension, params);
     extensions::NativeAppWindow* native_app_window =
         app_window->GetBaseWindow();
     SetToInitialShowState(app_window);
@@ -254,7 +254,7 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsPlatformAppFullscreenBrowserTest,
     extensions::AppWindow::CreateParams params;
     params.frame = extensions::AppWindow::FRAME_NONE;
     extensions::AppWindow* app_window =
-        CreateAppWindowFromParams(browser()->profile(), extension, params);
+        CreateAppWindowFromParams(browser()->GetProfile(), extension, params);
     extensions::NativeAppWindow* native_app_window =
         app_window->GetBaseWindow();
     ASSERT_TRUE(app_window->GetBaseWindow()->IsActive());

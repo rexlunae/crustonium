@@ -7,6 +7,7 @@
 #include <string>
 
 #include "ash/constants/notifier_catalogs.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -15,6 +16,7 @@
 #include "chrome/grit/theme_resources.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -164,12 +166,18 @@ const gfx::Image NotificationTesterHandler::GetRichDataImageFromString(
 const gfx::VectorIcon&
 NotificationTesterHandler::GetRichDataSmallImageFromString(
     const std::string& small_image_name) {
-  if (small_image_name == "kTerminalSshIcon") {
-    return kTerminalSshIcon;
-  } else if (small_image_name == "kCreditCardIcon") {
-    return kCreditCardIcon;
-  } else if (small_image_name == "kSmartphoneIcon") {
-    return kSmartphoneIcon;
+  if (small_image_name == "ash::kTerminalSshIcon") {
+    return ash::kTerminalSshIcon;
+  } else if (small_image_name ==
+             "::features::IsRoundedIconsEnabled() ? kCreditCardIcon : "
+             "kCreditCardOldIcon") {
+    return ::features::IsRoundedIconsEnabled() ? kCreditCardIcon
+                                               : kCreditCardOldIcon;
+  } else if (small_image_name ==
+             "::features::IsRoundedIconsEnabled() ? kMobileIcon : "
+             "kSmartphoneOldIcon") {
+    return ::features::IsRoundedIconsEnabled() ? kMobileIcon
+                                               : kSmartphoneOldIcon;
   }
 
   return gfx::VectorIcon::EmptyIcon();

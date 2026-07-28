@@ -3,24 +3,24 @@
 // found in the LICENSE file.
 
 import type {CrIconElement, CrToastManagerElement, DownloadsItemElement} from 'chrome://downloads/downloads.js';
-import {BrowserProxy, DangerType, IconLoaderImpl, loadTimeData, SafeBrowsingState, State, TailoredWarningType} from 'chrome://downloads/downloads.js';
+import {browserProxyFactory, DangerType, IconLoaderImpl, loadTimeData, SafeBrowsingState, State, TailoredWarningType} from 'chrome://downloads/downloads.js';
 import {assertEquals, assertFalse, assertNotReached, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {createDownload, TestDownloadsProxy, TestIconLoader} from './test_support.js';
+import {createDownload, FakePageHandler, TestIconLoader} from './test_support.js';
 
 suite('ItemTest', function() {
   let item: DownloadsItemElement;
-  let testDownloadsProxy: TestDownloadsProxy;
+  let handler: FakePageHandler;
   let testIconLoader: TestIconLoader;
   let toastManager: CrToastManagerElement;
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
-    testDownloadsProxy = new TestDownloadsProxy();
-
-    BrowserProxy.setInstance(testDownloadsProxy);
+    handler = new FakePageHandler();
+    const {instance} = browserProxyFactory.createForTest(handler);
+    browserProxyFactory.setInstance(instance);
 
     testIconLoader = new TestIconLoader();
     IconLoaderImpl.setInstance(testIconLoader);
@@ -42,8 +42,8 @@ suite('ItemTest', function() {
     });
     await microtasksFinished();
 
-    assertFalse(isVisible(item.$['file-link']));
-    assertFalse(item.$['file-link'].hasAttribute('href'));
+    assertFalse(isVisible(item.$.fileLink));
+    assertFalse(item.$.fileLink.hasAttribute('href'));
   });
 
   test('initiator origin empty string in data isn\'t displayed', async () => {
@@ -111,227 +111,211 @@ suite('ItemTest', function() {
     assertTrue(item.getFileIcon().hidden);
   });
 
-  test(
-      'icon overridden by display type', async () => {
-        testIconLoader.setShouldIconsLoad(true);
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kSensitiveContentBlock,
-        });
-        await microtasksFinished();
-        assertEquals(
-            'cr:error', item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'red',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+  test('icon overridden by display type', async () => {
+    testIconLoader.setShouldIconsLoad(true);
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kSensitiveContentBlock,
+    });
+    await microtasksFinished();
+    assertEquals('cr:error', item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'red',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          isInsecure: true,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      isInsecure: true,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+    assertEquals('cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousFile,
-          safeBrowsingState: SafeBrowsingState.kNoSafeBrowsing,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousFile,
+      safeBrowsingState: SafeBrowsingState.kNoSafeBrowsing,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+    assertEquals('cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousFile,
-          safeBrowsingState: SafeBrowsingState.kEnhancedProtection,
-          hasSafeBrowsingVerdict: true,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousFile,
+      safeBrowsingState: SafeBrowsingState.kEnhancedProtection,
+      hasSafeBrowsingVerdict: true,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+    assertEquals('cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousFile,
-          safeBrowsingState: SafeBrowsingState.kStandardProtection,
-          hasSafeBrowsingVerdict: false,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousFile,
+      safeBrowsingState: SafeBrowsingState.kStandardProtection,
+      hasSafeBrowsingVerdict: false,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+    assertEquals('cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDeepScannedFailed,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDeepScannedFailed,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+    assertEquals('cr:warning', item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousUrl,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousUrl,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'downloads:dangerous',
-            item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'red',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
+    assertEquals(
+        'downloads:dangerous-old',
+        item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'red',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kCookieTheft,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kCookieTheft,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'downloads:dangerous',
-            item.shadowRoot.querySelector('cr-icon')!.icon);
-        assertTrue(item.$['file-icon'].hidden);
-        assertEquals(
-            'red',
-            item.shadowRoot.querySelector('cr-icon')!.getAttribute(
-                'icon-color'));
-      });
+    assertEquals(
+        'downloads:dangerous-old',
+        item.shadowRoot.querySelector('cr-icon')!.icon);
+    assertTrue(item.$.fileIcon.hidden);
+    assertEquals(
+        'red',
+        item.shadowRoot.querySelector('cr-icon')!.getAttribute('icon-color'));
+  });
 
-  test(
-      'description color set by display type', async () => {
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kSensitiveContentBlock,
-        });
-        await microtasksFinished();
+  test('description color set by display type', async () => {
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kSensitiveContentBlock,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'red',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
+    assertEquals(
+        'red',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          isInsecure: true,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      isInsecure: true,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousFile,
-          safeBrowsingState: SafeBrowsingState.kNoSafeBrowsing,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousFile,
+      safeBrowsingState: SafeBrowsingState.kNoSafeBrowsing,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousFile,
-          safeBrowsingState: SafeBrowsingState.kEnhancedProtection,
-          hasSafeBrowsingVerdict: true,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousFile,
+      safeBrowsingState: SafeBrowsingState.kEnhancedProtection,
+      hasSafeBrowsingVerdict: true,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousFile,
-          safeBrowsingState: SafeBrowsingState.kStandardProtection,
-          hasSafeBrowsingVerdict: false,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousFile,
+      safeBrowsingState: SafeBrowsingState.kStandardProtection,
+      hasSafeBrowsingVerdict: false,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDeepScannedFailed,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDeepScannedFailed,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'grey',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
+    assertEquals(
+        'grey',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
 
-        item.data = createDownload({
-          filePath: 'unique1',
-          hideDate: false,
-          dangerType: DangerType.kDangerousUrl,
-        });
-        await microtasksFinished();
+    item.data = createDownload({
+      filePath: 'unique1',
+      hideDate: false,
+      dangerType: DangerType.kDangerousUrl,
+    });
+    await microtasksFinished();
 
-        assertEquals(
-            'red',
-            item.shadowRoot.querySelector('.description')!.getAttribute(
-                'description-color'));
-      });
+    assertEquals(
+        'red',
+        item.shadowRoot.querySelector('.description')!.getAttribute(
+            'description-color'));
+  });
 
   test('description text overridden by tailored warning type', async () => {
     function assertDescriptionText(expected: string) {
@@ -447,8 +431,7 @@ suite('ItemTest', function() {
     saveDangerousButton.click();
     await microtasksFinished();
     // The mojo handler is called directly, no event for the dialog is fired.
-    const id = await testDownloadsProxy.handler.whenCalled(
-        'saveSuspiciousRequiringGesture');
+    const id = await handler.whenCalled('saveSuspiciousRequiringGesture');
     assertEquals('itemId', id);
   });
 
@@ -578,7 +561,7 @@ suite('ItemTest', function() {
     assertTrue(isVisible(quickRemoveButton));
     quickRemoveButton.click();
     await microtasksFinished();
-    const id = await testDownloadsProxy.handler.whenCalled('discardDangerous');
+    const id = await handler.whenCalled('discardDangerous');
     assertEquals('itemId', id);
   });
 
@@ -595,7 +578,7 @@ suite('ItemTest', function() {
     assertTrue(isVisible(quickRemoveButton));
     quickRemoveButton.click();
     await microtasksFinished();
-    const id = await testDownloadsProxy.handler.whenCalled('remove');
+    const id = await handler.whenCalled('remove');
     assertEquals('itemId', id);
   });
 
@@ -627,7 +610,7 @@ suite('ItemTest', function() {
     assertTrue(!!esbPromo);
     assertTrue(isVisible(esbPromo));
     esbPromo.click();
-    await testDownloadsProxy.handler.whenCalled('openEsbSettings');
+    await handler.whenCalled('openEsbSettings');
   });
 
   test('ESBDownloadRowPromoNotShown', async () => {
@@ -674,16 +657,32 @@ suite('ItemTest', function() {
 
 suite('ItemFocusTest', function() {
   let item: DownloadsItemElement;
-  let testDownloadsProxy: TestDownloadsProxy;
+  let handler: FakePageHandler;
   let testIconLoader: TestIconLoader;
   let toastManager: CrToastManagerElement;
+
+  function waitForToast(toastManager: CrToastManagerElement): Promise<void> {
+    return new Promise(resolve => {
+      if (toastManager.isToastOpen) {
+        resolve();
+        return;
+      }
+      const observer = new MutationObserver(() => {
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(
+          toastManager.$.toast, {attributes: true, attributeFilter: ['open']});
+    });
+  }
+
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
-    testDownloadsProxy = new TestDownloadsProxy();
-
-    BrowserProxy.setInstance(testDownloadsProxy);
+    handler = new FakePageHandler();
+    const {instance} = browserProxyFactory.createForTest(handler);
+    browserProxyFactory.setInstance(instance);
 
     testIconLoader = new TestIconLoader();
     IconLoaderImpl.setInstance(testIconLoader);
@@ -693,6 +692,18 @@ suite('ItemFocusTest', function() {
 
     toastManager = document.createElement('cr-toast-manager');
     document.body.appendChild(toastManager);
+
+    let clipboardText = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: (text: string) => {
+          clipboardText = text;
+          return Promise.resolve();
+        },
+        readText: () => Promise.resolve(clipboardText),
+      },
+      configurable: true,
+    });
   });
 
   // Must be an interactive test because the clipboard write call will fail
@@ -708,10 +719,35 @@ suite('ItemFocusTest', function() {
             item.shadowRoot.querySelector<HTMLElement>('#copy-download-link');
         assertTrue(!!copyDownloadLinkButton);
         copyDownloadLinkButton.click();
+
+        await waitForToast(toastManager);
         const clipboardText = await navigator.clipboard.readText();
 
         assertTrue(toastManager.isToastOpen);
         assertTrue(toastManager.slottedHidden);
+        assertEquals(clipboardText, url);
+      });
+
+  test(
+      'copy download link button copies data url and shows generic toast',
+      async () => {
+        const url = 'data:text/plain,hello://world';
+        item.data = createDownload({url: url});
+        await microtasksFinished();
+        const copyDownloadLinkButton =
+            item.shadowRoot.querySelector<HTMLElement>('#copy-download-link');
+        assertTrue(!!copyDownloadLinkButton);
+        copyDownloadLinkButton.click();
+
+        await waitForToast(toastManager);
+        const clipboardText = await navigator.clipboard.readText();
+
+        assertTrue(toastManager.isToastOpen);
+        assertTrue(toastManager.slottedHidden);
+        // The toast message should not contain the URL to prevent spoofing.
+        const toastContent = (toastManager.$.content.textContent || '').trim();
+        assertFalse(toastContent.includes(url));
+        assertEquals(toastContent, loadTimeData.getString('toastCopiedLink'));
         assertEquals(clipboardText, url);
       });
 });

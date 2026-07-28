@@ -10,6 +10,8 @@
 #include <memory>
 
 #include "base/android/jni_android.h"
+#include "base/android/jni_weak_ref.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/android/render_widget_host_connector.h"
@@ -160,12 +162,11 @@ class CONTENT_EXPORT WebContentsAndroid {
       JNIEnv* env,
       const base::android::JavaRef<jobject>& view_structure_root,
       const base::android::JavaRef<jobject>& view_structure_builder,
-      const base::android::JavaRef<jobject>& callback);
+      base::OnceClosure&& callback);
 
   base::android::ScopedJavaLocalRef<jstring> GetEncoding(JNIEnv* env) const;
 
-  void Discard(JNIEnv* env,
-               const base::android::JavaRef<jobject>& on_discarded);
+  void Discard(base::OnceClosure&& on_discarded);
 
   void SetOverscrollRefreshHandler(
       JNIEnv* env,
@@ -190,6 +191,7 @@ class CONTENT_EXPORT WebContentsAndroid {
   void SetSize(JNIEnv* env, int32_t width, int32_t height);
   int GetWidth(JNIEnv* env);
   int GetHeight(JNIEnv* env);
+  bool IsBeingCaptured(JNIEnv* env);
 
   base::android::ScopedJavaLocalRef<jobject> GetOrCreateEventForwarder(
       JNIEnv* env);
@@ -278,8 +280,7 @@ class CONTENT_EXPORT WebContentsAndroid {
       JNIEnv* env);
 
  private:
-  void OnFinishDownloadImage(const base::android::JavaRef<jobject>& obj,
-                             const base::android::JavaRef<jobject>& callback,
+  void OnFinishDownloadImage(const base::android::JavaRef<jobject>& callback,
                              int id,
                              int http_status_code,
                              const GURL& url,
@@ -293,13 +294,12 @@ class CONTENT_EXPORT WebContentsAndroid {
   void AXTreeSnapshotCallback(
       const base::android::JavaRef<jobject>& view_structure_root,
       const base::android::JavaRef<jobject>& view_structure_builder,
-      const base::android::JavaRef<jobject>& callback,
+      base::OnceClosure&& callback,
       ui::AXTreeUpdate& result);
 
   raw_ptr<WebContentsImpl> web_contents_;
 
   NavigationControllerAndroid navigation_controller_;
-  base::android::ScopedJavaGlobalRef<jobject> obj_;
 
   base::ObserverList<DestructionObserver> destruction_observers_;
 

@@ -385,7 +385,8 @@ void IOSCollaborationControllerDelegate::ShowShareDialog(
 
   auto callback = base::BindOnce(
       &IOSCollaborationControllerDelegate::ConfigureAndShareTabGroup,
-      weak_ptr_factory_.GetWeakPtr(), either_id, std::move(result), tab_group);
+      weak_ptr_factory_.GetWeakPtr(), either_id, std::move(result),
+      tab_group->GetWeakPtr());
 
   favicons_grid_configurator_->FetchFaviconsGrid(tab_group,
                                                  std::move(callback));
@@ -419,7 +420,8 @@ void IOSCollaborationControllerDelegate::ShowManageDialog(
 
   auto callback = base::BindOnce(
       &IOSCollaborationControllerDelegate::ConfigureAndManageTabGroup,
-      weak_ptr_factory_.GetWeakPtr(), either_id, std::move(result), tab_group);
+      weak_ptr_factory_.GetWeakPtr(), either_id, std::move(result),
+      tab_group->GetWeakPtr());
 
   favicons_grid_configurator_->FetchFaviconsGrid(tab_group,
                                                  std::move(callback));
@@ -697,7 +699,7 @@ void IOSCollaborationControllerDelegate::FetchPreviewItems(
     ShareKitPreviewItem* preview_item = [[ShareKitPreviewItem alloc] init];
     preview_item.title = base::SysUTF8ToNSString(tabs[i].url.GetHost());
     preview_item.image = SymbolWithPalette(
-        DefaultSymbolWithPointSize(kGlobeAmericasSymbol, kFaviconSize),
+        SymbolWithPointSize(SymbolGlobeAmericas, kFaviconSize),
         @[ [UIColor colorNamed:kGrey400Color] ]);
     [preview_items addObject:preview_item];
   }
@@ -785,7 +787,7 @@ void IOSCollaborationControllerDelegate::ConfigureAndJoinTabGroup(
 void IOSCollaborationControllerDelegate::ConfigureAndShareTabGroup(
     const tab_groups::EitherGroupID& either_id,
     ResultWithGroupTokenCallback result,
-    const TabGroup* tab_group,
+    base::WeakPtr<const TabGroup> tab_group,
     UIImage* faviconsGridImage) {
   if (!tab_group || !faviconsGridImage) {
     std::move(result).Run(CollaborationControllerDelegate::Outcome::kFailure,
@@ -817,7 +819,7 @@ void IOSCollaborationControllerDelegate::ConfigureAndShareTabGroup(
 void IOSCollaborationControllerDelegate::ConfigureAndManageTabGroup(
     const tab_groups::EitherGroupID& either_id,
     ResultCallback result,
-    const TabGroup* tab_group,
+    base::WeakPtr<const TabGroup> tab_group,
     UIImage* faviconsGridImage) {
   if (!tab_group || !faviconsGridImage) {
     std::move(result).Run(CollaborationControllerDelegate::Outcome::kFailure);

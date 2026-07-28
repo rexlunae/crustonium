@@ -10,7 +10,6 @@
 #include "base/auto_reset.h"
 #include "base/containers/map_util.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/timer/elapsed_timer.h"
 #include "content/public/renderer/render_frame.h"
@@ -510,7 +509,7 @@ void ExtensionFrameHelper::ExecuteCode(mojom::ExecuteCodeParamsPtr param,
 }
 
 void ExtensionFrameHelper::SetFrameName(const std::string& name) {
-  render_frame()->GetWebFrame()->SetName(blink::WebString::FromUTF8(name));
+  render_frame()->GetWebFrame()->SetName(blink::WebString::FromUtf8(name));
 }
 
 void ExtensionFrameHelper::AppWindowClosed(bool send_onclosed) {

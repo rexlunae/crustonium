@@ -8,7 +8,7 @@
 #include "base/rand_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/views/webauthn/authenticator_gpm_pin_sheet_view.h"
@@ -20,6 +20,7 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/webauthn/core/browser/passkey_model.h"
@@ -34,7 +35,7 @@
 
 // These tests are disabled under MSAN. The enclave subprocess is written in
 // Rust and FFI from Rust to C++ doesn't work in Chromium at this time
-// (crbug.com/1369167).
+// (crbug.com/40240570).
 #if !defined(MEMORY_SANITIZER)
 
 namespace {
@@ -66,11 +67,7 @@ const DeepQuery kMessage{"#message-container"};
 using Fixture = InteractiveBrowserTestMixin<EnclaveAuthenticatorTestBase>;
 class WebAuthnImmediateGetTest : public Fixture {
  public:
-  WebAuthnImmediateGetTest() {
-    feature_list_.InitWithFeatures(
-        {device::kWebAuthnImmediateGet},
-        {device::kWebAuthnImmediateRequestRateLimit});
-  }
+  WebAuthnImmediateGetTest() = default;
 
   ~WebAuthnImmediateGetTest() override = default;
 
@@ -118,12 +115,10 @@ class WebAuthnImmediateGetTest : public Fixture {
 
     scoped_refptr<password_manager::PasswordStoreInterface> password_store =
         ProfilePasswordStoreFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS);
-    password_store->AddLogin(form);
+            browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS);
+    password_store->AddLogin(password_manager::FromPasswordForm(form));
   }
 
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAuthnImmediateGetTest,

@@ -18,10 +18,10 @@
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_checker.h"
@@ -42,11 +42,11 @@
 #include "remoting/host/win/chromoting_lib.h"
 #include "remoting/host/win/host_service.h"
 #include "remoting/host/win/trust_util.h"
-#include "remoting/host/win/worker_process_launcher.h"
 #include "remoting/host/win/wts_session_process_delegate.h"
 #include "remoting/host/win/wts_terminal_monitor.h"
 #include "remoting/host/win/wts_terminal_observer.h"
 #include "remoting/host/worker_process_ipc_delegate.h"
+#include "remoting/host/worker_process_launcher.h"
 
 using base::win::ScopedHandle;
 
@@ -158,7 +158,7 @@ class RdpSession : public DesktopSessionWin {
   ~RdpSession() override;
 
   // Performs the part of initialization that can fail.
-  bool Initialize(const ScreenResolution& resolution);
+  bool Initialize(const mojom::DesktopSessionOptions& options);
 
   // Mirrors IRdpDesktopSessionEventHandler.
   void OnRdpConnected();
@@ -267,8 +267,14 @@ RdpSession::RdpSession(scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
 
 RdpSession::~RdpSession() {}
 
-bool RdpSession::Initialize(const ScreenResolution& resolution) {
+bool RdpSession::Initialize(const mojom::DesktopSessionOptions& options) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
+
+  if (!options.required_username.empty()) {
+    LOG(WARNING)
+        << "Policy host_username_match_required ignored since it is not "
+        << "supported on Windows.";
+  }
 
   if (!VerifyRdpSettings()) {
     LOG(ERROR) << "Could not create an RDP session due to invalid settings.";
@@ -285,7 +291,7 @@ bool RdpSession::Initialize(const ScreenResolution& resolution) {
     return false;
   }
 
-  ScreenResolution local_resolution = resolution;
+  ScreenResolution local_resolution = options.screen_resolution;
 
   // If the screen resolution is not specified, use the default screen
   // resolution.
@@ -489,7 +495,7 @@ std::unique_ptr<DesktopSession> DesktopSessionWin::CreateForConsole(
     scoped_refptr<AutoThreadTaskRunner> io_task_runner,
     DaemonProcess* daemon_process,
     int id,
-    const ScreenResolution& resolution) {
+    const mojom::DesktopSessionOptions& options) {
   return std::make_unique<ConsoleSession>(caller_task_runner, io_task_runner,
                                           daemon_process, id,
                                           HostService::GetInstance());
@@ -501,11 +507,11 @@ std::unique_ptr<DesktopSession> DesktopSessionWin::CreateForVirtualTerminal(
     scoped_refptr<AutoThreadTaskRunner> io_task_runner,
     DaemonProcess* daemon_process,
     int id,
-    const ScreenResolution& resolution) {
+    const mojom::DesktopSessionOptions& options) {
   std::unique_ptr<RdpSession> session(
       new RdpSession(caller_task_runner, io_task_runner, daemon_process, id,
                      HostService::GetInstance()));
-  if (!session->Initialize(resolution)) {
+  if (!session->Initialize(options)) {
     return nullptr;
   }
 
@@ -571,13 +577,22 @@ void DesktopSessionWin::StopMonitoring() {
   OnSessionDetached();
 }
 
-void DesktopSessionWin::TerminateSession() {
+void DesktopSessionWin::TerminateSession(ErrorCode error_code,
+                                         const std::string& error_details,
+                                         const SourceLocation& error_location) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  if (!error_details.empty() || error_code != ErrorCode::OK) {
+    LOG(ERROR) << "Terminating session " << id()
+               << " (error code: " << ErrorCodeToString(error_code)
+               << "): " << error_details << " at " << error_location.ToString();
+  }
 
   StopMonitoring();
 
   // This call will delete |this| so it should be at the very end of the method.
-  daemon_process()->CloseDesktopSession(id());
+  daemon_process()->CloseDesktopSessionWithError(id(), error_code,
+                                                 error_details, error_location);
 }
 
 void DesktopSessionWin::OnChannelConnected(int32_t peer_pid) {
@@ -638,7 +653,8 @@ void DesktopSessionWin::OnSessionAttached(uint32_t session_id) {
   }
 
   if (!result) {
-    TerminateSession();
+    TerminateSession(ErrorCode::HOST_CONFIGURATION_ERROR,
+                     "Failed to find trusted desktop binary.", FROM_HERE);
     return;
   }
 
@@ -658,7 +674,8 @@ void DesktopSessionWin::OnSessionAttached(uint32_t session_id) {
           io_task_runner_, std::move(target), /*launch_elevated=*/true,
           base::WideToUTF8(kDaemonIpcSecurityDescriptor)));
   if (!delegate->Initialize(session_id)) {
-    TerminateSession();
+    TerminateSession(ErrorCode::HOST_CONFIGURATION_ERROR,
+                     "Failed to initialize session delegate.", FROM_HERE);
     return;
   }
 
@@ -689,7 +706,7 @@ void DesktopSessionWin::ConnectDesktopChannel(
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
   if (!daemon_process()->OnDesktopSessionAgentAttached(
-          id(), session_id_, std::move(desktop_pipe))) {
+          id(), std::move(desktop_pipe))) {
     CrashDesktopProcess(FROM_HERE);
   }
 }
@@ -700,6 +717,11 @@ void DesktopSessionWin::InjectSecureAttentionSequence() {
 
 void DesktopSessionWin::CrashNetworkProcess() {
   daemon_process()->CrashNetworkProcess(FROM_HERE);
+}
+
+void DesktopSessionWin::ReconnectNetworkChannel(
+    const mojom::DesktopSessionOptions& options) {
+  NOTIMPLEMENTED();
 }
 
 void DesktopSessionWin::CrashDesktopProcess(const base::Location& location) {
@@ -717,10 +739,14 @@ void DesktopSessionWin::ReportElapsedTime(const std::string& event) {
                                 (now - last_timestamp_).InSecondsF());
   }
 
-  VLOG(1) << base::StringPrintf(
-      "session(%d): %s at %s%s", id(), event.c_str(),
-      base::UnlocalizedTimeFormatWithPattern(now, "HH:mm:ss.SSS").c_str(),
-      passed.c_str());
+  base::Time::Exploded exploded;
+  now.LocalExplode(&exploded);
+  std::string time_str =
+      base::StringPrintf("%02d:%02d:%02d.%03d", exploded.hour, exploded.minute,
+                         exploded.second, exploded.millisecond);
+
+  VLOG(1) << base::StringPrintf("session(%d): %s at %s%s", id(), event.c_str(),
+                                time_str.c_str(), passed.c_str());
 
   last_timestamp_ = now;
 }

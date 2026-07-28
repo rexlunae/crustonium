@@ -72,8 +72,7 @@ AccountChecker::AccountChecker(
 AccountChecker::~AccountChecker() = default;
 
 bool AccountChecker::IsSignedIn() {
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     return identity_manager_ &&
            identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin);
   }
@@ -116,7 +115,7 @@ bool AccountChecker::IsSubjectToParentalControls() {
       identity_manager_
           ->FindExtendedAccountInfo(identity_manager_->GetPrimaryAccountInfo(
               signin::ConsentLevel::kSignin))
-          .capabilities;
+          .GetAccountCapabilities();
 
   return capabilities.is_subject_to_parental_controls() ==
          signin::Tribool::kTrue;
@@ -131,7 +130,7 @@ bool AccountChecker::CanUseModelExecutionFeatures() {
       identity_manager_
           ->FindExtendedAccountInfo(identity_manager_->GetPrimaryAccountInfo(
               signin::ConsentLevel::kSignin))
-          .capabilities;
+          .GetAccountCapabilities();
 
   return capabilities.can_use_model_execution_features() ==
          signin::Tribool::kTrue;
@@ -313,7 +312,7 @@ std::unique_ptr<EndpointFetcher> AccountChecker::CreateEndpointFetcher(
   // kReplaceSyncPromosWithSignInPromos is launched on all platforms. See
   // ConsentLevel::kSync documentation for details.
   signin::ConsentLevel consent_level =
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
           ? signin::ConsentLevel::kSignin
           : signin::ConsentLevel::kSync;
   EndpointFetcher::RequestParams::Builder request_params =

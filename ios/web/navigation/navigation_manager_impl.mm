@@ -286,6 +286,16 @@ void NavigationManagerImpl::SerializeToProto(
   for (const auto* item : base::span(items).subspan(offset, length)) {
     item->SerializeToProto(*storage.add_items());
   }
+
+  // If the navigation history is empty but there is a pending navigation item,
+  // serialize the pending item as the initial committed item.
+  if (storage.items_size() == 0) {
+    const NavigationItemImpl* pending_item = GetPendingItemImpl();
+    if (pending_item) {
+      pending_item->SerializeToProto(*storage.add_items());
+      storage.set_last_committed_item_index(0);
+    }
+  }
 }
 
 void NavigationManagerImpl::SetNativeSessionFetcher(
@@ -335,6 +345,13 @@ void NavigationManagerImpl::AddPendingItem(
       &transient_url_rewriters_);
   RemoveTransientURLRewriters();
 
+  if (ui::PageTransitionCoreTypeIs(navigation_type,
+                                   ui::PAGE_TRANSITION_RELOAD) &&
+      last_committed_item && last_committed_item->GetURL() == url) {
+    pending_item_->SetInternalScrollToTextFragment(
+        last_committed_item->GetInternalScrollToTextFragment());
+  }
+
   if (!next_pending_url_should_skip_serialization_.is_empty() &&
       url == next_pending_url_should_skip_serialization_) {
     pending_item_->SetShouldSkipSerialization(true);
@@ -369,7 +386,8 @@ void NavigationManagerImpl::AddPendingItem(
 
   bool is_form_post =
       is_post_navigation &&
-      (navigation_type & ui::PageTransition::PAGE_TRANSITION_FORM_SUBMIT);
+      ui::PageTransitionCoreTypeIs(
+          navigation_type, ui::PageTransition::PAGE_TRANSITION_FORM_SUBMIT);
   if (proxy.backForwardList.currentItem && isCurrentURLSameAsPending &&
       !is_form_post && !is_error_navigation) {
     pending_item_index_ = web_view_cache_.GetCurrentItemIndex();
@@ -942,6 +960,9 @@ void NavigationManagerImpl::LoadURLWithParams(
     added_item->AddHttpRequestHeaders(params.extra_headers);
   }
 
+  added_item->SetInternalScrollToTextFragment(
+      params.internal_scroll_to_text_fragment);
+
   added_item->SetHttpsUpgradeType(params.https_upgrade_type);
 
   if (params.post_data) {
@@ -1115,6 +1136,8 @@ void NavigationManagerImpl::ReloadWithUserAgentType(
   if (item_to_reload->GetVirtualURL() != reload_url) {
     params.virtual_url = item_to_reload->GetVirtualURL();
   }
+  params.internal_scroll_to_text_fragment =
+      item_to_reload->GetInternalScrollToTextFragment();
   params.referrer = item_to_reload->GetReferrer();
   params.transition_type = ui::PAGE_TRANSITION_RELOAD;
 
@@ -1481,12 +1504,14 @@ const GURL& NavigationManagerImpl::WKWebViewCache::GetVisibleWebViewOriginURL()
     // Retain the url to reduce the number of calls to `proxy.URL` which may be
     // very expensive after being called hundreds of time for one navigation.
     NSURL* url = proxy.URL;
-    if (![cached_visible_host_nsstring_ isEqualToString:url.host] ||
+    if (![cached_visible_port_nsnumber_ isEqual:url.port] ||
+        ![cached_visible_host_nsstring_ isEqualToString:url.host] ||
         ![cached_visible_scheme_nsstring_ isEqualToString:url.scheme]) {
       cached_visible_origin_url_ =
           net::GURLWithNSURL(url).DeprecatedGetOriginAsURL();
       cached_visible_host_nsstring_ = url.host;
       cached_visible_scheme_nsstring_ = url.scheme;
+      cached_visible_port_nsnumber_ = url.port;
     }
     return cached_visible_origin_url_;
   }

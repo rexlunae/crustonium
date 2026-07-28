@@ -19,6 +19,8 @@ import '/shared/settings/prefs/prefs.js';
 import '../controls/settings_toggle_button.js';
 import '../settings_page/settings_subpage.js';
 import '../settings_shared.css.js';
+import '../simple_confirmation_dialog.js';
+import '../site_favicon.js';
 import './address_edit_dialog.js';
 import './address_remove_confirmation_dialog.js';
 import './passwords_shared.css.js';
@@ -26,9 +28,9 @@ import './your_saved_info_shared.css.js';
 
 import {getInstance as getAnnouncerInstance} from '//resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {I18nMixin} from '//resources/cr_elements/i18n_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
-import type {CrToggleElement} from 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
 import {OpenWindowProxyImpl} from 'chrome://resources/js/open_window_proxy.js';
@@ -38,6 +40,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {loadTimeData} from '../i18n_setup.js';
 import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
+import type {SettingsSimpleConfirmationDialogElement} from '../simple_confirmation_dialog.js';
 
 import type {AutofillManagerProxy, PersonalDataChangedListener} from './autofill_manager_proxy.js';
 import {AutofillManagerImpl} from './autofill_manager_proxy.js';
@@ -71,12 +74,11 @@ declare global {
 
 export interface SettingsAutofillSectionElement {
   $: {
-    autofillProfileToggle: SettingsToggleButtonElement,
-    autofillSyncToggleWrapper: HTMLElement,
-    autofillSyncToggle: CrToggleElement,
-    addressSharedMenu: CrActionMenuElement,
     addAddress: CrButtonElement,
     addressList: HTMLElement,
+    addressSharedMenu: CrActionMenuElement,
+    autofillProfileToggle: SettingsToggleButtonElement,
+    emailSharedMenu: CrActionMenuElement,
     menuEditAddress: HTMLElement,
     menuRemoveAddress: HTMLElement,
     noAddressesLabel: HTMLElement,
@@ -84,7 +86,7 @@ export interface SettingsAutofillSectionElement {
 }
 
 const SettingsAutofillSectionElementBase =
-    SettingsViewMixin(I18nMixin(PolymerElement));
+    PrefsMixin(SettingsViewMixin(I18nMixin(PolymerElement)));
 
 export class SettingsAutofillSectionElement extends
     SettingsAutofillSectionElementBase {
@@ -113,15 +115,24 @@ export class SettingsAutofillSectionElement extends
 
       showAddressDialog_: Boolean,
       showAddressRemoveConfirmationDialog_: Boolean,
+      showEmailRemoveConfirmationDialog_: Boolean,
+      activeEmailIssuer_: String,
 
       isGoogleProfileAddress: {
         type: Boolean,
         computed: 'computeIsGoogleProfileAddress_(activeAddress)',
       },
 
-      isPlusAddressEnabled_: {
+      isEmailVerificationProtocolEnabled_: {
         type: Boolean,
-        value: () => loadTimeData.getBoolean('plusAddressEnabled'),
+        value: () =>
+            loadTimeData.getBoolean('emailVerificationProtocolEnabled'),
+      },
+
+      emailVerificationAddresses_: {
+        type: Array,
+        computed: 'computeEmailVerificationAddresses_(' +
+            'prefs.autofill.email_verification_state.value)',
       },
 
       /**
@@ -133,18 +144,32 @@ export class SettingsAutofillSectionElement extends
         type: Boolean,
         value: () => loadTimeData.getBoolean('enableYourSavedInfoSettingsPage'),
       },
+
+      /**
+       * Computed field that determines if the Gmail OTP filling toggle should
+       * be shown.
+       */
+      showGmailOtpFillingToggle_: {
+        type: Boolean,
+        computed: 'computeShowGmailOtpFillingToggle_(accountInfo_)',
+      },
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare addresses: chrome.autofillPrivate.AddressEntry[];
   declare activeAddress: chrome.autofillPrivate.AddressEntry|null;
   declare private accountInfo_: chrome.autofillPrivate.AccountInfo|null;
   declare private showAddressDialog_: boolean;
   declare private showAddressRemoveConfirmationDialog_: boolean;
+  declare private showEmailRemoveConfirmationDialog_: boolean;
+  declare private activeEmailIssuer_: string;
   declare private isGoogleProfileAddress: boolean;
-  declare private isPlusAddressEnabled_: boolean;
+  declare private isEmailVerificationProtocolEnabled_: boolean;
   declare private isYourSavedInfoSubpage_: boolean;
+  declare private emailVerificationAddresses_: string[];
+  declare private showGmailOtpFillingToggle_: boolean;
+  private emailSharedMenuModel_: string = '';
   private autofillManager_: AutofillManagerProxy =
       AutofillManagerImpl.getInstance();
   private setPersonalDataListener_: PersonalDataChangedListener|null = null;
@@ -152,11 +177,6 @@ export class SettingsAutofillSectionElement extends
   override ready() {
     super.ready();
     this.addEventListener('save-address', this.saveAddress_);
-
-    // This is to mimic the behaviour of <settings-toggle-button>.
-    this.$.autofillSyncToggleWrapper.addEventListener('click', () => {
-      this.$.autofillSyncToggle.click();
-    });
   }
 
   override connectedCallback() {
@@ -361,6 +381,11 @@ export class SettingsAutofillSectionElement extends
         this.isAccountNameEmailAddress_(address);
   }
 
+  private computeEmailVerificationAddresses_(state: Record<string, unknown>):
+      string[] {
+    return Object.keys(state);
+  }
+
   private onAccountHomeAddressClick_() {
     OpenWindowProxyImpl.getInstance().openUrl(
         this.i18n('googleAccountHomeAddressUrl'));
@@ -374,6 +399,51 @@ export class SettingsAutofillSectionElement extends
   private onAccountNameEmailAddressClick_() {
     OpenWindowProxyImpl.getInstance().openUrl(
         this.i18n('googleAccountNameEmailAddressEditUrl'));
+  }
+
+  private onEmailMenuClick_(e: DomRepeatEvent<string>) {
+    this.emailSharedMenuModel_ = e.model.item;
+    const dotsButton = e.target as HTMLElement;
+    this.$.emailSharedMenu.showAt(dotsButton);
+  }
+
+  private onMenuRemoveEmailClick_() {
+    this.$.emailSharedMenu.close();
+    const email = this.emailSharedMenuModel_;
+    const currentPrefs = this.getPref<Record<string, unknown>>(
+                                 'autofill.email_verification_state')
+                             .value;
+    assert(currentPrefs);
+    const emailData = currentPrefs[email] as Record<string, string>| undefined;
+    assert(emailData);
+    const issuerSite = emailData['issuer_site'];
+    assert(issuerSite);
+    const hostname = new URL(issuerSite).hostname;
+    this.activeEmailIssuer_ = hostname;
+    this.showEmailRemoveConfirmationDialog_ = true;
+  }
+
+  private onEmailRemoveConfirmationDialogClose_(e: Event) {
+    const confirmationDialog =
+        e.target as SettingsSimpleConfirmationDialogElement;
+    assert(confirmationDialog);
+    const wasDeletionConfirmed = confirmationDialog.wasConfirmed();
+    if (wasDeletionConfirmed) {
+      const email = this.emailSharedMenuModel_;
+      this.deletePrefDictEntry('autofill.email_verification_state', email);
+    }
+    this.showEmailRemoveConfirmationDialog_ = false;
+  }
+
+  private getEmailRemoveConfirmationDescription_(issuer: string): string {
+    return this.i18n('removeVerifiedEmailPermissionBody', issuer);
+  }
+
+  private getIssuerSite_(email: string): string {
+    const state = this.getPref<Record<string, {issuer_site?: string}>>(
+                          'autofill.email_verification_state')
+                      .value;
+    return state[email]?.issuer_site || '';
   }
 
   private isCloudOffVisible_(
@@ -420,13 +490,11 @@ export class SettingsAutofillSectionElement extends
   private getAddressIcon_(
       address: chrome.autofillPrivate.AddressEntry,
       accountInfo: chrome.autofillPrivate.AccountInfo|null): string {
-    if (loadTimeData.getBoolean('enableSupportForHomeAndWork')) {
-      if (this.isAccountHomeAddress_(address)) {
-        return 'settings20:home';
-      }
-      if (this.isAccountWorkAddress_(address)) {
-        return 'settings20:work';
-      }
+    if (this.isAccountHomeAddress_(address)) {
+      return 'settings20:home';
+    }
+    if (this.isAccountWorkAddress_(address)) {
+      return 'settings20:work';
     }
     if (this.isCloudOffVisible_(address, accountInfo)) {
       return 'cr20:cloud-off';
@@ -475,10 +543,10 @@ export class SettingsAutofillSectionElement extends
     return this.i18n(messageKey, fullLabel);
   }
 
-  private isAutofillSyncToggleVisible_(accountInfo:
-                                           chrome.autofillPrivate.AccountInfo|
-                                       null): boolean {
-    return !!(accountInfo?.isAutofillSyncToggleAvailable);
+  private computeShowGmailOtpFillingToggle_(): boolean {
+    const isSignedIn = !!this.accountInfo_;
+    return isSignedIn &&
+        loadTimeData.getBoolean('autofillGmailOtpFillingEnabled');
   }
 
   private getRecordTypeSuffix_(
@@ -514,18 +582,6 @@ export class SettingsAutofillSectionElement extends
         'Autofill.ProfileDeleted.Any.' + suffix, wasDeletionConfirmed);
   }
 
-  /**
-   * Triggered by settings-toggle-button#autofillSyncToggle. It passes
-   * the toggle state to the native code. If the data changed the page
-   * content will be refreshed automatically via `PersonalDataChangedListener`.
-   */
-  private onAutofillSyncEnabledChange_() {
-    assert(
-        this.accountInfo_ && this.accountInfo_.isAutofillSyncToggleAvailable);
-    this.autofillManager_.setAutofillSyncToggleEnabled(
-        this.$.autofillSyncToggle.checked);
-  }
-
   private onAutofillProfileToggleChanged_() {
     const value = this.$.autofillProfileToggle.checked ?
         AutofillAddressOptInChange.OPT_IN :
@@ -535,11 +591,15 @@ export class SettingsAutofillSectionElement extends
         AutofillAddressOptInChange.COUNT);
   }
 
-  private onPlusAddressClick_() {
-    chrome.metricsPrivate.recordUserAction(
-        'Settings.ManageOptionOnSettingsSelected');
+  private onGmailOtpFillingLinkClick_() {
     OpenWindowProxyImpl.getInstance().openUrl(
-        loadTimeData.getString('plusAddressManagementUrl'));
+        loadTimeData.getString('gmailOtpFillingLearnMoreUrl'));
+  }
+
+  private onAutofillOtpFillingToggleChanged_(event: Event) {
+    const toggle = event.target as SettingsToggleButtonElement;
+    chrome.metricsPrivate.recordBoolean(
+        'Autofill.GmailOtpOptIn.SettingsChange', toggle.checked);
   }
 
   // SettingsViewMixin implementation.

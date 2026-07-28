@@ -7,6 +7,8 @@
 
 #include <jni.h>
 
+#include <cstdint>
+
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/threading/sequence_bound.h"
@@ -52,16 +54,16 @@ class SerialDeviceEnumeratorAndroid : public SerialDeviceEnumerator {
   // Methods called by Java.
   void OpenPathCallbackViaJni(JNIEnv* env,
                               const std::string& port_name,
-                              jint fd);
+                              int32_t fd);
   void ErrorCallbackViaJni(JNIEnv* env,
                            const std::string& port_name,
                            const std::string& error_name,
                            const std::string& message);
   void AddPortViaJni(JNIEnv* env,
                      const std::string& name,
-                     jint vendor_id,
-                     jint product_id,
-                     jboolean initial_enumeration);
+                     int32_t vendor_id,
+                     int32_t product_id,
+                     bool initial_enumeration);
   void RemovePortViaJni(JNIEnv* env, const std::string& name);
 
   // For testing
@@ -69,6 +71,14 @@ class SerialDeviceEnumeratorAndroid : public SerialDeviceEnumerator {
       jni_zero::ScopedJavaLocalRef<jobject> j_serial_manager);
 
  private:
+  // Methods executed by the sequenced |task_runner_|
+  void OpenPathInternal(const base::FilePath& path,
+                        OpenPathCallback callback,
+                        ErrorCallback error_callback);
+  void OpenPathCallbackInternal(const std::string& port_name, int32_t fd);
+  void ErrorCallbackInternal(const std::string& port_name,
+                             const std::string& error_name,
+                             const std::string& message);
   void AddPortName(const std::string& name, int vendor_id, int product_id);
   void RemovePortName(const std::string& name);
 

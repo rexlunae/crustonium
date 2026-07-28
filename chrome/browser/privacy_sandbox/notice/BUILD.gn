@@ -24,6 +24,7 @@ source_set("core") {
     "notice_storage.cc",
   ]
   public = [
+    "deprecated_notices.h",
     "notice_model.h",
     "notice_storage.h",
   ]
@@ -58,8 +59,8 @@ source_set("catalog") {
     ":notice_definitions",
     ":notice_mojom",
     "//base",
-    "//chrome/browser/privacy_sandbox:headers",
   ]
+  public_deps = [ "//chrome/browser/privacy_sandbox:headers" ]
 }
 
 source_set("factory") {
@@ -135,19 +136,6 @@ if (!is_android) {
   }
 }
 
-test("fuzz_tests") {
-  sources = [ "notice_storage_fuzztest.cc" ]
-  fuzztests = [
-    "PrivacySandboxNoticeStorageFuzzTest.CheckConvertsV1SchemaSuccessfully",
-  ]
-  deps = [
-    ":core",
-    "//testing/gmock",
-    "//testing/gtest",
-    "//third_party/fuzztest:fuzztest_gtest_main",
-  ]
-}
-
 source_set("test_support") {
   testonly = true
   sources = [
@@ -212,10 +200,6 @@ source_set("unit_tests") {
     sources += [ "desktop_view_manager_unittest.cc" ]
     deps += [ ":desktop_view_manager" ]
   }
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("browser_tests") {

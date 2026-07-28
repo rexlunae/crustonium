@@ -13,16 +13,18 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_util.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/values_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/process/launch.h"
-#include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/enterprise_companion/global_constants.h"
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/external_constants_builder.h"
@@ -37,6 +39,7 @@
 #include "chrome/updater/updater_branding.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/test/test_reg_util_win.h"
@@ -271,8 +274,7 @@ class FakePolicyManager : public PolicyManagerInterface {
     std::ranges::transform(
         channels_, std::inserter(apps_with_policy, apps_with_policy.end()),
         [](const auto& kv) { return kv.first; });
-    return std::vector<std::string>(apps_with_policy.begin(),
-                                    apps_with_policy.end());
+    return base::ToVector(apps_with_policy);
   }
 
  private:
@@ -425,6 +427,23 @@ TEST_F(PolicyServiceTest, SinglePolicyManager) {
   EXPECT_EQ(app2_update_status.conflict_policy(), std::nullopt);
   EXPECT_THAT(app2_update_status.all_policies(),
               ElementsAre(PolicyEntry("test_source", 3)));
+}
+
+TEST_F(PolicyServiceTest, VersionRolloutPolicies) {
+  auto manager = base::MakeRefCounted<FakePolicyManager>(true, "test_source");
+  manager->SetMajorVersionRolloutPolicy("app1", 1);
+  manager->SetMinorVersionRolloutPolicy("app1", 2);
+  auto policy_service = CreatePolicyServiceForTesting({std::move(manager)});
+
+  PolicyStatus<int> major_policy =
+      policy_service->GetMajorVersionRolloutPolicy("app1");
+  ASSERT_TRUE(major_policy);
+  EXPECT_EQ(major_policy.policy(), 1);
+
+  PolicyStatus<int> minor_policy =
+      policy_service->GetMinorVersionRolloutPolicy("app1");
+  ASSERT_TRUE(minor_policy);
+  EXPECT_EQ(minor_policy.policy(), 2);
 }
 
 TEST_F(PolicyServiceTest, MultiplePolicyManagers) {
@@ -584,7 +603,7 @@ TEST_F(PolicyServiceTest, MultiplePolicyManagers) {
   EXPECT_EQ(download_preference_status.conflict_policy(), std::nullopt);
 
   EXPECT_EQ(policy_service->GetAllPoliciesAsString(),
-            base::StringPrintf(
+            absl::StrFormat(
                 "{\n"
                 "  CloudPolicyOverridesPlatformPolicy = false (Group Policy)\n"
                 "  DownloadPreference = cacheable (DictValuePolicy)\n"
@@ -866,21 +885,21 @@ TEST_F(PolicyServiceTest, MultiplePolicyManagers_WithUnmanagedOnes) {
             "}\n");
 }
 
-struct PolicyServiceAreUpdatesSuppressedNowTestCase {
+struct PolicyServiceAreUpdatesSuppressedTestCase {
   const UpdatesSuppressedTimes updates_suppressed_times;
-  const std::string now_string;
+  const std::string time_string;
   const bool expect_updates_suppressed;
 };
 
-class PolicyServiceAreUpdatesSuppressedNowTest
+class PolicyServiceAreUpdatesSuppressedTest
     : public ::testing::WithParamInterface<
-          PolicyServiceAreUpdatesSuppressedNowTestCase>,
+          PolicyServiceAreUpdatesSuppressedTestCase>,
       public PolicyServiceTest {};
 
 INSTANTIATE_TEST_SUITE_P(
-    PolicyServiceAreUpdatesSuppressedNowTestCases,
-    PolicyServiceAreUpdatesSuppressedNowTest,
-    ValuesIn(std::vector<PolicyServiceAreUpdatesSuppressedNowTestCase>{
+    PolicyServiceAreUpdatesSuppressedTestCases,
+    PolicyServiceAreUpdatesSuppressedTest,
+    ValuesIn(std::vector<PolicyServiceAreUpdatesSuppressedTestCase>{
         // Suppress starting 12:00 for 959 minutes.
         {{12, 00, 959}, "Sat, 01 July 2023 01:15:00", true},
 
@@ -900,15 +919,15 @@ INSTANTIATE_TEST_SUITE_P(
         {{18, 00, 12 * 60}, "Sat, 01 July 2023 06:15:00", false},
     }));
 
-TEST_P(PolicyServiceAreUpdatesSuppressedNowTest, TestCases) {
+TEST_P(PolicyServiceAreUpdatesSuppressedTest, TestCases) {
   auto manager = base::MakeRefCounted<FakePolicyManager>(true, "Group Policy");
   manager->SetUpdatesSuppressedTimes(GetParam().updates_suppressed_times);
 
-  base::Time now;
-  ASSERT_TRUE(base::Time::FromString(GetParam().now_string.c_str(), &now));
+  base::Time time;
+  ASSERT_TRUE(base::Time::FromString(GetParam().time_string.c_str(), &time));
   EXPECT_EQ(GetParam().expect_updates_suppressed,
             CreatePolicyServiceForTesting({std::move(manager)})
-                ->AreUpdatesSuppressedNow(now));
+                ->AreUpdatesSuppressed(time));
 }
 
 TEST_F(PolicyServiceTest, PolicyServiceProxyConfiguration_Get) {

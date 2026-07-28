@@ -59,6 +59,9 @@ inline constexpr char kPolicyFetchingTimeHistogramName[] =
 
 POLICY_EXPORT BASE_DECLARE_FEATURE(kPolicyFetchWithSha256);
 
+// Returns the form factor of the device.
+POLICY_EXPORT enterprise_management::FormFactor GetFormFactor();
+
 // Implements the core logic required to talk to the device management service.
 // Also keeps track of the current state of the association with the service,
 // such as whether there is a valid registration (DMToken is present in that
@@ -103,6 +106,11 @@ class POLICY_EXPORT CloudPolicyClient {
 
   using PromotionEligibilityCallback = base::OnceCallback<void(
       enterprise_management::GetUserEligiblePromotionsResponse)>;
+
+  using GenerateChromeProfileChallengeCallback = base::OnceCallback<void(
+      DeviceManagementStatus,
+      const enterprise_management::GenerateChromeProfileChallengeResponse&
+          response)>;
 
   using MacAddress = std::array<uint8_t, 6>;
 
@@ -191,7 +199,7 @@ class POLICY_EXPORT CloudPolicyClient {
     // PSM protocol execution result. Its value will exist if the device
     // undergoes enrollment and a PSM server-backed state determination was
     // performed before (on Chrome OS, as encoded in the
-    // `prefs::kEnrollmentPsmResult` pref).
+    // `ash::prefs::kEnrollmentPsmResult` pref).
     std::optional<
         enterprise_management::DeviceRegisterRequest::PsmExecutionResult>
         psm_execution_result;
@@ -199,7 +207,7 @@ class POLICY_EXPORT CloudPolicyClient {
     // The following field is relevant only to Chrome OS.
     // PSM protocol determination timestamp. Its value will exist if the device
     // undergoes enrollment and PSM got executed successfully (on ChromeOS, as
-    // encoded in `prefs::kEnrollmentPsmDeterminationTime` pref).
+    // encoded in `ash::prefs::kEnrollmentPsmDeterminationTime` pref).
     std::optional<int64_t> psm_determination_timestamp;
 
     // The following field is relevant only to Chrome OS Demo Mode.
@@ -477,18 +485,6 @@ class POLICY_EXPORT CloudPolicyClient {
                                          base::DictValue report,
                                          ResultCallback callback);
 
-  // Uploads a report on the status of app push-installs. The client must be in
-  // a registered state. The |callback| will be called when the operation
-  // completes.
-  // Only one outstanding app push-install report upload is allowed.
-  // In case the new push-installs report upload is started, the previous one
-  // will be canceled.
-  virtual void UploadAppInstallReport(base::DictValue report,
-                                      ResultCallback callback);
-
-  // Cancels the pending app push-install status report upload, if exists.
-  virtual void CancelAppInstallReportUpload();
-
   // Attempts to fetch remote commands, with `last_command_id` being the ID of
   // the last command that finished execution, `command_results` being
   // results for previous commands which have not been reported yet,
@@ -547,6 +543,9 @@ class POLICY_EXPORT CloudPolicyClient {
 
   virtual void DeterminePromotionEligibility(
       PromotionEligibilityCallback callback);
+
+  virtual void GenerateChromeProfileChallenge(
+      GenerateChromeProfileChallengeCallback callback);
 
   // Adds an observer to be called back upon policy and state changes.
   void AddObserver(Observer* observer);
@@ -646,6 +645,18 @@ class POLICY_EXPORT CloudPolicyClient {
 
   void AddPolicyTypeToFetch(const PolicyTypeToFetch& params);
 
+  bool HasPolicyTypeToFetch(const std::string& policy_type,
+                            const std::string& settings_entity_id) const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return types_to_fetch_.contains(
+        PolicyTypeToFetch(policy_type, settings_entity_id));
+  }
+
+  bool HasPolicyTypeToFetch() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return !types_to_fetch_.empty();
+  }
+
   // FetchPolicy() calls won't request the given policy type and optional
   // |settings_entity_id| anymore.
   void RemovePolicyTypeToFetch(const std::string& policy_type,
@@ -740,6 +751,10 @@ class POLICY_EXPORT CloudPolicyClient {
   void SetURLLoaderFactoryForTesting(
       scoped_refptr<network::SharedURLLoaderFactory> factory);
 
+  base::WeakPtr<CloudPolicyClient> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  protected:
   // A map of (policy type, settings entity ID) pairs to fetch to the set of
   // settings entity IDs that should be fetched for the given policy type and
@@ -826,6 +841,10 @@ class POLICY_EXPORT CloudPolicyClient {
   void OnPromotionEligibilityDetermined(PromotionEligibilityCallback callback,
                                         DMServerJobResult result);
 
+  void OnGenerateChromeProfileChallengeCompleted(
+      GenerateChromeProfileChallengeCallback callback,
+      DMServerJobResult result);
+
   // Callback for `UploadFmRegistrationToken` request.
   void OnUploadFmRegistrationTokenResponse(ResultCallback callback,
                                            DMServerJobResult result);
@@ -900,11 +919,6 @@ class POLICY_EXPORT CloudPolicyClient {
 
   // All of the outstanding non-policy-fetch request jobs.
   std::vector<std::unique_ptr<DeviceManagementService::Job>> request_jobs_;
-
-  // Only one outstanding app push-install report upload is allowed, and it must
-  // be accessible so that it can be canceled.
-  raw_ptr<DeviceManagementService::Job> app_install_report_request_job_ =
-      nullptr;
 
   // Only one outstanding extension install report upload is allowed, and it
   // must be accessible so that it can be canceled.

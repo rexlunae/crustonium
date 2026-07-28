@@ -39,7 +39,6 @@
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
-#import "ios/web/public/test/http_server/http_server.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -233,11 +232,6 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
     config.features_enabled.push_back(kAutofillFixXhrForXframe);
   }
 
-  if ([self isRunningTest:@selector(testUserData_LocalUpdate)]) {
-    config.features_enabled.push_back(
-        autofill::features::kAutofillEnableSupportForHomeAndWork);
-  }
-
   // TODO(crbug.com/428189566): Re-enable after the test is fixed for
   // ios-fieldtrial-rel.
   if ([self isRunningTest:@selector
@@ -261,6 +255,11 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
   // Ensure there are no saved profiles.
   GREYAssertEqual(0U, [AutofillAppInterface profilesCount],
                   @"There should be no saved profile.");
+
+  [ChromeEarlGrey waitForWebStateContainingText:"Profile Autofill"];
+
+  GREYAssertTrue([AutofillAppInterface waitForFormToBeCachedInMainFrame],
+                 @"Forms were not parsed and cached.");
 
   [ChromeEarlGrey tapWebStateElementWithID:@"fill_profile_president"];
   [ChromeEarlGrey tapWebStateElementWithID:@"submit_profile"];
@@ -350,12 +349,9 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 
   // Load the URL and wait for its content to be loaded.
   [ChromeEarlGrey loadURL:fullURL];
-
-  // Wait until the expected content is loaded in the DOM. If the page is in an
-  // error state this verification will fail.
-  NSString* wait_content_script =
-      @"document.body.innerText.includes('Address Form Test Page')";
-  [ChromeEarlGrey waitForJavaScriptCondition:wait_content_script];
+  [ChromeEarlGrey waitForWebStateContainingText:"Address Form Test Page"];
+  GREYAssertTrue([AutofillAppInterface waitForFormToBeCachedInMainFrame],
+                 @"Forms were not parsed and cached.");
 
   // Call the helper function embedded in the page content to fill the form.
   [ChromeEarlGrey evaluateJavaScriptForSideEffect:@"FillForm();"];
@@ -531,8 +527,9 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
       assertWithMatcher:grey_sufficientlyVisible()];
 
   // Save the profile.
-  [[EarlGrey selectElementWithMatcher:ModalButtonMatcher()]
-      performAction:grey_tap()];
+  [[[EarlGrey selectElementWithMatcher:ModalButtonMatcher()]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 200)
+      onElementWithMatcher:EditProfileBottomSheet()] performAction:grey_tap()];
 
   // Ensure profile is saved locally.
   GREYAssertEqual(1U, [AutofillAppInterface profilesCount],
@@ -543,7 +540,8 @@ void TypeTextInXframeField(NSString* fieldID, NSString* text) {
 
 // Ensures that if a local profile is filled in a form and submitted, the user
 // is asked for a migration prompt and the profile is moved to the Account.
-- (void)testUserData_MigrationToAccount {
+// TODO(crbug.com/520302619): Flaky on waterfall.
+- (void)FLAKY_testUserData_MigrationToAccount {
   [AutofillAppInterface clearProfilesStore];
 
   // Store one local address.

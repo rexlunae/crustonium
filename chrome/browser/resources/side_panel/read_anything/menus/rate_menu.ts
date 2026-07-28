@@ -43,18 +43,26 @@ export class RateMenuElement extends RateMenuElementBase {
   }
 
   static override get properties() {
-    return {settingsPrefs: {type: Object}};
+    return {
+      settingsPrefs: {type: Object},
+      options_: {type: Array},
+      isImmersiveEnabled_: {type: Boolean},
+    };
   }
 
   accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
 
-  protected options_: Array<MenuStateItem<number>> = RATE_OPTIONS.map(rate => {
-    return {
-      title: loadTimeData.getStringF(
-          'voiceSpeedOptionTitle', rate.toLocaleString()),
-      data: rate,
-    };
-  });
+  protected accessor isImmersiveEnabled_: boolean =
+      chrome.readingMode.isImmersiveEnabled;
+
+  protected accessor options_: Array<MenuStateItem<number>> =
+      RATE_OPTIONS.map(rate => {
+        return {
+          title: loadTimeData.getStringF(
+              'voiceSpeedOptionTitle', rate.toLocaleString()),
+          data: rate,
+        };
+      });
   private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
 
   open(anchor: HTMLElement) {
@@ -76,7 +84,7 @@ export class RateMenuElement extends RateMenuElementBase {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'Rate-menu': RateMenuElement;
+    'rate-menu': RateMenuElement;
   }
 }
 

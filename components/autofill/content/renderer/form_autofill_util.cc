@@ -53,6 +53,7 @@
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/common/password_manager_features.h"
+#include "content/public/common/content_features.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/blink/public/platform/url_conversion.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -164,7 +165,6 @@ constexpr std::string_view kListItem = "li";
 constexpr std::string_view kMeta = "meta";
 constexpr std::string_view kName = "name";
 constexpr std::string_view kNoScript = "noscript";
-constexpr std::string_view kNonce = "nonce";
 constexpr std::string_view kOption = "option";
 constexpr std::string_view kParagraph = "p";
 constexpr std::string_view kPattern = "pattern";
@@ -190,7 +190,7 @@ constexpr std::string_view kValue = "value";
 template <const std::string_view& string>
 const WebString& GetWebString() {
   static const base::NoDestructor<WebString> web_string(
-      WebString::FromUTF8(string));
+      WebString::FromUtf8(string));
   return *web_string;
 }
 
@@ -277,6 +277,7 @@ bool IsTextInput(const WebFormControlElement& element) {
   switch (*type) {
     case FormControlType::kContentEditable:
     case FormControlType::kInputCheckbox:
+    case FormControlType::kInputHiddenEmailVerification:
     case FormControlType::kInputMonth:
     case FormControlType::kInputDate:
     case FormControlType::kInputRadio:
@@ -388,23 +389,19 @@ size_t CalculateTableCellColumnSpan(const WebElement& element) {
 //  * CombineAndCollapseWhitespace("foo   ", "   bar", false) -> "foo bar"
 //  * CombineAndCollapseWhitespace(" foo", "bar ", false)     -> " foobar "
 //  * CombineAndCollapseWhitespace(" foo", "bar ", true)      -> " foo bar "
-const std::u16string CombineAndCollapseWhitespace(const std::u16string& prefix,
-                                                  const std::u16string& suffix,
-                                                  bool force_whitespace) {
-  std::u16string prefix_trimmed;
-  base::TrimPositions prefix_trailing_whitespace =
-      base::TrimWhitespace(prefix, base::TRIM_TRAILING, &prefix_trimmed);
+std::u16string CombineAndCollapseWhitespace(std::u16string_view prefix,
+                                            std::u16string_view suffix,
+                                            bool force_whitespace) {
+  const std::u16string_view prefix_trimmed =
+      base::TrimWhitespace(prefix, base::TRIM_TRAILING);
+  const std::u16string_view suffix_trimmed =
+      base::TrimWhitespace(suffix, base::TRIM_LEADING);
 
-  // Recursively compute the children's text.
-  std::u16string suffix_trimmed;
-  base::TrimPositions suffix_leading_whitespace =
-      base::TrimWhitespace(suffix, base::TRIM_LEADING, &suffix_trimmed);
-
-  if (prefix_trailing_whitespace || suffix_leading_whitespace ||
+  if (prefix_trimmed != prefix || suffix_trimmed != suffix ||
       force_whitespace) {
-    return prefix_trimmed + u" " + suffix_trimmed;
+    return base::StrCat({prefix_trimmed, u" ", suffix_trimmed});
   }
-  return prefix_trimmed + suffix_trimmed;
+  return base::StrCat({prefix_trimmed, suffix_trimmed});
 }
 
 // This is a helper function for the FindChildText() function (see below).
@@ -469,13 +466,11 @@ std::u16string FindChildTextWithIgnoreList(
     return node.NodeValue().Utf16();
   }
 
+  constexpr int kChildSearchDepth = 10;
   WebNode child = node.FirstChild();
-
-  const int kChildSearchDepth = 10;
-  std::u16string node_text =
-      FindChildTextInner(child, kChildSearchDepth, divs_to_skip);
-  base::TrimWhitespace(node_text, base::TRIM_ALL, &node_text);
-  return node_text;
+  return std::u16string(base::TrimWhitespace(
+      FindChildTextInner(child, kChildSearchDepth, divs_to_skip),
+      base::TRIM_ALL));
 }
 
 struct InferredLabel {
@@ -747,7 +742,7 @@ std::optional<InferredLabel> InferLabelFromAriaLabel(
 // input element (they need to overlap a bit). We want to disregard elements
 // that are primarily below the input element (even if they overlap) because
 // that place is often used to indicate incorrect inputs.
-std::optional<InferredLabel> InferLabelFromOverlayingSuccessor(
+std::optional<InferredLabel> InferPlaceholderFromOverlayingSuccessor(
     const WebFormControlElement& element) {
   WebNode next = element.NextSibling();
   while (next && !next.IsElementNode()) {
@@ -1084,9 +1079,9 @@ std::optional<InferredLabel> InferLabelForElement(
     if (auto r = InferLabelFromPlaceholder(element)) {
       return r;
     }
-  }
-  if (auto r = InferLabelFromOverlayingSuccessor(element)) {
-    return r;
+    if (auto r = InferPlaceholderFromOverlayingSuccessor(element)) {
+      return r;
+    }
   }
   // If we didn't find a placeholder, check for aria-label text.
   if (auto r = InferLabelFromAriaLabel(element)) {
@@ -1231,6 +1226,47 @@ ButtonTitleList InferButtonTitlesForForm(const WebFormElement& web_form) {
   return least_priority_buttons;
 }
 
+std::vector<WebOptionElement> GetOptionElements(
+    const WebSelectElement& select_element) {
+  std::vector<WebElement> option_elements = select_element.GetListItems();
+
+  // Constrain the maximum list length to prevent a malicious site from DOS'ing
+  // the browser, without entirely breaking autocomplete for some extreme
+  // legitimate sites: http://crbug.com/49332 and http://crbug.com/363094
+  if (option_elements.size() > kMaxListSize) {
+    return {};
+  }
+  std::erase_if(option_elements, [](const WebElement& element) {
+    return !element.DynamicTo<WebOptionElement>();
+  });
+  return base::ToVector(option_elements, [](const WebElement& option) {
+    return option.DynamicTo<WebOptionElement>();
+  });
+}
+
+WebOptionElement FindOptionToSelect(const WebSelectElement& select,
+                                    const FormFieldData::FillData& data) {
+  std::vector<WebOptionElement> select_options = GetOptionElements(select);
+
+  WebString value_to_select(data.value);
+  WebString text_to_select = WebString::FromUtf16(data.selected_option_text);
+
+  WebOptionElement option_to_select;
+  for (const WebOptionElement& option : select_options) {
+    if (option.Value().Substring(0, kMaxStringLength) != value_to_select) {
+      continue;
+    }
+    if (option.GetText().Substring(0, kMaxStringLength) == text_to_select) {
+      option_to_select = option;
+      break;
+    }
+    if (!option_to_select) {
+      option_to_select = option;
+    }
+  }
+  return option_to_select;
+}
+
 bool ShouldSkipFillField(const FormFieldData::FillData& field,
                          const WebFormControlElement& element) {
   enum class SkipReason {
@@ -1316,6 +1352,7 @@ void FillFormField(const FormFieldData::FillData& data,
   switch (*type) {
     case FormControlType::kInputCheckbox:
     case FormControlType::kInputRadio:
+    case FormControlType::kInputHiddenEmailVerification:
       return;
     case FormControlType::kContentEditable:
       NOTREACHED();
@@ -1344,8 +1381,19 @@ void FillFormField(const FormFieldData::FillData& data,
         FieldPropertiesFlags::kAutofilledOnUserTrigger);
   }
 
-  form_control.SetAutofillValue(WebString::FromUTF16(data.value),
-                                new_autofill_state);
+  if (WebSelectElement select_element =
+          form_control.DynamicTo<WebSelectElement>()) {
+    if (WebOptionElement new_option =
+            FindOptionToSelect(select_element, data)) {
+      select_element.SetAutofillOption(&new_option, new_autofill_state);
+    } else {
+      select_element.SetAutofillValue(WebString::FromUtf16(data.value),
+                                      new_autofill_state);
+    }
+  } else {
+    form_control.SetAutofillValue(WebString::FromUtf16(data.value),
+                                  new_autofill_state);
+  }
   // Changing the field's value might trigger JavaScript, which is capable
   // of destroying the frame.
   if (!form_control.GetDocument().GetFrame()) {
@@ -1378,6 +1426,7 @@ void PreviewFormField(const FormFieldData::FillData& data,
   switch (*type) {
     case FormControlType::kInputCheckbox:
     case FormControlType::kInputRadio:
+    case FormControlType::kInputHiddenEmailVerification:
       return;
     case FormControlType::kContentEditable:
       NOTREACHED();
@@ -1395,7 +1444,17 @@ void PreviewFormField(const FormFieldData::FillData& data,
       break;
   }
 
-  form_control.SetSuggestedValue(WebString::FromUTF16(data.value));
+  if (WebSelectElement select_element =
+          form_control.DynamicTo<WebSelectElement>()) {
+    if (WebOptionElement new_option =
+            FindOptionToSelect(select_element, data)) {
+      select_element.SetSuggestedOption(&new_option);
+    } else {
+      select_element.SetSuggestedValue(WebString::FromUtf16(data.value));
+    }
+  } else {
+    form_control.SetSuggestedValue(WebString::FromUtf16(data.value));
+  }
   WebAutofillState new_autofill_state = data.is_autofilled
                                             ? WebAutofillState::kPreviewed
                                             : WebAutofillState::kNotFilled;
@@ -1801,34 +1860,16 @@ uint64_t GetMaxLength(const WebFormControlElement& element) {
 // returns {{.value = "Foo", .text = "Bar"}, {.value = "Foo", .text = "Foo"}}.
 // For more details, see the documentation of `SelectOption`.
 std::vector<SelectOption> GetSelectOptions(
-    const WebSelectElement& select_element) {
-  std::vector<WebElement> option_elements = select_element.GetListItems();
-
-  // Constrain the maximum list length to prevent a malicious site from DOS'ing
-  // the browser, without entirely breaking autocomplete for some extreme
-  // legitimate sites: http://crbug.com/49332 and http://crbug.com/363094
-  if (option_elements.size() > kMaxListSize) {
-    return {};
-  }
-
-  auto to_string = [](WebString s) {
-    return s.Utf16().substr(0, kMaxStringLength);
-  };
-  std::vector<SelectOption> options;
-  options.reserve(option_elements.size());
-  for (const auto& maybe_option_element : option_elements) {
-    if (auto option_element =
-            maybe_option_element.DynamicTo<WebOptionElement>()) {
-      std::u16string text = to_string(option_element.GetText());
-      if (text.empty()) {
-        text = GetAriaLabel(option_element.GetDocument(), option_element)
-                   .substr(0, kMaxStringLength);
-      }
-      options.push_back({.value = to_string(option_element.Value()),
-                         .text = std::move(text)});
-    }
-  }
-  return options;
+    const std::vector<WebOptionElement>& select_option_elements) {
+  return base::ToVector(
+      select_option_elements, [&](const WebOptionElement& option) {
+        WebString text = option.GetText();
+        return SelectOption{
+            .value = option.Value().Utf16().substr(0, kMaxStringLength),
+            .text = text.IsEmpty() ? GetAriaLabel(option.GetDocument(), option)
+                                         .substr(0, kMaxStringLength)
+                                   : text.Utf16().substr(0, kMaxStringLength)};
+      });
 }
 
 // Returns the SelectOptions for the <datalist> associated with the given
@@ -1899,7 +1940,7 @@ std::vector<WebFormControlElement> GetOwnedFormControls(
   return form_controls;
 }
 
-// Populates out a FormField object from a given autofillable
+// Populates out a FormFieldData object from a given autofillable
 // WebFormControlElement. Field properties are copied from |field_data_manager|,
 // if the argument is not null and has entry for |element| (see properties in
 // FieldPropertiesFlags).
@@ -1940,6 +1981,24 @@ void WebFormControlElementToFormField(
   }
 
   field->set_placeholder(GetAttribute<kPlaceholder>(element).Utf16());
+  // With `AutofillBetterLocalHeuristicPlaceholderSupport` enabled, field
+  // placeholder (and "poor man's placeholder") gets promoted to become
+  // a first class citizen for local heuristics. Since "poor man's placeholder"
+  // (extracted through `InferPlaceholderFromOverlayingSuccessor`) is a kind of
+  // placeholder, it is treated as a fallback for the placeholder rather
+  // than for the label.
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillBetterLocalHeuristicPlaceholderSupport) &&
+      !InferredLabel::BuildIfValid(field->placeholder(),
+                                   LabelSource::kPlaceHolder)) {
+    std::optional<InferredLabel> inferred_placeholder =
+        InferPlaceholderFromOverlayingSuccessor(element);
+    if (inferred_placeholder) {
+      field->set_placeholder(inferred_placeholder->label);
+    }
+  }
+  field->set_placeholder_attribute(GetAttribute<kPlaceholder>(element).Utf16());
+
   if (HasAttribute<kClass>(element)) {
     field->set_css_classes(GetAttribute<kClass>(element).Utf16());
   }
@@ -1953,8 +2012,13 @@ void WebFormControlElementToFormField(
   field->set_aria_description(
       GetAriaDescription(element.GetDocument(), element));
 
-  if (HasAttribute<kNonce>(element)) {
-    field->set_nonce(GetAttribute<kNonce>(element).Utf16());
+  // We can't use getAttribute for the nonce because the nonce attribute gets
+  // cleared when a content security policy is used.
+  // See
+  // https://html.spec.whatwg.org/dev/urls-and-fetching.html#nonce-attributes
+  WebString nonce = element.Nonce();
+  if (!nonce.IsEmpty()) {
+    field->set_nonce(nonce.Utf16());
   }
 
   // Traverse up through shadow hosts to see if we can gather missing
@@ -2005,8 +2069,7 @@ void WebFormControlElementToFormField(
   }
 
   // The browser doesn't need to differentiate between preview and autofill.
-  field->set_is_autofilled(element.IsAutofilled());
-  field->set_is_user_edited(element.UserHasEditedTheField());
+  field->set_is_autofilled_according_to_renderer(element.IsAutofilled());
   field->set_is_focusable(element.IsFocusable());
   field->set_is_visible(IsWebElementVisible(element));
   field->set_should_autocomplete(
@@ -2031,7 +2094,19 @@ void WebFormControlElementToFormField(
   } else {
     // Set option strings on the field if available.
     DCHECK(IsSelectElement(element));
-    field->set_options(GetSelectOptions(element.To<WebSelectElement>()));
+
+    std::vector<WebOptionElement> select_option_elements =
+        GetOptionElements(element.To<WebSelectElement>());
+    field->set_options(GetSelectOptions(select_option_elements));
+
+    CHECK_EQ(field->options().size(), select_option_elements.size());
+    for (const auto [option, option_element] :
+         base::zip(field->options(), select_option_elements)) {
+      if (option_element.IsSelected()) {
+        field->set_selected_option_text(option.text);
+        break;
+      }
+    }
   }
 
   if (auto* local_frame = element.GetDocument().GetFrame()) {
@@ -2290,19 +2365,24 @@ bool IsAutofillableElement(const WebFormControlElement& element) {
   return GetAutofillFormControlType(element).has_value();
 }
 
-std::optional<FormControlType> ToAutofillFormControlType(
-    blink::mojom::FormControlType type) {
+std::optional<FormControlType> GetAutofillFormControlType(
+    const WebFormControlElement& element) {
+  if (!element) {
+    return std::nullopt;
+  }
   // We cache this for performance reasons (crbug.com/428506178). This should
   // not affect tests because the only tests that explicitly set the feature are
   // two browser tests (form_autofill_util_browsertest.cc and
   // form_structure_browsertest.cc) whose renderer processes are hopefully never
   // shared with other tests.
-  const static bool g_autofill_ignore_checkable_elements_enabled =
+  static const bool g_autofill_ignore_checkable_elements_enabled =
       base::FeatureList::IsEnabled(features::kAutofillIgnoreCheckableElements);
+  static const bool g_email_verification_protocol_enabled =
+      base::FeatureList::IsEnabled(::features::kEmailVerificationProtocol);
 
   // Note that adding a new field type here automatically makes
   // IsAutofillableElement() return true.
-  switch (type) {
+  switch (element.FormControlTypeForAutofill()) {
     case blink::mojom::FormControlType::kInputCheckbox:
       if (!g_autofill_ignore_checkable_elements_enabled) {
         return FormControlType::kInputCheckbox;
@@ -2310,6 +2390,15 @@ std::optional<FormControlType> ToAutofillFormControlType(
       break;
     case blink::mojom::FormControlType::kInputEmail:
       return FormControlType::kInputEmail;
+    case blink::mojom::FormControlType::kInputHidden:
+      if (g_email_verification_protocol_enabled) {
+        std::optional<AutocompleteParsingResult> parsed =
+            ParseAutocompleteAttribute(GetAutocompleteAttribute(element));
+        if (parsed && parsed->email_verification_token) {
+          return FormControlType::kInputHiddenEmailVerification;
+        }
+      }
+      break;
     case blink::mojom::FormControlType::kInputMonth:
       return FormControlType::kInputMonth;
     case blink::mojom::FormControlType::kInputNumber:
@@ -2344,7 +2433,6 @@ std::optional<FormControlType> ToAutofillFormControlType(
     case blink::mojom::FormControlType::kInputColor:
     case blink::mojom::FormControlType::kInputDatetimeLocal:
     case blink::mojom::FormControlType::kInputFile:
-    case blink::mojom::FormControlType::kInputHidden:
     case blink::mojom::FormControlType::kInputImage:
     case blink::mojom::FormControlType::kInputRange:
     case blink::mojom::FormControlType::kInputReset:
@@ -2356,13 +2444,6 @@ std::optional<FormControlType> ToAutofillFormControlType(
       break;
   }
   return std::nullopt;
-}
-
-std::optional<FormControlType> GetAutofillFormControlType(
-    const WebFormControlElement& element) {
-  return element
-             ? ToAutofillFormControlType(element.FormControlTypeForAutofill())
-             : std::nullopt;
 }
 
 bool IsWebauthnTaggedElement(const WebFormControlElement& element) {
@@ -2451,6 +2532,7 @@ FindFormAndFieldForFormControlElement(
     WebFormControlElementToFormField(owning_form, element, nullptr, &field,
                                      /*shadow_data=*/nullptr);
     form.emplace();
+    form->set_renderer_id(GetFormRendererId(owning_form));
     form->set_fields({std::move(field)});
   }
 
@@ -2724,7 +2806,7 @@ void DispatchAutofillEvent(blink::WebDocument document,
     }
 
     autofill_values.emplace_back(control_element,
-                                 WebString::FromUTF16(field.value));
+                                 WebString::FromUtf16(field.value));
   }
 
   if (autofill_values.empty()) {
@@ -2933,14 +3015,14 @@ std::string ExtractFinalCheckoutAmountFromDom(
     std::string_view label_regex,
     size_t number_of_ancestor_levels_to_search) {
   std::vector<WebNode> price_nodes =
-      document.FindAllTextNodesMatchingRegex(WebString::FromUTF8(price_regex));
+      document.FindAllTextNodesMatchingRegex(WebString::FromUtf8(price_regex));
 
   if (price_nodes.empty()) {
     return "";
   }
 
   std::vector<WebNode> label_nodes =
-      document.FindAllTextNodesMatchingRegex(WebString::FromUTF8(label_regex));
+      document.FindAllTextNodesMatchingRegex(WebString::FromUtf8(label_regex));
 
   if (label_nodes.empty()) {
     return "";

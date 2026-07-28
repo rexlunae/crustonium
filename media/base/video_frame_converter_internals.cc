@@ -167,18 +167,89 @@ void I4xxxScale(const VideoFrame& src_frame, VideoFrame& dest_frame) {
           : libyuv::kFilterBox;
 
   for (size_t i = 0; i < VideoFrame::NumPlanes(dest_frame.format()); ++i) {
-    libyuv::ScalePlane(
-        src_frame.visible_data(i), src_frame.stride(i),
-        VideoFrame::Columns(i, src_frame.format(),
-                            src_frame.visible_rect().size().width()),
-        VideoFrame::Rows(i, src_frame.format(),
-                         src_frame.visible_rect().size().height()),
-        dest_frame.GetWritableVisibleData(i), dest_frame.stride(i),
-        VideoFrame::Columns(i, dest_frame.format(),
-                            dest_frame.visible_rect().size().width()),
-        VideoFrame::Rows(i, dest_frame.format(),
-                         dest_frame.visible_rect().size().height()),
-        kDefaultFiltering);
+    libyuv::ScalePlane(src_frame.visible_data(i), src_frame.stride(i),
+                       src_frame.GetVisibleColumns(i),
+                       src_frame.GetVisibleRows(i),
+                       dest_frame.GetWritableVisibleData(i),
+                       dest_frame.stride(i), dest_frame.GetVisibleColumns(i),
+                       dest_frame.GetVisibleRows(i), kDefaultFiltering);
+  }
+}
+
+void I4xxxScale_16(const VideoFrame& src_frame, VideoFrame& dest_frame) {
+  DCHECK(src_frame.format() == PIXEL_FORMAT_YUV420P10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV422P10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV444P10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV420P12 ||
+         src_frame.format() == PIXEL_FORMAT_YUV422P12 ||
+         src_frame.format() == PIXEL_FORMAT_YUV444P12 ||
+         src_frame.format() == PIXEL_FORMAT_YUV420AP10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV422AP10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV444AP10);
+  DCHECK(dest_frame.format() == PIXEL_FORMAT_YUV420P10 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV422P10 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV444P10 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV420P12 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV422P12 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV444P12 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV420AP10 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV422AP10 ||
+         dest_frame.format() == PIXEL_FORMAT_YUV444AP10);
+
+  const auto kDefaultFiltering =
+      src_frame.visible_rect() == dest_frame.visible_rect()
+          ? libyuv::kFilterNone
+          : libyuv::kFilterBox;
+
+  for (size_t i = 0; i < VideoFrame::NumPlanes(dest_frame.format()); ++i) {
+    const uint16_t* src_ptr =
+        reinterpret_cast<const uint16_t*>(src_frame.visible_data(i));
+    int src_stride = src_frame.stride(i) / sizeof(uint16_t);
+    uint16_t* dst_ptr =
+        reinterpret_cast<uint16_t*>(dest_frame.GetWritableVisibleData(i));
+    int dst_stride = dest_frame.stride(i) / sizeof(uint16_t);
+
+    libyuv::ScalePlane_16(src_ptr, src_stride, src_frame.GetVisibleColumns(i),
+                          src_frame.GetVisibleRows(i), dst_ptr, dst_stride,
+                          dest_frame.GetVisibleColumns(i),
+                          dest_frame.GetVisibleRows(i), kDefaultFiltering);
+  }
+}
+
+void Convert16To8Plane(const VideoFrame& src_frame, VideoFrame& dest_frame) {
+  DCHECK(src_frame.format() == PIXEL_FORMAT_YUV420P10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV422P10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV444P10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV420P12 ||
+         src_frame.format() == PIXEL_FORMAT_YUV422P12 ||
+         src_frame.format() == PIXEL_FORMAT_YUV444P12 ||
+         src_frame.format() == PIXEL_FORMAT_YUV420AP10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV422AP10 ||
+         src_frame.format() == PIXEL_FORMAT_YUV444AP10);
+  DCHECK(dest_frame.format() == PIXEL_FORMAT_I420 ||
+         dest_frame.format() == PIXEL_FORMAT_I420A ||
+         dest_frame.format() == PIXEL_FORMAT_I422 ||
+         dest_frame.format() == PIXEL_FORMAT_I422A ||
+         dest_frame.format() == PIXEL_FORMAT_I444 ||
+         dest_frame.format() == PIXEL_FORMAT_I444A);
+  DCHECK_EQ(src_frame.visible_rect().size(), dest_frame.visible_rect().size());
+
+  int scale = (src_frame.format() == PIXEL_FORMAT_YUV420P12 ||
+               src_frame.format() == PIXEL_FORMAT_YUV422P12 ||
+               src_frame.format() == PIXEL_FORMAT_YUV444P12)
+                  ? 4096    // 12 bits -> 8 bits
+                  : 16384;  // 10 bits -> 8 bits
+
+  for (size_t i = 0; i < VideoFrame::NumPlanes(dest_frame.format()); ++i) {
+    const uint16_t* src_ptr =
+        reinterpret_cast<const uint16_t*>(src_frame.visible_data(i));
+    int src_stride = src_frame.stride(i) / sizeof(uint16_t);
+    uint8_t* dst_ptr = dest_frame.GetWritableVisibleData(i);
+    int dst_stride = dest_frame.stride(i);
+
+    libyuv::Convert16To8Plane(src_ptr, src_stride, dst_ptr, dst_stride, scale,
+                              src_frame.GetVisibleColumns(i),
+                              src_frame.GetVisibleRows(i));
   }
 }
 
@@ -261,8 +332,8 @@ void MergeUV(const VideoFrame& src_frame, VideoFrame& dest_frame) {
       src_frame.stride(VideoFrame::Plane::kV),
       dest_frame.GetWritableVisibleData(VideoFrame::Plane::kUV),
       dest_frame.stride(VideoFrame::Plane::kUV),
-      dest_frame.visible_rect().width() / 2,
-      dest_frame.visible_rect().height() / 2);
+      dest_frame.GetVisibleColumns(VideoFrame::Plane::kUV),
+      dest_frame.GetVisibleRows(VideoFrame::Plane::kUV));
 }
 
 void SplitUV(const VideoFrame& src_frame, VideoFrame& dest_frame) {
@@ -277,8 +348,8 @@ void SplitUV(const VideoFrame& src_frame, VideoFrame& dest_frame) {
                        dest_frame.stride(VideoFrame::Plane::kU),
                        dest_frame.GetWritableVisibleData(VideoFrame::Plane::kV),
                        dest_frame.stride(VideoFrame::Plane::kV),
-                       dest_frame.visible_rect().width() / 2,
-                       dest_frame.visible_rect().height() / 2);
+                       src_frame.GetVisibleColumns(VideoFrame::Plane::kUV),
+                       src_frame.GetVisibleRows(VideoFrame::Plane::kUV));
 }
 
 bool NV12xScale(const VideoFrame& src_frame,

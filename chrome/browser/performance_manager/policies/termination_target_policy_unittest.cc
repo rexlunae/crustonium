@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "chrome/browser/performance_manager/mechanisms/termination_target_setter.h"
 #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "chrome/browser/performance_manager/test_support/page_discarding_utils.h"
@@ -48,7 +48,8 @@ class TerminationTargetPolicyTest : public GraphTestHarness {
 
     auto eligibility_policy =
         std::make_unique<policies::DiscardEligibilityPolicy>();
-    eligibility_policy->SetNoDiscardPatternsForProfile("", {});
+    eligibility_policy->SetNoDiscardPatternsForProfile(base::UnguessableToken(),
+                                                       {});
 
     graph()->PassToGraph(std::move(eligibility_policy));
   }

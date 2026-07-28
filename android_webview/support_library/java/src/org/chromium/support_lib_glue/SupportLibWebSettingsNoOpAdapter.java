@@ -136,14 +136,15 @@ class SupportLibWebSettingsNoOpAdapter implements WebSettingsBoundaryInterface {
     }
 
     @Override
+    @Deprecated
     public void setAttributionBehavior(@AttributionBehavior int behavior) {
-        recordApiCall(ApiCall.SET_ATTRIBUTION_BEHAVIOR);
+        // No-op.
     }
 
     @Override
+    @Deprecated
     public int getAttributionBehavior() {
-        recordApiCall(ApiCall.GET_ATTRIBUTION_BEHAVIOR);
-        return AttributionBehavior.APP_SOURCE_AND_WEB_TRIGGER;
+        return AttributionBehavior.DISABLED;
     }
 
     @Override
@@ -250,12 +251,37 @@ class SupportLibWebSettingsNoOpAdapter implements WebSettingsBoundaryInterface {
     }
 
     @Override
+    public void setBackForwardCacheSettingsKeepForwardEntries(
+            boolean keepForwardEntries) {
+        recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_SET_KEEP_FORWARD_ENTRIES);
+    }
+
+    @Override
     public long getBackForwardCacheSettingsTimeout() {
+        recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_GET_TIMEOUT_IN_SECONDS);
         return 0;
     }
 
     @Override
     public int getBackForwardCacheSettingsMaxPagesInCache() {
+        recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_GET_MAX_PAGES_IN_CACHE);
         return 0;
+    }
+
+    @Override
+    public boolean getBackForwardCacheSettingsKeepForwardEntries() {
+        recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_GET_KEEP_FORWARD_ENTRIES);
+        return true;
+    }
+
+    @Override
+    public void setDownloadFaviconsEnabled(boolean enabled) {
+        recordApiCall(ApiCall.SET_DOWNLOAD_FAVICONS_ENABLED);
+    }
+
+    @Override
+    public boolean getDownloadFaviconsEnabled() {
+        recordApiCall(ApiCall.GET_DOWNLOAD_FAVICONS_ENABLED);
+        return true;
     }
 }

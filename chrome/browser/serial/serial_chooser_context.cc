@@ -27,11 +27,8 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/device_service.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "ui/base/l10n/l10n_util.h"
-
-#if !BUILDFLAG(IS_ANDROID)
 #include "services/device/public/cpp/usb/usb_ids.h"
-#endif  // !BUILDFLAG(IS_ANDROID)
+#include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -87,38 +84,32 @@ bool IsPolicyGrantedObject(const base::DictValue& object) {
 base::Value VendorAndProductIdsToValue(uint16_t vendor_id,
                                        uint16_t product_id) {
   base::DictValue object;
-#if !BUILDFLAG(IS_ANDROID)
-  const char* product_name =
-      device::UsbIds::GetProductName(vendor_id, product_id);
-  if (product_name) {
-    object.Set(kPortNameKey, product_name);
+  device::UsbIdNames names =
+      device::UsbIds::GetVendorAndProductName(vendor_id, product_id);
+  if (names.product_name) {
+    object.Set(kPortNameKey, names.product_name);
   } else {
-    const char* vendor_name = device::UsbIds::GetVendorName(vendor_id);
-    if (vendor_name) {
+    if (names.vendor_name) {
       object.Set(
           kPortNameKey,
           l10n_util::GetStringFUTF16(
               IDS_SERIAL_POLICY_DESCRIPTION_FOR_USB_PRODUCT_ID_AND_VENDOR_NAME,
               base::ASCIIToUTF16(base::StringPrintf("%04X", product_id)),
-              base::UTF8ToUTF16(vendor_name)));
+              base::UTF8ToUTF16(names.vendor_name)));
     } else {
-#endif  // !BUILDFLAG(IS_ANDROID)
       object.Set(
           kPortNameKey,
           l10n_util::GetStringFUTF16(
               IDS_SERIAL_POLICY_DESCRIPTION_FOR_USB_PRODUCT_ID_AND_VENDOR_ID,
               base::ASCIIToUTF16(base::StringPrintf("%04X", product_id)),
               base::ASCIIToUTF16(base::StringPrintf("%04X", vendor_id))));
-#if !BUILDFLAG(IS_ANDROID)
     }
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
   return base::Value(std::move(object));
 }
 
 base::Value VendorIdToValue(uint16_t vendor_id) {
   base::DictValue object;
-#if !BUILDFLAG(IS_ANDROID)
   const char* vendor_name = device::UsbIds::GetVendorName(vendor_id);
   if (vendor_name) {
     object.Set(kPortNameKey,
@@ -126,14 +117,11 @@ base::Value VendorIdToValue(uint16_t vendor_id) {
                    IDS_SERIAL_POLICY_DESCRIPTION_FOR_USB_VENDOR_NAME,
                    base::UTF8ToUTF16(vendor_name)));
   } else {
-#endif  // !BUILDFLAG(IS_ANDROID)
     object.Set(kPortNameKey,
                l10n_util::GetStringFUTF16(
                    IDS_SERIAL_POLICY_DESCRIPTION_FOR_USB_VENDOR_ID,
                    base::ASCIIToUTF16(base::StringPrintf("%04X", vendor_id))));
-#if !BUILDFLAG(IS_ANDROID)
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
   return base::Value(std::move(object));
 }
 
@@ -675,7 +663,12 @@ void SerialChooserContext::SetUpPortManagerConnection(
                      base::Unretained(this)));
 
   port_manager_->SetClient(client_receiver_.BindNewPipeAndPassRemote());
-  port_manager_->GetDevices(base::BindOnce(&SerialChooserContext::OnGetDevices,
+  // Pass false for `allow_bluetooth_system_prompt` to avoid triggering the
+  // macOS Bluetooth permission prompt during background initialization. Any
+  // explicit user request to find devices (e.g. via `requestPort`) will use
+  // passes true for `GetDevices` call.
+  port_manager_->GetDevices(/*allow_bluetooth_system_prompt=*/false,
+                            base::BindOnce(&SerialChooserContext::OnGetDevices,
                                            weak_factory_.GetWeakPtr()));
 }
 

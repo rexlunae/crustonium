@@ -10,7 +10,6 @@ import static org.robolectric.Shadows.shadowOf;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
-import android.os.Build;
 import android.os.Looper;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
@@ -34,11 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Unit tests for the {@link CompositorAnimator} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        // AnimatorSet seems to not work in Robolectric 3.4.2. Remove this SDK
-        // specification once we upgrade to a version in which it works. crbug.com/774357
-        sdk = Build.VERSION_CODES.TIRAMISU)
+@Config(manifest = Config.NONE)
 public final class CompositorAnimatorTest {
     /** An animation update listener that counts calls to its methods. */
     private static class TestUpdateListener implements CompositorAnimator.AnimatorUpdateListener {
@@ -545,7 +540,7 @@ public final class CompositorAnimatorTest {
                 listener2.mEndCallbackHelper.getCallCount());
     }
 
-    @DisabledTest(message = "crbug.com/774357")
+    @DisabledTest(message = "crbug.com/40544586")
     @Test
     public void testAnimatorSet_playSequentially() {
         CompositorAnimator animator = new CompositorAnimator(mHandler);

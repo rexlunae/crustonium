@@ -5,14 +5,22 @@
 #include "chrome/browser/webauthn/chrome_web_authentication_delegate_base.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <string_view>
 
 #include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/util/affiliation.h"
+#include "chrome/browser/policy/chrome_browser_policy_connector.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/webauthn/webauthn_pref_names.h"
 #include "chrome/browser/webauthn/webauthn_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
+#include "device/fido/public/features.h"
 
 namespace {
 
@@ -31,6 +39,34 @@ class OriginMayUseRemoteDesktopClientOverrideTest
 
   static constexpr char kExampleOrigin[] = "https://example.com";
   static constexpr char kAnotherExampleOrigin[] = "https://another.example.com";
+#if !BUILDFLAG(IS_ANDROID)
+  static constexpr char kTestIsolatedAppOrigin[] =
+      "isolated-app://aerugqztij5biqquuk3mfwpsaibuegaqcitgfchwuosuofdjabzqaaic";
+#endif
+  static constexpr std::string_view kTestAtExampleDotCom = "test@example.com";
+
+  void SetUp() override {
+    ChromeRenderViewHostTestHarness::SetUp();
+    SetupUserAffiliation(true, kTestAtExampleDotCom);
+  }
+
+  void SetupUserAffiliation(bool is_affiliated, std::string_view email) {
+    const base::flat_set<std::string> affiliation_ids =
+        is_affiliated ? base::flat_set<std::string>({"test-affiliation-id"})
+                      : base::flat_set<std::string>();
+
+    g_browser_process->browser_policy_connector()
+        ->SetDeviceAffiliatedIdsForTesting(affiliation_ids);
+
+    profile()->GetProfilePolicyConnector()->SetUserAffiliationIdsForTesting(
+        affiliation_ids);
+  }
+
+  void LogOutUser(std::string_view email) {
+    g_browser_process->browser_policy_connector()
+        ->SetDeviceAffiliatedIdsForTesting({});
+    profile()->GetProfilePolicyConnector()->SetUserAffiliationIdsForTesting({});
+  }
 };
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -158,6 +194,44 @@ TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
 }
 
 TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
+       AdditionalOriginSwitch_WithAllowedOriginsPolicy_NoAffiliation) {
+  // Version of a test case above but for non-affiliated user
+  ChromeWebAuthenticationDelegateBase delegate;
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      webauthn::switches::kRemoteProxiedRequestsAllowedAdditionalOrigin,
+      kExampleOrigin);
+
+  // Log user out, no affiliated user exists for this test
+  LogOutUser(kTestAtExampleDotCom);
+
+  // Set the allowed origins pref to include another origin.
+  PrefService* prefs =
+      Profile::FromBrowserContext(GetBrowserContext())->GetPrefs();
+  prefs->SetList(webauthn::pref_names::kRemoteDesktopAllowedOrigins,
+                 base::ListValue().Append(kAnotherExampleOrigin));
+
+  // False when user is not affiliated or no user regardless if policy set with
+  // origin
+  EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(), url::Origin::Create(GURL(kExampleOrigin))));
+  EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(), url::Origin::Create(GURL(kAnotherExampleOrigin))));
+
+  // Behavior for case without affiliated user in a sense of corporate origins
+  // should not change
+  for (auto* origin : kCorpCrdOrigins) {
+    EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+        browser_context(), url::Origin::Create(GURL(origin))));
+  }
+
+  // Origins not listed in either the switch or the policy remain disallowed.
+  EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(),
+      url::Origin::Create(GURL("https://very.other.example.com"))));
+}
+
+TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
        AdditionalOriginSwitch_WithExplicitlyEmptyAllowedOriginsPolicy) {
   // The --webauthn-remote-proxied-requests-allowed-additional-origin switch
   // should be ignored when the allowed origins policy list is empty.
@@ -181,6 +255,68 @@ TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
   EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
       browser_context(), url::Origin::Create(GURL(kExampleOrigin))));
 }
+
+#if !BUILDFLAG(IS_ANDROID)  // IWAs aren't supported on Android
+TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
+       AllowedOriginsPolicy_IWAAccepted) {
+  ChromeWebAuthenticationDelegateBase delegate;
+  base::test::ScopedFeatureList scoped_feature_list(
+      device::kWebAuthnIWARemoteDesktopAllowedOriginsPolicy);
+
+  PrefService* prefs =
+      Profile::FromBrowserContext(GetBrowserContext())->GetPrefs();
+
+  prefs->SetList(webauthn::pref_names::kRemoteDesktopAllowedOrigins,
+                 base::ListValue().Append(kTestIsolatedAppOrigin));
+
+  EXPECT_TRUE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(), url::Origin::Create(GURL(kTestIsolatedAppOrigin))));
+}
+
+TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
+       AllowedOriginsPolicy_IWANotAccepted_Another_Caller_Origin) {
+  ChromeWebAuthenticationDelegateBase delegate;
+  base::test::ScopedFeatureList scoped_feature_list(
+      device::kWebAuthnIWARemoteDesktopAllowedOriginsPolicy);
+
+  PrefService* prefs =
+      Profile::FromBrowserContext(GetBrowserContext())->GetPrefs();
+
+  prefs->SetList(webauthn::pref_names::kRemoteDesktopAllowedOrigins,
+                 base::ListValue().Append(kExampleOrigin));
+
+  EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(), url::Origin::Create(GURL(kTestIsolatedAppOrigin))));
+}
+
+TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
+       AllowedOriginsPolicy_IWAsNotAccepted_Feature_Off) {
+  ChromeWebAuthenticationDelegateBase delegate;
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      device::kWebAuthnIWARemoteDesktopAllowedOriginsPolicy);
+
+  PrefService* prefs =
+      Profile::FromBrowserContext(GetBrowserContext())->GetPrefs();
+
+  prefs->SetList(webauthn::pref_names::kRemoteDesktopAllowedOrigins,
+                 base::ListValue().Append(kTestIsolatedAppOrigin));
+
+  EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(), url::Origin::Create(GURL(kTestIsolatedAppOrigin))));
+}
+
+TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
+       AllowedOriginsPolicy_IWAsNotAccepted_Origin_Not_Listed) {
+  ChromeWebAuthenticationDelegateBase delegate;
+  base::test::ScopedFeatureList scoped_feature_list(
+      device::kWebAuthnIWARemoteDesktopAllowedOriginsPolicy);
+
+  EXPECT_FALSE(delegate.OriginMayUseRemoteDesktopClientOverride(
+      browser_context(), url::Origin::Create(GURL(kTestIsolatedAppOrigin))));
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(OriginMayUseRemoteDesktopClientOverrideTest,
        AllowedOriginsPolicy_InvalidURLs) {

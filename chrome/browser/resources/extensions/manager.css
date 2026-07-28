@@ -25,7 +25,7 @@
   position: relative;
 }
 
-@media (min-width:1650px) {
+@media (min-width: 1650px) {
   #viewManager:has(extensions-item-list.active) {
     /* The flex basis is wider for the item list view so more items can be
        shown per row. This value pertains to 3 extension items shown per
@@ -34,7 +34,7 @@
   }
 }
 
-@media (max-width:1649px) {
+@media (max-width: 1649px) {
   #viewManager:has(extensions-item-list.active) {
     /* The flex basis is wider for the item list view so more items can be
        shown per row. This value pertains to 2 extension items shown per
@@ -73,3 +73,17 @@ extensions-item {
 #right {
   flex: 1 1 0;
 }
+
+picture[slot='header-icon'] {
+  display: inline-block;
+  height: 24px;
+  margin-inline-end: 16px;
+  width: 24px;
+}
+
+picture[slot='header-icon'] img {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+

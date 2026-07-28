@@ -37,12 +37,16 @@
 
 - (void)backAction {
   self.navigationAgent->GoBack();
-  self.tabBasedIPHAgent->NotifyBackForwardButtonTap();
+  if (self.tabBasedIPHAgent) {
+    self.tabBasedIPHAgent->NotifyBackForwardButtonTap();
+  }
 }
 
 - (void)forwardAction {
   self.navigationAgent->GoForward();
-  self.tabBasedIPHAgent->NotifyBackForwardButtonTap();
+  if (self.tabBasedIPHAgent) {
+    self.tabBasedIPHAgent->NotifyBackForwardButtonTap();
+  }
 }
 
 - (void)tabGridTouchDown {
@@ -58,8 +62,8 @@
   [self.menuHandler showToolsMenuPopup];
 }
 
-- (void)shareAction {
-  [self.activityHandler showShareSheet];
+- (void)shareAction:(UIView*)sender {
+  [self.activityHandler showShareSheetFromShareButton:sender];
 }
 
 - (void)reloadAction {

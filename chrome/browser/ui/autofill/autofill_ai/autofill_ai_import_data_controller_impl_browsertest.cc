@@ -16,7 +16,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/test/browser_test.h"
@@ -69,12 +69,18 @@ class AutofillAiImportDataControllerImplTest
     if (name == "UpdateEntity") {
       std::pair<EntityInstance, EntityInstance> entities = GetUpdateEntities();
       controller_->ShowPrompt(std::move(entities.first),
-                              std::move(entities.second), base::NullCallback());
+                              std::move(entities.second),
+                              /*close_on_accept=*/true, base::NullCallback());
       return;
     } else if (name == "SaveNewEntity") {
       controller_->ShowPrompt(
           test::GetPassportEntityInstance(save_new_entity_options_),
-          std::nullopt, base::NullCallback());
+          std::nullopt, /*close_on_accept=*/true, base::NullCallback());
+      return;
+    } else if (name == "SaveNewEntity_NoCloseOnAccept") {
+      controller_->ShowPrompt(
+          test::GetPassportEntityInstance(save_new_entity_options_),
+          std::nullopt, /*close_on_accept=*/false, base::NullCallback());
       return;
     }
     NOTREACHED();
@@ -143,6 +149,8 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataControllerImplTest,
     GTEST_SKIP() << "BubbleManager doesn't get informed of the tab changes";
   }
 
+  SetNewEntitiesOptions(
+      {.record_type = EntityInstance::RecordType::kServerWallet});
   ShowUi("SaveNewEntity");
 
   ASSERT_TRUE(controller()->IsShowingBubble());
@@ -161,6 +169,7 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataControllerImplTest,
   ShowUi("SaveNewEntity");
 
   ASSERT_TRUE(controller()->IsShowingBubble());
+  EXPECT_TRUE(controller()->CloseOnAccept());
   controller()->OnSaveButtonClicked();
   ASSERT_FALSE(controller()->IsShowingBubble());
 
@@ -190,12 +199,32 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataControllerImplTest,
   ShowUi("SaveNewEntity");
   ASSERT_TRUE(controller()->IsShowingBubble());
 
-  base::test::TestFuture<AutofillClient::AutofillAiBubbleResult>
+  base::test::TestFuture<AutofillClient::AutofillAiBubbleResult,
+                         std::optional<EntityInstance>,
+                         const AutofillClient::EntityImportUIContext&>
       prompt_result_future;
   controller()->ShowPrompt(test::GetPassportEntityInstance(), std::nullopt,
+                           /*close_on_accept=*/true,
                            prompt_result_future.GetCallback());
-  EXPECT_EQ(prompt_result_future.Get(),
+  EXPECT_EQ(std::get<0>(prompt_result_future.Get()),
             AutofillClient::AutofillAiBubbleResult::kUnknown);
+}
+
+// Tests that if the prompt is configured to not close on accept, clicking the
+// save button does not close the bubble.
+IN_PROC_BROWSER_TEST_P(AutofillAiImportDataControllerImplTest,
+                       AcceptPrompt_DoNotCloseBubble) {
+  ShowUi("SaveNewEntity_NoCloseOnAccept");
+
+  ASSERT_TRUE(controller()->IsShowingBubble());
+  EXPECT_FALSE(controller()->CloseOnAccept());
+  controller()->OnSaveButtonClicked();
+  // Expect it to stay open
+  EXPECT_TRUE(controller()->IsShowingBubble());
+
+  // Manually close the bubble to clean up.
+  controller()->OnBubbleClosed(
+      AutofillClient::AutofillAiBubbleResult::kAccepted);
 }
 
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(AutofillAiImportDataControllerImplTest);

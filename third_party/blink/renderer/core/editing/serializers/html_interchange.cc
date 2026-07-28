@@ -33,10 +33,10 @@
 
 namespace blink {
 
-String ConvertHTMLTextToInterchangeFormat(const String& in, const Text& node) {
+String ConvertHtmlTextToInterchangeFormat(const String& in, const Text& node) {
   // Assume all the text comes from node.
   if (node.GetLayoutObject() &&
-      node.GetLayoutObject()->Style()->ShouldPreserveBreaks()) {
+      node.GetLayoutObject()->StyleRef().ShouldPreserveBreaks()) {
     return in;
   }
 

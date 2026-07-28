@@ -10,6 +10,7 @@
 #include "ash/shell.h"
 #include "ash/system/accessibility/facegaze_bubble_controller.h"
 #include "ash/system/accessibility/facegaze_bubble_view.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/scoped_feature_list.h"
@@ -20,10 +21,9 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/webui_url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -61,7 +61,8 @@ class AccessibilityPrivateApiTest
     scoped_feature_list_.InitWithFeatures(
         {// Live Caption only works if on-device speech recognition is
          // available.
-         ash::features::kOnDeviceSpeechRecognition},
+         ash::features::kOnDeviceSpeechRecognition,
+         ::features::kAccessibilityChromeVoxJapaneseBraille},
         /*disabled_features=*/{});
   }
 
@@ -124,16 +125,18 @@ IN_PROC_BROWSER_TEST_P(AccessibilityPrivateApiTest, OpenSettingsSubpage) {
   chrome::SettingsWindowManager* settings_manager =
       chrome::SettingsWindowManager::GetInstance();
 
-  Browser* settings_browser = settings_manager->FindBrowserForProfile(profile);
+  BrowserWindowInterface* settings_browser =
+      settings_manager->FindBrowserForProfile(profile);
   EXPECT_NE(nullptr, settings_browser);
 
   content::WebContents* web_contents =
-      settings_browser->tab_strip_model()->GetWebContentsAt(0);
+      settings_browser->GetTabStripModel()->GetWebContentsAt(0);
 
   EXPECT_TRUE(WaitForLoadStop(web_contents));
 
-  EXPECT_EQ(GURL(chrome::GetOSSettingsUrl("manageAccessibility/tts")),
-            web_contents->GetLastCommittedURL());
+  EXPECT_EQ(
+      GURL(chromeos::settings::GetOSSettingsUrl("manageAccessibility/tts")),
+      web_contents->GetLastCommittedURL());
 }
 
 IN_PROC_BROWSER_TEST_P(AccessibilityPrivateApiTest,
@@ -149,7 +152,8 @@ IN_PROC_BROWSER_TEST_P(AccessibilityPrivateApiTest,
       chrome::SettingsWindowManager::GetInstance();
 
   // Invalid subpage should not open settings window.
-  Browser* settings_browser = settings_manager->FindBrowserForProfile(profile);
+  BrowserWindowInterface* settings_browser =
+      settings_manager->FindBrowserForProfile(profile);
   EXPECT_EQ(nullptr, settings_browser);
 }
 
@@ -535,6 +539,28 @@ IN_PROC_BROWSER_TEST_P(AccessibilityPrivateApiTest, UpdateFaceGazeBubble) {
   empty_text_listener.Reply("Continue");
 
   ASSERT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
+}
+
+IN_PROC_BROWSER_TEST_P(AccessibilityPrivateApiTest, InstallTenjiFail) {
+  ASSERT_TRUE(RunSubtest("testInstallTenjiFail")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_P(AccessibilityPrivateApiTest, InstallTenjiSuccess) {
+  // Initialize DLC directory.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir tenji_root_dir;
+  ASSERT_TRUE(tenji_root_dir.CreateUniqueTempDir());
+
+  // Create fake DLC files.
+  AccessibilityManager::Get()->SetDlcPathForTest(tenji_root_dir.GetPath());
+  ASSERT_TRUE(base::WriteFile(
+      tenji_root_dir.GetPath().Append("tenji_wasm_wrapper.wasm"),
+      "Fake tenji wasm"));
+  ASSERT_TRUE(
+      base::WriteFile(tenji_root_dir.GetPath().Append("tenji_wasm_wrapper.js"),
+                      "Fake tenji wrapper js"));
+
+  ASSERT_TRUE(RunSubtest("testInstallTenjiSuccess")) << message_;
 }
 
 INSTANTIATE_TEST_SUITE_P(ServiceWorker,

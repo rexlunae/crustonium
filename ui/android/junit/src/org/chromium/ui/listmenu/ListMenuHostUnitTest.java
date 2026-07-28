@@ -4,8 +4,11 @@
 
 package org.chromium.ui.listmenu;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
@@ -21,9 +24,9 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Spy;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.ui.R;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.widget.AnchoredPopupWindow;
@@ -99,16 +102,38 @@ public class ListMenuHostUnitTest {
         dismissMenu(btnMenuStart);
     }
 
+    @Test
+    public void testTooltipClearedAndRestored() {
+        ListMenuButton btnDefault = mActivity.findViewById(R.id.button_default);
+        btnDefault.setDelegate(mMenuDelegate);
+        btnDefault.setTooltipText("Test Tooltip");
+
+        btnDefault.setAttachedToWindowForTesting();
+        btnDefault.showMenu();
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertNull("Tooltip should be cleared when menu is shown.", btnDefault.getTooltipText());
+
+        btnDefault.dismiss();
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertEquals(
+                "Tooltip should be restored after menu dismissal.",
+                "Test Tooltip",
+                btnDefault.getTooltipText());
+    }
+
     private void showMenuForButton(ListMenuButton button) {
         button.setAttachedToWindowForTesting();
         button.showMenu();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mSpyPopupMenu);
+        assertTrue("Button should be in pressed state when menu is visible.", button.isPressed());
     }
 
     private void dismissMenu(ListMenuButton button) {
         button.dismiss();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNull(mSpyPopupMenu);
+        assertFalse(
+                "Button should no longer be pressed once menu is dismissed.", button.isPressed());
     }
 }

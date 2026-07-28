@@ -10,30 +10,35 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 
 namespace password_manager::features {
 // All features in alphabetical order. The features should be documented
 // alongside the definition of their values in the .cc file.
 
-#if !BUILDFLAG(IS_IOS)
-// Filling on pageload is disabled if an actor task is active on the tab.
-BASE_DECLARE_FEATURE(kActorActiveDisablesFillingOnPageLoad);
 BASE_DECLARE_FEATURE(kActorLogin);
-// Enables Actor Login form finding with async check
-BASE_DECLARE_FEATURE(kActorLoginFieldVisibilityCheck);
-// Ensures that `GetCredentials` differentiates between no saved credentials
-// and no signin form found on the page.
-BASE_DECLARE_FEATURE(kActorLoginGetCredentialsNoLoginForm);
+// Killswitch for the conflicting permission cleanup. Conflicting permissions
+// are the ones granted for 2 different accounts on the same website.
+BASE_DECLARE_FEATURE(kActorLoginConflictingPermissionCleanup);
 BASE_DECLARE_FEATURE(kActorLoginLocalClassificationModel);
-// Enables the usage of temporary permissions across affiliated origins for
-// Actor Login.
-BASE_DECLARE_FEATURE(kActorLoginPermissionsUseStrongAffiliations);
-BASE_DECLARE_FEATURE(kActorLoginReauthTaskRefocus);
+
+#if BUILDFLAG(IS_ANDROID)
+// When enabled, it completely ignores existing permanent permissions
+// and does not store new ones.
+// TODO(crbug.com/507403760): Remove once the permissions management UI is
+// available.
+BASE_DECLARE_FEATURE(kActorLoginNoPermanentPermissionsAndroid);
+// Enables the Actor Login Permissions Settings UI on Android.
+BASE_DECLARE_FEATURE(kActorLoginPermissionsUi);
+#endif
+
+// Enables syncing password permissions.
+BASE_DECLARE_FEATURE(kActorLoginSyncsPasswordPermissions);
+
+#if !BUILDFLAG(IS_IOS)
 // Enables logging quality for actor login.
 BASE_DECLARE_FEATURE(kActorLoginQualityLogs);
-// Enables finding and filling forms in same-site iframes for actor login.
-BASE_DECLARE_FEATURE(kActorLoginSameSiteIframeSupport);
 #endif  // !BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -58,23 +63,23 @@ BASE_DECLARE_FEATURE(kAutoApproveSharedPasswordUpdatesFromSameSender);
 // across quarters.
 BASE_DECLARE_FEATURE(kAutofillPasswordUserPerceptionSurvey);
 
-// Undoes the effect of WebAuthnUsePasskeyFromAnotherDeviceInContextMenu by
-// adding the hybrid item back into the dropdown. It also adds the entry point
-// to autofill dropdowns.
-// Needs autofill::features::AutofillAndPasswordsInSameSurface to be enabled.
-BASE_DECLARE_FEATURE(kAutofillReintroduceHybridPasskeyDropdownItem);
+// Waits for the page to reach stability before triggering any password change
+// actions.
+BASE_DECLARE_FEATURE(kAwaitPageStabilityForPasswordChange);
+extern const base::FeatureParam<base::TimeDelta> kAwaitPageStabilityTimeout;
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 // Enables Biometrics for the Touch To Fill feature. This only effects Android.
 BASE_DECLARE_FEATURE(kBiometricTouchToFill);
 
+// Kill switch for calling OnAddPasswordFillData() asynchronously to avoid
+// reentrant AutofillManager::Observer events.
+// TODO(crbug.com/500883329): Clean up after M141 BP (June 29, 2026).
+BASE_DECLARE_FEATURE(kCallOnAddPasswordFillDataAsynchronously);
+
 // Checks if submitted form is identical to an observed form before evaluating
 // login success/failure.
 BASE_DECLARE_FEATURE(kCheckIfSubmittedFormIdenticalToObserved);
-
-// Checks if the new password field is visible in the viewport before returning
-// the form in the ChangePasswordFormWaiter.
-BASE_DECLARE_FEATURE(kCheckVisibilityInChangePasswordFormWaiter);
 
 // Delete undecryptable passwords from the login database.
 BASE_DECLARE_FEATURE(kClearUndecryptablePasswords);
@@ -92,46 +97,38 @@ BASE_DECLARE_FEATURE(kCredentialManagementUnifiedUi);
 // launched.
 BASE_DECLARE_FEATURE(kDebugUiForOtps);
 
-// This feature disables filling on page load for leaked credentials on some
-// sites. Filling on page load interferes with password change feature.
-BASE_DECLARE_FEATURE(kDisableFillingOnPageLoadForLeakedCredentials);
+// When enabled, automated password change won't be offered when the form
+// contains new password field.
+BASE_DECLARE_FEATURE(kDisablePasswordChangeFromNewPasswordFields);
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)  // Desktop
 // Enables the Mojo JavaScript API for the password manager, replacing the
 // legacy passwordsPrivate extension API.
 BASE_DECLARE_FEATURE(kEnablePasswordManagerMojoApi);
+
+// Enables Phase 2 of the Mojo JavaScript API migration for the password
+// manager, replacing the legacy passwordsPrivate extension API.
+BASE_DECLARE_FEATURE(kEnablePasswordManagerMojoApiPhase2);
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+// Cross domain credential data is not previewed by the manual fallback
+// suggestion popup.
+BASE_DECLARE_FEATURE(kFallbackNoPreviewForCrossDomainCredentials);
 
 // Fetches change password url if the credential has been identified as leaked.
 // Later change password url is used during password change.
 BASE_DECLARE_FEATURE(kFetchChangePasswordUrlForPasswordChange);
 
-// Enables filling of change password form by typing.
-BASE_DECLARE_FEATURE(kFillChangePasswordFormByTyping);
-
 // Enables the experiment for the password manager to only fill on account
 // selection, rather than autofilling on page load, with highlighting of fields.
 BASE_DECLARE_FEATURE(kFillOnAccountSelect);
 
-#if BUILDFLAG(IS_ANDROID)
-// Allows filling from a secondary recovery password saved as a backup.
-BASE_DECLARE_FEATURE(kFillRecoveryPassword);
-#endif
-
-// Enables improvements to password change functionality.
-BASE_DECLARE_FEATURE(kImprovedPasswordChangeService);
-
 #if BUILDFLAG(IS_IOS)
-
 // Enables the clean up of hanging form extraction requests made by the
 // password suggestion helper. This is to fix the cases where the suggestions
 // pipeline is broken because the pipeline is waiting for password suggestions
 // that are never provided.
 BASE_DECLARE_FEATURE(kIosCleanupHangingPasswordFormExtractionRequests);
-
-// Allows filling from a secondary recovery password saved as a backup on iOS.
-// Acts as an iOS kill switch for the `kImprovedPasswordChangeService` feature.
-BASE_DECLARE_FEATURE(kIOSFillRecoveryPassword);
 
 // The feature parameter that determines the minimal period of time in
 // milliseconds before the form extraction request times out.
@@ -143,6 +140,7 @@ extern const base::FeatureParam<int>
 BASE_DECLARE_FEATURE(kIOSProactivePasswordGenerationBottomSheet);
 #endif  // BUILDFLAG(IS_IOS)
 
+
 // Marks all submitted credentials as leaked, useful for testing of a password
 // leak dialog.
 BASE_DECLARE_FEATURE(kMarkAllCredentialsAsLeaked);
@@ -151,6 +149,23 @@ BASE_DECLARE_FEATURE(kMarkAllCredentialsAsLeaked);
 // Enables OTP phishing checks.
 BASE_DECLARE_FEATURE(kOtpPhishGuard);
 #endif  // BUILDFLAG(IS_ANDROID)
+
+// PasswordManagerClient::IsFillingEnabled returns `false` for opaque origins.
+// Intended as a kill-switch.
+BASE_DECLARE_FEATURE(kPasswordBlockOpaqueOrigins);
+
+#if BUILDFLAG(IS_ANDROID)
+// When enabled, DeletionOrigin is sent to Android Backend for password
+// deletions.
+BASE_DECLARE_FEATURE(kPassDeletionOriginToAndroidBackend);
+
+// The minimum GMS version required to send deletion origin to Android Backend.
+extern const base::FeatureParam<int> kPassDeletionOriginMinGmsVersion;
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// Triggers password change glow invoking Glic from settings.
+// This flag is only for the prototype version.
+BASE_DECLARE_FEATURE(kPasswordCheckupPrototype);
 
 // Populate the `date_last_filled` timestamp for passwords.
 BASE_DECLARE_FEATURE(kPasswordDateLastFilled);
@@ -161,37 +176,42 @@ BASE_DECLARE_FEATURE(kPasswordFormClientsideClassifier);
 // Enables offering credentials for filling across grouped domains.
 BASE_DECLARE_FEATURE(kPasswordFormGroupedAffiliations);
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)  // Desktop
-// Enables "chunking" generated passwords by adding hyphens every 4 characters
-// to make them more readable.
-BASE_DECLARE_FEATURE(kPasswordGenerationChunking);
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-
 // Enables logging the content of chrome://password-manager-internals to the
 // terminal.
 BASE_DECLARE_FEATURE(kPasswordManagerLogToTerminal);
 
-// Updates password change flow to await for local ML model availability. The
-// model has a superior performance compared to existing password manager
-// classifications.
-BASE_DECLARE_FEATURE(kProactivelyDownloadModelForPasswordChange);
+// Performs additional security checks wrt. the triggering frame before adding
+// the "Select password" entry to the context menu.
+BASE_DECLARE_FEATURE(kPasswordManualFallbackSecurityChecks);
 
-// Removes country and language restrictions for password change. This allows to
-// control locale/country server side.
-BASE_DECLARE_FEATURE(kReduceRequirementsForPasswordChange);
+// When enabled, the user can resolve actionable errors in context during a
+// password save flow.
+BASE_DECLARE_FEATURE(kPasswordSaveInContextErrorResolution);
+
+// When enabled, the password store triggers the `OnErrorStateChanged`
+// notifications.
+BASE_DECLARE_FEATURE(kPasswordStorePropagatesActionableErrors);
+
+// Prevents offering Automatic Password Change on federated login.
+BASE_DECLARE_FEATURE(kPreventAPCOnFederatedLogin);
+
+// Prevents password manager from showing save/update UI on federated login.
+BASE_DECLARE_FEATURE(kPreventPasswordManagerOnFederatedLogin);
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 // Enables "Needs access to keychain, restart chrome" bubble and banner.
 BASE_DECLARE_FEATURE(kRestartToGainAccessToKeychain);
 #endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-// Runs the Password Change flow (enabled by kImprovedPasswordChangeService
-// feature flag) in a user-visible background tab.
-BASE_DECLARE_FEATURE(kRunPasswordChangeInBackgroundTab);
+// Retries capturing annotated page context during automated password change if
+// capturing failed for some reason.
+BASE_DECLARE_FEATURE(kRetryCapturePageContent);
+extern const base::FeatureParam<base::TimeDelta> kCapturePageContentDelay;
+extern const base::FeatureParam<int> kCapturePageContentRetryCount;
 
-// Shows recovery password for the improved password change flow in the
-// management UI.
-BASE_DECLARE_FEATURE(kShowRecoveryPassword);
+// Shows a confirmation dialog before filling grouped credentials from the
+// manual fallback popup on Desktop.
+BASE_DECLARE_FEATURE(kShowConfirmationForGroupedCredentials);
 
 // Shows a tab with password change instead of bubble/settings page after
 // successful password change.
@@ -201,60 +221,17 @@ BASE_DECLARE_FEATURE(kShowTabWithPasswordChangeOnSuccess);
 // manager
 BASE_DECLARE_FEATURE(kSkipUndecryptablePasswords);
 
-// Immediately terminates password change whenever the model detects login
-// failed due to incorrect password.
-BASE_DECLARE_FEATURE(kStopLoginCheckOnFailedLogin);
-
-// Adds throttling logic to password change dialog.
-BASE_DECLARE_FEATURE(kThrottlePasswordChangeDialog);
-
 // Starts passwords resync when undecryptable passwords are detected.
 BASE_DECLARE_FEATURE(kTriggerPasswordResyncWhenUndecryptablePasswordsDetected);
 
-// Updates password change flow to use the refined prompt on Open form step. The
-// prompt uses the list of interactable actionables on the web page to identify
-// the button, which opens the password change form.
-BASE_DECLARE_FEATURE(kUseActionablesForImprovedPasswordChange);
+// The feature enables the use of detached Widget during password change
+// to which WebContents is attached. This helps to resolve the problem
+// that requestAnimationFrame() is not fired on a detached WebContents.
+BASE_DECLARE_FEATURE(kUseDetachedWidget);
 
-// Improves PSL matching capabilities by utilizing PSL-extension list from
-// affiliation service. It fixes problem with incorrect password suggestions on
-// websites like slack.com.
-BASE_DECLARE_FEATURE(kUseExtensionListForPSLMatching);
-
-// Handles user intervention in the Password Change flow for all steps except
-// IS_LOGGED_IN_STEP.
-BASE_DECLARE_FEATURE(kUserInterventionForPasswordChange);
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)  // Desktop
-
-// Moves the "Use a passkey / Use a different passkey" to the context menu from
-// the autofill dropdown. This is now decoupled from
-// "PasswordManualFallbackAvailable" flag.
-BASE_DECLARE_FEATURE(kWebAuthnUsePasskeyFromAnotherDeviceInContextMenu);
-
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-
-inline constexpr base::FeatureParam<std::string>
-    kPasswordChangeSuccessSurveyTriggerId{
-        &kImprovedPasswordChangeService, "PasswordChangeSuccessSurveyTriggerId",
-        /*default_value=*/""};
-inline constexpr base::FeatureParam<std::string>
-    kPasswordChangeErrorSurveyTriggerId{&kImprovedPasswordChangeService,
-                                        "PasswordChangeErrorSurveyTriggerId",
-                                        /*default_value=*/""};
-inline constexpr base::FeatureParam<std::string>
-    kPasswordChangeCanceledSurveyTriggerId{
-        &kImprovedPasswordChangeService,
-        "PasswordChangeCanceledSurveyTriggerId",
-        /*default_value=*/""};
-inline constexpr base::FeatureParam<std::string>
-    kPasswordChangeDelayedSurveyTriggerId{
-        &kImprovedPasswordChangeService, "PasswordChangeDelayedSurveyTriggerId",
-        /*default_value=*/""};
-
-inline constexpr base::FeatureParam<base::TimeDelta>
-    kPasswordChangeThrottleTime{&kThrottlePasswordChangeDialog,
-                                "PasswordChangeThrottleTime", base::Days(14)};
+// Enables the "Use a passkey / Use a different passkey" in the password manual
+// fallback.
+BASE_DECLARE_FEATURE(kWebAuthnUsePasskeyFromAnotherDeviceInManualFallback);
 
 // All features parameters in alphabetical order.
 

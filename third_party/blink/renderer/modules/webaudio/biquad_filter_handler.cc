@@ -247,8 +247,6 @@ void BiquadFilterHandler::Process(uint32_t frames_to_process) {
   } else {
     scoped_refptr<AudioBus> source_bus = Input(0).Bus();
 
-    // FIXME: if we take "tail time" into account, then we can avoid calling
-    // processor()->process() once the tail dies down.
     if (!Input(0).IsConnected()) {
       source_bus->Zero();
     }
@@ -313,25 +311,21 @@ void BiquadFilterHandler::Process(uint32_t frames_to_process) {
         }
       }
 
-      // BiquadDSPKernel of each BiquadProcessor.
-
+      // Update the parameters of each biquad kernel.
       if (are_filter_coefficients_dirty) {
-        SECURITY_CHECK(static_cast<unsigned>(frames_to_process) <=
-                       render_quantum_frames_);
+        const size_t frames_count = static_cast<size_t>(frames_to_process);
+        SECURITY_CHECK(frames_count <= render_quantum_frames_);
 
         if (has_sample_accurate_values && is_audio_rate) {
           parameter_cutoff_frequency_->CalculateSampleAccurateValues(
               cutoff_frequency_sample_accurate_values_.as_span().first(
-                  static_cast<size_t>(frames_to_process)));
+                  frames_count));
           parameter_q_->CalculateSampleAccurateValues(
-              q_sample_accurate_values_.as_span().first(
-                  static_cast<size_t>(frames_to_process)));
+              q_sample_accurate_values_.as_span().first(frames_count));
           parameter_gain_->CalculateSampleAccurateValues(
-              gain_sample_accurate_values_.as_span().first(
-                  static_cast<size_t>(frames_to_process)));
+              gain_sample_accurate_values_.as_span().first(frames_count));
           parameter_detune_->CalculateSampleAccurateValues(
-              detune_sample_accurate_values_.as_span().first(
-                  static_cast<size_t>(frames_to_process)));
+              detune_sample_accurate_values_.as_span().first(frames_count));
 
           // If all the values are actually constant for this render (or the
           // automation rate is "k-rate" for all of the AudioParams), we
@@ -339,11 +333,15 @@ void BiquadFilterHandler::Process(uint32_t frames_to_process) {
           // they would be the same as the first.
           bool is_constant =
               HasConstantValues(
-                  cutoff_frequency_sample_accurate_values_.as_span()) &&
-              HasConstantValues(q_sample_accurate_values_.as_span()) &&
-              HasConstantValues(gain_sample_accurate_values_.as_span()) &&
-              HasConstantValues(detune_sample_accurate_values_.as_span());
-          size_t needed_frames = is_constant ? 1 : render_quantum_frames_;
+                  cutoff_frequency_sample_accurate_values_.as_span().first(
+                      frames_count)) &&
+              HasConstantValues(
+                  q_sample_accurate_values_.as_span().first(frames_count)) &&
+              HasConstantValues(
+                  gain_sample_accurate_values_.as_span().first(frames_count)) &&
+              HasConstantValues(
+                  detune_sample_accurate_values_.as_span().first(frames_count));
+          size_t needed_frames = is_constant ? 1 : frames_count;
           // Convert from Hertz to normalized frequency 0 -> 1.
           for (const auto& biquad : biquads_) {
             biquad->SetHasSampleAccurateValues(needed_frames > 1);
@@ -352,12 +350,13 @@ void BiquadFilterHandler::Process(uint32_t frames_to_process) {
               const double normalized_frequency = NormalizeFrequency(
                   cutoff_frequency_sample_accurate_values_[k], nyquist_,
                   detune_sample_accurate_values_[k]);
-              SetBiquadParams(biquad.get(), type_, k, normalized_frequency,
+              SetBiquadParams(biquad.get(), type_, base::checked_cast<int>(k),
+                              normalized_frequency,
                               q_sample_accurate_values_[k],
                               gain_sample_accurate_values_[k]);
             }
           }
-          const int coef_index = needed_frames - 1;
+          const int coef_index = base::checked_cast<int>(needed_frames - 1);
           DCHECK(!biquads_.empty());
           const double tail =
               biquads_[0]->TailFrame(coef_index, kMaxTailTime * sample_rate_) /
@@ -390,11 +389,10 @@ void BiquadFilterHandler::Process(uint32_t frames_to_process) {
       // For each channel of our input, process using the corresponding
       // Biquad into the output channel.
       for (unsigned i = 0; i < biquads_.size(); ++i) {
-        DCHECK(source_bus->Channel(i)->Data());
-        DCHECK(destination_bus->Channel(i)->MutableData());
-        biquads_[i]->Process(source_bus->Channel(i)->Data(),
-                             destination_bus->Channel(i)->MutableData(),
-                             frames_to_process);
+        biquads_[i]->Process(
+            source_bus->Channel(i)->Span().first(frames_to_process),
+            destination_bus->Channel(i)->MutableSpan().first(
+                frames_to_process));
       }
     }
   }
@@ -406,7 +404,7 @@ void BiquadFilterHandler::Process(uint32_t frames_to_process) {
     AudioBus* output_bus = Output(0).Bus();
     for (wtf_size_t k = 0; k < output_bus->NumberOfChannels(); ++k) {
       AudioChannel* channel = output_bus->Channel(k);
-      if (channel->length() > 0 && !std::isfinite(channel->Data()[0])) {
+      if (channel->length() > 0 && !std::isfinite(channel->Span()[0])) {
         did_warn_bad_filter_state_ = true;
         PostCrossThreadTask(
             *task_runner_, FROM_HERE,
@@ -512,11 +510,12 @@ void BiquadFilterHandler::GetFrequencyResponse(
   DCHECK(!mag_response.empty());
   DCHECK(!phase_response.empty());
 
-  Vector<float> frequency(frequency_hz.size());
+  const wtf_size_t size = base::checked_cast<wtf_size_t>(frequency_hz.size());
+  Vector<float> frequency(size);
 
   // Convert from frequency in Hz to normalized frequency (0 -> 1),
   // with 1 equal to the Nyquist frequency.
-  for (size_t k = 0; k < frequency_hz.size(); ++k) {
+  for (wtf_size_t k = 0; k < size; ++k) {
     frequency[k] = frequency_hz[k] / nyquist_;
   }
 

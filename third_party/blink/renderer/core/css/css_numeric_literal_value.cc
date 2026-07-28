@@ -317,7 +317,7 @@ String CSSNumericLiteralValue::CustomCSSText() const {
         text = builder.ReleaseString();
       }
     } break;
-    default:
+    case UnitType::kIdent:
       NOTREACHED();
   }
   return text;
@@ -364,18 +364,51 @@ bool CSSNumericLiteralValue::Equals(const CSSNumericLiteralValue& other) const {
     case UnitType::kViewportHeight:
     case UnitType::kViewportMin:
     case UnitType::kViewportMax:
+    case UnitType::kViewportInlineSize:
+    case UnitType::kViewportBlockSize:
+    case UnitType::kSmallViewportWidth:
+    case UnitType::kSmallViewportHeight:
+    case UnitType::kSmallViewportInlineSize:
+    case UnitType::kSmallViewportBlockSize:
+    case UnitType::kSmallViewportMin:
+    case UnitType::kSmallViewportMax:
+    case UnitType::kLargeViewportWidth:
+    case UnitType::kLargeViewportHeight:
+    case UnitType::kLargeViewportInlineSize:
+    case UnitType::kLargeViewportBlockSize:
+    case UnitType::kLargeViewportMin:
+    case UnitType::kLargeViewportMax:
+    case UnitType::kDynamicViewportWidth:
+    case UnitType::kDynamicViewportHeight:
+    case UnitType::kDynamicViewportInlineSize:
+    case UnitType::kDynamicViewportBlockSize:
+    case UnitType::kDynamicViewportMin:
+    case UnitType::kDynamicViewportMax:
+    case UnitType::kContainerWidth:
+    case UnitType::kContainerHeight:
+    case UnitType::kContainerInlineSize:
+    case UnitType::kContainerBlockSize:
+    case UnitType::kContainerMin:
+    case UnitType::kContainerMax:
     case UnitType::kFlex:
+    case UnitType::kChs:
+    case UnitType::kIcs:
+    case UnitType::kLhs:
+    case UnitType::kRlhs:
+    case UnitType::kCaps:
+    case UnitType::kRcaps:
       return num_ == other.num_;
     case UnitType::kQuirkyEms:
-      return false;
-    default:
+    case UnitType::kIdent:
       return false;
   }
 }
 
 unsigned CSSNumericLiteralValue::CustomHash() const {
   uint64_t val = base::bit_cast<uint64_t>(num_);
-  return HashInts(static_cast<unsigned>(GetType()), HashInts(val >> 32, val));
+  return HashInts(
+      static_cast<unsigned>(GetType()),
+      HashInts(static_cast<unsigned>(val >> 32), static_cast<unsigned>(val)));
 }
 
 CSSPrimitiveValue::UnitType CSSNumericLiteralValue::CanonicalUnit() const {

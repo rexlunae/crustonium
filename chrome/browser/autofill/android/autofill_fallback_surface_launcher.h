@@ -11,11 +11,12 @@ class WebContents;
 
 namespace autofill {
 
-// Opens the plus addresses management UI.
-void ShowManagePlusAddressesPage(content::WebContents& web_contents);
-
 // Opens the Google Wallet passes management UI web page in a Chrome Custom Tab.
 void ShowGoogleWalletPassesPage(content::WebContents& web_contents);
+
+// Opens the Google Wallet private passes help center page in Cct.
+void ShowGoogleWallePrivatePassesHelpCenterPageInCct(
+    content::WebContents& web_contents);
 
 }  // namespace autofill
 

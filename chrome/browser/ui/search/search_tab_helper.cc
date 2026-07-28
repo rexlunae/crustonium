@@ -8,7 +8,6 @@
 
 #include "base/containers/flat_map.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/strings/string_util.h"
@@ -24,7 +23,6 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/search/omnibox_utils.h"
@@ -32,9 +30,7 @@
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/google/core/common/google_util.h"
 #include "components/navigation_metrics/navigation_metrics.h"
@@ -48,7 +44,6 @@
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -107,7 +102,7 @@ void RecordNewTabLoadTime(content::WebContents* contents) {
 void RecordConcreteNtp(content::NavigationHandle* navigation_handle) {
   NewTabPageConcretePage concrete_page = NewTabPageConcretePage::kOther;
   if (navigation_handle->GetURL().DeprecatedGetOriginAsURL() ==
-      GURL(chrome::kChromeUINewTabPageURL).DeprecatedGetOriginAsURL()) {
+      chrome::ChromeUINewTabPageURLAsGURL().DeprecatedGetOriginAsURL()) {
     concrete_page = NewTabPageConcretePage::k1PWebUiNtp;
   } else if (navigation_handle->GetURL().DeprecatedGetOriginAsURL() ==
              GURL(chrome::kChromeUINewTabPageThirdPartyURL)
@@ -122,7 +117,7 @@ void RecordConcreteNtp(content::NavigationHandle* navigation_handle) {
                  navigation_handle->GetWebContents()->GetBrowserContext())
                  ->IsOffTheRecord() &&
              navigation_handle->GetURL().DeprecatedGetOriginAsURL() ==
-                 GURL(chrome::kChromeUINewTabURL).DeprecatedGetOriginAsURL()) {
+                 chrome::ChromeUINewTabURLAsGURL().DeprecatedGetOriginAsURL()) {
     concrete_page = NewTabPageConcretePage::kOffTheRecordNtp;
   }
   base::UmaHistogramEnumeration("NewTabPage.ConcretePage", concrete_page);
@@ -195,7 +190,7 @@ void SearchTabHelper::DidStartNavigation(
   }
 
   if (web_contents()->GetVisibleURL().DeprecatedGetOriginAsURL() ==
-      GURL(chrome::kChromeUINewTabURL).DeprecatedGetOriginAsURL()) {
+      chrome::ChromeUINewTabURLAsGURL().DeprecatedGetOriginAsURL()) {
     RecordConcreteNtp(navigation_handle);
   }
 

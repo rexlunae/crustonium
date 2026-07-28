@@ -119,7 +119,7 @@ public class MockTab extends TabImpl {
     }
 
     @Override
-    public void show(@TabSelectionType int type, @TabLoadIfNeededCaller int caller) {
+    public void show(@TabSelectionType int type) {
         // Intentionally do nothing.
     }
 
@@ -156,11 +156,12 @@ public class MockTab extends TabImpl {
     }
 
     @Override
-    public void destroy() {
+    public @TabDestroyStatus int destroy() {
         mIsDestroyed = true;
         mIsInitialized = false;
         for (TabObserver observer : mObservers) observer.onDestroyed(this);
         mObservers.clear();
+        return TabDestroyStatus.FAST_SHUTDOWN;
     }
 
     @Override

@@ -29,6 +29,7 @@
 #include "base/strings/utf_string_conversion_utils.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
@@ -44,16 +45,20 @@
 #include "chrome/browser/extensions/api/downloads/downloads_api.h"
 #include "chrome/browser/extensions/api/downloads_internal/downloads_internal_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/platform_util_internal.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/extensions/api/downloads.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_item.h"
+#include "components/history/core/browser/download_row.h"
+#include "components/history/core/browser/history_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
 #include "content/public/browser/browser_context.h"
@@ -92,6 +97,10 @@
 #include "ui/base/window_open_disposition.h"
 #include "url/origin.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/content_uri_utils.h"
+#endif
+
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
 #include "chrome/browser/download/bubble/download_display_controller.h"
@@ -102,12 +111,14 @@
 #include "chrome/test/base/ui_test_utils.h"
 #if !BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/download/download_display.h"
-#endif
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "components/safe_browsing/content/common/file_type_policies_test_util.h"
-#endif
-#endif
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -145,6 +156,17 @@ bool IsDownloadExternallyRemoved(download::DownloadItem* item) {
 void OnFileDeleted(bool success) {}
 
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if BUILDFLAG(IS_ANDROID)
+// Returns the base filename or the empty string on error.
+std::string FilenameFromContentUri(const base::FilePath& content_uri) {
+  std::u16string display_name;
+  if (base::MaybeGetFileDisplayName(content_uri, &display_name)) {
+    return base::UTF16ToUTF8(display_name);
+  }
+  return std::string();
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // Comparator that orders download items by their ID. Can be used with
 // std::sort.
@@ -274,8 +296,9 @@ class DownloadsEventsListener : public EventRouter::TestObserver {
   void OnWillDispatchEvent(const extensions::Event& event) override {
     // TestObserver receives notifications for all events but only needs to
     // check download events.
-    if (!base::StartsWith(event.event_name, "downloads"))
+    if (!base::StartsWith(event.event_name, "downloads")) {
       return;
+    }
 
     Event* new_event = new Event(
         Profile::FromBrowserContext(event.restrict_to_browser_context),
@@ -493,8 +516,9 @@ class DownloadExtensionTest : public ExtensionApiTest {
   void GoOnTheRecord() {
     current_browser_ = browser_window_interface();
     current_profile_ = profile();
-    if (events_listener_.get())
+    if (events_listener_.get()) {
       events_listener_->UpdateProfile(current_profile());
+    }
   }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -520,8 +544,9 @@ class DownloadExtensionTest : public ExtensionApiTest {
                                                false);
     current_browser_ = incognito_browser_;
     current_profile_ = incognito_profile_;
-    if (events_listener_.get())
+    if (events_listener_.get()) {
       events_listener_->UpdateProfile(current_profile());
+    }
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
@@ -532,8 +557,9 @@ class DownloadExtensionTest : public ExtensionApiTest {
   bool WaitForInterruption(DownloadItem* item,
                            download::DownloadInterruptReason expected_error,
                            const std::string& on_created_event) {
-    if (!WaitFor(downloads::OnCreated::kEventName, on_created_event))
+    if (!WaitFor(downloads::OnCreated::kEventName, on_created_event)) {
       return false;
+    }
     // Now, onCreated is always fired before interruption.
     return WaitFor(
         downloads::OnChanged::kEventName,
@@ -649,8 +675,9 @@ class DownloadExtensionTest : public ExtensionApiTest {
 
     EXPECT_EQ(0, manager->BlockingShutdownCount());
     EXPECT_EQ(0, manager->InProgressCount());
-    if (manager->InProgressCount() != 0)
+    if (manager->InProgressCount() != 0) {
       return nullptr;
+    }
     return CreateSlowTestDownload(first_download_.get(), kFirstDownloadUrl);
   }
 
@@ -661,8 +688,9 @@ class DownloadExtensionTest : public ExtensionApiTest {
   DownloadItem* CreateSlowTestDownload(
       net::test_server::ControllableHttpResponse* response,
       const std::string& path) {
-    if (!embedded_test_server()->Started())
+    if (!embedded_test_server()->Started()) {
       StartEmbeddedTestServer();
+    }
     std::unique_ptr<content::DownloadTestObserver> observer(
         CreateInProgressDownloadObserver(1));
     DownloadManager* manager = GetCurrentManager();
@@ -963,8 +991,9 @@ class ScopedItemVectorCanceller {
   ~ScopedItemVectorCanceller() {
     for (DownloadManager::DownloadVector::const_iterator item = items_->begin();
          item != items_->end(); ++item) {
-      if ((*item)->GetState() == DownloadItem::IN_PROGRESS)
+      if ((*item)->GetState() == DownloadItem::IN_PROGRESS) {
         (*item)->Cancel(true);
+      }
       content::DownloadUpdatedObserver observer(
           (*item), base::BindRepeating(&ItemNotInProgress));
       observer.WaitForEvent();
@@ -1030,7 +1059,7 @@ class HTML5FileWriter {
 }  // namespace
 
 // Tests that Number/double properties in query are parsed correctly.
-// Regression test for https://crbug.com/617435.
+// Regression test for https://crbug.com/41257260.
 IN_PROC_BROWSER_TEST_F(DownloadExtensionTest, ParseSearchQuery) {
   ASSERT_TRUE(
       RunFunction(new DownloadsSearchFunction, "[{\"totalBytesLess\":1}]"));
@@ -1117,7 +1146,7 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
   EXPECT_TRUE(download_item->IsPaused());
 
   // Calling removeFile on a non-active download yields kNotComplete
-  // and should not crash. http://crbug.com/319984
+  // and should not crash. http://crbug.com/41074456
   error = RunFunctionAndReturnError(
       base::MakeRefCounted<DownloadsRemoveFileFunction>(),
       DownloadItemIdAsArgList(download_item));
@@ -1548,7 +1577,7 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
   // no sorters, DownloadQuery does not call sort(), so the order of the results
   // depends on the order of the items in DownloadManagerImpl::downloads_,
   // which is unspecified and differs between libc++ and libstdc++.
-  // http://crbug.com/365334
+  // http://crbug.com/40361797
 }
 
 // Test the |danger| option for search().
@@ -1658,9 +1687,18 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
 // DownloadsResumeFunction, and DownloadsCancelFunction.
 // TODO(crbug.com/405219117): Support incognito on desktop Android. This is
 // blocked on Android support for CreateBrowserWindow().
+
+// TODO(crbug.com/520432613): Re-enable once test failure is fixed.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_DownloadExtensionTest_SearchPauseResumeCancelGetFileIconIncognito \
+  DISABLED_DownloadExtensionTest_SearchPauseResumeCancelGetFileIconIncognito
+#else
+#define MAYBE_DownloadExtensionTest_SearchPauseResumeCancelGetFileIconIncognito \
+  DownloadExtensionTest_SearchPauseResumeCancelGetFileIconIncognito
+#endif
 IN_PROC_BROWSER_TEST_F(
     DownloadExtensionTest,
-    DownloadExtensionTest_SearchPauseResumeCancelGetFileIconIncognito) {
+    MAYBE_DownloadExtensionTest_SearchPauseResumeCancelGetFileIconIncognito) {
   std::optional<base::Value> result_value;
   std::string error;
   std::string result_string;
@@ -2177,7 +2215,6 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
       "oRiGiN",
       "Access-Control-Request-Headers",
       "Access-Control-Request-Method",
-      "Access-Control-Request-Private-Network",
   });
 
   for (size_t index = 0; index < std::size(kUnsafeHeaders); ++index) {
@@ -3128,7 +3165,7 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
 #endif
 }
 
-// Disabled due to cross-platform flakes; http://crbug.com/370531.
+// Disabled due to cross-platform flakes; http://crbug.com/41105685.
 IN_PROC_BROWSER_TEST_F(
     DownloadExtensionTest,
     DISABLED_DownloadExtensionTest_OnDeterminingFilename_Timeout) {
@@ -3266,7 +3303,7 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
 }
 
 // Tests downloadsInternal.determineFilename.
-// Regression test for https://crbug.com/815362.
+// Regression test for https://crbug.com/40564481.
 IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
                        DownloadsInternalDetermineFilename) {
   GoOnTheRecord();
@@ -3375,11 +3412,9 @@ IN_PROC_BROWSER_TEST_F(
 #endif
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 // Tests that overriding a dangerous file extension to a safe extension will
 // trigger the dangerous prompt and will not change the extension.
-// TODO(crbug.com/405219117): Port to desktop Android when the dangerous
-// download prompt is ported.
 IN_PROC_BROWSER_TEST_F(
     DownloadExtensionTest,
     DownloadExtensionTest_OnDeterminingFilename_SafeOverride) {
@@ -3451,10 +3486,18 @@ IN_PROC_BROWSER_TEST_F(
                           "    \"previous\": \"in_progress\","
                           "    \"current\": \"complete\"}}]",
                           result_id)));
+#if BUILDFLAG(IS_ANDROID)
+  // Android uses content URIs for downloads.
+  std::string filename = FilenameFromContentUri(item->GetTargetFilePath());
+  // Sometimes the downloads directory isn't empty, so the filename may be
+  // of the form "overridden (1).swf". http://crbug.com/494021088
+  EXPECT_TRUE(re2::RE2::FullMatch(filename, "overridden.*swf"));
+#else
   EXPECT_EQ(downloads_directory().AppendASCII("overridden.swf"),
             item->GetTargetFilePath());
+#endif
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 IN_PROC_BROWSER_TEST_F(
     DownloadExtensionTest,
@@ -3941,7 +3984,7 @@ IN_PROC_BROWSER_TEST_F(
 #endif
 }
 
-// Flaky. crbug.com/1147804
+// Flaky. crbug.com/40156773
 IN_PROC_BROWSER_TEST_F(
     DownloadExtensionTest,
     DISABLED_DownloadExtensionTest_OnDeterminingFilename_EmptyBasenameInvalid) {
@@ -4328,7 +4371,7 @@ IN_PROC_BROWSER_TEST_F(
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // TODO(crbug.com/405219117): Support incognito on desktop Android.
-// This test is flaky on Linux ASan LSan Tests bot. https://crbug.com/1114226
+// This test is flaky on Linux ASan LSan Tests bot. https://crbug.com/40710698
 #if ((BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && \
      defined(ADDRESS_SANITIZER))
 #define MAYBE_DownloadExtensionTest_OnDeterminingFilename_IncognitoSplit \
@@ -4619,6 +4662,7 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
   // TODO(benjhayden) Test that browsers associated with other profiles are not
   // affected.
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // TODO(benjhayden) Figure out why DisableExtension() does not fire
 // OnListenerRemoved.
@@ -4626,57 +4670,145 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
 // TODO(benjhayden) Test that the shelf is shown for download() both with and
 // without a WebContents.
 
-void OnDangerPromptCreated(DownloadDangerPrompt* prompt) {
-  prompt->InvokeActionForTesting(DownloadDangerPrompt::ACCEPT);
-}
-
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-// TODO(crbug.com/450662444): Enable this test on desktop Android when the
-// DownloadDangerPrompt is implemented.
-IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
-                       DownloadExtensionTest_AcceptDanger) {
+class DownloadsSafeBrowsingTest : public DownloadExtensionTest {
+ public:
+  DownloadsSafeBrowsingTest()
+      : test_safe_browsing_factory_(
+            std::make_unique<safe_browsing::TestSafeBrowsingServiceFactory>()) {
+  }
+  DownloadsSafeBrowsingTest(const DownloadsSafeBrowsingTest&) = delete;
+  DownloadsSafeBrowsingTest& operator=(const DownloadsSafeBrowsingTest&) =
+      delete;
+  ~DownloadsSafeBrowsingTest() override = default;
+
+  void SetUp() override {
+    safe_browsing::SafeBrowsingService::RegisterFactory(
+        test_safe_browsing_factory_.get());
+    DownloadExtensionTest::SetUp();
+  }
+
+  void TearDown() override {
+    DownloadExtensionTest::TearDown();
+    safe_browsing::SafeBrowsingService::RegisterFactory(nullptr);
+  }
+
+  // Downloads a file that will be marked dangerous.
+  DownloadItem* DownloadDangerousFile(int* out_result_id) {
+    std::optional<base::Value> result = RunFunctionAndReturnResult(
+        base::MakeRefCounted<DownloadsDownloadFunction>(),
+        "[{\"url\": \"data:application/x-shockwave-flash,\", \"filename\": "
+        "\"dangerous.swf\"}]");
+    if (!result || !result->is_int()) {
+      return nullptr;
+    }
+    *out_result_id = result->GetInt();
+    DownloadItem* item = GetCurrentManager()->GetDownload(*out_result_id);
+    if (!item) {
+      return nullptr;
+    }
+    if (!WaitFor(downloads::OnChanged::kEventName,
+                 base::StringPrintf("[{\"id\": %d, "
+                                    "  \"danger\": {"
+                                    "    \"previous\": \"safe\","
+                                    "    \"current\": \"file\"}}]",
+                                    *out_result_id))) {
+      return nullptr;
+    }
+    EXPECT_TRUE(item->IsDangerous());
+    return item;
+  }
+
+  // Verifies Safe Browsing report.
+  void VerifySafeBrowsingReport(bool expect_proceed) {
+    std::string report_str =
+        test_safe_browsing_factory_->test_safe_browsing_service()
+            ->serialized_download_report();
+    if (expect_proceed) {
+      EXPECT_FALSE(report_str.empty());
+      safe_browsing::ClientSafeBrowsingReportRequest report;
+      ASSERT_TRUE(report.ParseFromString(report_str));
+      EXPECT_EQ(safe_browsing::ClientSafeBrowsingReportRequest::
+                    DANGEROUS_DOWNLOAD_BY_API,
+                report.type());
+      EXPECT_TRUE(report.did_proceed());
+    } else {
+      EXPECT_TRUE(report_str.empty());
+    }
+  }
+
+ protected:
+  std::unique_ptr<safe_browsing::TestSafeBrowsingServiceFactory>
+      test_safe_browsing_factory_;
+};
+
+IN_PROC_BROWSER_TEST_F(DownloadsSafeBrowsingTest, AcceptDanger) {
   safe_browsing::FileTypePoliciesTestOverlay scoped_dangerous =
       safe_browsing::ScopedMarkAllFilesDangerousForTesting();
 
-  // Download a file that will be marked dangerous; click the browser action
-  // button; the browser action popup will call acceptDanger(); when the
-  // DownloadDangerPrompt is created, pretend that the user clicks the Accept
-  // button; wait until the download completes.
   LoadExtension("downloads_split");
-  std::optional<base::Value> result = RunFunctionAndReturnResult(
-      base::MakeRefCounted<DownloadsDownloadFunction>(),
-      "[{\"url\": \"data:application/x-shockwave-flash,\", \"filename\": "
-      "\"dangerous.swf\"}]");
-  ASSERT_TRUE(result);
-  ASSERT_TRUE(result->is_int());
-  int result_id = result->GetInt();
-  DownloadItem* item = GetCurrentManager()->GetDownload(result_id);
+
+  // When dialog is triggered, this will call the callback with Action::ACCEPT
+  // without showing the dialog.
+  auto downloads_danger_dialog_reset =
+      DownloadsAcceptDangerFunction::TriggerDangerPromptActionForTesting(
+          DownloadDangerPrompt::Action::ACCEPT);
+
+  int result_id;
+  DownloadItem* item = DownloadDangerousFile(&result_id);
   ASSERT_TRUE(item);
-  ASSERT_TRUE(WaitFor(downloads::OnChanged::kEventName,
-                      base::StringPrintf(
-                          "[{\"id\": %d, "
-                          "  \"danger\": {"
-                          "    \"previous\": \"safe\","
-                          "    \"current\": \"file\"}}]",
-                          result_id)));
-  ASSERT_TRUE(item->IsDangerous());
-  ScopedCancellingItem canceller(item);
+
   std::unique_ptr<content::DownloadTestObserver> observer(
       new content::DownloadTestObserverTerminal(
           GetCurrentManager(), 1,
           content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_IGNORE));
-  DownloadsAcceptDangerFunction::OnPromptCreatedCallback callback =
-      base::BindOnce(&OnDangerPromptCreated);
-  DownloadsAcceptDangerFunction::OnPromptCreatedForTesting(
-      &callback);
 
+  // Trigger the download, which will show the danger dialog whose callback is
+  // automatically triggered with the accept action.
   const GURL url = extension()->GetResourceURL("accept_danger.html");
   ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
 
+  // Wait until the download completes.
   observer->WaitForFinished();
+  // Re-fetch the item, in case the original one was mistakenly deleted. This
+  // has caused tricky test failures in the past.
+  item = GetCurrentManager()->GetDownload(result_id);
+  ASSERT_TRUE(item);
+  EXPECT_EQ(DownloadItem::COMPLETE, item->GetState());
+
+  VerifySafeBrowsingReport(/*expect_proceed=*/true);
+}
+
+IN_PROC_BROWSER_TEST_F(DownloadsSafeBrowsingTest, CancelDanger) {
+  safe_browsing::FileTypePoliciesTestOverlay scoped_dangerous =
+      safe_browsing::ScopedMarkAllFilesDangerousForTesting();
+
+  LoadExtension("downloads_split");
+
+  // When dialog is triggered, this will call the callback with Action::CANCEL
+  // without showing the dialog.
+  auto downloads_danger_dialog_reset =
+      DownloadsAcceptDangerFunction::TriggerDangerPromptActionForTesting(
+          DownloadDangerPrompt::Action::CANCEL);
+
+  int result_id;
+  DownloadItem* item = DownloadDangerousFile(&result_id);
+  ASSERT_TRUE(item);
+
+  // Trigger the download, which will show the danger dialog whose callback is
+  // automatically triggered with the cancel action.
+  const GURL url = extension()->GetResourceURL("accept_danger.html");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
+
+  // Wait until the download is removed.
+  ASSERT_TRUE(WaitFor(downloads::OnErased::kEventName,
+                      base::StringPrintf("[%d]", result_id)));
+
+  VerifySafeBrowsingReport(/*expect_proceed=*/false);
 }
 #endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Test that file deletion event is correctly generated after download
 // completion.
 // TODO(crbug.com/405219117): Fix on desktop Android. Currently crashes in
@@ -4726,16 +4858,14 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
 }
 
 // The DownloadExtensionBubbleEnabledTest relies on the download surface, which
-// ChromeOS_ASH and Android don't use (see crbug.com/1323505).
+// ChromeOS_ASH and Android don't use (see crbug.com/40224714).
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 class DownloadExtensionBubbleEnabledTest : public DownloadExtensionTest {
  public:
   DownloadExtensionBubbleEnabledTest() = default;
 
   DownloadDisplay* GetDownloadToolbarButton() {
-    return current_browser()
-        ->GetBrowserForMigrationOnly()
-        ->window()
+    return BrowserWindow::FromBrowser(current_browser())
         ->GetDownloadBubbleUIController()
         ->GetDownloadDisplayController()
         ->download_display_for_testing();
@@ -4910,5 +5040,363 @@ TEST(ExtensionDetermineDownloadFilenameInternal,
             warnings.begin()->warning_type());
   EXPECT_EQ("incumbent", warnings.begin()->extension_id());
 }
+
+class DownloadExtensionDeferredHistoryTest
+    : public DownloadExtensionTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  DownloadExtensionDeferredHistoryTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          download::features::kDeferredDownloadHistoryLoading);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          download::features::kDeferredDownloadHistoryLoading);
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest, DeferLoadingTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    // History should not be loaded initially since the feature flag is on.
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    // History should be loaded initially since the feature flag is off.
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  // Call chrome.downloads.search, which should trigger history loading.
+  std::optional<base::Value> result_value = RunFunctionAndReturnResult(
+      base::MakeRefCounted<DownloadsSearchFunction>(), "[{}]");
+  ASSERT_TRUE(result_value);
+
+  // Verify history has now been loaded.
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingQueryTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    // History should not be loaded initially since the feature flag is on.
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    // History should be loaded initially since the feature flag is off.
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  // Populate the History database with a completed download.
+  history::HistoryService* history_service =
+      HistoryServiceFactory::GetForProfile(current_profile(),
+                                           ServiceAccessType::EXPLICIT_ACCESS);
+  ASSERT_TRUE(history_service);
+
+  history::DownloadRow row;
+  row.id = 42;
+  row.guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  row.current_path = downloads_directory().AppendASCII("history_file.txt");
+  row.target_path = downloads_directory().AppendASCII("history_file.txt");
+  row.url_chain.emplace_back("http://example.com/history_file.txt");
+  row.state = history::DownloadState::COMPLETE;
+  row.start_time = base::Time::Now() - base::Hours(1);
+  row.end_time = base::Time::Now();
+  row.received_bytes = 100;
+  row.total_bytes = 100;
+
+  base::test::TestFuture<bool> create_future;
+  history_service->CreateDownload(row, create_future.GetCallback());
+  ASSERT_TRUE(create_future.Get());
+
+  // Verify the item is in the DB.
+  DownloadManager* manager = GetOnRecordManager();
+  DownloadManager::DownloadVector items;
+  manager->GetAllDownloads(&items);
+
+  if (GetParam()) {
+    // The item is NOT yet loaded into DownloadManager.
+    EXPECT_TRUE(items.empty());
+
+    // Listen for the OnDownloadCreated notification when history loads
+    // asynchronously in the background.
+    base::test::TestFuture<void> download_created_future;
+    class ActiveDownloadObserver : public DownloadManager::Observer {
+     public:
+      ActiveDownloadObserver(DownloadManager* manager,
+                             base::OnceClosure callback)
+          : manager_(manager), callback_(std::move(callback)) {
+        manager_->AddObserver(this);
+      }
+      ~ActiveDownloadObserver() override { manager_->RemoveObserver(this); }
+      void OnDownloadCreated(DownloadManager* manager,
+                             DownloadItem* item) override {
+        if (callback_) {
+          std::move(callback_).Run();
+        }
+      }
+
+     private:
+      raw_ptr<DownloadManager> manager_;
+      base::OnceClosure callback_;
+    };
+    ActiveDownloadObserver observer(manager,
+                                    download_created_future.GetCallback());
+
+    // Call chrome.downloads.search, which triggers history loading.
+    // The call now waits for history loading to complete and returns the
+    // completed download item immediately!
+    std::optional<base::Value> result_value = RunFunctionAndReturnResult(
+        base::MakeRefCounted<DownloadsSearchFunction>(), "[{}]");
+    ASSERT_TRUE(result_value);
+    ASSERT_TRUE(result_value->is_list());
+    ASSERT_EQ(1UL, result_value->GetList().size());
+
+    const base::DictValue& result_dict = result_value->GetList()[0].GetDict();
+    std::optional<int> id = result_dict.FindInt("id");
+    ASSERT_TRUE(id.has_value());
+    EXPECT_EQ(42, id.value());
+    const std::string* filename = result_dict.FindString("filename");
+    ASSERT_TRUE(filename);
+    EXPECT_EQ(row.target_path.AsUTF8Unsafe(), *filename);
+  } else {
+    // If deferred loading is disabled, the item created after startup won't
+    // be loaded. Let's verify that calling search returns empty.
+    std::optional<base::Value> result_value = RunFunctionAndReturnResult(
+        base::MakeRefCounted<DownloadsSearchFunction>(), "[{}]");
+    ASSERT_TRUE(result_value);
+  }
+}
+
+// Helper class to wait until a DownloadItem's target path has been determined.
+class TargetResolvedObserver : public DownloadItem::Observer {
+ public:
+  explicit TargetResolvedObserver(DownloadItem* item) : item_(item) {
+    item_->AddObserver(this);
+  }
+  ~TargetResolvedObserver() override {
+    if (item_) {
+      item_->RemoveObserver(this);
+    }
+  }
+
+  void WaitForTargetResolved() {
+    if (!item_->GetFullPath().empty()) {
+      return;
+    }
+    run_loop_.Run();
+  }
+
+  // DownloadItem::Observer:
+  void OnDownloadUpdated(DownloadItem* download) override {
+    if (!download->GetFullPath().empty()) {
+      run_loop_.Quit();
+    }
+  }
+  void OnDownloadDestroyed(DownloadItem* download) override {
+    item_ = nullptr;
+    run_loop_.Quit();
+  }
+
+ private:
+  raw_ptr<DownloadItem> item_;
+  base::RunLoop run_loop_;
+};
+
+// Test chrome.downloads.download(), pause(), and cancel() under both deferred
+// and non-deferred history loading configurations.
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DownloadPauseCancelTest) {
+  LoadExtension("downloads_split");
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    // History should not be loaded initially.
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    // History should be loaded initially.
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  // Use a never-ending exabyte response URL from the test server so the
+  // download starts instantly but stays active in the IN_PROGRESS state
+  // indefinitely.
+  std::string download_url =
+      embedded_test_server()->GetURL("/exabyte_response").spec();
+
+  // 1. Start the download using the extension API downloads.download().
+  // If deferred loading is enabled, this will be queued and will trigger
+  // history loading.
+  std::optional<base::Value> result = RunFunctionAndReturnResult(
+      base::MakeRefCounted<DownloadsDownloadFunction>(),
+      base::StringPrintf("[{\"url\": \"%s\"}]", download_url.c_str()));
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->is_int());
+  int download_id = result->GetInt();
+
+  // Verify history is now loaded in both cases.
+  EXPECT_TRUE(service->GetDownloadHistory());
+
+  DownloadItem* item = GetCurrentManager()->GetDownload(download_id);
+  ASSERT_TRUE(item);
+  ScopedCancellingItem canceller(item);
+
+  // Wait for the download's target path to be determined (resolving the race
+  // condition).
+  TargetResolvedObserver target_observer(item);
+  target_observer.WaitForTargetResolved();
+
+  // Wait for onCreated event.
+  ASSERT_TRUE(WaitFor(downloads::OnCreated::kEventName,
+                      base::StringPrintf("[{\"danger\": \"safe\","
+                                         "  \"incognito\": false,"
+                                         "  \"id\": %d,"
+                                         "  \"mime\": \"text/plain\","
+                                         "  \"paused\": false,"
+                                         "  \"url\": \"%s\"}]",
+                                         download_id, download_url.c_str())));
+
+  // 2. Pause the download using downloads.pause().
+  // Since history is already loaded, this should run immediately.
+  EXPECT_TRUE(RunFunction(base::MakeRefCounted<DownloadsPauseFunction>(),
+                          base::StringPrintf("[%d]", download_id)));
+  EXPECT_TRUE(item->IsPaused());
+
+  // 3. Cancel the download using downloads.cancel().
+  // This should also run immediately.
+  EXPECT_TRUE(RunFunction(base::MakeRefCounted<DownloadsCancelFunction>(),
+                          base::StringPrintf("[%d]", download_id)));
+  EXPECT_EQ(DownloadItem::CANCELLED, item->GetState());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingEraseTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  std::optional<base::Value> result_value = RunFunctionAndReturnResult(
+      base::MakeRefCounted<DownloadsEraseFunction>(), "[{}]");
+  ASSERT_TRUE(result_value);
+
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingGetFileIconTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  std::string error = RunFunctionAndReturnError(
+      base::MakeRefCounted<DownloadsGetFileIconFunction>(), "[0]");
+  EXPECT_FALSE(error.empty());
+
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingOpenTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  std::string error = RunFunctionAndReturnError(
+      base::MakeRefCounted<DownloadsOpenFunction>(), "[0]");
+  EXPECT_FALSE(error.empty());
+
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingResumeTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  std::string error = RunFunctionAndReturnError(
+      base::MakeRefCounted<DownloadsResumeFunction>(), "[0]");
+  EXPECT_FALSE(error.empty());
+
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingRemoveFileTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  std::string error = RunFunctionAndReturnError(
+      base::MakeRefCounted<DownloadsRemoveFileFunction>(), "[0]");
+  EXPECT_FALSE(error.empty());
+
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
+                       DeferLoadingShowTest) {
+  DownloadCoreService* service =
+      DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+  ASSERT_TRUE(service);
+
+  if (GetParam()) {
+    EXPECT_FALSE(service->GetDownloadHistory());
+  } else {
+    EXPECT_TRUE(service->GetDownloadHistory());
+  }
+
+  std::string error = RunFunctionAndReturnError(
+      base::MakeRefCounted<DownloadsShowFunction>(), "[0]");
+  EXPECT_FALSE(error.empty());
+
+  EXPECT_TRUE(service->GetDownloadHistory());
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         DownloadExtensionDeferredHistoryTest,
+                         testing::Bool());
 
 }  // namespace extensions

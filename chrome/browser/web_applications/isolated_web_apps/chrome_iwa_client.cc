@@ -13,7 +13,6 @@
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/runtime_data/chrome_iwa_runtime_data_provider.h"
 #include "chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -22,6 +21,7 @@
 #include "chrome/common/url_constants.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/webapps/isolated_web_apps/client.h"
+#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/types/url_loading_types.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/isolated_web_apps_policy.h"
@@ -34,7 +34,6 @@ namespace {
 
 using SourceRequestError = IwaClient::SourceRequestError;
 
-constexpr char kInstallPagePath[] = "/.well-known/_generated_install_page.html";
 constexpr char kInstallPageContent[] = R"(
     <!DOCTYPE html>
     <html>
@@ -65,28 +64,15 @@ GetIwaSourceWithTrustCheck(base::WeakPtr<Profile> profile,
         .error_description = base::StringPrintf(
             "There's no matching Isolated Web App installed.")});
   }
-  if (iwa->isolation_data()->location().dev_mode() &&
-      !IsIwaDevModeEnabled(profile.get())) {
-    return base::unexpected(SourceRequestError{
-        .net_error = net::ERR_FAILED,
-        .error_description =
-            "Isolated Web App Developer Mode is not enabled or "
-            "blocked by policy."});
-  }
-  auto source = IwaSourceWithMode::FromStorageLocation(
+  RETURN_IF_ERROR(IsolatedWebAppTrustChecker::IsResourceLoadingAllowed(
+                      *profile, web_bundle_id, *iwa)
+                      .transform_error([](const std::string& error) {
+                        return SourceRequestError{
+                            .net_error = net::ERR_INVALID_WEB_BUNDLE,
+                            .error_description = error};
+                      }));
+  return IwaSourceWithMode::FromStorageLocation(
       profile->GetPath(), iwa->isolation_data()->location());
-  if (std::holds_alternative<IwaSourceBundleWithMode>(source.variant())) {
-    // TODO(crbug.com/474076928): Split up IsTrusted() so that
-    // holds_alternative check is not needed.
-    RETURN_IF_ERROR(IsolatedWebAppTrustChecker::IsTrusted(
-                        *profile, web_bundle_id, source.dev_mode())
-                        .transform_error([](const std::string& error) {
-                          return SourceRequestError{
-                              .net_error = net::ERR_INVALID_WEB_BUNDLE,
-                              .error_description = error};
-                        }));
-  }
-  return source;
 }
 
 void GetIwaSourceForRequestImpl(
@@ -109,7 +95,7 @@ void GetIwaSourceForRequestImpl(
     if (!web_contents) {
       // `web_contents` can be `nullptr` in certain edge cases, such as when
       // the browser window closes concurrently with an ongoing request (see
-      // crbug.com/1477761). Return an error if that is the case, instead of
+      // crbug.com/40929036). Return an error if that is the case, instead of
       // silently not querying `NonInstalledBundleInspectionContext`. Should we
       // ever find a case where we _do_ want to continue request processing
       // even though the `WebContents` no longer exists, we can change the
@@ -124,20 +110,14 @@ void GetIwaSourceForRequestImpl(
     if (const auto* inspection_context =
             NonInstalledBundleInspectionContext::FromWebContents(
                 web_contents)) {
-      if (std::holds_alternative<IwaSourceBundleWithMode>(
-              inspection_context->source().variant())) {
-        // TODO(crbug.com/474076928): Split up IsTrusted() so that
-        // holds_alternative check is not needed.
-        RETURN_IF_ERROR(
-            IsolatedWebAppTrustChecker::IsTrusted(
-                *profile, web_bundle_id,
-                inspection_context->source().dev_mode()),
-            [&](const std::string& error) {
-              std::move(callback).Run(base::unexpected(
-                  SourceRequestError{.net_error = net::ERR_INVALID_WEB_BUNDLE,
-                                     .error_description = error}));
-            });
-      }
+      RETURN_IF_ERROR(
+          IsolatedWebAppTrustChecker::IsResourceLoadingAllowed(
+              *profile, web_bundle_id, *inspection_context),
+          [&](const std::string& error) {
+            std::move(callback).Run(base::unexpected(
+                SourceRequestError{.net_error = net::ERR_INVALID_WEB_BUNDLE,
+                                   .error_description = error}));
+          });
       if (request.url.GetPath() == kInstallPagePath) {
         std::move(callback).Run(
             GeneratedResponse{.response_body = kInstallPageContent});
@@ -207,7 +187,7 @@ void ChromeIwaClient::GetIwaSourceForRequest(
 }
 
 IwaRuntimeDataProvider* ChromeIwaClient::GetRuntimeDataProvider() {
-  return &ChromeIwaRuntimeDataProvider::GetInstance();
+  return &IwaRuntimeDataProvider::GetInstance();
 }
 
 }  // namespace web_app

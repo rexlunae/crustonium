@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/core/editing/local_caret_rect.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/editing/position_iterator.h"
+#include "third_party/blink/renderer/core/editing/position_units.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/editing/selection_adjuster.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
@@ -239,9 +240,20 @@ AdjustBackwardPositionToAvoidCrossingEditingBoundariesTemplate(
 
   ContainerNode* highest_root = HighestEditableRoot(anchor);
 
-  // Return empty position if |pos| is not somewhere inside the editable
-  // region containing this position
+  // Return first position in the anchor's text node if |pos| is not somewhere
+  // inside the editable region containing this position.
   if (highest_root && !highest_root->contains(pos.AnchorNode())) {
+    if (RuntimeEnabledFeatures::
+            ClampWordBoundaryToContentEditableScopeEnabled()) {
+      const Node* first_editable = anchor.ComputeContainerNode();
+      if (first_editable->IsTextNode()) {
+        PositionTemplate<Strategy> first_position =
+            PositionTemplate<Strategy>::FirstPositionInNode(*first_editable);
+        if (anchor != first_position) {
+          return PositionWithAffinityTemplate<Strategy>(first_position);
+        }
+      }
+    }
     return PositionWithAffinityTemplate<Strategy>();
   }
 
@@ -375,44 +387,16 @@ static Node* ParentEditingBoundary(const PositionTemplate<Strategy>& position) {
 
 // ---------
 
-template <typename Strategy>
-static PositionTemplate<Strategy> StartOfDocumentAlgorithm(
-    const PositionTemplate<Strategy>& position) {
-  const Node* const node = position.AnchorNode();
-  if (!node || !node->GetDocument().documentElement())
-    return PositionTemplate<Strategy>();
-
-  return PositionTemplate<Strategy>::FirstPositionInNode(
-      *node->GetDocument().documentElement());
-}
-
-Position StartOfDocument(const Position& c) {
-  return StartOfDocumentAlgorithm<EditingStrategy>(c);
-}
-
-PositionInFlatTree StartOfDocument(const PositionInFlatTree& c) {
-  return StartOfDocumentAlgorithm<EditingInFlatTreeStrategy>(c);
-}
-
-template <typename Strategy>
-static VisiblePositionTemplate<Strategy> EndOfDocumentAlgorithm(
-    const VisiblePositionTemplate<Strategy>& visible_position) {
-  DCHECK(visible_position.IsValid()) << visible_position;
-  Node* node = visible_position.DeepEquivalent().AnchorNode();
-  if (!node || !node->GetDocument().documentElement())
-    return VisiblePositionTemplate<Strategy>();
-
-  Element* doc = node->GetDocument().documentElement();
-  return CreateVisiblePosition(
-      PositionTemplate<Strategy>::LastPositionInNode(*doc));
-}
-
 VisiblePosition EndOfDocument(const VisiblePosition& c) {
-  return EndOfDocumentAlgorithm<EditingStrategy>(c);
+  DCHECK(c.IsValid()) << c;
+  return CreateVisiblePosition(
+      EndOfDocument(c.DeepEquivalent()));
 }
 
 VisiblePositionInFlatTree EndOfDocument(const VisiblePositionInFlatTree& c) {
-  return EndOfDocumentAlgorithm<EditingInFlatTreeStrategy>(c);
+  DCHECK(c.IsValid()) << c;
+  return CreateVisiblePosition(
+      EndOfDocument(c.DeepEquivalent()));
 }
 
 bool IsStartOfDocument(const VisiblePosition& p) {
@@ -427,22 +411,6 @@ bool IsEndOfDocument(const VisiblePosition& p) {
 }
 
 // ---------
-
-PositionInFlatTree StartOfEditableContent(const PositionInFlatTree& position) {
-  ContainerNode* highest_root = HighestEditableRoot(position);
-  if (!highest_root)
-    return PositionInFlatTree();
-
-  return PositionInFlatTree::FirstPositionInNode(*highest_root);
-}
-
-PositionInFlatTree EndOfEditableContent(const PositionInFlatTree& position) {
-  ContainerNode* highest_root = HighestEditableRoot(position);
-  if (!highest_root)
-    return PositionInFlatTree();
-
-  return PositionInFlatTree::LastPositionInNode(*highest_root);
-}
 
 bool IsEndOfEditableOrNonEditableContent(const VisiblePosition& position) {
   DCHECK(position.IsValid()) << position;
@@ -534,21 +502,21 @@ PositionWithAffinity PositionForContentsPointRespectingEditingBoundary(
 
   if (result.InnerNode()) {
     return PositionRespectingEditingBoundary(
-        frame->Selection().ComputeVisibleSelectionInDOMTree().Start(), result);
+        frame->Selection().ComputeVisibleSelectionInDomTree().Start(), result);
   }
   return PositionWithAffinity();
 }
 
 // TODO(yosin): We should use |AssociatedLayoutObjectOf()| in "visible_units.cc"
 // where it takes |LayoutObject| from |Position|.
-int CaretMinOffset(const Node* node) {
+wtf_size_t CaretMinOffset(const Node* node) {
   const LayoutObject* layout_object = AssociatedLayoutObjectOf(*node, 0);
   if (const LayoutText* layout_text = DynamicTo<LayoutText>(layout_object))
     return layout_text->CaretMinOffset();
   return 0;
 }
 
-int CaretMaxOffset(const Node* n) {
+wtf_size_t CaretMaxOffset(const Node* n) {
   return EditingStrategy::CaretMaxOffset(*n);
 }
 
@@ -558,14 +526,14 @@ static bool InRenderedText(const PositionTemplate<Strategy>& position) {
   if (!anchor_node || !anchor_node->IsTextNode())
     return false;
 
-  const int offset_in_node = position.ComputeEditingOffset();
+  const wtf_size_t offset_in_node = position.ComputeEditingOffset();
   const LayoutObject* layout_object =
       AssociatedLayoutObjectOf(*anchor_node, offset_in_node);
   if (!layout_object)
     return false;
 
   const auto* text_layout_object = To<LayoutText>(layout_object);
-  const int text_offset =
+  const wtf_size_t text_offset =
       offset_in_node - text_layout_object->TextStartOffset();
   if (!text_layout_object->ContainsCaretOffset(text_offset))
     return false;
@@ -614,8 +582,7 @@ bool EndsOfNodeAreVisuallyDistinctPositions(const Node* node) {
     return true;
 
   // There is a VisiblePosition inside an empty inline-block container.
-  return layout_object->IsAtomicInlineLevel() &&
-         CanHaveChildrenForEditing(node) &&
+  return layout_object->IsAtomicInline() && CanHaveChildrenForEditing(node) &&
          !To<LayoutBox>(layout_object)->StitchedSize().IsEmpty() &&
          !HasRenderedNonAnonymousDescendantsWithHeight(layout_object);
 }
@@ -653,7 +620,7 @@ static Position MostBackwardOrForwardCaretPosition(
   DCHECK(position.IsValidFor(*position.GetDocument())) << position;
 
   // Find the most backward or forward caret position in the flat tree.
-  const Position& candidate = ToPositionInDOMTree(
+  const Position& candidate = ToPositionInDomTree(
       AlgorithmInFlatTree(ToPositionInFlatTree(position), rule, client));
   Node* candidate_anchor = candidate.AnchorNode();
   if (!candidate_anchor)
@@ -666,13 +633,13 @@ static Position MostBackwardOrForwardCaretPosition(
   }
 
   // Adjust the candidate to avoid crossing shadow boundaries.
-  const SelectionInDOMTree& selection =
-      SelectionInDOMTree::Builder()
+  const SelectionInDomTree& selection =
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(position, candidate)
           .Build();
   if (selection.IsCaret())
     return candidate;
-  const SelectionInDOMTree& shadow_adjusted_selection =
+  const SelectionInDomTree& shadow_adjusted_selection =
       SelectionAdjuster::AdjustSelectionToAvoidCrossingShadowBoundaries(
           selection);
   const Position& adjusted_candidate = shadow_adjusted_selection.Focus();
@@ -686,7 +653,7 @@ static Position MostBackwardOrForwardCaretPosition(
   // crossing editing boundaries if it's not allowed.
   if (rule == kCannotCrossEditingBoundary &&
       selection != shadow_adjusted_selection) {
-    const SelectionInDOMTree& editing_adjusted_selection =
+    const SelectionInDomTree& editing_adjusted_selection =
         SelectionAdjuster::AdjustSelectionToAvoidCrossingEditingBoundaries(
             shadow_adjusted_selection);
     return editing_adjusted_selection.Focus();
@@ -799,7 +766,7 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
         IsA<Text>(current_node) ? current_pos.OffsetInTextNode() : 0,
         LayoutObjectSide::kFirstLetterIfOnBoundary);
     if (!layout_object ||
-        layout_object->Style()->Visibility() != EVisibility::kVisible) {
+        layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
       if (boundary_crossed && rule == kCannotCrossEditingBoundary)
         break;
       continue;
@@ -812,8 +779,8 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
     }
 
     if (!writing_mode.has_value()) {
-      writing_mode.emplace(layout_object->Style()->GetWritingMode());
-    } else if (*writing_mode != layout_object->Style()->GetWritingMode()) {
+      writing_mode.emplace(layout_object->StyleRef().GetWritingMode());
+    } else if (*writing_mode != layout_object->StyleRef().GetWritingMode()) {
       return last_visible.ComputePosition();
     }
 
@@ -992,7 +959,7 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
         *current_node,
         IsA<Text>(current_node) ? current_pos.OffsetInTextNode() : 0);
     if (!layout_object ||
-        layout_object->Style()->Visibility() != EVisibility::kVisible) {
+        layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
       if (boundary_crossed && rule == kCannotCrossEditingBoundary)
         break;
       continue;
@@ -1005,8 +972,8 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
     }
 
     if (!writing_mode.has_value()) {
-      writing_mode.emplace(layout_object->Style()->GetWritingMode());
-    } else if (*writing_mode != layout_object->Style()->GetWritingMode()) {
+      writing_mode.emplace(layout_object->StyleRef().GetWritingMode());
+    } else if (*writing_mode != layout_object->StyleRef().GetWritingMode()) {
       return last_visible.ComputePosition();
     }
 
@@ -1114,7 +1081,7 @@ static bool IsVisuallyEquivalentCandidateAlgorithm(
   if (!layout_object)
     return false;
 
-  if (layout_object->Style()->Visibility() != EVisibility::kVisible) {
+  if (layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
     return false;
   }
 
@@ -1186,34 +1153,6 @@ bool IsVisuallyEquivalentCandidate(const PositionInFlatTree& position) {
 }
 
 template <typename Strategy>
-static PositionTemplate<Strategy> SkipToEndOfEditingBoundary(
-    const PositionTemplate<Strategy>& pos,
-    const PositionTemplate<Strategy>& anchor) {
-  if (pos.IsNull())
-    return pos;
-
-  ContainerNode* highest_root = HighestEditableRoot(anchor);
-  ContainerNode* highest_root_of_pos = HighestEditableRoot(pos);
-
-  // Return |pos| itself if the two are from the very same editable region,
-  // or both are non-editable.
-  if (highest_root_of_pos == highest_root)
-    return pos;
-
-  // If this is not editable but |pos| has an editable root, skip to the end
-  if (!highest_root && highest_root_of_pos) {
-    return PositionTemplate<Strategy>(highest_root_of_pos,
-                                      PositionAnchorType::kAfterAnchor)
-        .ParentAnchoredEquivalent();
-  }
-
-  // That must mean that |pos| is not editable. Return the next position after
-  // |pos| that is in the same editable region as this position
-  DCHECK(highest_root);
-  return FirstEditablePositionAfterPositionInRoot(pos, *highest_root);
-}
-
-template <typename Strategy>
 static UChar32 CharacterAfterAlgorithm(
     const VisiblePositionTemplate<Strategy>& visible_position) {
   DCHECK(visible_position.IsValid()) << visible_position;
@@ -1232,7 +1171,7 @@ static UChar32 CharacterAfterAlgorithm(
   if (offset >= length)
     return 0;
 
-  return text_node->data().CharacterStartingAt(offset);
+  return text_node->data().CodePointAtOrZero(offset);
 }
 
 UChar32 CharacterAfter(const VisiblePosition& visible_position) {
@@ -1263,7 +1202,7 @@ static VisiblePositionTemplate<Strategy> NextPositionOfAlgorithm(
     const PositionWithAffinityTemplate<Strategy>& position,
     EditingBoundaryCrossingRule rule) {
   const VisiblePositionTemplate<Strategy> next = CreateVisiblePosition(
-      NextVisuallyDistinctCandidate(position.GetPosition()),
+      NextVisuallyDistinctCandidate(position.GetPosition(), rule),
       position.Affinity());
 
   switch (rule) {
@@ -1278,13 +1217,6 @@ static VisiblePositionTemplate<Strategy> NextPositionOfAlgorithm(
           next.DeepEquivalent(), position.GetPosition()));
   }
   NOTREACHED();
-}
-
-VisiblePosition NextPositionOf(const Position& position,
-                               EditingBoundaryCrossingRule rule) {
-  DCHECK(position.IsValidFor(*position.GetDocument())) << position;
-  return NextPositionOfAlgorithm<EditingStrategy>(
-      PositionWithAffinityTemplate<EditingStrategy>(position), rule);
 }
 
 VisiblePosition NextPositionOf(const VisiblePosition& visible_position,
@@ -1303,40 +1235,11 @@ VisiblePositionInFlatTree NextPositionOf(
 }
 
 template <typename Strategy>
-static PositionTemplate<Strategy> SkipToStartOfEditingBoundary(
-    const PositionTemplate<Strategy>& pos,
-    const PositionTemplate<Strategy>& anchor) {
-  if (pos.IsNull())
-    return pos;
-
-  ContainerNode* highest_root = HighestEditableRoot(anchor);
-  ContainerNode* highest_root_of_pos = HighestEditableRoot(pos);
-
-  // Return |pos| itself if the two are from the very same editable region, or
-  // both are non-editable.
-  if (highest_root_of_pos == highest_root)
-    return pos;
-
-  // If this is not editable but |pos| has an editable root, skip to the start
-  if (!highest_root && highest_root_of_pos) {
-    return PreviousVisuallyDistinctCandidate(
-        PositionTemplate<Strategy>(highest_root_of_pos,
-                                   PositionAnchorType::kBeforeAnchor)
-            .ParentAnchoredEquivalent());
-  }
-
-  // That must mean that |pos| is not editable. Return the last position
-  // before |pos| that is in the same editable region as this position
-  DCHECK(highest_root);
-  return LastEditablePositionBeforePositionInRoot(pos, *highest_root);
-}
-
-template <typename Strategy>
 static VisiblePositionTemplate<Strategy> PreviousPositionOfAlgorithm(
     const PositionTemplate<Strategy>& position,
     EditingBoundaryCrossingRule rule) {
   const PositionTemplate<Strategy> prev_position =
-      PreviousVisuallyDistinctCandidate(position);
+      PreviousVisuallyDistinctCandidate(position, rule);
 
   // return null visible position if there is no previous visible position
   if (prev_position.AtStartOfTree())

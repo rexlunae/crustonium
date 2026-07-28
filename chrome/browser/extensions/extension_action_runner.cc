@@ -13,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/extensions/extension_action_dispatcher.h"
@@ -51,7 +50,6 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #endif
@@ -75,9 +73,7 @@ ExtensionActionRunner::ExtensionActionRunner(content::WebContents* web_contents)
       ExtensionRegistry::Get(browser_context_));
 }
 
-ExtensionActionRunner::~ExtensionActionRunner() {
-  LogUMA();
-}
+ExtensionActionRunner::~ExtensionActionRunner() = default;
 
 // static
 ExtensionActionRunner* ExtensionActionRunner::GetForWebContents(
@@ -160,12 +156,13 @@ void ExtensionActionRunner::GrantTabPermissions(
 
   // If a refresh is required this prevents blocked actions (that wouldn't run
   // at the right time) from running until the user refreshes the page.
-  base::AutoReset<bool> ignore_active_tab(&ignore_active_tab_granted_,
-                                          refresh_required);
   // Immediately grant permissions to every extension.
+  auto* granter = ActiveTabPermissionGranter::FromWebContents(web_contents());
   for (auto* extension : extensions) {
-    ActiveTabPermissionGranter::FromWebContents(web_contents())
-        ->GrantIfRequested(extension);
+    if (refresh_required && !granter->IsGranted(extension)) {
+      extensions_to_ignore_active_tab_granted_.insert(extension->id());
+    }
+    granter->GrantIfRequested(extension);
   }
 
   if (!refresh_required) {
@@ -188,7 +185,7 @@ void ExtensionActionRunner::GrantTabPermissions(
 
 void ExtensionActionRunner::OnActiveTabPermissionGranted(
     const Extension* extension) {
-  if (ignore_active_tab_granted_) {
+  if (extensions_to_ignore_active_tab_granted_.erase(extension->id())) {
     return;
   }
 
@@ -260,7 +257,7 @@ ExtensionActionRunner::RequiresUserConsentForScriptInjection(
     return PermissionsData::PageAccess::kAllowed;
   }
 
-  GURL url = web_contents()->GetVisibleURL();
+  GURL url = web_contents()->GetLastCommittedURL();
   int tab_id = sessions::SessionTabHelper::IdForTab(web_contents()).id();
   switch (type) {
     case mojom::InjectionType::kContentScript:
@@ -287,8 +284,6 @@ void ExtensionActionRunner::RequestScriptInjection(
   if (list.size() == 1u) {
     NotifyChange(extension);
   }
-
-  was_used_on_page_ = true;
 
   for (TestObserver& observer : test_observers_) {
     observer.OnBlockedActionAdded();
@@ -380,19 +375,6 @@ void ExtensionActionRunner::NotifyChange(const Extension* extension) {
   }
 }
 
-void ExtensionActionRunner::LogUMA() const {
-  // We only log the permitted extensions metric if the feature was used at all
-  // on the page, because otherwise the data will be boring.
-  if (was_used_on_page_) {
-    UMA_HISTOGRAM_COUNTS_100(
-        "Extensions.ActiveScriptController.PermittedExtensions",
-        permitted_extensions_.size());
-    UMA_HISTOGRAM_COUNTS_100(
-        "Extensions.ActiveScriptController.DeniedExtensions",
-        pending_scripts_.size());
-  }
-}
-
 void ExtensionActionRunner::ShowReloadPageBubble(
     const std::vector<const Extension*>& extensions) {
   reload_page_dialog_controller_ = std::make_unique<ReloadPageDialogController>(
@@ -432,7 +414,6 @@ void ExtensionActionRunner::DidFinishNavigation(
     return;
   }
 
-  LogUMA();
   num_page_requests_ = 0;
   permitted_extensions_.clear();
   // Runs all pending callbacks before clearing them.
@@ -441,7 +422,7 @@ void ExtensionActionRunner::DidFinishNavigation(
   }
   pending_scripts_.clear();
   web_request_blocked_.clear();
-  was_used_on_page_ = false;
+  extensions_to_ignore_active_tab_granted_.clear();
 
   // Note: This needs to be called *after* the maps have been updated, so that
   // when the UI updates, this object returns the proper result for "wants to
@@ -460,8 +441,10 @@ void ExtensionActionRunner::DidFinishNavigation(
 
 void ExtensionActionRunner::WebContentsDestroyed() {
   ExtensionActionDispatcher::Get(browser_context_)
-      ->ClearAllValuesForTab(web_contents());
+      ->ClearAllValuesForTab(web_contents(),
+                             /*web_contents_being_destroyed=*/true);
 
+  int tab_id = ExtensionTabUtil::GetTabId(web_contents());
   declarative_net_request::RulesMonitorService* rules_monitor_service =
       declarative_net_request::RulesMonitorService::Get(browser_context_);
 
@@ -470,7 +453,6 @@ void ExtensionActionRunner::WebContentsDestroyed() {
     declarative_net_request::ActionTracker& action_tracker =
         rules_monitor_service->action_tracker();
 
-    int tab_id = ExtensionTabUtil::GetTabId(web_contents());
     action_tracker.ClearTabData(tab_id);
   }
 }

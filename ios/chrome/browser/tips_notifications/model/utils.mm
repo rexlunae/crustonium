@@ -4,8 +4,10 @@
 
 #import "ios/chrome/browser/tips_notifications/model/utils.h"
 
+#import "base/metrics/histogram_functions.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/string_split.h"
+#import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "components/prefs/pref_service.h"
@@ -247,6 +249,11 @@ ContentIDs ContentIDsForType(TipsNotificationType type) {
       return {IDS_IOS_NOTIFICATIONS_TIPS_TRUSTED_VAULT_KEY_RETRIVAL_TITLE,
               IDS_IOS_NOTIFICATIONS_TIPS_TRUSTED_VAULT_KEY_RETRIVAL_BODY};
     case TipsNotificationType::kIncognitoLock:
+    case TipsNotificationType::kTabGroups:
+    case TipsNotificationType::kPriceTracking:
+      // kTabGroups and kPriceTracking are triggered by cross platform push
+      // notifications, so the title and string do not need to be configured.
+      NOTREACHED();
     case TipsNotificationType::kError:
       NOTREACHED();
   }
@@ -475,6 +482,10 @@ NotificationType NotificationTypeForTipsNotificationType(
       return NotificationType::kTipsIncognitoLock;
     case TipsNotificationType::kTrustedVaultKeyRetrieval:
       return NotificationType::kTipsTrustedVaultKeyRetrieval;
+    case TipsNotificationType::kTabGroups:
+      return NotificationType::kCrossPlatformPromoTabGroups;
+    case TipsNotificationType::kPriceTracking:
+      return NotificationType::kCrossPlatformPromoPriceTracking;
     case TipsNotificationType::kError:
       NOTREACHED();
   }
@@ -503,4 +514,35 @@ TipsNotificationUserType GetTipsNotificationUserType(PrefService* local_state) {
 void SetTipsNotificationUserType(PrefService* local_state,
                                  TipsNotificationUserType user_type) {
   local_state->SetInteger(kTipsNotificationsUserType, int(user_type));
+}
+
+void LogTipsNotificationPromoAction(TipsNotificationType type,
+                                    TipsNotificationPromoAction action) {
+  std::string_view promo_name;
+  switch (type) {
+    case TipsNotificationType::kEnhancedSafeBrowsing:
+      promo_name = "EnhancedSafeBrowsing";
+      break;
+    case TipsNotificationType::kLens:
+      promo_name = "Lens";
+      break;
+    case TipsNotificationType::kPriceTracking:
+      promo_name = "PriceTracking";
+      break;
+    case TipsNotificationType::kLensOverlay:
+      promo_name = "SearchWhatYouSee";
+      break;
+    case TipsNotificationType::kTabGroups:
+      promo_name = "TabGroups";
+      break;
+    default:
+      // Other promos log interaction metrics in separate histograms.
+      return;
+  }
+
+  std::string histogram_name = "IOS.TipsNotification.";
+  histogram_name += promo_name;
+  histogram_name += ".PromoAction";
+
+  base::UmaHistogramEnumeration(histogram_name, action);
 }

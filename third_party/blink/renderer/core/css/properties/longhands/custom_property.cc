@@ -27,31 +27,28 @@ CSSProperty::Flags InheritedFlag(const PropertyRegistration* registration) {
 
 }  // namespace
 
-CustomProperty::CustomProperty(AtomicString name, const Document& document)
+CustomProperty::CustomProperty(const AtomicString* name,
+                               const Document& document)
     : CustomProperty(
-          PropertyRegistration::From(document.GetExecutionContext(), name)) {
-  // Initializing `name_` on the body prevents `name` to be used after the
-  // std::move call.
-  name_ = std::move(name);
+          name,
+          PropertyRegistration::From(document.GetExecutionContext(), *name)) {
   DCHECK_EQ(IsShorthand(), CSSProperty::IsShorthand(GetCSSPropertyName()));
   DCHECK_EQ(IsRepeated(), CSSProperty::IsRepeated(GetCSSPropertyName()));
 }
 
-CustomProperty::CustomProperty(const AtomicString& name,
+CustomProperty::CustomProperty(const AtomicString* name,
                                const PropertyRegistry* registry)
-    : CustomProperty(name, registry ? registry->Registration(name) : nullptr) {}
+    : CustomProperty(name, registry ? registry->Registration(*name) : nullptr) {
+}
 
-CustomProperty::CustomProperty(const AtomicString& name,
+CustomProperty::CustomProperty(const AtomicString* name,
                                const PropertyRegistration* registration)
     : Variable(InheritedFlag(registration)),
-      name_(name),
+      name_(*name),
       registration_(registration) {
   DCHECK_EQ(IsShorthand(), CSSProperty::IsShorthand(GetCSSPropertyName()));
   DCHECK_EQ(IsRepeated(), CSSProperty::IsRepeated(GetCSSPropertyName()));
 }
-
-CustomProperty::CustomProperty(const PropertyRegistration* registration)
-    : Variable(InheritedFlag(registration)), registration_(registration) {}
 
 const AtomicString& CustomProperty::GetPropertyNameAtomicString() const {
   return name_;
@@ -118,7 +115,7 @@ void CustomProperty::ApplyInherit(StyleResolverState& state) const {
 
 void CustomProperty::ApplyValue(StyleResolverState& state,
                                 const CSSValue& value,
-                                ValueMode value_mode) const {
+                                ValueModeFlags value_mode) const {
   ComputedStyleBuilder& builder = state.StyleBuilder();
   DCHECK(!value.IsCSSWideKeyword());
 
@@ -188,8 +185,9 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
   if (!registered_value) {
     DCHECK(declaration);
     CSSVariableData& data = *declaration->VariableDataValue();
-    CSSParserLocalContext local_context =
-        CSSParserLocalContext(GetCSSPropertyName());
+    CSSParserLocalContext local_context(GetCSSPropertyName(),
+                                        CSSPropertyID::kInvalid,
+                                        /*custom_function_name=*/g_null_atom);
     registered_value = Parse(data.OriginalText(), *context, local_context);
   }
 
@@ -203,7 +201,8 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
     return;
   }
 
-  bool is_animation_tainted = value_mode == ValueMode::kAnimated;
+  bool is_animation_tainted =
+      value_mode & static_cast<ValueModeFlags>(ValueMode::kAnimated);
 
   // Note that the computed value ("SetVariableValue") is stored separately
   // from the substitution value ("SetVariableData") on ComputedStyle.
@@ -211,8 +210,10 @@ void CustomProperty::ApplyValue(StyleResolverState& state,
   // the custom property, and the computed value is generally used in other
   // cases (e.g. serialization).
 
-  bool is_attr_tainted = declaration && declaration->VariableDataValue() &&
-                         declaration->VariableDataValue()->IsAttrTainted();
+  bool is_attr_tainted =
+      (value_mode & static_cast<ValueModeFlags>(ValueMode::kAttrTainted)) ||
+      (declaration && declaration->VariableDataValue() &&
+       declaration->VariableDataValue()->IsAttrTainted());
 
   registered_value = &StyleBuilderConverter::ConvertRegisteredPropertyValue(
       state, *registered_value, context);

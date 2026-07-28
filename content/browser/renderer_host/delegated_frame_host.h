@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
@@ -27,7 +28,7 @@
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
 #include "services/viz/public/mojom/hit_test/hit_test_region_list.mojom.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
-#include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom-forward.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/layer.h"
@@ -45,7 +46,7 @@ class CONTENT_EXPORT DelegatedFrameHostClient {
  public:
   virtual ~DelegatedFrameHostClient() {}
 
-  virtual ui::Layer* DelegatedFrameHostGetLayer() const = 0;
+  virtual ui::LayerSurface* GetDelegatedFrameHostLayer() const = 0;
   virtual bool DelegatedFrameHostIsVisible() const = 0;
   // Returns the color that the resize gutters should be drawn with.
   virtual SkColor DelegatedFrameHostGetGutterColor() const = 0;
@@ -55,6 +56,7 @@ class CONTENT_EXPORT DelegatedFrameHostClient {
   virtual void InvalidateLocalSurfaceIdOnEviction() = 0;
   virtual viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction() = 0;
   virtual bool ShouldShowStaleContentOnEviction() = 0;
+  virtual cc::DeadlinePolicy GetResizeDeadlinePolicy() const;
 };
 
 // The DelegatedFrameHost is used to host all of the RenderWidgetHostView state
@@ -120,19 +122,20 @@ class CONTENT_EXPORT DelegatedFrameHost
   // TODO(ccameron): Include device scale factor here.
   void WasShown(const viz::LocalSurfaceId& local_surface_id,
                 const gfx::Size& dip_size,
-                blink::mojom::RecordContentToVisibleTimeRequestPtr
+                std::optional<blink::RecordContentToVisibleTimeRequest>
                     record_tab_switch_time_request);
 
   // Called to request the presentation time for the next frame or cancel any
   // requests when the RenderWidget's visibility state is not changing. If the
   // visibility state is changing call WasHidden or WasShown instead.
   void RequestSuccessfulPresentationTimeForNextFrame(
-      blink::mojom::RecordContentToVisibleTimeRequestPtr visible_time_request);
+      blink::RecordContentToVisibleTimeRequest visible_time_request);
   void CancelSuccessfulPresentationTimeRequest();
 
   void EmbedSurface(const viz::LocalSurfaceId& local_surface_id,
                     const gfx::Size& dip_size,
                     cc::DeadlinePolicy deadline_policy);
+  void SetForceSpecifiedDeadline(std::optional<uint32_t> deadline_in_frames);
   bool HasSavedFrame() const;
   void AttachToCompositor(ui::Compositor* compositor);
   void DetachFromCompositor();
@@ -171,6 +174,10 @@ class CONTENT_EXPORT DelegatedFrameHost
 
   gfx::Size CurrentFrameSizeInDipForTesting() const {
     return current_frame_size_in_dip_;
+  }
+
+  std::optional<uint32_t> GetForceSpecifiedDeadlineForTesting() const {
+    return force_specified_deadline_;
   }
 
   void DidNavigate();
@@ -295,10 +302,12 @@ class CONTENT_EXPORT DelegatedFrameHost
 
   FrameEvictionState frame_eviction_state_ = FrameEvictionState::kNotStarted;
 
+  std::optional<uint32_t> force_specified_deadline_ = std::nullopt;
+
   // Layer responsible for displaying the stale content for the DFHC when the
   // actual web content frame has been evicted. This will be reset when a new
   // compositor frame is submitted.
-  std::unique_ptr<ui::Layer> stale_content_layer_;
+  std::unique_ptr<ui::LayerSolidColor> stale_content_layer_;
 
   blink::ContentToVisibleTimeReporter tab_switch_time_recorder_;
 

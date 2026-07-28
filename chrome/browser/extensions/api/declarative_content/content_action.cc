@@ -34,6 +34,7 @@
 #include "extensions/common/mojom/host_id.mojom.h"
 #include "extensions/common/mojom/match_origin_as_fallback.mojom-shared.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
+#include "extensions/common/permissions/permissions_data.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
@@ -249,8 +250,9 @@ std::unique_ptr<ContentAction> RequestContentScript::Create(
     const base::DictValue* dict,
     std::string* error) {
   ScriptData script_data;
-  if (!InitScriptData(dict, error, &script_data))
+  if (!InitScriptData(dict, error, &script_data)) {
     return nullptr;
+  }
 
   RecordContentActionCreated(
       declarative_content_constants::ContentActionType::kRequestContentScript);
@@ -283,15 +285,17 @@ bool RequestContentScript::InitScriptData(const base::DictValue* dict,
   }
   if (const base::Value* all_frames_val =
           dict->Find(declarative_content_constants::kAllFrames)) {
-    if (!all_frames_val->is_bool())
+    if (!all_frames_val->is_bool()) {
       return false;
+    }
 
     script_data->all_frames = all_frames_val->GetBool();
   }
   if (const base::Value* match_about_blank_val =
           dict->Find(declarative_content_constants::kMatchAboutBlank)) {
-    if (!match_about_blank_val->is_bool())
+    if (!match_about_blank_val->is_bool()) {
       return false;
+    }
 
     script_data->match_about_blank = match_about_blank_val->GetBool();
   }
@@ -371,6 +375,18 @@ void RequestContentScript::Revert(const ApplyInfo& apply_info) const {}
 void RequestContentScript::InstructRenderProcessToInject(
     content::WebContents* contents,
     const Extension* extension) const {
+  // Verify that the extension has permission to access the page before
+  // granting trust for script injection. This prevents a compromised renderer
+  // from fully bypassing permission checks (for example: a spoofed
+  // `extensions::mojom::LocalFrameHost::WatchedPageChange` IPC bypassing the
+  // check we have for an invalid selector and getting here).
+  std::string error;
+  if (!extension->permissions_data()->CanAccessPage(
+          contents->GetLastCommittedURL(), ExtensionTabUtil::GetTabId(contents),
+          &error)) {
+    return;
+  }
+
   ScriptInjectionTracker::WillExecuteCode(base::PassKey<RequestContentScript>(),
                                           contents->GetPrimaryMainFrame(),
                                           *extension);
@@ -456,9 +472,10 @@ std::unique_ptr<ContentAction> ContentAction::Create(
 
   ContentActionFactory& factory = GetContentActionFactory();
   auto factory_method_iter = factory.factory_methods.find(*instance_type);
-  if (factory_method_iter != factory.factory_methods.end())
+  if (factory_method_iter != factory.factory_methods.end()) {
     return (*factory_method_iter->second)(browser_context, extension,
                                           &json_action_dict, error);
+  }
 
   *error =
       base::StringPrintf(kInvalidInstanceTypeError, instance_type->c_str());

@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
@@ -19,9 +18,6 @@
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "ui/gfx/image/image.h"
-#include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/paint_vector_icon.h"
 
 namespace ash::phonehub {
 
@@ -49,18 +45,12 @@ RecentAppsInteractionHandlerImpl::RecentAppsInteractionHandlerImpl(
     : pref_service_(pref_service),
       multidevice_setup_client_(multidevice_setup_client),
       multidevice_feature_access_manager_(multidevice_feature_access_manager) {
-  multidevice_setup_client_->AddObserver(this);
-  multidevice_feature_access_manager_->AddObserver(this);
+  multidevice_setup_client_observation_.Observe(multidevice_setup_client);
+  multidevice_feature_access_manager_observation_.Observe(
+      multidevice_feature_access_manager);
 }
 
-RecentAppsInteractionHandlerImpl::~RecentAppsInteractionHandlerImpl() {
-  if (eche_connection_status_handler_) {
-    eche_connection_status_handler_->RemoveObserver(this);
-  }
-
-  multidevice_setup_client_->RemoveObserver(this);
-  multidevice_feature_access_manager_->RemoveObserver(this);
-}
+RecentAppsInteractionHandlerImpl::~RecentAppsInteractionHandlerImpl() = default;
 
 void RecentAppsInteractionHandlerImpl::AddRecentAppClickObserver(
     RecentAppClickObserver* observer) {
@@ -108,14 +98,11 @@ void RecentAppsInteractionHandlerImpl::NotifyRecentAppAddedOrUpdated(
 
 void RecentAppsInteractionHandlerImpl::SetConnectionStatusHandler(
     eche_app::EcheConnectionStatusHandler* eche_connection_status_handler) {
-  if (eche_connection_status_handler_) {
-    eche_connection_status_handler_->RemoveObserver(this);
-  }
+  eche_connection_status_handler_observation_.Reset();
 
-  eche_connection_status_handler_ = eche_connection_status_handler;
-
-  if (eche_connection_status_handler_) {
-    eche_connection_status_handler_->AddObserver(this);
+  if (eche_connection_status_handler) {
+    eche_connection_status_handler_observation_.Observe(
+        eche_connection_status_handler);
   }
 }
 

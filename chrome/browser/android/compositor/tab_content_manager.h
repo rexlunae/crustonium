@@ -16,12 +16,17 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/thumbnail/cc/thumbnail_cache.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/render_widget_host_view.h"
 
-using base::android::ScopedJavaLocalRef;
+class TabAndroid;
 
 namespace cc::slim {
 class Layer;
+}
+
+namespace sync_sessions {
+class SessionSyncService;
 }
 
 namespace ui {
@@ -73,22 +78,22 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
                         int primary_tab_id);
 
   void CaptureThumbnail(JNIEnv* env,
-                        const base::android::JavaRef<jobject>& tab,
+                        TabAndroid* tab_android,
                         float thumbnail_scale,
                         bool return_bitmap,
                         const base::android::JavaRef<jobject>& j_callback);
   void CacheTabWithBitmap(JNIEnv* env,
-                          const base::android::JavaRef<jobject>& tab,
+                          TabAndroid* tab_android,
                           const base::android::JavaRef<jobject>& bitmap,
                           float thumbnail_scale);
-  void InvalidateIfChanged(JNIEnv* env,
-                           int32_t tab_id,
-                           const base::android::JavaRef<jobject>& jurl);
+  void InvalidateIfChanged(JNIEnv* env, int32_t tab_id, const GURL& url);
   void UpdateVisibleIds(JNIEnv* env,
                         const base::android::JavaRef<jintArray>& priority,
                         int32_t primary_tab_id);
   void NativeRemoveTabThumbnail(int tab_id);
   void RemoveTabThumbnail(JNIEnv* env, int32_t tab_id);
+  void RemoveAllTabThumbnailsExceptForIds(JNIEnv* env,
+                                          std::vector<int32_t> tab_ids);
   void OnUIResourcesWereEvicted();
   void WaitForJpegTabThumbnail(
       JNIEnv* env,
@@ -97,12 +102,16 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
   void GetEtc1TabThumbnail(JNIEnv* env,
                            int32_t tab_id,
                            const base::android::JavaRef<jobject>& j_callback);
-  void SetCaptureMinRequestTimeForTesting(JNIEnv* env, int32_t timeMs);
+  void SetCaptureMinRequestTimeForTesting(JNIEnv* env, int32_t time_ms);
   bool IsTabCaptureInFlightForTesting(JNIEnv* env, int32_t tab_id);
 
   // ThumbnailCacheObserver implementation;
   void OnThumbnailAddedToCache(thumbnail::TabId tab_id) override;
   void OnFinishedThumbnailRead(thumbnail::TabId tab_id) override;
+
+  static void CompressScreenshotForSyncForTesting(
+      const SkBitmap& bitmap,
+      base::OnceCallback<void(std::string)> callback);
 
  private:
   class TabReadbackRequest;
@@ -110,34 +119,37 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
   // these layer maps are small.
   using ThumbnailLayerMap = std::map<int, scoped_refptr<ThumbnailLayer>>;
   using TabReadbackRequestMap =
-      base::flat_map<int, std::unique_ptr<TabReadbackRequest>>;
+      absl::flat_hash_map<int, std::unique_ptr<TabReadbackRequest>>;
+  using ThumbnailCaptureTrackerPtr =
+      std::unique_ptr<thumbnail::ThumbnailCaptureTracker,
+                      base::OnTaskRunnerDeleter>;
+  using JavaBitmapCallback =
+      base::OnceCallback<void(const base::android::JavaRef<jobject>&)>;
 
-  content::RenderWidgetHostView* GetRwhvForTab(
-      JNIEnv* env,
-      const base::android::JavaRef<jobject>& tab);
-  std::unique_ptr<thumbnail::ThumbnailCaptureTracker, base::OnTaskRunnerDeleter>
-  TrackCapture(thumbnail::TabId tab_id);
+  ThumbnailCaptureTrackerPtr TrackCapture(thumbnail::TabId tab_id);
   void CleanupTrackers();
   void OnTrackingFinished(int tab_id,
                           thumbnail::ThumbnailCaptureTracker* tracker);
   void OnTabReadback(int tab_id,
-                     std::unique_ptr<thumbnail::ThumbnailCaptureTracker,
-                                     base::OnTaskRunnerDeleter> tracker,
-                     base::android::ScopedJavaGlobalRef<jobject> j_callback,
+                     ThumbnailCaptureTrackerPtr tracker,
+                     JavaBitmapCallback callback,
                      bool return_bitmap,
                      float thumbnail_scale,
                      const SkBitmap& bitmap);
 
-  void SendThumbnailToJava(
-      base::android::ScopedJavaGlobalRef<jobject> j_callback,
-      bool need_downsampling,
-      bool result,
-      const SkBitmap& bitmap);
+  void SendThumbnailToJava(JavaBitmapCallback callback,
+                           bool need_downsampling,
+                           bool result,
+                           const SkBitmap& bitmap);
 
-  base::flat_map<thumbnail::TabId,
-                 base::WeakPtr<thumbnail::ThumbnailCaptureTracker>>
+  sync_sessions::SessionSyncService* GetSessionSyncService(int tab_id);
+
+  void AddTabScreenshotToSync(int tab_id, std::string compressed_data);
+
+  absl::flat_hash_map<thumbnail::TabId,
+                      base::WeakPtr<thumbnail::ThumbnailCaptureTracker>>
       in_flight_captures_;
-  std::unique_ptr<thumbnail::ThumbnailCache> thumbnail_cache_;
+  thumbnail::ThumbnailCache thumbnail_cache_;
   ThumbnailLayerMap static_layer_cache_;
   TabReadbackRequestMap pending_tab_readbacks_;
 

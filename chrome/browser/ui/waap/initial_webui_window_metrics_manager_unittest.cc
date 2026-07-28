@@ -47,12 +47,12 @@ TEST_F(InitialWebUIWindowMetricsManagerTest,
       waap::NewWindowCreationSource::kBrowserInitiated, start_time);
   base::HistogramTester tester;
   tester.ExpectUniqueTimeSample(
-      "InitialWebUI.NewWindow.AllSources.BrowserWindow.FirstPaint."
-      "FromConstructor",
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
+      "FirstPaint.FromConstructor2",
       kTestLatency, 0);
   tester.ExpectUniqueTimeSample(
-      "InitialWebUI.NewWindow.BrowserInitiated.BrowserWindow.FirstPaint."
-      "FromConstructor",
+      "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
+      "BrowserWindow.FirstPaint.FromConstructor2",
       kTestLatency, 0);
 
   manager.SkipStartupForTesting();
@@ -61,11 +61,232 @@ TEST_F(InitialWebUIWindowMetricsManagerTest,
   manager.OnBrowserWindowFirstPresentation(timestamp);
 
   tester.ExpectUniqueTimeSample(
-      "InitialWebUI.NewWindow.AllSources.BrowserWindow.FirstPaint."
-      "FromConstructor",
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
+      "FirstPaint.FromConstructor2",
       kTestLatency, 1);
   tester.ExpectUniqueTimeSample(
-      "InitialWebUI.NewWindow.BrowserInitiated.BrowserWindow.FirstPaint."
-      "FromConstructor",
+      "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
+      "BrowserWindow.FirstPaint.FromConstructor2",
       kTestLatency, 1);
+}
+
+TEST_F(InitialWebUIWindowMetricsManagerTest, RecordsFirstPaintGapDelta) {
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  InitialWebUIWindowMetricsManager manager(&browser_window_);
+  manager.SetWindowCreationInfo(
+      waap::NewWindowCreationSource::kBrowserInitiated, start_time);
+  manager.SkipStartupForTesting();
+
+  base::HistogramTester tester;
+
+  // Simulate presenting native window.
+  base::TimeTicks browser_window_time = start_time + kTestLatency;
+  manager.OnBrowserWindowFirstPresentation(browser_window_time);
+
+  // Still no metric because WebUI hasn't painted.
+  tester.ExpectTotalCount(
+      "InitialWebUI.NewWindow.AllSources.BrowserWindowToReloadButton."
+      "FirstPaintGap2",
+      0);
+
+  // Simulate paint of WebUI reload button.
+  base::TimeDelta webui_delay = base::Milliseconds(50);
+  base::TimeTicks reload_button_time = browser_window_time + webui_delay;
+  manager.OnReloadButtonFirstPaint(reload_button_time);
+
+  // Now the gap metric should be emitted with the correct delta
+  tester.ExpectUniqueTimeSample(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow."
+      "BrowserWindowToReloadButton.FirstPaintGap2",
+      webui_delay, 1);
+  tester.ExpectUniqueTimeSample(
+      "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
+      "BrowserWindowToReloadButton.FirstPaintGap2",
+      webui_delay, 1);
+}
+
+TEST_F(InitialWebUIWindowMetricsManagerTest, RecordsShowRequestedToFirstPaint) {
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  InitialWebUIWindowMetricsManager manager(&browser_window_);
+  manager.SetWindowCreationInfo(
+      waap::NewWindowCreationSource::kBrowserInitiated, start_time);
+  manager.SkipStartupForTesting();
+
+  base::HistogramTester tester;
+
+  // Simulate show request.
+  base::TimeDelta show_request_delay = base::Milliseconds(30);
+  base::TimeTicks show_request_time = start_time + show_request_delay;
+  manager.OnBrowserWindowShowRequested(show_request_time);
+
+  // Still no metric because first presentation hasn't happened.
+  tester.ExpectTotalCount(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
+      "ShowRequestedToFirstPaint2",
+      0);
+
+  // Simulate presenting native window.
+  base::TimeDelta total_delay = base::Milliseconds(100);
+  base::TimeTicks browser_window_time = start_time + total_delay;
+  manager.OnBrowserWindowFirstPresentation(browser_window_time);
+
+  // ShowRequestedToFirstPaint should be the time between show request and
+  // presentation.
+  base::TimeDelta expected_delta = total_delay - show_request_delay;
+
+  tester.ExpectUniqueTimeSample(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
+      "ShowRequestedToFirstPaint.FromConstructor2",
+      expected_delta, 1);
+  tester.ExpectUniqueTimeSample(
+      "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
+      "BrowserWindow."
+      "ShowRequestedToFirstPaint."
+      "FromConstructor2",
+      expected_delta, 1);
+}
+
+TEST_F(InitialWebUIWindowMetricsManagerTest,
+       ShowRequestedToFirstPaintIsIdempotent) {
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  InitialWebUIWindowMetricsManager manager(&browser_window_);
+  manager.SetWindowCreationInfo(
+      waap::NewWindowCreationSource::kBrowserInitiated, start_time);
+  manager.SkipStartupForTesting();
+
+  base::HistogramTester tester;
+
+  // 1st show request.
+  base::TimeDelta first_delay = base::Milliseconds(30);
+  base::TimeTicks first_time = start_time + first_delay;
+  manager.OnBrowserWindowShowRequested(first_time);
+
+  // 2nd show request, which should be ignored.
+  base::TimeDelta second_delay = base::Milliseconds(60);
+  base::TimeTicks second_time = start_time + second_delay;
+  manager.OnBrowserWindowShowRequested(second_time);
+
+  // Simulate presentation.
+  base::TimeDelta total_delay = base::Milliseconds(100);
+  base::TimeTicks browser_window_time = start_time + total_delay;
+  manager.OnBrowserWindowFirstPresentation(browser_window_time);
+
+  // Baseline should be the 1st show request.
+  base::TimeDelta expected_delta = total_delay - first_delay;
+
+  tester.ExpectUniqueTimeSample(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
+      "ShowRequestedToFirstPaint."
+      "FromConstructor2",
+      expected_delta, 1);
+}
+
+TEST_F(InitialWebUIWindowMetricsManagerTest,
+       RecordsNewWindowIfStartupDeltaIsNegative) {
+  // Ensure pristine static state across tests if tests are run in the same
+  // process.
+  InitialWebUIWindowMetricsManager::ResetForTesting();
+
+  base::HistogramTester tester;
+
+  {
+    // Window 1: Startup Window (First window created)
+    const base::TimeTicks start_time1 = base::TimeTicks::Now();
+    InitialWebUIWindowMetricsManager startup_manager(&browser_window_);
+    // We do NOT call `SkipStartupForTesting()` because we want to test the
+    // startup logic.
+
+    // Simulate presentation of native window.
+    base::TimeTicks browser_window_time1 = start_time1 + kTestLatency;
+    startup_manager.OnBrowserWindowFirstPresentation(browser_window_time1);
+
+    // Simulate an invalid/negative gap (reload button paints BEFORE the window
+    // presentation).
+    base::TimeTicks reload_button_time1 =
+        browser_window_time1 - base::Milliseconds(10);
+    startup_manager.OnReloadButtonFirstPaint(reload_button_time1);
+  }
+
+  // Verify the startup metric was NOT recorded because the gap is negative.
+  tester.ExpectTotalCount(
+      "InitialWebUI.Startup.BrowserWindowToReloadButton.FirstPaintGap", 0);
+
+  base::TimeDelta webui_delay = base::Milliseconds(50);
+  {
+    // Window 2: New Window
+    const base::TimeTicks start_time2 = base::TimeTicks::Now();
+    InitialWebUIWindowMetricsManager new_window_manager(&browser_window_);
+    new_window_manager.SetWindowCreationInfo(
+        waap::NewWindowCreationSource::kBrowserInitiated, start_time2);
+
+    // Simulate presentation of native window.
+    base::TimeTicks browser_window_time2 = start_time2 + kTestLatency;
+    new_window_manager.OnBrowserWindowFirstPresentation(browser_window_time2);
+
+    // Simulate a valid positive gap.
+    base::TimeTicks reload_button_time2 = browser_window_time2 + webui_delay;
+    new_window_manager.OnReloadButtonFirstPaint(reload_button_time2);
+  }
+
+  // The critical verification: This window must incorrectly NOT be logged as
+  // Startup, but correctly as a New Window.
+  tester.ExpectTotalCount(
+      "InitialWebUI.Startup.BrowserWindowToReloadButton.FirstPaintGap", 0);
+  tester.ExpectUniqueTimeSample(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow."
+      "BrowserWindowToReloadButton.FirstPaintGap2",
+      webui_delay, 1);
+}
+
+TEST_F(InitialWebUIWindowMetricsManagerTest,
+       RecordsClosedBeforeFirstPaintForNewWindow) {
+  InitialWebUIWindowMetricsManager::ResetForTesting();
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  base::HistogramTester tester;
+
+  {
+    InitialWebUIWindowMetricsManager manager(&browser_window_);
+    manager.SetWindowCreationInfo(
+        waap::NewWindowCreationSource::kBrowserInitiated, start_time);
+    manager.SkipStartupForTesting();
+
+    // Simulate show request.
+    base::TimeDelta show_request_delay = base::Milliseconds(30);
+    base::TimeTicks show_request_time = start_time + show_request_delay;
+    manager.OnBrowserWindowShowRequested(show_request_time);
+
+    // Destruction happens here when 'manager' goes out of scope.
+  }
+
+  // Verify metric was recorded.
+  tester.ExpectTotalCount(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
+      "ClosedBeforeFirstPaint2",
+      1);
+  tester.ExpectTotalCount(
+      "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
+      "BrowserWindow.ClosedBeforeFirstPaint2",
+      1);
+}
+
+TEST_F(InitialWebUIWindowMetricsManagerTest,
+       RecordsClosedBeforeFirstPaintForStartupWindow) {
+  InitialWebUIWindowMetricsManager::ResetForTesting();
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  base::HistogramTester tester;
+
+  {
+    InitialWebUIWindowMetricsManager manager(&browser_window_);
+
+    // Simulate show request.
+    base::TimeDelta show_request_delay = base::Milliseconds(30);
+    base::TimeTicks show_request_time = start_time + show_request_delay;
+    manager.OnBrowserWindowShowRequested(show_request_time);
+
+    // Destruction happens here when 'manager' goes out of scope.
+  }
+
+  // Verify metric was recorded.
+  tester.ExpectTotalCount(
+      "InitialWebUI.Startup.BrowserWindow.ClosedBeforeFirstPaint", 1);
 }

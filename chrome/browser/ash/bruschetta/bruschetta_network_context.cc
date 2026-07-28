@@ -10,13 +10,12 @@
 #include <optional>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
-#include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_factory.h"
 #include "chrome/browser/net/proxy_config_monitor.h"
@@ -27,6 +26,7 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
+#include "extensions/browser/cws_info_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -101,7 +101,7 @@ BruschettaNetworkContext::GetURLLoaderFactory() {
     network::mojom::URLLoaderFactoryParamsPtr url_loader_factory_params =
         network::mojom::URLLoaderFactoryParams::New();
     url_loader_factory_params->process_id =
-        network::OriginatingProcess::browser();
+        network::OriginatingProcessId::browser();
     url_loader_factory_params->is_orb_enabled = false;
     url_loader_factory_params->is_trusted = true;
     url_loader_observers_.Add(
@@ -124,7 +124,7 @@ void BruschettaNetworkContext::EnsureNetworkContextExists() {
 
 void BruschettaNetworkContext::CreateNetworkContext() {
   network::mojom::NetworkContextParamsPtr network_context_params =
-      g_browser_process->system_network_context_manager()
+      SystemNetworkContextManager::GetInstance()
           ->CreateDefaultNetworkContextParams();
   network_context_params->http_cache_enabled = false;
 
@@ -240,6 +240,11 @@ void BruschettaNetworkContext::OnLocalNetworkAccessPermissionRequired(
   std::move(callback).Run(network::mojom::LocalNetworkAccessResult::kDenied);
 }
 
+void BruschettaNetworkContext::OnPlatformLocalNetworkPermissionRequired(
+    OnPlatformLocalNetworkPermissionRequiredCallback callback) {
+  std::move(callback).Run(/*granted=*/false);
+}
+
 void BruschettaNetworkContext::OnClearSiteData(
     const GURL& url,
     const std::string& header_value,
@@ -270,21 +275,17 @@ void BruschettaNetworkContext::OnSharedStorageHeaderReceived(
   std::move(callback).Run();
 }
 
-void BruschettaNetworkContext::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
-
 void BruschettaNetworkContext::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
         observer) {
   url_loader_observers_.Add(this, std::move(observer));
 }
 
-void BruschettaNetworkContext::OnWebSocketConnectedToPrivateNetwork(
+void BruschettaNetworkContext::OnWebSocketConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace ip_address_space) {}
 
-void BruschettaNetworkContext::OnUrlLoaderConnectedToPrivateNetwork(
+void BruschettaNetworkContext::OnUrlLoaderConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace response_address_space,
     network::mojom::IPAddressSpace client_address_space,

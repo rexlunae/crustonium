@@ -16,7 +16,6 @@
 #import "base/base64.h"
 #import "base/check.h"
 #import "base/command_line.h"
-#import "base/debug/dump_without_crashing.h"
 #import "base/feature_list.h"
 #import "base/files/file_path.h"
 #import "base/functional/bind.h"
@@ -29,15 +28,14 @@
 #import "base/path_service.h"
 #import "base/process/process_metrics.h"
 #import "base/rand_util.h"
-#import "base/strings/safe_sprintf.h"
 #import "base/task/thread_pool.h"
 #import "base/threading/platform_thread.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/country_codes/country_codes.h"
-#import "components/crash/core/common/crash_key.h"
 #import "components/crash/core/common/crash_keys.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/keyed_service/core/service_access_type.h"
+#import "components/language/core/browser/locale_util.h"
 #import "components/metrics/call_stacks/call_stack_profile_metrics_provider.h"
 #import "components/metrics/cpu_metrics_provider.h"
 #import "components/metrics/demographics/demographic_metrics_provider.h"
@@ -48,6 +46,7 @@
 #import "components/metrics/field_trials_provider.h"
 #import "components/metrics/install_date_provider.h"
 #import "components/metrics/metrics_data_validation.h"
+#import "components/metrics/metrics_features.h"
 #import "components/metrics/metrics_log_uploader.h"
 #import "components/metrics/metrics_pref_names.h"
 #import "components/metrics/metrics_reporting_default_state.h"
@@ -63,6 +62,7 @@
 #import "components/metrics/ui/screen_info_metrics_provider.h"
 #import "components/metrics/version_utils.h"
 #import "components/omnibox/browser/omnibox_metrics_provider.h"
+#import "components/policy/core/common/enterprise_management_metrics_provider.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/pref_service.h"
 #import "components/regional_capabilities/regional_capabilities_country_id.h"
@@ -90,6 +90,9 @@
 #import "ios/chrome/browser/metrics/model/ios_push_notifications_metrics_provider.h"
 #import "ios/chrome/browser/metrics/model/mobile_session_crash_helper_metrics_provider.h"
 #import "ios/chrome/browser/metrics/model/mobile_session_shutdown_metrics_provider.h"
+#import "ios/chrome/browser/policy/model/browser_management_service.h"
+#import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
+#import "ios/chrome/browser/policy/model/profile_policy_connector.h"
 #import "ios/chrome/browser/regional_capabilities/model/ios_regional_capabilities_metrics_provider.h"
 #import "ios/chrome/browser/regional_capabilities/model/regional_capabilities_service_factory.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -103,8 +106,10 @@
 #import "ios/chrome/browser/shared/model/utils/first_run_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/subscription_eligibility/model/ios_subscription_eligibility_metrics_provider.h"
 #import "ios/chrome/browser/sync/model/device_info_sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/tracing/ios_chrome_background_tracing_metrics_provider.h"
 #import "ios/chrome/browser/translate/model/translate_ranker_metrics_provider.h"
 #import "ios/chrome/common/channel_info.h"
 #import "ios/public/provider/chrome/browser/app_distribution/app_distribution_api.h"
@@ -143,6 +148,27 @@ std::unique_ptr<metrics::FileMetricsProvider> CreateFileMetricsProvider(
                                           metrics_reporting_enabled);
   }
   return file_metrics_provider;
+}
+
+std::vector<policy::EnterpriseManagementMetricsProvider::ProfileState>
+GetEnterpriseManagementProfileStates() {
+  std::vector<policy::EnterpriseManagementMetricsProvider::ProfileState> states;
+  ApplicationContext* context = GetApplicationContext();
+  if (context && context->GetProfileManager()) {
+    for (ProfileIOS* profile :
+         context->GetProfileManager()->GetLoadedProfiles()) {
+      if (profile->IsOffTheRecord()) {
+        continue;
+      }
+      ProfilePolicyConnector* connector =
+          profile->GetPolicyConnector();
+      states.push_back({
+          policy::BrowserManagementServiceFactory::GetForProfile(profile),
+          connector ? connector->GetPolicyService() : nullptr
+      });
+    }
+  }
+  return states;
 }
 
 }  // namespace
@@ -264,6 +290,11 @@ int32_t IOSChromeMetricsServiceClient::GetProduct() {
 }
 
 std::string IOSChromeMetricsServiceClient::GetApplicationLocale() {
+  if (base::FeatureList::IsEnabled(
+          metrics::features::kConsolidateMetricsServiceLocales)) {
+    return language::GetApplicationLocale(
+        GetApplicationContext()->GetLocalState());
+  }
   return GetApplicationContext()->GetApplicationLocaleStorage()->Get();
 }
 
@@ -382,7 +413,8 @@ void IOSChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
       std::make_unique<metrics::ScreenInfoMetricsProvider>());
 
   metrics_service_->RegisterMetricsProvider(
-      std::make_unique<metrics::DriveMetricsProvider>(ios::FILE_LOCAL_STATE));
+      std::make_unique<metrics::DriveMetricsProvider>(ios::FILE_LOCAL_STATE,
+                                                      local_state));
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<metrics::CallStackProfileMetricsProvider>());
@@ -403,15 +435,6 @@ void IOSChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<syncer::PassphraseTypeMetricsProvider>(
-          syncer::PassphraseTypeMetricsProvider::HistogramVersion::kV2,
-          base::BindRepeating(&SyncServiceFactory::GetAllSyncServices)));
-  metrics_service_->RegisterMetricsProvider(
-      std::make_unique<syncer::PassphraseTypeMetricsProvider>(
-          syncer::PassphraseTypeMetricsProvider::HistogramVersion::kV4,
-          base::BindRepeating(&SyncServiceFactory::GetAllSyncServices)));
-  metrics_service_->RegisterMetricsProvider(
-      std::make_unique<syncer::PassphraseTypeMetricsProvider>(
-          syncer::PassphraseTypeMetricsProvider::HistogramVersion::kV5,
           base::BindRepeating(&SyncServiceFactory::GetAllSyncServices)));
 
   metrics_service_->RegisterMetricsProvider(
@@ -431,14 +454,22 @@ void IOSChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<IOSPushNotificationsMetricsProvider>());
 
-  // Only register the RegionalCapabilitiesMetricsProvider if the dynamic
-  // profile country feature is enabled. This is because that feature
-  // significantly changes the cases under which the "Mixed" bucket is emitted.
-  if (base::FeatureList::IsEnabled(switches::kDynamicProfileCountry)) {
-    metrics_service_->RegisterMetricsProvider(
-        std::make_unique<
-            regional_capabilities::IOSRegionalCapabilitiesMetricsProvider>());
-  }
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<
+          regional_capabilities::IOSRegionalCapabilitiesMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<tracing::IOSChromeBackgroundTracingMetricsProvider>(
+          synthetic_trial_registry_));
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<policy::EnterpriseManagementMetricsProvider>(
+          policy::BrowserManagementServiceFactory::GetForPlatform(),
+          base::BindRepeating(&GetEnterpriseManagementProfileStates)));
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<subscription_eligibility::
+                           IOSSubscriptionEligibilityMetricsProvider>());
 }
 
 void IOSChromeMetricsServiceClient::RegisterUKMProviders() {
@@ -502,17 +533,6 @@ void IOSChromeMetricsServiceClient::CollectFinalHistograms() {
             "Memory.Browser.MemoryFootprint.Background", footprint_mb);
         break;
     }
-  } else {
-    // Max kern_return_t is 0x100 = 256, plus trailing null.
-    // (https://opensource.apple.com/source/xnu/xnu-792.25.20/osfmk/mach/kern_return.h)
-    // TODO(crbug.com/40866217): Remove this when done debugging the uncaught
-    // memory regression.
-    static crash_reporter::CrashKeyString<4> task_info_kern_return(
-        "task-info-kern-return");
-    char kr_buf[4];
-    base::strings::SafeSPrintf(kr_buf, "%d", result.error());
-    task_info_kern_return.Set(kr_buf);
-    base::debug::DumpWithoutCrashing();
   }
 
   int open_tabs_count = 0;

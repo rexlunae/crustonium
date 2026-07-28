@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/views/first_run_dialog.h"
 
 #include <string>
+#include <utility>
 
 #include "base/functional/bind.h"
 #include "base/process/process.h"
@@ -18,8 +19,6 @@
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/ui/dialogs/browser_dialogs.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
@@ -46,18 +45,6 @@ void ShowFirstRunDialog() {
     return;
   }
 
-#if BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(features::kViewsFirstRunDialog)) {
-    ShowFirstRunDialogViews();
-  } else {
-    ShowFirstRunDialogCocoa();
-  }
-#else
-  ShowFirstRunDialogViews();
-#endif
-}
-
-void ShowFirstRunDialogViews() {
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   bool closed_through_accept_button = false;
 
@@ -82,12 +69,14 @@ void ShowFirstRunDialogViews() {
 
 }  // namespace first_run
 
+
 // FirstRunDialog::TestApi
 FirstRunDialog::TestApi::TestApi(FirstRunDialog* dialog) : dialog_(dialog) {}
 
 void FirstRunDialog::TestApi::SetMakeDefaultCheckboxChecked(bool checked) {
   dialog_->make_default_->SetChecked(checked);
 }
+
 
 // static
 void FirstRunDialog::Show(base::RepeatingClosure learn_more_callback,
@@ -124,6 +113,7 @@ FirstRunDialog::FirstRunDialog(base::RepeatingClosure learn_more_callback,
       l10n_util::GetStringUTF16(IDS_FR_ENABLE_LOGGING)));
   // Having this box checked means the user has to opt-out of metrics recording.
   report_crashes_->SetChecked(true);
+
 }
 
 FirstRunDialog::~FirstRunDialog() = default;
@@ -131,9 +121,9 @@ FirstRunDialog::~FirstRunDialog() = default;
 bool FirstRunDialog::Accept() {
   closed_through_accept_button_ = true;
 
-  ChangeMetricsReportingState(
+  metrics::ChangeMetricsReportingState(
       report_crashes_->GetChecked(),
-      ChangeMetricsReportingStateCalledFrom::kUiFirstRun);
+      metrics::ChangeMetricsReportingStateCalledFrom::kUiFirstRun);
 
   if (make_default_->GetChecked()) {
     shell_integration::SetAsDefaultBrowser();

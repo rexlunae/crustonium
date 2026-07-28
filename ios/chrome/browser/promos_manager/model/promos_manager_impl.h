@@ -18,13 +18,14 @@
 #import "base/values.h"
 #import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/promos_manager/model/constants.h"
-#import "ios/chrome/browser/promos_manager/model/impression_limit.h"
 #import "ios/chrome/browser/promos_manager/model/promo_config.h"
 #import "ios/chrome/browser/promos_manager/model/promos_manager.h"
 
 namespace feature_engagement {
 class Tracker;
 }
+
+struct PromoDisplayContext;
 
 // Centralized promos manager for coordinating and scheduling the display of
 // app-wide promos. Feature teams should not use this directly, use
@@ -82,7 +83,8 @@ class PromosManagerImpl : public PromosManager {
   void Init() override;
   void InitializePromoConfigs(PromoConfigsSet promo_configs) override;
   void DeregisterAfterDisplay(promos_manager::Promo promo) override;
-  std::optional<promos_manager::Promo> NextPromoForDisplay() override;
+  std::optional<promos_manager::Promo> NextPromoForDisplay(
+      const PromoDisplayContext& display_context) override;
   void RegisterPromoForContinuousDisplay(promos_manager::Promo promo) override;
   void RegisterPromoForSingleDisplay(promos_manager::Promo promo) override;
   void RegisterPromoForSingleDisplay(

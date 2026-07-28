@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "chrome/browser/ui/browser_window_state.h"
 
 #include <stddef.h>
@@ -17,6 +16,7 @@
 #include "chrome/browser/sessions/session_service_base.h"
 #include "chrome/browser/sessions/session_service_lookup.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/window_sizer/window_sizer.h"
 #include "chrome/common/chrome_switches.h"
@@ -104,8 +104,9 @@ bool ShouldSaveWindowPlacement(const Browser* browser) {
   // Never track app windows that do not have a trusted source (i.e. windows
   // spawned by an app).  See similar code in
   // SessionServiceBase::ShouldTrackBrowser().
-  return !(browser->is_type_app() || browser->is_type_app_popup()) ||
-         browser->is_trusted_source();
+  return !(browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+           browser->is_type_app_popup()) ||
+         WindowFeatureController::From(browser)->IsTrustedSource();
 }
 
 bool SavedBoundsAreContentBounds(const Browser* browser) {
@@ -113,10 +114,10 @@ bool SavedBoundsAreContentBounds(const Browser* browser) {
   // Web apps, on the other hand, have the same behavior as popups, and save
   // their content bounds.
   return !browser->is_type_normal() && !browser->is_type_devtools() &&
-         !browser->is_trusted_source();
+         !WindowFeatureController::From(browser)->IsTrustedSource();
 }
 
-void SaveWindowPlacement(const Browser* browser,
+void SaveWindowPlacement(Browser* browser,
                          const gfx::Rect& bounds,
                          ui::mojom::WindowShowState show_state) {
   // Save to the session storage service, used when reloading a past session.
@@ -129,14 +130,14 @@ void SaveWindowPlacement(const Browser* browser,
   }
 }
 
-void SaveWindowWorkspace(const Browser* browser, const std::string& workspace) {
+void SaveWindowWorkspace(Browser* browser, const std::string& workspace) {
   SessionServiceBase* service = GetAppropriateSessionServiceIfExisting(browser);
   if (service) {
     service->SetWindowWorkspace(browser->session_id(), workspace);
   }
 }
 
-void SaveWindowVisibleOnAllWorkspaces(const Browser* browser,
+void SaveWindowVisibleOnAllWorkspaces(Browser* browser,
                                       bool visible_on_all_workspaces) {
   SessionServiceBase* service = GetAppropriateSessionServiceIfExisting(browser);
   if (service) {
@@ -145,13 +146,13 @@ void SaveWindowVisibleOnAllWorkspaces(const Browser* browser,
   }
 }
 
-void GetSavedWindowBoundsAndShowState(const Browser* browser,
+void GetSavedWindowBoundsAndShowState(Browser* browser,
                                       gfx::Rect* bounds,
                                       ui::mojom::WindowShowState* show_state) {
   DCHECK(browser);
   DCHECK(bounds);
   DCHECK(show_state);
-  *bounds = browser->override_bounds();
+  *bounds = BrowserInitState::From(browser)->override_bounds();
   WindowSizer::GetBrowserWindowBoundsAndShowState(*bounds, browser, bounds,
                                                   show_state);
 

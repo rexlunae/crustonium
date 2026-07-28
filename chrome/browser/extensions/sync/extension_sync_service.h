@@ -84,8 +84,8 @@ class ExtensionSyncService : public syncer::SyncableService,
       const syncer::SyncableService::StartSyncFlare& flare);
 
   // Special hack: There was a bug where themes incorrectly ended up in the
-  // syncer::EXTENSIONS type. This is for cleaning up the data. crbug.com/558299
-  // DO NOT USE FOR ANYTHING ELSE!
+  // syncer::EXTENSIONS type. This is for cleaning up the data.
+  // crbug.com/40445445 DO NOT USE FOR ANYTHING ELSE!
   // TODO(crbug.com/41401013): This *should* be safe to remove now, but it's
   // not.
   void DeleteThemeDoNotUse(const extensions::Extension& theme);
@@ -100,6 +100,8 @@ class ExtensionSyncService : public syncer::SyncableService,
   void OnExtensionInstalled(content::BrowserContext* browser_context,
                             const extensions::Extension* extension,
                             bool is_update) override;
+  void OnExtensionLoaded(content::BrowserContext* browser_context,
+                         const extensions::Extension* extension) override;
   void OnExtensionUninstalled(content::BrowserContext* browser_context,
                               const extensions::Extension* extension,
                               extensions::UninstallReason reason) override;

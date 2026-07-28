@@ -5,12 +5,21 @@
 #include "components/autofill/core/browser/integrators/optimization_guide/autofill_optimization_guide_decider.h"
 
 #include <algorithm>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include "base/check.h"
+#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
+#include "base/feature_list.h"
+#include "base/notreached.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card_benefit.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/payments/constants.h"
@@ -18,6 +27,7 @@
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decider.h"
+#include "components/optimization_guide/core/hints/optimization_guide_decision.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
@@ -91,6 +101,17 @@ GetCardBenefitsOptimizationTypesForCard(
         optimization_guide::proto::BMO_CREDIT_CARD_TRAVEL_BENEFITS);
     optimization_types.push_back(
         optimization_guide::proto::BMO_CREDIT_CARD_WHOLESALE_CLUB_BENEFITS);
+  } else if (
+      card.benefit_source() == kCurinosCardBenefitSource &&
+      base::FeatureList::IsEnabled(
+          features::
+              kAutofillEnableTravelCategoryAndMerchantBenefitsFromCurinos)) {
+    optimization_types.push_back(
+        optimization_guide::proto::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS);
+    optimization_types.push_back(
+        optimization_guide::proto::CURINOS_CREDIT_CARD_HOTEL_BENEFITS);
+    optimization_types.push_back(
+        optimization_guide::proto::CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS);
   }
   if (payments_data_manager
           .GetFlatRateBenefitByInstrumentId(
@@ -132,12 +153,9 @@ void AddCreditCardOptimizationTypes(
     // optimizations.
     if (base::FeatureList::IsEnabled(
             features::kAutofillEnableCardBenefitsSync)) {
-      auto benefits_optimization_types =
-          GetCardBenefitsOptimizationTypesForCard(*card, payments_data_manager);
-      if (!benefits_optimization_types.empty()) {
-        optimization_types.insert(benefits_optimization_types.begin(),
-                                  benefits_optimization_types.end());
-      }
+      optimization_types.insert_range(
+          base::RangeAsRvalues(GetCardBenefitsOptimizationTypesForCard(
+              *card, payments_data_manager)));
     }
   }
 }
@@ -167,6 +185,7 @@ GetBenefitCategoryForOptimizationType(
   switch (optimization_type) {
     case optimization_guide::proto::
         AMERICAN_EXPRESS_CREDIT_CARD_FLIGHT_BENEFITS:
+    case optimization_guide::proto::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS:
       return CreditCardCategoryBenefit::BenefitCategory::kFlights;
     case optimization_guide::proto::
         AMERICAN_EXPRESS_CREDIT_CARD_SUBSCRIPTION_BENEFITS:
@@ -199,6 +218,10 @@ GetBenefitCategoryForOptimizationType(
       return CreditCardCategoryBenefit::BenefitCategory::kEntertainment;
     case optimization_guide::proto::CAPITAL_ONE_CREDIT_CARD_STREAMING_BENEFITS:
       return CreditCardCategoryBenefit::BenefitCategory::kStreaming;
+    case optimization_guide::proto::CURINOS_CREDIT_CARD_HOTEL_BENEFITS:
+      return CreditCardCategoryBenefit::BenefitCategory::kHotels;
+    case optimization_guide::proto::CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS:
+      return CreditCardCategoryBenefit::BenefitCategory::kCarRentals;
     default:
       NOTREACHED();
   }
@@ -220,11 +243,13 @@ void AddOptimizationTypesForBnplIssuers(
     optimization_types.insert(
         base::FeatureList::IsEnabled(
             features::kAutofillPreferBuyNowPayLaterBlocklists)
-            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM
 #if BUILDFLAG(IS_ANDROID)
+            ? optimization_guide::proto::
+                  BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM_ANDROID
             : optimization_guide::proto::
                   BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM_ANDROID);
 #else
+            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM
             : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM);
 #endif  // BUILDFLAG(IS_ANDROID)
   }
@@ -233,11 +258,12 @@ void AddOptimizationTypesForBnplIssuers(
     optimization_types.insert(
         base::FeatureList::IsEnabled(
             features::kAutofillPreferBuyNowPayLaterBlocklists)
-            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP
 #if BUILDFLAG(IS_ANDROID)
+            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP_ANDROID
             : optimization_guide::proto::
                   BUY_NOW_PAY_LATER_ALLOWLIST_ZIP_ANDROID);
 #else
+            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP
             : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_ZIP);
 #endif  // BUILDFLAG(IS_ANDROID)
   }
@@ -246,11 +272,13 @@ void AddOptimizationTypesForBnplIssuers(
     optimization_types.insert(
         base::FeatureList::IsEnabled(
             features::kAutofillPreferBuyNowPayLaterBlocklists)
-            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA
 #if BUILDFLAG(IS_ANDROID)
+            ? optimization_guide::proto::
+                  BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA_ANDROID
             : optimization_guide::proto::
                   BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA_ANDROID);
 #else
+            ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA
             : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA);
 #endif  // BUILDFLAG(IS_ANDROID)
   }
@@ -280,6 +308,16 @@ void AutofillOptimizationGuideDecider::OnPaymentsDataLoaded(
           features::kAutofillActorRewriteCreditCardTriggerField)) {
     optimization_types.insert(
         optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST);
+  }
+
+  if (base::FeatureList::IsEnabled(features::kAutofillEnableOmniboxAutofill)) {
+    optimization_types.insert(
+        optimization_guide::proto::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST);
+  }
+
+  if (base::FeatureList::IsEnabled(features::kAutofillAtMemory)) {
+    optimization_types.insert(
+        optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED);
   }
 
   // If we do not have any optimization types to register, do not do anything.
@@ -366,6 +404,17 @@ AutofillOptimizationGuideDecider::AttemptToGetEligibleCreditCardBenefitCategory(
         optimization_guide::proto::BMO_CREDIT_CARD_TRAVEL_BENEFITS);
     issuer_optimization_types.push_back(
         optimization_guide::proto::BMO_CREDIT_CARD_WHOLESALE_CLUB_BENEFITS);
+  } else if (
+      benefit_source == kCurinosCardBenefitSource &&
+      base::FeatureList::IsEnabled(
+          features::
+              kAutofillEnableTravelCategoryAndMerchantBenefitsFromCurinos)) {
+    issuer_optimization_types.push_back(
+        optimization_guide::proto::CURINOS_CREDIT_CARD_FLIGHT_BENEFITS);
+    issuer_optimization_types.push_back(
+        optimization_guide::proto::CURINOS_CREDIT_CARD_HOTEL_BENEFITS);
+    issuer_optimization_types.push_back(
+        optimization_guide::proto::CURINOS_CREDIT_CARD_CAR_RENTAL_BENEFITS);
   }
 
   for (auto& optimization_type : issuer_optimization_types) {
@@ -470,7 +519,7 @@ bool AutofillOptimizationGuideDecider::IsUrlEligibleForBnplIssuer(
     BnplIssuer::IssuerId issuer_id,
     const GURL& url) const {
   if (base::FeatureList::IsEnabled(
-          ::autofill::features::kAutofillEnableAmountExtractionTesting)) {
+          features::kAutofillEnableAmountExtractionTesting)) {
     return true;
   }
 
@@ -487,22 +536,26 @@ bool AutofillOptimizationGuideDecider::IsUrlEligibleForBnplIssuer(
       return can_apply_optimization(
           base::FeatureList::IsEnabled(
               features::kAutofillPreferBuyNowPayLaterBlocklists)
-              ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM
 #if BUILDFLAG(IS_ANDROID)
+              ? optimization_guide::proto::
+                    BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM_ANDROID
               : optimization_guide::proto::
                     BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM_ANDROID);
 #else
+              ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_AFFIRM
               : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_AFFIRM);
 #endif  // BUILDFLAG(IS_ANDROID)
     case BnplIssuer::IssuerId::kBnplZip:
       return can_apply_optimization(
           base::FeatureList::IsEnabled(
               features::kAutofillPreferBuyNowPayLaterBlocklists)
-              ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP
 #if BUILDFLAG(IS_ANDROID)
+              ? optimization_guide::proto::
+                    BUY_NOW_PAY_LATER_BLOCKLIST_ZIP_ANDROID
               : optimization_guide::proto::
                     BUY_NOW_PAY_LATER_ALLOWLIST_ZIP_ANDROID);
 #else
+              ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_ZIP
               : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_ZIP);
 #endif  // BUILDFLAG(IS_ANDROID)
     // TODO(crbug.com/408268581): Handle Afterpay issuer enum value when
@@ -513,11 +566,13 @@ bool AutofillOptimizationGuideDecider::IsUrlEligibleForBnplIssuer(
       return can_apply_optimization(
           base::FeatureList::IsEnabled(
               features::kAutofillPreferBuyNowPayLaterBlocklists)
-              ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA
 #if BUILDFLAG(IS_ANDROID)
+              ? optimization_guide::proto::
+                    BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA_ANDROID
               : optimization_guide::proto::
                     BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA_ANDROID);
 #else
+              ? optimization_guide::proto::BUY_NOW_PAY_LATER_BLOCKLIST_KLARNA
               : optimization_guide::proto::BUY_NOW_PAY_LATER_ALLOWLIST_KLARNA);
 #endif  // BUILDFLAG(IS_ANDROID)
   }
@@ -533,6 +588,29 @@ bool AutofillOptimizationGuideDecider::IsIframeUrlAllowlistedForActor(
              optimization_guide::proto::AUTOFILL_ACTOR_IFRAME_ORIGIN_ALLOWLIST,
              /*optimization_metadata=*/nullptr) ==
              optimization_guide::OptimizationGuideDecision::kTrue;
+}
+
+bool AutofillOptimizationGuideDecider::IsUrlEligibleForOmniboxAutofill(
+    const GURL& url) const {
+  return base::FeatureList::IsEnabled(
+             features::kAutofillEnableOmniboxAutofill) &&
+         decider_->CanApplyOptimization(
+             url, optimization_guide::proto::OMNIBOX_AUTOFILL_IFRAME_ALLOWLIST,
+             /*optimization_metadata=*/nullptr) ==
+             optimization_guide::OptimizationGuideDecision::kTrue;
+}
+
+bool AutofillOptimizationGuideDecider::ShouldBlockAtMemory(
+    const GURL& url) const {
+  // Since the optimization guide decider integration corresponding to
+  // `AUTOFILL_AT_MEMORY_BLOCKED` lists are blocklists for the question "Can
+  // this site be optimized?", a match on the blocklist answers the question
+  // with "no". Therefore, `kFalse` indicates that `url` is blocked from the
+  // AtMemory feature.
+  return decider_->CanApplyOptimization(
+             url, optimization_guide::proto::AUTOFILL_AT_MEMORY_BLOCKED,
+             /*optimization_metadata=*/nullptr) ==
+         optimization_guide::OptimizationGuideDecision::kFalse;
 }
 
 }  // namespace autofill

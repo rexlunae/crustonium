@@ -6,17 +6,24 @@
 
 #import <optional>
 
+#import "base/apple/foundation_util.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/not_fatal_until.h"
+#import "base/task/thread_pool.h"
+#import "components/autofill/ios/form_util/form_activity_params.h"
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
+#import "components/password_manager/ios/features.h"
 #import "components/segmentation_platform/embedder/home_modules/tips_manager/signal_constants.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/first_run/public/best_features_item.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/credential_suggestion_bottom_sheet_mediator.h"
-#import "ios/chrome/browser/passwords/bottom_sheet/public/scoped_credential_suggestion_bottom_sheet_reauth_module_override.h"
+#import "ios/chrome/browser/passwords/bottom_sheet/coordinator/passkey_suggestion_bottom_sheet_mediator.h"
+#import "ios/chrome/browser/passwords/bottom_sheet/coordinator/password_suggestion_bottom_sheet_exit_reason.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/ui/credential_suggestion_bottom_sheet_view_controller.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_account_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
@@ -26,6 +33,7 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios_factory.h"
 #import "ios/chrome/browser/welcome_back/model/features.h"
@@ -39,29 +47,30 @@ using PasswordSuggestionBottomSheetExitReason::kShowPasswordDetails;
 using PasswordSuggestionBottomSheetExitReason::kShowPasswordManager;
 using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 
-@interface CredentialSuggestionBottomSheetCoordinator () {
-  // The password controller delegate used to open the password manager.
-  id<PasswordControllerDelegate> _passwordControllerDelegate;
+@interface CredentialSuggestionBottomSheetCoordinator ()
 
-  // Currently in the process of dismissing the bottom sheet.
-  bool _dismissing;
-}
-
-// This mediator is used to fetch data related to the bottom sheet.
-@property(nonatomic, strong) CredentialSuggestionBottomSheetMediator* mediator;
-
-// This view controller is used to display the bottom sheet.
-@property(nonatomic, strong)
-    CredentialSuggestionBottomSheetViewController* viewController;
-
-// Module handling reauthentication before accessing sensitive data.
-@property(nonatomic, strong) id<ReauthenticationProtocol> reauthModule;
+@property(nonatomic, strong) UINavigationController* navigationController;
 
 @end
 
 @implementation CredentialSuggestionBottomSheetCoordinator {
-  // The navigation controller containing the Suggestion.
-  UINavigationController* _navigationController;
+  // The password controller delegate used to open the password manager.
+  __weak id<PasswordControllerDelegate> _passwordControllerDelegate;
+
+  // Currently in the process of dismissing the bottom sheet.
+  bool _dismissing;
+
+  // This mediator is used to fetch data related to the bottom sheet.
+  CredentialSuggestionBottomSheetMediatorBase* _mediator;
+
+  // This view controller is used to display the bottom sheet.
+  CredentialSuggestionBottomSheetViewController* _viewController;
+
+  // Form activity parameters giving the context around the sheet trigger.
+  std::optional<autofill::FormActivityParams> _params;
+
+  // Information of the passkey request.
+  std::optional<webauthn::IOSPasskeyClient::RequestInfo> _requestInfo;
 }
 
 - (instancetype)
@@ -73,46 +82,22 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   if (self) {
     _passwordControllerDelegate = delegate;
     _dismissing = NO;
+    _params = params;
+  }
+  return self;
+}
 
-    WebStateList* webStateList = browser->GetWebStateList();
-    const GURL& URL = webStateList->GetActiveWebState()->GetLastCommittedURL();
-    self.viewController = [[CredentialSuggestionBottomSheetViewController alloc]
-        initWithHandler:self
-                    URL:URL];
-
-    _navigationController = [[UINavigationController alloc]
-        initWithRootViewController:self.viewController];
-
-    ProfileIOS* profile = browser->GetProfile()->GetOriginalProfile();
-
-    auto profilePasswordStore =
-        IOSChromeProfilePasswordStoreFactory::GetForProfile(
-            profile, ServiceAccessType::EXPLICIT_ACCESS);
-    auto accountPasswordStore =
-        IOSChromeAccountPasswordStoreFactory::GetForProfile(
-            profile, ServiceAccessType::EXPLICIT_ACCESS);
-
-    self.reauthModule =
-        ScopedCredentialSuggestionBottomSheetReauthModuleOverride::Get();
-    if (!self.reauthModule) {
-      self.reauthModule = [[ReauthenticationModule alloc] init];
-    }
-    self.mediator = [[CredentialSuggestionBottomSheetMediator alloc]
-          initWithWebStateList:webStateList
-                 faviconLoader:IOSChromeFaviconLoaderFactory::GetForProfile(
-                                   profile)
-                   prefService:profile->GetPrefs()
-                        params:params
-                  reauthModule:_reauthModule
-                           URL:URL
-          profilePasswordStore:profilePasswordStore
-          accountPasswordStore:accountPasswordStore
-        sharedURLLoaderFactory:profile->GetSharedURLLoaderFactory()
-             engagementTracker:feature_engagement::TrackerFactory::
-                                   GetForProfile(self.profile)
-                     presenter:self];
-    self.viewController.delegate = self.mediator;
-    self.mediator.consumer = self.viewController;
+- (instancetype)
+    initWithBaseViewController:(UIViewController*)viewController
+                       browser:(Browser*)browser
+                   requestInfo:
+                       (webauthn::IOSPasskeyClient::RequestInfo)requestInfo
+                      delegate:(id<PasswordControllerDelegate>)delegate {
+  self = [super initWithBaseViewController:viewController browser:browser];
+  if (self) {
+    _passwordControllerDelegate = delegate;
+    _dismissing = NO;
+    _requestInfo = std::move(requestInfo);
   }
   return self;
 }
@@ -120,9 +105,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 #pragma mark - ChromeCoordinator
 
 - (void)start {
-  // If the bottom sheet has no suggestion to show, stop the presentation right
-  // away.
-  if (![self.mediator hasSuggestions]) {
+  if (!_params.has_value() && !_requestInfo.has_value()) {
     // Cleanup the coordinator if it couldn't be started.
     [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
     // Do not add any logic past this point in this specific context since the
@@ -130,7 +113,75 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
     return;
   }
 
-  self.viewController.parentViewControllerHeight =
+  WebStateList* webStateList = self.browser->GetWebStateList();
+  const GURL& URL = webStateList->GetActiveWebState()->GetLastCommittedURL();
+
+  ProfileIOS* profile = self.browser->GetProfile()->GetOriginalProfile();
+
+  auto profilePasswordStore =
+      IOSChromeProfilePasswordStoreFactory::GetForProfile(
+          profile, ServiceAccessType::EXPLICIT_ACCESS);
+  auto accountPasswordStore =
+      IOSChromeAccountPasswordStoreFactory::GetForProfile(
+          profile, ServiceAccessType::EXPLICIT_ACCESS);
+
+  id<ReauthenticationProtocol> reauthModule =
+      ReauthenticationServiceFactory::GetForProfile(profile)->GetReauthModule();
+
+  FaviconLoader* faviconLoader =
+      IOSChromeFaviconLoaderFactory::GetForProfile(profile);
+  PrefService* prefService = profile->GetPrefs();
+  scoped_refptr<network::SharedURLLoaderFactory> sharedURLLoaderFactory =
+      profile->GetSharedURLLoaderFactory();
+  feature_engagement::Tracker* engagementTracker =
+      feature_engagement::TrackerFactory::GetForProfile(profile);
+
+  if (_params.has_value()) {
+    _mediator = [[CredentialSuggestionBottomSheetMediator alloc]
+          initWithWebStateList:webStateList
+                 faviconLoader:faviconLoader
+                   prefService:prefService
+                        params:*_params
+                  reauthModule:reauthModule
+          profilePasswordStore:profilePasswordStore
+          accountPasswordStore:accountPasswordStore
+        sharedURLLoaderFactory:sharedURLLoaderFactory
+             engagementTracker:engagementTracker];
+  } else {
+    CHECK(_requestInfo.has_value());
+
+    _mediator = [[PasskeySuggestionBottomSheetMediator alloc]
+        initWithWebStateList:webStateList
+                 requestInfo:std::move(*_requestInfo)
+                reauthModule:reauthModule];
+
+    _requestInfo.reset();
+  }
+  _mediator.presenter = self;
+
+  _viewController = [[CredentialSuggestionBottomSheetViewController alloc]
+      initWithHandler:self
+                  URL:URL];
+
+  _navigationController = [[UINavigationController alloc]
+      initWithRootViewController:_viewController];
+
+  _viewController.delegate = _mediator;
+  _mediator.consumer = _viewController;
+
+  // If the bottom sheet has no suggestion to show, stop the presentation right
+  // away.
+  if (![_mediator hasSuggestions]) {
+    // If there is an active passkey request, defer it to the renderer.
+    [_mediator deferPasskeyRequestToRenderer];
+    // Cleanup the coordinator if it couldn't be started.
+    [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+    // Do not add any logic past this point in this specific context since the
+    // the coordinator was torn down at this point hence now unusable.
+    return;
+  }
+
+  _viewController.parentViewControllerHeight =
       self.baseViewController.view.frame.size.height;
   __weak __typeof(self) weakSelf = self;
   [self.baseViewController presentViewController:_navigationController
@@ -140,24 +191,23 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
                                       }];
 
   // Dismiss right away if the presentation failed to avoid having a zombie
-  // coordinator. This is the best proxy we have to know whether the view
-  // controller for the bottom sheet could really be presented as the completion
-  // block is only called when presentation really happens, and we can't get any
-  // error message or signal. Based on what we could test, we know that
-  // presentingViewController is only set if the view controller can be
-  // presented, where it is left to nil if the presentation is rejected for
-  // various reasons (having another view controller already presented is one of
-  // them). One should not think they can know all the reasons why the
-  // presentation fails.
+  // coordinator. The check is performed asynchronously in the main queue to
+  // prevent the credential suggestion bottom sheet from being dismissed
+  // prematurely due to UIKit's asynchronous presentation timing. This is the
+  // best proxy we have to know whether the view controller for the bottom sheet
+  // could really be presented as the completion block is only called when
+  // presentation really happens, and we can't get any error message or signal.
   //
   // Keep this line at the end of -start because the
   // delegate will likely -stop the coordinator when closing suggestions, so the
   // coordinator should be in the most up to date state where it can be safely
   // stopped.
-  if (!_navigationController.presentingViewController) {
-    [self.mediator logExitReason:kCouldNotPresent];
-    [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
-  }
+
+  ExecuteWhenTransitionsComplete(
+      ^{
+        [weakSelf verifyPresentation];
+      },
+      self.baseViewController);
 }
 
 - (void)stop {
@@ -173,7 +223,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 
 - (void)displayPasswordManager {
   _dismissing = YES;
-  [self.mediator logExitReason:kShowPasswordManager];
+  [_mediator logExitReason:kShowPasswordManager];
 
   __weak __typeof(self) weakSelf = self;
   [_navigationController.presentingViewController
@@ -188,9 +238,16 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 - (void)displayPasswordDetailsForFormSuggestion:
     (FormSuggestion*)formSuggestion {
   _dismissing = YES;
-  [self.mediator logExitReason:kShowPasswordDetails];
+
+  CredentialSuggestionBottomSheetMediator*
+      credentialSuggestionBottomSheetMediator =
+          base::apple::ObjCCastStrict<CredentialSuggestionBottomSheetMediator>(
+              _mediator);
+
+  [credentialSuggestionBottomSheetMediator logExitReason:kShowPasswordDetails];
   std::optional<password_manager::CredentialUIEntry> credential =
-      [self.mediator getCredentialForFormSuggestion:formSuggestion];
+      [credentialSuggestionBottomSheetMediator
+          getCredentialForFormSuggestion:formSuggestion];
 
   __weak __typeof(self) weakSelf = self;
   [_navigationController.presentingViewController
@@ -218,25 +275,44 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   }
   // Disable user interactions on the root view of the view controller so any
   // further user action isn't allowed. Only one action is allowed on the sheet.
-  self.viewController.view.userInteractionEnabled = NO;
+  _viewController.view.userInteractionEnabled = NO;
 
   _dismissing = YES;
-  [self.mediator logExitReason:kUsePasswordSuggestion];
+  [_mediator logExitReason:kUsePasswordSuggestion];
   __weak __typeof(self) weakSelf = self;
-  ProceduralBlock completion = ^{
-    [weakSelf.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
-  };
-  [_navigationController.presentingViewController
-      dismissViewControllerAnimated:YES
-                         completion:^{
-                           [weakSelf.mediator didSelectSuggestion:formSuggestion
-                                                          atIndex:index
-                                                       completion:completion];
-                         }];
 
-  // Dismiss the soft keyboard right after starting the animation so it doesn't
-  // flicker.
-  [self dismissSoftKeyboard];
+  if (password_manager::features::kAutoSubmissionTypeParam.Get() ==
+      password_manager::features::AutoSubmissionType::kSubmitThenDismiss) {
+    // When using kSubmitThenDismiss auto-submit, do not dismiss the sheet yet.
+    // Pass the dismissal logic to the mediator to be executed after the
+    // auto-submission sequence is complete.
+    ProceduralBlock completion = ^{
+      [weakSelf.navigationController.presentingViewController
+          dismissViewControllerAnimated:YES
+                             completion:^{
+                               [weakSelf.browserCoordinatorCommandsHandler
+                                       dismissPasswordSuggestions];
+                             }];
+    };
+    [self didSelectSuggestion:formSuggestion
+                      atIndex:index
+                   completion:completion];
+  } else {
+    ProceduralBlock completion = ^{
+      [weakSelf.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+    };
+    [_navigationController.presentingViewController
+        dismissViewControllerAnimated:YES
+                           completion:^{
+                             [weakSelf didSelectSuggestion:formSuggestion
+                                                   atIndex:index
+                                                completion:completion];
+                           }];
+
+    // Dismiss the soft keyboard right after starting the animation so it
+    // doesn't flicker.
+    [self dismissSoftKeyboard];
+  }
 
   // Records the usage of password autofill. This notifies the Tips Manager,
   // which may trigger tips or guidance related to password management features.
@@ -267,20 +343,26 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
     return;
   }
 
-  // Terminate dismissal if the entrypoint that dismissed the bottom sheet
-  // wasn't handled yet (e.g. when swipped away).
-  // Explicitly refocus the field if the sheet is dismissed without using any
-  // of its features. The listeners are detached as soon as the sheet is
-  // presented which requires another means to refocus the blurred field once
-  // the sheet is dismissed.
-  [self.mediator refocus];
+  CredentialSuggestionBottomSheetMediator*
+      credentialSuggestionBottomSheetMediator =
+          base::apple::ObjCCast<CredentialSuggestionBottomSheetMediator>(
+              _mediator);
+  if (credentialSuggestionBottomSheetMediator) {
+    // Terminate dismissal if the entrypoint that dismissed the bottom sheet
+    // wasn't handled yet (e.g. when swipped away).
+    // Explicitly refocus the field if the sheet is dismissed without using any
+    // of its features. The listeners are detached as soon as the sheet is
+    // presented which requires another means to refocus the blurred field once
+    // the sheet is dismissed.
+    [credentialSuggestionBottomSheetMediator refocus];
+  }
 
-  [self.mediator logExitReason:kDismissal];
-  [self.mediator onDismissWithoutAnyCredentialAction];
+  [_mediator logExitReason:kDismissal];
+  [_mediator onDismissWithoutAnyCredentialAction];
 
   // Disconnect as a last step of cleaning up the presentation. This should
   // always be kept as the last step.
-  [self.mediator disconnect];
+  [_mediator disconnect];
   [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
 }
 
@@ -300,15 +382,36 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
                          completion:nil];
 }
 
+#pragma mark - Public
+
+- (BOOL)hasPendingRequest:
+    (const webauthn::IOSPasskeyClient::RequestInfo&)requestInfo {
+  if (_mediator) {
+    return [_mediator hasPendingRequest:requestInfo];
+  }
+
+  return _requestInfo.has_value() && *_requestInfo == requestInfo;
+}
+
 #pragma mark - Private
 
 - (void)setInitialVoiceOverFocus {
   UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification,
-                                  self.viewController.aboveTitleView);
+                                  _viewController.aboveTitleView);
 }
 
 - (void)displaySavedPasswordList {
   [_passwordControllerDelegate displaySavedPasswordList];
+}
+
+// Sends the information about which suggestion from the bottom sheet was
+// selected by the user, which is expected to fill the relevant fields.
+- (void)didSelectSuggestion:(FormSuggestion*)formSuggestion
+                    atIndex:(NSInteger)index
+                 completion:(ProceduralBlock)completion {
+  [_mediator didSelectSuggestion:formSuggestion
+                         atIndex:index
+                      completion:completion];
 }
 
 - (void)showPasswordDetailsForCredential:
@@ -324,6 +427,17 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   CHECK(activeWebState);
   if (activeWebState) {
     [activeWebState->GetView() endEditing:NO];
+  }
+}
+
+// Verifies whether the bottom sheet view controller was successfully presented.
+// If not, logs an exit reason and dismisses the password suggestions.
+- (void)verifyPresentation {
+  if (!_navigationController.presentingViewController &&
+      !_navigationController.beingPresented) {
+    [_mediator logExitReason:kCouldNotPresent];
+    [_mediator deferPasskeyRequestToRenderer];
+    [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
   }
 }
 

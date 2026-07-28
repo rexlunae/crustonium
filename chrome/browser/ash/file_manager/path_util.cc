@@ -122,7 +122,7 @@ constexpr char kArcRemovableMediaUuidForTesting[] =
     "00000000000000000000000000000000DEADBEEF";
 // The dummy UUID of the MyFiles volume is taken from
 // chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.cc.
-// TODO(crbug.com/929031): Move MyFiles constants to a common place.
+// TODO(crbug.com/255484683): Move MyFiles constants to a common place.
 constexpr char kArcMyFilesContentUrlPrefix[] =
     "content://org.chromium.arc.volumeprovider/"
     "0000000000000000000000000000CAFEF00D2019/";
@@ -492,7 +492,9 @@ bool IsBruschettaMountPointName(const std::string& name,
       continue;
     }
     if (name == util::GetGuestOsMountPointName(profile, provider->GuestId())) {
-      *guest_id = provider->GuestId();
+      if (guest_id) {
+        *guest_id = provider->GuestId();
+      }
       return true;
     }
   }

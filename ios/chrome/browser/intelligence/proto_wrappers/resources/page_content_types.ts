@@ -10,9 +10,6 @@
  * Read the mojom files to get more documentation on these.
  */
 
-// TODO(crbug.com/473741676): Port the aria role definitions from
-// ui/accessibility/ax_enums.mojom.
-
 // Definitions from mojo/public/mojom/base/unguessable_token.mojom
 
 // TODO(crbug.com/473752555): Serialize the UnguessableToken as a 2 numbers
@@ -40,12 +37,6 @@ export interface Point {
 export interface Size {
   width: number;
   height: number;
-}
-
-// Definitions from url/mojom/url.mojom
-
-export interface Url {
-  url: string;
 }
 
 // Definitions from url/mojom/origin.mojom
@@ -147,8 +138,8 @@ export enum PageContentAnnotatedRole {
 
 export interface PageContentGeometry {
   outerBoundingBox: Rect;
-  visibleBoundingBox: Rect;
-  fragmentVisibleBoundingBoxes: Rect[];
+  visibleBoundingBox?: Rect;
+  fragmentVisibleBoundingBoxes?: Rect[];
 }
 
 export interface PageContentSelection {
@@ -166,6 +157,7 @@ export interface PageContentPageInteractionInfo {
 }
 
 export interface PageContentFrameInteractionInfo {
+  focusedDomNodeId?: number;
   selection?: PageContentSelection;
 }
 
@@ -226,7 +218,9 @@ export enum PageContentTextSize {
 export interface PageContentTextStyle {
   textSize: PageContentTextSize;
   hasEmphasis: boolean;
-  color: number;
+  // Color is passed as a string to avoid 32-bit signed integer overflow
+  // during bridge conversion (values can exceed INT_MAX).
+  color?: string;
 }
 
 export interface PageContentTextInfo {
@@ -246,7 +240,7 @@ export enum PageContentAnchorRel {
 }
 
 export interface PageContentAnchorData {
-  url: Url;
+  url: string;
   rel: PageContentAnchorRel[];
 }
 
@@ -264,13 +258,28 @@ export interface PageContentCanvasData {
 }
 
 export interface PageContentVideoData {
-  url: Url;
+  url: string;
   sourceOrigin?: Origin;
 }
 
 export interface PageContentMeta {
   name: string;
   content: string;
+}
+
+// The numbers are aligned with the MediaDataType enum in
+// components/optimization_guide/proto/features/common_quality_data.proto.
+export enum PageContentMediaType {
+  MEDIA_DATA_TYPE_UNKNOWN = 0,
+  MEDIA_DATA_TYPE_VIDEO = 1,
+  MEDIA_DATA_TYPE_AUDIO = 2,
+}
+
+export interface PageContentMediaData {
+  mediaDataType: PageContentMediaType;
+  durationMilliseconds: number;
+  currentPositionMilliseconds: number;
+  isPlaying: boolean;
 }
 
 // Some fields aren't listed here because they are not supported on ios:
@@ -284,6 +293,11 @@ export interface PageContentFrameData {
   // Exclusive to ios which needs to get the full url from JS to get more than
   // the URL origin from the WebFrame data.
   sourceUrl?: string;
+  // Exclusive to ios which gets the document id from the remote token issued
+  // during iframe registration. Just populated for PageContentIframeContent.
+  documentId?: string;
+  mediaData?: PageContentMediaData;
+  isFocusedDocument?: boolean;
 }
 
 // The numbers are aligned with the RedactedFrameMetadata enum in
@@ -305,7 +319,11 @@ export interface PageContentIframeContent {
 }
 
 export interface PageContentIframeData {
-  frameToken: FrameToken;
+  // The token used by the browser to identify and graft this child frame.
+  remoteFrameToken: FrameToken;
+  // The frame's local and private token in the renderer context.
+  localFrameToken?: FrameToken;
+  // The grafted iframe content if same-origin.
   content?: PageContentIframeContent;
 }
 
@@ -327,7 +345,7 @@ export interface PageContentTableRowData {
 
 export interface PageContentFormData {
   formName?: string;
-  actionUrl?: Url;
+  actionUrl?: string;
 }
 
 export interface PageContentSelectOption {
@@ -353,13 +371,15 @@ export interface PageContentFormControlData {
   placeholder?: string;
   isChecked: boolean;
   isRequired: boolean;
+  isReadonly?: boolean;
   redactionDecision: PageContentRedactionDecision;
+  // Node ID assigned by Autofill if the node is handled by Autofill.
+  autofillNodeId?: number;
 }
 
-// TODO(crbug.com/473741676): Support the aria role.
-// ariaRole?: Role;
 export interface PageContentAttributes {
   domNodeId?: number;
+  ariaRole?: AxRole;
   attributeType: PageContentAttributeType;
   geometry?: PageContentGeometry;
   nodeInteractionInfo?: PageContentNodeInteractionInfo;
@@ -395,6 +415,7 @@ export interface PageContent {
   rootNode: PageContentNode;
   pageInteractionInfo?: PageContentPageInteractionInfo;
   frameData: PageContentFrameData;
+  viewportGeometry: Rect;
   visibleBoundingBoxesForPasswordRedaction: Rect[];
 }
 
@@ -412,4 +433,33 @@ export interface PageContentOptions {
   includeSameSiteOnly: boolean;
   mainFrameViewRectInDips: Rect;
   includePasswordsForRedaction: boolean;
+}
+
+/**
+ * Enum representing accessibility roles.
+ * The numbers are aligned with the AxRole enum in
+ * ui/accessibility/ax_enums.mojom.
+ */
+
+export enum AxRole {
+  AX_ROLE_NONE = 0,
+  AX_ROLE_UNKNOWN = 181, // The role has not been set.
+  AX_ROLE_BANNER = 7,
+  AX_ROLE_BUTTON = 9,
+  AX_ROLE_CHECK_BOX = 14,
+  AX_ROLE_LINK = 110,
+  AX_ROLE_MENU_ITEM = 124,
+  AX_ROLE_MENU_ITEM_CHECK_BOX = 125,
+  AX_ROLE_MENU_ITEM_RADIO = 126,
+  AX_ROLE_LIST_BOX_OPTION = 113,
+  AX_ROLE_RADIO_BUTTON = 141,
+  AX_ROLE_SWITCH = 163,
+  AX_ROLE_TAB = 164,
+  AX_ROLE_NAVIGATION = 130,
+  AX_ROLE_SEARCH = 152,
+  AX_ROLE_MAIN = 118,
+  AX_ROLE_ARTICLE = 5,
+  AX_ROLE_REGION = 143,
+  AX_ROLE_COMPLEMENTARY = 22,
+  AX_ROLE_CONTENT_INFO = 26,
 }

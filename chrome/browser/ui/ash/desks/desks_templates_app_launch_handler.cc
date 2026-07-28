@@ -8,7 +8,6 @@
 
 #include "ash/public/cpp/desk_template.h"
 #include "ash/wm/desks/desks_controller.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/numerics/safe_conversions.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -295,11 +294,11 @@ void DesksTemplatesAppLaunchHandler::LaunchBrowsers() {
       // window types, it's not shown.
       if (window_state_type &&
           *window_state_type == chromeos::WindowStateType::kMinimized) {
-        browser->window()->Minimize();
+        browser->GetWindow()->Minimize();
         continue;
       }
 
-      browser->window()->ShowInactive();
+      browser->GetWindow()->ShowInactive();
     }
   }
   restore_data()->RemoveApp(app_constants::kChromeAppId);

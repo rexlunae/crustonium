@@ -29,7 +29,6 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/rand_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/common/features.h"
@@ -80,6 +79,21 @@ enum ParserPrefetchPolicy {
   kDisallowPrefetching
 };
 
+class ParserRootInsertionPoint
+    : public GarbageCollected<ParserRootInsertionPoint> {
+ public:
+  ParserRootInsertionPoint(ContainerNode& target, Node* ref_node)
+      : target(target), ref_node(ref_node) {}
+
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(target);
+    visitor->Trace(ref_node);
+  }
+
+  Member<ContainerNode> target;
+  Member<Node> ref_node;
+};
+
 // TODO(https://crbug.com/1049898): These are only exposed to make it possible
 // to delete an expired histogram. The test should be rewritten to test at a
 // different level, so it won't have to make assertions about internal state.
@@ -91,13 +105,16 @@ class CORE_EXPORT HTMLDocumentParser : public ScriptableDocumentParser,
  public:
   HTMLDocumentParser(HTMLDocument&,
                      ParserSynchronizationPolicy,
+                     CustomElementRegistry* registry,
+                     StreamingSanitizer* sanitizer = nullptr,
                      ParserPrefetchPolicy prefetch_policy = kAllowPrefetching);
-  HTMLDocumentParser(ContainerNode* fragment_target,
+  HTMLDocumentParser(DocumentFragment* fragment_target,
                      Element* context_element,
                      ParserContentPolicy,
                      ParserPrefetchPolicy prefetch_policy,
                      CustomElementRegistry* registry,
-                     StreamingSanitizer* sanitizer);
+                     StreamingSanitizer* sanitizer,
+                     ParserRootInsertionPoint* root_insertion_point = nullptr);
   ~HTMLDocumentParser() override;
   void Trace(Visitor*) const override;
 
@@ -106,7 +123,8 @@ class CORE_EXPORT HTMLDocumentParser : public ScriptableDocumentParser,
       DocumentFragment*,
       Element* context_element,
       CustomElementRegistry*,
-      ParserContentPolicy = kAllowScriptingContent);
+      ParserContentPolicy = kAllowScriptingContent,
+      StreamingSanitizer* sanitizer = nullptr);
 
   // Exposed for testing.
   HTMLParserScriptRunnerHost* AsHTMLParserScriptRunnerHostForTesting() {
@@ -198,11 +216,13 @@ class CORE_EXPORT HTMLDocumentParser : public ScriptableDocumentParser,
   // execute script.
   ALWAYS_INLINE NextTokenStatus
   CanTakeNextToken(base::TimeDelta& time_executing_script) {
-    if (IsStopped())
+    if (IsStopped()) {
       return kNoTokens;
+    }
 
-    if (!tree_builder_->HasParserBlockingScript())
+    if (!tree_builder_->HasParserBlockingScript()) {
       return IsPaused() ? kNoTokens : kHaveTokens;
+    }
 
     // If we're paused waiting for a script, we try to execute scripts before
     // continuing.
@@ -326,8 +346,6 @@ class CORE_EXPORT HTMLDocumentParser : public ScriptableDocumentParser,
   // performance.mark() as a resuming signal is called.
   bool is_waiting_for_user_timing_ = false;
   base::TimeTicks time_waiting_for_user_timing_;
-
-  base::MetricsSubSampler metrics_sub_sampler_;
 };
 
 }  // namespace blink

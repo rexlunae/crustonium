@@ -18,7 +18,9 @@ import org.chromium.base.task.TaskTraits;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.LifecycleObserver;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -34,8 +36,6 @@ import org.chromium.components.messages.MessageDispatcher;
 import org.chromium.components.messages.MessageIdentifier;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
-import org.chromium.ui.base.ImmutableWeakReference;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.lang.annotation.Retention;
@@ -51,7 +51,8 @@ public class SigninSurveyController implements Destroyable {
     @IntDef({
         SigninSurveyType.FRE,
         SigninSurveyType.WEB,
-        SigninSurveyType.NTP_AVATAR,
+        SigninSurveyType.NTP_SIGNIN_BUTTON,
+        SigninSurveyType.NTP_ACCOUNT_AVATAR_TAP,
         SigninSurveyType.NTP_PROMO,
         SigninSurveyType.BOOKMARK_PROMO
     })
@@ -59,9 +60,10 @@ public class SigninSurveyController implements Destroyable {
     public @interface SigninSurveyType {
         int FRE = 0;
         int WEB = 1;
-        int NTP_AVATAR = 2;
-        int NTP_PROMO = 3;
-        int BOOKMARK_PROMO = 4;
+        int NTP_SIGNIN_BUTTON = 2;
+        int NTP_ACCOUNT_AVATAR_TAP = 3;
+        int NTP_PROMO = 4;
+        int BOOKMARK_PROMO = 5;
         int MAX_VALUE = BOOKMARK_PROMO;
     }
 
@@ -75,7 +77,7 @@ public class SigninSurveyController implements Destroyable {
     private static boolean sEnableForTesting;
 
     private final Profile mProfile;
-    private @Nullable ImmutableWeakReference<Activity> mActivityHolder;
+    private @Nullable Activity mActivity;
     private @Nullable ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
     private @Nullable TabModelSelector mTabModelSelector;
     private @Nullable MessageDispatcher mMessageDispatcher;
@@ -99,7 +101,7 @@ public class SigninSurveyController implements Destroyable {
             return;
         }
         SigninSurveyController controller = getForProfile(profile);
-        controller.mActivityHolder = new ImmutableWeakReference<>(activity);
+        controller.mActivity = activity;
         controller.mActivityLifecycleDispatcher = lifecycleDispatcher;
         controller.mTabModelSelector = tabModelSelector;
         controller.mMessageDispatcher = messageDispatcher;
@@ -115,6 +117,10 @@ public class SigninSurveyController implements Destroyable {
      */
     public static void registerTrigger(
             @Nullable Profile profile, @SigninSurveyType int surveyType) {
+        // Do not register trigger for testing unless explicitly enabled.
+        if (BuildConfig.IS_FOR_TEST && !sEnableForTesting) {
+            return;
+        }
         if (profile == null || profile.isOffTheRecord()) {
             return;
         }
@@ -127,6 +133,14 @@ public class SigninSurveyController implements Destroyable {
                 surveyType,
                 SigninSurveyType.MAX_VALUE);
         controller.mRegisteredTrigger = surveyType;
+
+        if (surveyType == SigninSurveyType.WEB
+                || surveyType == SigninSurveyType.NTP_SIGNIN_BUTTON
+                || surveyType == SigninSurveyType.NTP_PROMO) {
+            // These access points don't use a separate activity to sign-in and use
+            // ChromeTabbedActivity. So try to show the survey here.
+            controller.maybeShowSurvey();
+        }
     }
 
     // Enables triggering the survey in tests and a delay after which the survey will be shown.
@@ -149,30 +163,45 @@ public class SigninSurveyController implements Destroyable {
         return new SigninSurveyController(profile);
     }
 
-    private SigninSurveyController(Profile profile) {
-        mProfile = profile;
-        mLifecycleObserver =
-                new PauseResumeWithNativeObserver() {
-                    @Override
-                    public void onResumeWithNative() {
-                        maybeShowSurvey();
-                    }
+    private class SigninLifecycleObserver
+            implements PauseResumeWithNativeObserver, DestroyObserver {
+        @Override
+        public void onResumeWithNative() {
+            maybeShowSurvey();
+        }
 
-                    @Override
-                    public void onPauseWithNative() {}
-                };
+        @Override
+        public void onPauseWithNative() {}
+
+        @Override
+        public void onDestroy() {
+            uninitialize();
+        }
     }
 
+    private SigninSurveyController(Profile profile) {
+        mProfile = profile;
+        mLifecycleObserver = new SigninLifecycleObserver();
+    }
+
+    // Called when Profile is destroyed.
     @Override
     public void destroy() {
+        uninitialize();
+    }
+
+    private void uninitialize() {
         if (mActivityLifecycleDispatcher != null) {
             mActivityLifecycleDispatcher.unregister(mLifecycleObserver);
             mActivityLifecycleDispatcher = null;
+            mTabModelSelector = null;
+            mMessageDispatcher = null;
+            mActivity = null;
         }
     }
 
     private void maybeShowSurvey() {
-        if (mRegisteredTrigger == null || mAlreadyTriedShowing) {
+        if (mRegisteredTrigger == null || mActivity == null || mAlreadyTriedShowing) {
             return;
         }
 
@@ -183,7 +212,7 @@ public class SigninSurveyController implements Destroyable {
         }
         Runnable task =
                 () -> {
-                    Activity activity = assertNonNull(mActivityHolder).get();
+                    Activity activity = mActivity;
                     if (activity == null || activity.isFinishing() || activity.isDestroyed()) {
                         return;
                     }
@@ -206,11 +235,12 @@ public class SigninSurveyController implements Destroyable {
         PostTask.postDelayedTask(TaskTraits.UI_DEFAULT, task, sDelay);
     }
 
+    @RequiresNonNull("mActivity")
     private @Nullable SurveyClient constructSurveyClient(@SigninSurveyType int surveyType) {
         String triggerId = getSurveyTrigger(surveyType);
         assert triggerId != null;
         SurveyConfig surveyConfig = SurveyConfig.get(mProfile, triggerId);
-        Activity activity = assertNonNull(mActivityHolder).get();
+        Activity activity = mActivity;
         if (surveyConfig == null || activity == null) {
             return null;
         }
@@ -238,7 +268,8 @@ public class SigninSurveyController implements Destroyable {
         return switch (type) {
             case SigninSurveyType.FRE -> "signin-first-run";
             case SigninSurveyType.WEB -> "signin-web";
-            case SigninSurveyType.NTP_AVATAR -> "signin-ntp-avatar";
+            case SigninSurveyType.NTP_SIGNIN_BUTTON -> "signin-ntp-signin-button";
+            case SigninSurveyType.NTP_ACCOUNT_AVATAR_TAP -> "signin-ntp-account-avatar-tap";
             case SigninSurveyType.NTP_PROMO -> "signin-ntp-promo";
             case SigninSurveyType.BOOKMARK_PROMO -> "signin-bookmark-promo";
             default -> throw new IllegalStateException("Invalid signin survey type");
@@ -257,7 +288,7 @@ public class SigninSurveyController implements Destroyable {
         psd.put("Number of Google Accounts", String.valueOf(numberOfAccounts));
         boolean isSignedIn =
                 assertNonNull(IdentityServicesProvider.get().getIdentityManager(mProfile))
-                        .hasPrimaryAccount(ConsentLevel.SIGNIN);
+                        .hasPrimaryAccount();
         psd.put("Sign-in Status", isSignedIn ? "Signed In" : "Signed Out");
         return psd;
     }

@@ -16,6 +16,7 @@ import type {EventType} from '../../event_history.js';
 
 import {getCss} from './event_dialog.css.js';
 import {getHtml} from './event_dialog.html.js';
+import {handleKeyboardNavigation} from './keyboard_navigation.js';
 
 export class EventDialogElement extends CrLitElement {
   static get is() {
@@ -55,12 +56,17 @@ export class EventDialogElement extends CrLitElement {
     this.shadowRoot.querySelector<HTMLElement>('.filter-menu-item')?.focus();
   }
 
-  get commonEventTypes(): EventType[] {
+  protected onKeydown(e: KeyboardEvent) {
+    handleKeyboardNavigation(
+        e, this.shadowRoot.querySelectorAll<HTMLElement>('.filter-menu-item'));
+  }
+
+  getCommonEventTypes(): EventType[] {
     return ['UPDATE', 'INSTALL', 'UNINSTALL'] as EventType[];
   }
 
-  get otherEventTypes(): EventType[] {
-    const common = this.commonEventTypes;
+  getOtherEventTypes(): EventType[] {
+    const common = this.getCommonEventTypes();
     return Object.values(EVENT_TYPES).filter(et => !common.includes(et));
   }
 

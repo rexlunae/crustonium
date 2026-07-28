@@ -17,6 +17,7 @@ import android.text.TextUtils;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -112,6 +113,23 @@ public class PaymentDetailsUpdateServiceHelperTest {
     public void setUp() throws Throwable {
         mActivityTestRule.startOnBlankPage();
         mContext = mActivityTestRule.getActivity();
+    }
+
+    @After
+    public void tearDown() {
+        // Unbind the PaymentDetailsUpdateService so LoadedApk.mServices doesn't keep
+        // mConnection — and through it the ChromeTabbedActivity (mContext) — alive
+        // after the test finishes.
+        if (mBound) {
+            mContext.unbindService(mConnection);
+            mBound = false;
+        }
+
+        // Reset the PaymentDetailsUpdateServiceHelper singleton so it doesn't keep
+        // mUpdateListener (an inner class capturing this test) alive after the test
+        // finishes, which would otherwise retain the destroyed ChromeTabbedActivity.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> PaymentDetailsUpdateServiceHelper.getInstance().reset());
     }
 
     private void installPaymentApp() {

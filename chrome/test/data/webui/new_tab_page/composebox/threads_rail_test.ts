@@ -13,12 +13,13 @@ import type {TestMock} from 'chrome://webui-test/test_mock.js';
 import {installMock} from '../test_support.js';
 
 const AIM_THREADS_HISTORY_LABEL = 'AI Mode history';
+const DESKTOP_CHROME_NTP_THREADS_SOURCE = 'chrome.crn.rb';
 const DESKTOP_CHROME_NTP_THREADS_ENTRY_POINT = 129;
 const AIM_DISPLAY_MODE = 50;
 const AIM_THREADS_VISIBILITY_MODE = 3;
 const AIM_THREADS_URL = `https://www.google.com/search?udm=${
     AIM_DISPLAY_MODE}&aep=${DESKTOP_CHROME_NTP_THREADS_ENTRY_POINT}&atvm=${
-    AIM_THREADS_VISIBILITY_MODE}`;
+    AIM_THREADS_VISIBILITY_MODE}&source=${DESKTOP_CHROME_NTP_THREADS_SOURCE}`;
 
 suite('NewTabPageThreadsRailTest', () => {
   let threadsRailElement: ThreadsRailElement;
@@ -32,7 +33,6 @@ suite('NewTabPageThreadsRailTest', () => {
     loadTimeData.overrideValues({
       aimThreadsHistoryLabel: AIM_THREADS_HISTORY_LABEL,
       threadsUrl: AIM_THREADS_URL,
-      enableThreadsRailLogo: true,
     });
     threadsRailElement = document.createElement('cr-threads-rail');
     document.body.appendChild(threadsRailElement);
@@ -43,24 +43,6 @@ suite('NewTabPageThreadsRailTest', () => {
     document.body.removeChild(threadsRailElement);
   });
 
-  test('Logo shows on rail when enabled', async () => {
-    const threadsRail = document.createElement('cr-threads-rail');
-    document.body.appendChild(threadsRail);
-    await threadsRail.updateComplete;
-
-    const logo = threadsRail.shadowRoot.querySelector<HTMLElement>('#logo');
-    assertTrue(!!logo);
-  });
-
-  test('Logo does not show on rail when disabled', async () => {
-    loadTimeData.overrideValues({enableThreadsRailLogo: false});
-    const threadsRail = document.createElement('cr-threads-rail');
-    document.body.appendChild(threadsRail);
-    await threadsRail.updateComplete;
-
-    const logo = threadsRail.shadowRoot.querySelector<HTMLElement>('#logo');
-    assertEquals(null, logo);
-  });
 
   test('history button has correct tooltip', () => {
     const historyButton =

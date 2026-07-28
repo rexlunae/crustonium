@@ -9,6 +9,7 @@ import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.RootMatchers.isDialog;
+import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
@@ -71,7 +72,9 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.browsing_data.BrowsingDataBridge.OnClearBrowsingDataListener;
 import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragment.DialogOption;
@@ -91,14 +94,12 @@ import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.components.browser_ui.settings.SpinnerPreference;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.browsing_data.DeleteBrowsingDataAction;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.sync.DataType;
 import org.chromium.ui.test.util.ViewUtils;
@@ -148,7 +149,7 @@ public class ClearBrowsingDataFragmentTest {
                                     return null;
                                 })
                 .when(mBrowsingDataBridgeMock)
-                .clearBrowsingData(any(), any(), any(), anyInt(), any(), any(), any(), any());
+                .clearBrowsingData(any(), any(), any(), anyInt(), any(), any());
 
         // Default to delete all history.
         when(mBrowsingDataBridgeMock.getBrowsingDataDeletionTimePeriod(any()))
@@ -220,7 +221,7 @@ public class ClearBrowsingDataFragmentTest {
                 () ->
                         !IdentityServicesProvider.get()
                                 .getIdentityManager(ProfileManager.getLastUsedRegularProfile())
-                                .hasPrimaryAccount(ConsentLevel.SIGNIN),
+                                .hasPrimaryAccount(),
                 "Account should be signed out!");
         // Footer should be hidden after sign-out.
         onView(withText(preferences.buildSignOutOfChromeText().toString())).check(doesNotExist());
@@ -256,7 +257,7 @@ public class ClearBrowsingDataFragmentTest {
                 () ->
                         !IdentityServicesProvider.get()
                                 .getIdentityManager(ProfileManager.getLastUsedRegularProfile())
-                                .hasPrimaryAccount(ConsentLevel.SIGNIN),
+                                .hasPrimaryAccount(),
                 "Account should be signed out!");
         // Footer should be hidden after sign-out.
         onView(withText(preferences.buildSignOutOfChromeText().toString())).check(doesNotExist());
@@ -309,8 +310,6 @@ public class ClearBrowsingDataFragmentTest {
                         eq(getAllDataTypes()),
                         eq(DEFAULT_TIME_PERIOD),
                         any(),
-                        any(),
-                        any(),
                         any());
     }
 
@@ -355,8 +354,6 @@ public class ClearBrowsingDataFragmentTest {
                         any(),
                         eq(new int[] {BrowsingDataType.CACHE}),
                         eq(TimePeriod.LAST_HOUR),
-                        any(),
-                        any(),
                         any(),
                         any());
 
@@ -591,14 +588,7 @@ public class ClearBrowsingDataFragmentTest {
         // Should be cleared again.
         verify(mBrowsingDataBridgeMock, times(2))
                 .clearBrowsingData(
-                        eq(expectedProfile),
-                        any(),
-                        eq(expectedTypes),
-                        anyInt(),
-                        any(),
-                        any(),
-                        any(),
-                        any());
+                        eq(expectedProfile), any(), eq(expectedTypes), anyInt(), any(), any());
     }
 
     /**
@@ -609,15 +599,7 @@ public class ClearBrowsingDataFragmentTest {
     private void assertDataTypesCleared(int... types) {
         // TODO(yfriedman): Add testing for time period.
         verify(mBrowsingDataBridgeMock)
-                .clearBrowsingData(
-                        any(),
-                        any(),
-                        eq(types),
-                        eq(DEFAULT_TIME_PERIOD),
-                        any(),
-                        any(),
-                        any(),
-                        any());
+                .clearBrowsingData(any(), any(), eq(types), eq(DEFAULT_TIME_PERIOD), any(), any());
     }
 
     /** This presses the 'clear' button on the root preference page. */
@@ -718,7 +700,7 @@ public class ClearBrowsingDataFragmentTest {
     /**
      * Tests that the important sites dialog is shown and if we cancel nothing happens.
      *
-     * <p>http://crbug.com/727310
+     * <p>http://crbug.com/41322002
      */
     @Test
     @MediumTest
@@ -746,8 +728,7 @@ public class ClearBrowsingDataFragmentTest {
 
         // Nothing was cleared.
         verify(mBrowsingDataBridgeMock, never())
-                .clearBrowsingData(
-                        eq(expectedProfile), any(), any(), anyInt(), any(), any(), any(), any());
+                .clearBrowsingData(eq(expectedProfile), any(), any(), anyInt(), any(), any());
     }
 
     /**
@@ -813,9 +794,7 @@ public class ClearBrowsingDataFragmentTest {
                         eq(expectedTypes),
                         eq(DEFAULT_TIME_PERIOD),
                         eq(keepDomains),
-                        any(),
-                        eq(ignoredDomains),
-                        any());
+                        eq(ignoredDomains));
     }
 
     @Test
@@ -920,6 +899,76 @@ public class ClearBrowsingDataFragmentTest {
                         ClearBrowsingDataFragment.getPreferenceKey(DialogOption.CLEAR_TABS));
 
         assertNull(checkboxPreference);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testPasswordsCheckboxIsHidded_WhenPasswordRemovalAndroidEnabled() {
+        ClearBrowsingDataFragment preferences =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+        CheckBoxPreference checkboxPreference =
+                preferences.findPreference(
+                        ClearBrowsingDataFragment.getPreferenceKey(DialogOption.CLEAR_PASSWORDS));
+
+        assertNull(checkboxPreference);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testManageOtherGoogleDataSection() {
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+
+        ClearBrowsingDataFragment fragment =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+
+        String manageOtherGoogleDataSectionTitle =
+                fragment.getString(
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title);
+
+        String passwordManagerLinkOutTitle =
+                fragment.getString(R.string.password_manager_link_out_title);
+        String searchHistoryLinkOutTitle =
+                fragment.getString(R.string.search_history_link_out_title);
+        String myActivityLinkOutTitle = fragment.getString(R.string.my_activity_link_out_title);
+
+        verifyPrefWithTitleVisible(manageOtherGoogleDataSectionTitle);
+
+        // "Manage other Google data" is initially collapsed.
+        verifyPrefWithTitleHidden(passwordManagerLinkOutTitle);
+        verifyPrefWithTitleHidden(searchHistoryLinkOutTitle);
+        verifyPrefWithTitleHidden(myActivityLinkOutTitle);
+
+        // Expand the "Manage other Google data" section and verify content is visible.
+        clickOnPrefWithTitle(manageOtherGoogleDataSectionTitle);
+
+        verifyPrefWithTitleVisible(passwordManagerLinkOutTitle);
+        verifyPrefWithTitleVisible(searchHistoryLinkOutTitle);
+        verifyPrefWithTitleVisible(myActivityLinkOutTitle);
+
+        // After signing out, only the password manager link out must be visible.
+        mSigninTestRule.signOut();
+
+        verifyPrefWithTitleVisible(passwordManagerLinkOutTitle);
+        verifyPrefWithTitleHidden(searchHistoryLinkOutTitle);
+        verifyPrefWithTitleHidden(myActivityLinkOutTitle);
+    }
+
+    private void clickOnPrefWithTitle(String title) {
+        onView(withId(R.id.recycler_view))
+                .perform(RecyclerViewActions.scrollTo(hasDescendant(withText(title))));
+        onView(withText(title)).perform(click());
+    }
+
+    private void verifyPrefWithTitleVisible(String title) {
+        onView(withId(R.id.recycler_view))
+                .perform(RecyclerViewActions.scrollTo(hasDescendant(withText(title))));
+        onView(withText(title)).check(matches(isDisplayed()));
+    }
+
+    private void verifyPrefWithTitleHidden(String title) {
+        onView(withText(title)).check(doesNotExist());
     }
 
     /** Wait for the snackbar to show on the main activity post deletion. */

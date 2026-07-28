@@ -4,12 +4,14 @@
 
 #include "partition_alloc/partition_bucket.h"
 
+#include <bit>
 #include <cstdint>
 #include <tuple>
 
 #include "partition_alloc/address_pool_manager.h"
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
+#include "partition_alloc/internal/partition_root_internal.h"
 #include "partition_alloc/oom.h"
 #include "partition_alloc/page_allocator.h"
 #include "partition_alloc/page_allocator_constants.h"
@@ -30,7 +32,6 @@
 #include "partition_alloc/partition_freelist_entry.h"
 #include "partition_alloc/partition_oom.h"
 #include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/reservation_offset_table.h"
 #include "partition_alloc/slot_start.h"
 #include "partition_alloc/tagging.h"
@@ -179,7 +180,7 @@ SlotSpanMetadata* PartitionDirectMap(PartitionRoot* root,
                                      size_t raw_size,
                                      size_t slot_span_alignment) {
   PA_DCHECK((slot_span_alignment >= PartitionPageSize()) &&
-            base::bits::HasSingleBit(slot_span_alignment));
+            std::has_single_bit(slot_span_alignment));
 
   // No static EXCLUSIVE_LOCKS_REQUIRED(), as the checker doesn't understand
   // scoped unlocking.
@@ -394,6 +395,8 @@ SlotSpanMetadata* PartitionDirectMap(PartitionRoot* root,
         PartitionOutOfMemoryCommitFailure(root, slot_size);
       }
 
+      root->GetReservationOffsetTable().SetNotAllocatedTag(reservation_start,
+                                                           reservation_size);
       {
         ScopedSyscallTimer timer{root};
 #if !PA_BUILDFLAG(HAS_64_BIT_POINTERS)
@@ -926,7 +929,9 @@ PartitionBucket::ProvisionMoreSlotsAndAllocOne(PartitionRoot* root,
   // provisioned.
   size_t slots_to_provision = (commit_end - return_slot) / slot_size;
   slot_span->num_unprovisioned_slots -= slots_to_provision;
-  PA_DCHECK(slot_span->num_allocated_slots +
+  // Note: the bitfields are promoted to int for arithmetic operations, so the
+  // static_casts are necessary to avoid -Werror=sign-compare.
+  PA_DCHECK(static_cast<size_t>(slot_span->num_allocated_slots) +
                 slot_span->num_unprovisioned_slots <=
             get_slots_per_span());
 
@@ -1268,7 +1273,7 @@ uintptr_t PartitionBucket::SlowPathAlloc(PartitionRoot* root,
                                          SlotSpanMetadata** slot_span,
                                          bool* is_already_zeroed) {
   PA_DCHECK((slot_span_alignment >= PartitionPageSize()) &&
-            base::bits::HasSingleBit(slot_span_alignment));
+            std::has_single_bit(slot_span_alignment));
 
   // The slow path is called when the freelist is empty. The only exception is
   // when a higher-order alignment is requested, in which case the freelist

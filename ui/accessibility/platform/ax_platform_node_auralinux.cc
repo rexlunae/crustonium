@@ -129,11 +129,6 @@ AXPlatformNode* g_root_application = nullptr;
 // ATK_STATE_FOCUSED change to false.
 AtkObject* g_current_focused = nullptr;
 
-// The last object which was selected. Tracking this is required because
-// widgets in the browser UI only emit notifications upon becoming selected,
-// but clients also expect notifications when items become unselected.
-AXPlatformNodeAuraLinux* g_current_selected = nullptr;
-
 // The AtkObject with role=ATK_ROLE_FRAME that represents the toplevel desktop
 // window with focus. If this window is not one of our windows, this value
 // should be null. This is a weak pointer as well, so its value will also be
@@ -1056,8 +1051,9 @@ gunichar GetCharacterAtOffset(AtkText* atk_text, int offset) {
   size_t limited_offset = std::min(static_cast<size_t>(offset), text_length);
 
   base_icu::UChar32 code_point;
-  base::ReadUnicodeCharacter(text.c_str(), text_length + 1, &limited_offset,
-                             &code_point);
+  if (!base::ReadUnicodeCharacter(text, &limited_offset, &code_point)) {
+    return 0;
+  }
   return code_point;
 }
 
@@ -2750,10 +2746,8 @@ AtkRole AXPlatformNodeAuraLinux::GetAtkRole() const {
       return ATK_ROLE_EMBEDDED;
     case ax::mojom::Role::kForm:
       // Per Core AAM, named forms should be exposed as landmarks.
-      // TODO(crbug.com/468317749): Blink currently maps unnamed <form> to
-      // kSection instead of kForm. Once fixed, platforms will handle the
-      // mapping. For now, explicit role="form" without a name still reaches
-      // here and should remain ATK_ROLE_FORM.
+      // Per HTML AAM, unnamed forms should be exposed as ATK_ROLE_FORM.
+      // Per Core AAM, only named forms should be landmarks.
       if (HasStringAttribute(ax::mojom::StringAttribute::kName)) {
         return ATK_ROLE_LANDMARK;
       }
@@ -3308,9 +3302,6 @@ AtkRelationSet* AXPlatformNodeAuraLinux::GetAtkRelations() {
 AXPlatformNodeAuraLinux::AXPlatformNodeAuraLinux() = default;
 
 AXPlatformNodeAuraLinux::~AXPlatformNodeAuraLinux() {
-  if (g_current_selected == this)
-    g_current_selected = nullptr;
-
   DestroyAtkObjects();
 
   if (window_activate_event_postponed_)
@@ -3601,6 +3592,24 @@ void AXPlatformNodeAuraLinux::OnWindowVisibilityChanged() {
   atk_object_notify_state_change(atk_object, ATK_STATE_ICONIFIED, minimized);
 }
 
+void AXPlatformNodeAuraLinux::HandleWindowActivatedEvent() {
+  if (AtkUtilAuraLinux::GetInstance()->IsAtSpiReady()) {
+    OnWindowActivated();
+  } else {
+    AtkUtilAuraLinux::GetInstance()->PostponeEventsFor(this);
+    window_activate_event_postponed_ = true;
+  }
+}
+
+void AXPlatformNodeAuraLinux::HandleWindowDeactivatedEvent() {
+  if (AtkUtilAuraLinux::GetInstance()->IsAtSpiReady()) {
+    OnWindowDeactivated();
+  } else {
+    AtkUtilAuraLinux::GetInstance()->CancelPostponedEventsFor(this);
+    window_activate_event_postponed_ = false;
+  }
+}
+
 void AXPlatformNodeAuraLinux::OnScrolledToAnchor() {
   AtkObject* atk_object = GetOrCreateAtkObject();
   if (!atk_object)
@@ -3671,17 +3680,13 @@ void AXPlatformNodeAuraLinux::OnSelected() {
   AtkObject* atk_object = GetOrCreateAtkObject();
   if (!atk_object)
     return;
-  if (g_current_selected && !g_current_selected->GetBoolAttribute(
-                                ax::mojom::BoolAttribute::kSelected)) {
-    atk_object_notify_state_change(
-        ATK_OBJECT(g_current_selected->GetOrCreateAtkObject()),
-        ATK_STATE_SELECTED, false);
-  }
 
-  g_current_selected = this;
   if (ATK_IS_OBJECT(atk_object)) {
+    const bool selected =
+        !HasBoolAttribute(ax::mojom::BoolAttribute::kSelected) ||
+        GetBoolAttribute(ax::mojom::BoolAttribute::kSelected);
     atk_object_notify_state_change(ATK_OBJECT(atk_object), ATK_STATE_SELECTED,
-                                   true);
+                                   selected);
   }
 }
 
@@ -4101,7 +4106,6 @@ void AXPlatformNodeAuraLinux::NotifyAccessibilityEvent(
       OnExpandedStateChanged(HasState(ax::mojom::State::kExpanded));
       break;
     case ax::mojom::Event::kFocus:
-    case ax::mojom::Event::kFocusContext:
       OnFocused();
       break;
     case ax::mojom::Event::kFocusAfterMenuClose:
@@ -4127,6 +4131,10 @@ void AXPlatformNodeAuraLinux::NotifyAccessibilityEvent(
       // state. Because we don't know what state changed, we deliberately do
       // nothing here.
       break;
+    case ax::mojom::Event::kEnabledChanged:
+      OnEnabledChanged();
+      OnReadonlyChanged();
+      break;
     case ax::mojom::Event::kTextChanged:
       OnNameChanged();
       break;
@@ -4137,20 +4145,10 @@ void AXPlatformNodeAuraLinux::NotifyAccessibilityEvent(
       OnValueChanged();
       break;
     case ax::mojom::Event::kWindowActivated:
-      if (AtkUtilAuraLinux::GetInstance()->IsAtSpiReady()) {
-        OnWindowActivated();
-      } else {
-        AtkUtilAuraLinux::GetInstance()->PostponeEventsFor(this);
-        window_activate_event_postponed_ = true;
-      }
+      HandleWindowActivatedEvent();
       break;
     case ax::mojom::Event::kWindowDeactivated:
-      if (AtkUtilAuraLinux::GetInstance()->IsAtSpiReady()) {
-        OnWindowDeactivated();
-      } else {
-        AtkUtilAuraLinux::GetInstance()->CancelPostponedEventsFor(this);
-        window_activate_event_postponed_ = false;
-      }
+      HandleWindowDeactivatedEvent();
       break;
     case ax::mojom::Event::kWindowVisibilityChanged:
       OnWindowVisibilityChanged();
@@ -4266,11 +4264,11 @@ AXPlatformNodeAuraLinux::GetHypertextAdjustments() {
   text_unicode_adjustments_.emplace();
 
   std::u16string text = GetHypertext();
-  size_t text_length = text.size();
+  size_t text_length = text.length();
   for (size_t i = 0; i < text_length; i++) {
     base_icu::UChar32 code_point;
     size_t original_i = i;
-    base::ReadUnicodeCharacter(text.c_str(), text_length + 1, &i, &code_point);
+    base::ReadUnicodeCharacter(text, &i, &code_point);
 
     if ((i - original_i + 1) != 1) {
       text_unicode_adjustments_->push_back(
@@ -4668,28 +4666,19 @@ bool AXPlatformNodeAuraLinux::IsNameExposed() {
 }
 
 int AXPlatformNodeAuraLinux::GetCaretOffset() {
-  if (!HasVisibleCaretOrSelection()) {
+  // The caret has an offset in this object if this object contains it. Whether
+  // it is rendered, which is what Caret Browsing changes, is a separate matter.
+  if (!HasSelectionFocusInSubtree()) {
     std::optional<FindInPageResultInfo> result =
         GetSelectionOffsetsFromFindInPage();
     AtkObject* atk_object = GetOrCreateAtkObject();
-    if (!atk_object)
-      return -1;
-    if (result.has_value() && result->node == atk_object)
+    if (atk_object && result.has_value() && result->node == atk_object) {
       return UTF16ToUnicodeOffsetInText(result->end_offset);
+    }
     return -1;
   }
 
-  std::pair<int, int> selection;
-  AXPlatformNodeDelegate* const delegate = GetDelegate();
-  if (delegate->IsWebContent()) {
-    AXSelection unignored_selection = delegate->GetUnignoredSelection();
-    GetSelectionOffsetsFromTree(&unignored_selection, &selection.first,
-                                &selection.second, /*caret_only*/ true);
-  } else {
-    GetSelectionOffsets(&selection.first, &selection.second);
-  }
-
-  return UTF16ToUnicodeOffsetInText(selection.second);
+  return UTF16ToUnicodeOffsetInText(AXPlatformNodeBase::GetCaretOffset());
 }
 
 bool AXPlatformNodeAuraLinux::SetCaretOffset(int offset) {

@@ -5,8 +5,11 @@
 #ifndef COMPONENTS_TRANSLATE_CORE_BROWSER_LANGUAGE_STATE_H_
 #define COMPONENTS_TRANSLATE_CORE_BROWSER_LANGUAGE_STATE_H_
 
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "base/i18n/language_tag.h"
 #include "base/memory/raw_ptr.h"
 #include "components/language/core/common/language_util.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
@@ -37,13 +40,13 @@ class LanguageState {
   void DidNavigate(bool is_same_document_navigation,
                    bool is_main_frame,
                    bool reload,
-                   const std::string& href_translate,
+                   std::string_view href_translate,
                    bool navigation_from_google);
 
   // Should be called when the language of the page has been determined.
   // |page_level_translation_criteria_met| when false indicates that the browser
   // should not offer to translate the page.
-  void LanguageDetermined(const std::string& page_language,
+  void LanguageDetermined(std::string_view page_language,
                           bool page_level_translation_criteria_met);
 
   // Returns the language the current page should be translated to, based on the
@@ -61,12 +64,12 @@ class LanguageState {
   // Returns the source language represented as a lowercase alphabetic string
   // of length 0 to 3 or "zh-CN" or "zh-TW".
   const std::string& source_language() const { return source_lang_; }
-  void SetSourceLanguage(const std::string& language);
+  void SetSourceLanguage(std::string_view language);
 
   // Returns the current language represented as a lowercase alphabetic string
   // of length 0 to 3 or "zh-CN" or "zh-TW".
   const std::string& current_language() const { return current_lang_; }
-  void SetCurrentLanguage(const std::string& language);
+  void SetCurrentLanguage(std::string_view language);
 
   bool page_level_translation_criteria_met() const {
     return page_level_translation_criteria_met_;
@@ -74,7 +77,37 @@ class LanguageState {
 
   // Whether the page is currently in the process of being translated.
   bool translation_pending() const { return translation_pending_; }
-  void set_translation_pending(bool value) { translation_pending_ = value; }
+  void set_translation_pending(bool value) {
+    translation_pending_ = value;
+    if (!translation_pending_) {
+      ClearPendingTranslationLanguages();
+    }
+  }
+
+  // Returns the source language of the pending translation, or std::nullopt if
+  // no translation is pending.
+  const std::optional<base::i18n::LanguageTag>& pending_source_language() const {
+    return pending_source_lang_;
+  }
+
+  // Returns the target language of the pending translation, or std::nullopt if
+  // no translation is pending.
+  const std::optional<base::i18n::LanguageTag>& pending_target_language() const {
+    return pending_target_lang_;
+  }
+
+  // Caches the source and target languages for a pending translation.
+  void SetPendingTranslationLanguages(base::i18n::LanguageTag source,
+                                      base::i18n::LanguageTag target) {
+    pending_source_lang_ = std::move(source);
+    pending_target_lang_ = std::move(target);
+  }
+
+  // Clears the cached source and target languages for the pending translation.
+  void ClearPendingTranslationLanguages() {
+    pending_source_lang_.reset();
+    pending_target_lang_.reset();
+  }
 
   // Whether an error occured during translation.
   bool translation_error() const { return translation_error_; }
@@ -102,9 +135,9 @@ class LanguageState {
   const std::string& GetPredefinedTargetLanguage() const {
     return predefined_target_language_;
   }
-  void SetPredefinedTargetLanguage(const std::string& language,
+  void SetPredefinedTargetLanguage(std::string_view language,
                                    bool should_auto_translate) {
-    predefined_target_language_ = language;
+    predefined_target_language_ = std::string(language);
     language::ToTranslateLanguageSynonym(&predefined_target_language_);
     should_auto_translate_to_predefined_target_language_ =
         should_auto_translate;
@@ -149,6 +182,10 @@ class LanguageState {
   // TODO(jcampan): make the client send the language just once per navigation
   //                then we can get rid of that state.
   bool translation_pending_;
+
+  // Cache source/target languages for pending translations (e.g. for PDFs).
+  std::optional<base::i18n::LanguageTag> pending_source_lang_;
+  std::optional<base::i18n::LanguageTag> pending_target_lang_;
 
   // Whether an error occured during translation.
   bool translation_error_;

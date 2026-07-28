@@ -21,14 +21,15 @@ bool ShouldSkipInvisibleTextAt(const Text& text,
   const LayoutObject* layout_object = AssociatedLayoutObjectOf(text, offset);
   if (!layout_object)
     return true;
-  if (layout_object->Style()->Display() == EDisplay::kNone)
+  if (layout_object->StyleRef().Display() == EDisplay::kNone) {
     return true;
+  }
   if (ignores_visibility)
     return false;
-  return layout_object->Style()->Visibility() != EVisibility::kVisible;
+  return layout_object->StyleRef().Visibility() != EVisibility::kVisible;
 }
 
-String TextIgnoringCSSTextTransforms(const LayoutText& layout_text,
+String TextIgnoringCssTextTransforms(const LayoutText& layout_text,
                                      const OffsetMappingUnit& unit) {
   // LayoutTextFragment represents text substring of the element that is split
   // because of first-letter css. In that case, OriginalText() returns only a
@@ -37,7 +38,7 @@ String TextIgnoringCSSTextTransforms(const LayoutText& layout_text,
   String text = layout_text.IsTextFragment()
                     ? To<LayoutTextFragment>(layout_text).CompleteText()
                     : layout_text.OriginalText();
-  text = text.Substring(unit.DOMStart(), unit.DOMEnd() - unit.DOMStart());
+  text = text.substr(unit.DOMStart(), unit.DOMEnd() - unit.DOMStart());
   // Per the white space processing spec
   // https://drafts.csswg.org/css-text-3/#white-space-processing,
   // collapsed spaces should be ignored completely and this is assured since
@@ -70,26 +71,29 @@ StringAndOffsetRange ComputeTextAndOffsetsForEmission(
   DCHECK(IsA<LayoutText>(unit.GetLayoutObject()));
   const LayoutText& layout_text = To<LayoutText>(unit.GetLayoutObject());
 
-  // |TextIgnoringCSSTextTransforms| gets |layout_text.OriginalText()|
+  // |TextIgnoringCssTextTransforms| gets |layout_text.OriginalText()|
   // which is not masked. This should not be allowed when
   // |-webkit-text-security| property is set.
-  if (behavior.IgnoresCSSTextTransforms() && layout_text.HasTextTransform() &&
+  if (behavior.IgnoresCssTextTransforms() && layout_text.HasTextTransform() &&
       !layout_text.IsSecure()) {
-    result.string = TextIgnoringCSSTextTransforms(layout_text, unit);
+    result.string = TextIgnoringCssTextTransforms(layout_text, unit);
     result.start = 0;
     result.end = result.string.length();
   }
 
   if (behavior.EmitsOriginalText()) {
-    result.string = layout_text.OriginalText().Substring(
-        unit.DOMStart(), unit.DOMEnd() - unit.DOMStart());
+    String text = layout_text.IsTextFragment()
+                      ? To<LayoutTextFragment>(layout_text).CompleteText()
+                      : layout_text.OriginalText();
+    result.string =
+        text.substr(unit.DOMStart(), unit.DOMEnd() - unit.DOMStart());
     result.start = 0;
     result.end = result.string.length();
   }
 
   if (behavior.EmitsSpaceForNbsp()) {
     result.string =
-        result.string.Substring(result.start, result.end - result.start);
+        result.string.substr(result.start, result.end - result.start);
     result.string.Replace(uchar::kNoBreakSpace, uchar::kSpace);
     result.start = 0;
     result.end = result.string.length();
@@ -184,9 +188,10 @@ void TextIteratorTextNodeHandler::HandleTextNodeInRange(const Text* node,
 
   const OffsetMapping* const mapping =
       OffsetMapping::ForceGetFor(Position(node, offset_));
+  DCHECK(mapping) << "We have a Text node outside LayoutBlockFlow or inside an "
+                     "unlayouted LayoutBlockFlow. node="
+                  << text_node_;
   if (!mapping) [[unlikely]] {
-    DUMP_WILL_BE_NOTREACHED()
-        << "We have LayoutText outside LayoutBlockFlow " << text_node_;
     return;
   }
 

@@ -170,7 +170,7 @@ void DownloadRequestLimiter::TabDownloadState::DidFinishNavigation(
   if (status_ == ALLOW_ONE_DOWNLOAD) {
     // When the user reloads the page without responding to the prompt,
     // they are expecting DownloadRequestLimiter to behave as if they had
-    // just initially navigated to this page. See http://crbug.com/171372.
+    // just initially navigated to this page. See http://crbug.com/40299431.
     // However, explicitly leave the limiter in place if the navigation was
     // renderer-initiated and we are in a prompt state.
     NotifyCallbacks(false);
@@ -251,8 +251,7 @@ void DownloadRequestLimiter::TabDownloadState::SetContentSetting(
           permissions::features::
               kSafetyHubUnusedPermissionRevocationForAllSurfaces) &&
       content_settings::CanBeAutoRevokedAsUnusedPermission(
-          ContentSettingsType::AUTOMATIC_DOWNLOADS,
-          content_settings::ContentSettingToValue(setting))) {
+          ContentSettingsType::AUTOMATIC_DOWNLOADS, setting)) {
     constraints.set_track_last_visit_for_autoexpiration(true);
   }
 

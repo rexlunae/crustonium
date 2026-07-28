@@ -4,16 +4,21 @@
 
 #include "chrome/browser/web_applications/commands/launch_web_app_command.h"
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/functional/concurrent_closures.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_test_override.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
+#include "chrome/browser/web_applications/scheduler/update_validated_origin_associations_result.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
@@ -21,6 +26,8 @@
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/webapps/common/web_app_id.h"
+#include "third_party/blink/public/common/features.h"
 
 namespace web_app {
 
@@ -31,7 +38,7 @@ LaunchWebAppCommand::LaunchWebAppCommand(
     LaunchWebAppWindowSetting launch_setting,
     LaunchWebAppCallback callback)
     : WebAppCommand<AppLock,
-                    base::WeakPtr<Browser>,
+                    base::WeakPtr<BrowserWindowInterface>,
                     base::WeakPtr<content::WebContents>,
                     apps::LaunchContainer>(
           "LaunchWebAppCommand",
@@ -42,6 +49,7 @@ LaunchWebAppCommand::LaunchWebAppCommand(
                           /*web_contents=*/nullptr,
                           apps::LaunchContainer::kLaunchContainerNone)),
       params_(std::move(params)),
+      app_id_(params_.app_id),
       launch_setting_(launch_setting),
       profile_(*profile),
       provider_(*provider) {
@@ -52,7 +60,7 @@ LaunchWebAppCommand::~LaunchWebAppCommand() = default;
 
 void LaunchWebAppCommand::StartWithLock(std::unique_ptr<AppLock> lock) {
   lock_ = std::move(lock);
-  if (!lock_->registrar().AppMatches(params_.app_id,
+  if (!lock_->registrar().AppMatches(app_id_,
                                      WebAppFilter::IsAppSurfaceableToUser())) {
     GetMutableDebugValue().Set("error",
                                "suggested_from_migration_or_not_installed");
@@ -62,7 +70,7 @@ void LaunchWebAppCommand::StartWithLock(std::unique_ptr<AppLock> lock) {
     return;
   }
 
-  const WebApp* current_app = lock_->registrar().GetAppById(params_.app_id);
+  const WebApp* current_app = lock_->registrar().GetAppById(app_id_);
   CHECK(current_app);
 
   bool is_standalone_launch =
@@ -82,17 +90,16 @@ void LaunchWebAppCommand::StartWithLock(std::unique_ptr<AppLock> lock) {
   bool needs_os_integration_sync = false;
 
   // Upgrade to fully installed if needed.
-  if (is_standalone_launch &&
-      lock_->registrar().GetInstallState(params_.app_id) !=
-          proto::INSTALLED_WITH_OS_INTEGRATION) {
+  if (is_standalone_launch && lock_->registrar().GetInstallState(app_id_) !=
+                                  proto::INSTALLED_WITH_OS_INTEGRATION) {
     ScopedRegistryUpdate update = lock_->sync_bridge().BeginUpdate();
-    update->UpdateApp(params_.app_id)
-        ->SetInstallState(proto::INSTALLED_WITH_OS_INTEGRATION);
+    update->UpdateApp(app_id_)->SetInstallState(
+        proto::INSTALLED_WITH_OS_INTEGRATION);
     needs_os_integration_sync = true;
   }
 
   std::optional<proto::os_state::WebAppOsIntegration> os_integration =
-      lock_->registrar().GetAppCurrentOsIntegrationState(params_.app_id);
+      lock_->registrar().GetAppCurrentOsIntegrationState(app_id_);
   CHECK(os_integration);
   GetMutableDebugValue().Set("needs_os_integration_sync",
                              needs_os_integration_sync);
@@ -108,7 +115,7 @@ void LaunchWebAppCommand::StartWithLock(std::unique_ptr<AppLock> lock) {
     options.add_shortcut_to_desktop = true;
 #endif
     lock_->os_integration_manager().Synchronize(
-        params_.app_id,
+        app_id_,
         base::BindOnce(&LaunchWebAppCommand::OnOsIntegrationSynchronized,
                        weak_factory_.GetWeakPtr())
             .Then(completion.CreateClosure()),
@@ -132,11 +139,42 @@ void LaunchWebAppCommand::DoLaunch() {
       *lock_);
 }
 
+// Note: `params_` is no longer valid in this method, as it was std::move'd in
+// `DoLaunch()`.
 void LaunchWebAppCommand::OnAppLaunched(
-    base::WeakPtr<Browser> browser,
+    base::WeakPtr<BrowserWindowInterface> browser,
     base::WeakPtr<content::WebContents> web_contents,
     apps::LaunchContainer container,
     base::Value debug_value) {
+  const WebApp* app = lock_->registrar().GetAppById(app_id_);
+  bool is_iwa = lock_->registrar().AppMatches(
+      app_id_,
+      WebAppFilter::IsIsolatedApp() | WebAppFilter::IsIsolatedSubApp());
+  bool has_scope_extensions = app && !app->scope_extensions().empty();
+  bool has_migration_sources_for_revalidation =
+      base::FeatureList::IsEnabled(blink::features::kWebAppMigrationApi) &&
+      app && !app->unvalidated_migration_sources().empty();
+
+  bool should_validate = false;
+  if (is_iwa) {
+    // Retrigger validation for IWAs if scope extensions are enabled for IWAs,
+    // and it is set to open in a new container window.
+    should_validate =
+        base::FeatureList::IsEnabled(
+            blink::features::kWebAppEnableScopeExtensionsForIsolatedWebApps) &&
+        container == apps::LaunchContainer::kLaunchContainerWindow;
+  } else {
+    // PWAs should retrigger validation regardless of launch container, if they
+    // have scope extensions and/or migration sources.
+    should_validate =
+        (has_scope_extensions || has_migration_sources_for_revalidation);
+  }
+
+  if (should_validate) {
+    provider_->scheduler().UpdateValidatedOriginAssociations(app_id_,
+                                                             base::DoNothing());
+  }
+
   GetMutableDebugValue().Set("launch_web_app_debug_value",
                              std::move(debug_value));
   CompleteAndSelfDestruct(CommandResult::kSuccess, std::move(browser),

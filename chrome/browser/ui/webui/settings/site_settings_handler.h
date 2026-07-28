@@ -189,7 +189,7 @@ class SiteSettingsHandler
   void HandleResetCategoryPermissionForPattern(const base::ListValue& args);
   void HandleSetCategoryPermissionForPattern(const base::ListValue& args);
 
-  // TODO(andypaicu, crbug.com/880684): Update to only expect a list of three
+  // TODO(andypaicu, crbug.com/40592192): Update to only expect a list of three
   // arguments, replacing the current (requesting,embedding) arguments with
   // simply (origin) and update all call sites.
   // Handles resetting a chooser exception for the given site.
@@ -221,6 +221,12 @@ class SiteSettingsHandler
 
   // Attempts to open the the OS permission settings.
   void HandleOpenSystemPermissionSettings(const base::ListValue& args);
+
+  // Handles the request for info about whether the url points to an isolated
+  // web app that has sub apps or is a sub app so that we can later on explain
+  // clearly that an isolated web app shares permissions with its installed
+  // sub apps and vice versa.
+  void HandleGetSubAppsPermissionExplanation(const base::ListValue& args);
 
   void ClearAllSitesMapForTesting();
 

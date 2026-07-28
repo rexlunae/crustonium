@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/style/flow_tolerance.h"
 #include "third_party/blink/renderer/core/style/grid_area.h"
+#include "third_party/blink/renderer/core/style/max_lines_data.h"
 #include "third_party/blink/renderer/core/style/named_grid_lines_map.h"
 #include "third_party/blink/renderer/core/style/ordered_named_grid_lines.h"
 #include "third_party/blink/renderer/core/style/scroll_marker_group.h"
@@ -85,6 +86,7 @@ class RotateTransformOperation;
 class ScaleTransformOperation;
 class ScopedCSSName;
 class StyleAutoColor;
+class StyleCaretColor;
 class StylePath;
 class StyleResolverState;
 class StyleSVGResource;
@@ -231,7 +233,9 @@ class StyleBuilderConverter {
                                                       const CSSValue&);
   template <typename T>
   static T ConvertLineWidth(StyleResolverState&, const CSSValue&);
+  static int ClampLineWidth(double);
   static int ConvertBorderWidth(const StyleResolverState&, const CSSValue&);
+  static int ConvertOutlineOffset(const StyleResolverState&, const CSSValue&);
   static uint16_t ConvertColumnRuleWidth(StyleResolverState&, const CSSValue&);
   static Superellipse ConvertCornerShape(const StyleResolverState&,
                                          const CSSValue&);
@@ -253,6 +257,7 @@ class StyleBuilderConverter {
   static TabSize ConvertLengthOrTabSpaces(StyleResolverState&, const CSSValue&);
   static Length ConvertLineHeight(StyleResolverState&, const CSSValue&);
   static float ConvertNumberOrPercentage(StyleResolverState&, const CSSValue&);
+  static Length ConvertPathLength(StyleResolverState&, const CSSValue&);
   static int ConvertInteger(StyleResolverState&, const CSSValue&);
   template <int NoneValue = 0>
   static int ConvertIntegerOrNone(StyleResolverState&, const CSSValue&);
@@ -303,6 +308,8 @@ class StyleBuilderConverter {
   static GapDataList<EBorderStyle> ConvertGapDecorationStyleDataList(
       const StyleResolverState&,
       const CSSValue&);
+  static Length ConvertGapDecorationInsetLength(const StyleResolverState&,
+                                                const CSSValue&);
   static ShadowData ConvertShadow(const CSSToLengthConversionData&,
                                   StyleResolverState*,
                                   const CSSValue&);
@@ -319,6 +326,9 @@ class StyleBuilderConverter {
   static StyleAutoColor ConvertStyleAutoColor(StyleResolverState&,
                                               const CSSValue&,
                                               bool for_visited_link = false);
+  static StyleCaretColor ConvertStyleCaretColor(StyleResolverState&,
+                                                const CSSValue&,
+                                                bool for_visited_link = false);
   static SVGPaint ConvertSVGPaint(StyleResolverState&,
                                   const CSSValue&,
                                   bool for_visited_link,
@@ -457,12 +467,10 @@ class StyleBuilderConverter {
       StyleResolverState&,
       const CSSValue&,
       bool allow_any_keyword_in_position_area = false);
-  static FitText ConvertFitText(StyleResolverState&, const CSSValue&);
+  static TextFit ConvertTextFit(StyleResolverState&, const CSSValue&);
   static TextOverflowData ConvertTextOverflow(StyleResolverState&,
                                               const CSSValue&);
-
-  static ScopedCSSNameList* ConvertTimelineTriggerName(StyleResolverState&,
-                                                       const CSSValue&);
+  static MaxLinesData ConvertMaxLines(StyleResolverState&, const CSSValue&);
 
   static StyleTriggerScope ConvertTriggerScope(StyleResolverState&,
                                                const CSSValue&);
@@ -585,12 +593,12 @@ struct ResolveColorValueContext {
   STACK_ALLOCATED();
 
  public:
-  const CSSToLengthConversionData& conversion_data;
+  const CSSLengthResolver& length_resolver;
   const TextLinkColors& text_link_colors;
   const mojom::blink::ColorScheme used_color_scheme =
       mojom::blink::ColorScheme::kLight;
   const ui::ColorProvider* color_provider = nullptr;
-  const bool is_in_web_app_scope = false;
+  const bool can_expose_accent_color = false;
   const bool for_visited_link = false;
 };
 

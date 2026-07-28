@@ -52,11 +52,11 @@ class Proxy;
 class TestLayerTreeFrameSink;
 class TestTaskGraphRunner;
 
-class LayerTreeHostClientForTesting;
+class LayerTreeHostDelegateForTesting;
 
 // The LayerTreeTests runs with the main loop running. It instantiates a single
 // LayerTreeHostForTesting and associated LayerTreeHostImplForTesting and
-// LayerTreeHostClientForTesting.
+// LayerTreeHostDelegateForTesting.
 //
 // BeginTest() is called once the main message loop is running and the layer
 // tree host is initialized.
@@ -82,8 +82,6 @@ class LayerTreeTest : public testing::Test, public TestHooks {
         return "Skia Vulkan";
       case viz::RendererType::kSkiaGraphiteDawn:
         return "Skia Graphite Dawn";
-      case viz::RendererType::kSkiaGraphiteMetal:
-        return "Skia Graphite Metal";
       case viz::RendererType::kSoftware:
         return "Software";
     }
@@ -230,8 +228,7 @@ class LayerTreeTest : public testing::Test, public TestHooks {
     return renderer_type_ == viz::RendererType::kSkiaVk;
   }
   bool use_skia_graphite() const {
-    return renderer_type_ == viz::RendererType::kSkiaGraphiteDawn ||
-           renderer_type_ == viz::RendererType::kSkiaGraphiteMetal;
+    return renderer_type_ == viz::RendererType::kSkiaGraphiteDawn;
   }
 
   const viz::RendererType renderer_type_;
@@ -275,7 +272,7 @@ class LayerTreeTest : public testing::Test, public TestHooks {
 
   CompositorMode mode_;
 
-  std::unique_ptr<LayerTreeHostClientForTesting> client_;
+  std::unique_ptr<LayerTreeHostDelegateForTesting> client_;
   std::unique_ptr<LayerTreeHost> layer_tree_host_;
   std::unique_ptr<AnimationHost> animation_host_;
   raw_ptr<PropertyTreeDelegate> property_tree_delegate_ = nullptr;

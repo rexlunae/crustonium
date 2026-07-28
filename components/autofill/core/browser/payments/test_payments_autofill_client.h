@@ -29,6 +29,7 @@
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_manager.h"
 #include "components/autofill/core/browser/single_field_fillers/payments/mock_merchant_promo_code_manager.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_ui_delegate.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 
@@ -49,7 +50,11 @@ class BnplIssuer;
 class CardUnmaskOtpInputDialogController;
 class CardUnmaskPromptController;
 class CreditCardCvcAuthenticator;
-class TouchToFillDelegate;
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+class OmniboxAutofillDelegate;
+enum class SuggestionHidingReason;
+#endif
+class TouchToFillPaymentMethodDelegate;
 
 namespace payments {
 
@@ -114,8 +119,8 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
       base::OnceClosure accept_virtual_card_callback,
       base::OnceClosure decline_virtual_card_callback) override;
   void VirtualCardEnrollCompleted(PaymentsRpcResult result) override;
-  void OnCardDataAvailable(
-      const FilledCardInformationBubbleOptions& options) override;
+  void OnCardDataAvailable(const FilledCardInformationBubbleOptions& options,
+                           const url::Origin& origin) override;
   void ConfirmSaveIbanLocally(
       const Iban& iban,
       bool should_show_prompt,
@@ -127,7 +132,7 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
       PaymentsAutofillClient::SaveIbanPromptCallback callback) override;
   void IbanUploadCompleted(bool iban_saved, bool hit_max_strikes) override;
   void ShowAutofillProgressDialog(
-      AutofillProgressDialogType autofill_progress_dialog_type,
+      AutofillProgressUiType autofill_progress_dialog_type,
       base::OnceClosure cancel_callback) override;
   void CloseAutofillProgressDialog(
       bool show_confirmation_before_closing,
@@ -164,11 +169,7 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
   CreditCardCvcAuthenticator& GetCvcAuthenticator() override;
   CreditCardOtpAuthenticator* GetOtpAuthenticator() override;
   TestCreditCardRiskBasedAuthenticator* GetRiskBasedAuthenticator() override;
-  bool IsRiskBasedAuthEffectivelyAvailable() const override;
   bool IsMandatoryReauthEnabled() override;
-#if BUILDFLAG(IS_IOS)
-  bool IsUsingCustomCardIconEnabled() const override;
-#endif  // BUILDFLAG(IS_IOS)
   void ShowMandatoryReauthOptInPrompt(
       base::OnceClosure accept_mandatory_reauth_callback,
       base::OnceClosure cancel_mandatory_reauth_callback,
@@ -186,16 +187,16 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
       const OfferNotificationOptions& options) override;
   void DismissOfferNotification() override;
   bool ShowTouchToFillCreditCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       base::span<const Suggestion> suggestions) override;
   bool ShowTouchToFillIban(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      base::span<const autofill::Iban> ibans_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      base::span<const Iban> ibans_to_suggest) override;
   bool ShowTouchToFillAffiliatedLoyaltyCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      std::vector<autofill::LoyaltyCard> loyalty_cards_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
   bool ShowTouchToFillForAllLoyaltyCards(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
   bool OnPurchaseAmountExtracted(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
@@ -232,9 +233,26 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
   void ShowCreditCardSaveAndFillPendingDialog(
       CardSaveAndFillDialogCallback callback) override;
   void HideCreditCardSaveAndFillDialog() override;
-  bool IsTabModalPopupDeprecated() const override;
+  bool IsTabModalPopup() const override;
   BnplStrategy* GetBnplStrategy() override;
   BnplUiDelegate* GetBnplUiDelegate() override;
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  OmniboxAutofillDelegate* GetOmniboxAutofillDelegate() override;
+  void ShowExpandedOmniboxAutofillChip(
+      std::vector<Suggestion> suggestions,
+      base::OnceClosure on_chip_shown,
+      base::RepeatingCallback<void(base::span<const Suggestion>)>
+          on_suggestions_shown,
+      base::RepeatingCallback<void(SuggestionHidingReason)>
+          on_suggestions_hidden,
+      base::RepeatingCallback<void(const Suggestion&)> did_select_suggestion,
+      base::RepeatingClosure did_deselect_suggestion,
+      base::RepeatingCallback<
+          void(const Suggestion&,
+               const AutofillSuggestionDelegate::SuggestionMetadata&)>
+          did_accept_suggestion) override;
+  void HideOmniboxAutofillChip() override;
+#endif
 
   // Begin TestPaymentsAutofillClient-specific section.
 
@@ -302,7 +320,7 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
            !legal_message_lines_.empty();
   }
 
-  AutofillProgressDialogType autofill_progress_dialog_type() const {
+  AutofillProgressUiType autofill_progress_dialog_type() const {
     return autofill_progress_dialog_type_;
   }
 
@@ -347,6 +365,12 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
     bnpl_ui_delegate_ = std::move(bnpl_ui_delegate);
   }
 
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  bool omnibox_autofill_chip_shown() { return omnibox_autofill_chip_shown_; }
+
+  bool omnibox_autofill_chip_hidden() { return omnibox_autofill_chip_hidden_; }
+#endif
+
  private:
   const raw_ref<AutofillClient> client_;
 
@@ -373,8 +397,8 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
 
   bool is_tab_model_popup_ = false;
 
-  AutofillProgressDialogType autofill_progress_dialog_type_ =
-      AutofillProgressDialogType::kServerCardUnmaskProgressDialog;
+  AutofillProgressUiType autofill_progress_dialog_type_ =
+      AutofillProgressUiType::kServerCardUnmaskProgressUi;
 
   LegalMessageLines legal_message_lines_;
 
@@ -426,7 +450,7 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
   bool credit_card_name_fix_flow_bubble_was_shown_ = false;
 #endif
 
-  ::testing::NiceMock<MockMerchantPromoCodeManager>
+  testing::NiceMock<MockMerchantPromoCodeManager>
       mock_merchant_promo_code_manager_;
   std::unique_ptr<AutofillOfferManager> autofill_offer_manager_;
   std::unique_ptr<MockMandatoryReauthManager>
@@ -441,6 +465,16 @@ class TestPaymentsAutofillClient : public PaymentsAutofillClient {
   // platform.
   // Lazily initialized: access only through `GetBnplUiDelegate()`.
   std::unique_ptr<BnplUiDelegate> bnpl_ui_delegate_;
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // The OmniboxAutofillDelegate used to handle the logic flow and user
+  // interactions when the user triggers Autofill from the Omnibox.
+  std::unique_ptr<OmniboxAutofillDelegate> omnibox_autofill_delegate_;
+
+  bool omnibox_autofill_chip_shown_ = false;
+
+  bool omnibox_autofill_chip_hidden_ = false;
+#endif
 };
 
 }  // namespace payments

@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/views/tab_icon_view_model.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/pointer/touch_ui_controller.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/window/frame_view.h"
 
 class BrowserView;
@@ -53,13 +54,14 @@ class BrowserFrameViewWin : public BrowserFrameView, public TabIconViewModel {
   void UpdateWindowTitle() override;
   void ResetWindowControls() override;
   void OnThemeChanged() override;
+  gfx::RoundedCornersF GetWindowRoundedCorners() const override;
+  gfx::Point GetKeyboardContextMenuLocation() override;
 
   // TabIconViewModel:
   bool ShouldTabIconViewAnimate() const override;
   ui::ImageModel GetFaviconForTabIconView() override;
 
   bool IsMaximized() const;
-  bool IsWebUITabStrip() const;
 
   // Returns the y coordinate for the top of the frame, which in maximized mode
   // is the top of the screen and in restored mode is 1 pixel below the top of

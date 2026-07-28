@@ -42,12 +42,12 @@
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/resource_coordinator_service.h"
+#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/process_type.h"
 #include "content/public/common/result_codes.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "services/network/public/mojom/network_service.mojom.h"
@@ -291,6 +291,7 @@ void BrowserChildProcessHostImpl::LaunchWithoutExtraCommandLineSwitches(
       switches::kDisableBestEffortTasks,
       switches::kIPCConnectionTimeout,
       switches::kLogBestEffortTasks,
+      switches::kPartitionAllocSchedulerLoopQuarantine,
       switches::kPerfettoDisableInterning,
   };
   cmd_line->CopySwitchesFrom(browser_command_line, kForwardSwitches);
@@ -410,6 +411,14 @@ void BrowserChildProcessHostImpl::BindChildHistogramFetcherFactory(
     mojo::PendingReceiver<metrics::mojom::ChildHistogramFetcherFactory>
         factory) {
   GetHost()->BindReceiver(std::move(factory));
+}
+
+bool BrowserChildProcessHostImpl::IsWebiumRenderer() const {
+  return false;
+}
+
+uint64_t BrowserChildProcessHostImpl::GetProcessIdForHistogram() const {
+  return data_.GetChildProcessId().value();
 }
 
 void BrowserChildProcessHostImpl::TerminateOnBadMessageReceived(

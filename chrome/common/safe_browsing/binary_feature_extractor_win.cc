@@ -9,6 +9,7 @@
 #include <softpub.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <wintrust.h>
 
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
@@ -16,7 +17,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/win/pe_image_reader.h"
-#include "base/win/wintrust_shim.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 
 namespace safe_browsing {
@@ -49,7 +49,7 @@ void BinaryFeatureExtractor::CheckSignature(
     const base::FilePath& file_path,
     ClientDownloadRequest_SignatureInfo* signature_info) {
   // Mitigate the issues caused by loading DLLs on a background thread
-  // (http://crbug/973868).
+  // (http://crbug.com/41464781).
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
 
   DVLOG(2) << "Checking signature for " << file_path.value();

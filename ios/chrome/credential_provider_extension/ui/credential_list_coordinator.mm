@@ -24,8 +24,8 @@
 #import "ios/chrome/credential_provider_extension/ui/feature_flags.h"
 #import "ios/chrome/credential_provider_extension/ui/new_password_coordinator.h"
 
-@interface CredentialListCoordinator () <CredentialListUIHandler,
-                                         CredentialDetailsConsumerDelegate,
+@interface CredentialListCoordinator () <CredentialDetailsConsumerDelegate,
+                                         CredentialListUIHandler,
                                          NewPasswordCoordinatorDelegate>
 
 // Base view controller from where `viewController` is presented.
@@ -223,8 +223,7 @@
 // or an access to passwords (when `NO`).
 - (void)reauthenticateIfNeededToAccessPasskeys:(BOOL)forPasskeys
                          withCompletionHandler:
-                             (void (^)(ReauthenticationResult))
-                                 completionHandler {
+                             (ReauthenticationResultBlock)completionHandler {
   [self.reauthenticationHandler verifyUserToAccessPasskeys:forPasskeys
                                      withCompletionHandler:completionHandler
                            presentReminderOnViewController:self.viewController];

@@ -11,6 +11,7 @@ import androidx.test.filters.MediumTest;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
@@ -24,6 +25,8 @@ import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.TestAn
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
 import org.chromium.components.permissions.DismissalType;
 import org.chromium.content_public.browser.NavigationHandle;
@@ -33,12 +36,18 @@ import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class PermissionNavigationTest {
-    @Rule public PermissionTestRule mPermissionRule = new PermissionTestRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+    public PermissionTestRule mPermissionRule =
+            new PermissionTestRule(mActivityTestRule.getActivityTestRule());
+
+    @Rule
+    public RuleChain mRuleChain = RuleChain.outerRule(mActivityTestRule).around(mPermissionRule);
 
     private static final String TEST_FILE = "/content/test/data/android/permission_navigation.html";
 
     private static final String DISMISS_TYPE_HISTOGRAM =
-            "Permissions.Prompt.Geolocation.ModalDialog.Dismissed.Method";
+            "Permissions.Prompt.GeolocationApproximateOrPrecise.ModalDialog.Dismissed.Method";
 
     private TestAndroidPermissionDelegate mTestAndroidPermissionDelegate;
 
@@ -120,14 +129,14 @@ public class PermissionNavigationTest {
                         .build();
         PermissionTestRule.waitForDialog(mPermissionRule.getActivity());
 
-        ChromeTabModalPresenter mTabModalPresenter =
+        ChromeTabModalPresenter tabModalPresenter =
                 (ChromeTabModalPresenter)
                         mPermissionRule
                                 .getActivity()
                                 .getModalDialogManager()
                                 .getPresenterForTest(ModalDialogType.TAB);
 
-        View dialogContainerForTest = mTabModalPresenter.getDialogContainerForTest();
+        View dialogContainerForTest = tabModalPresenter.getDialogContainerForTest();
         ThreadUtils.runOnUiThreadBlocking(dialogContainerForTest::performClick);
         histogramExpectation.assertExpected(
                 "Should record tapping outside the scrim to dismiss permission prompt in UMA");

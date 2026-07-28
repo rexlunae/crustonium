@@ -33,6 +33,7 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
@@ -46,6 +47,7 @@ import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.chrome.test.util.MenuUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 
 /** Public transit tests for the Hub's history pane. */
@@ -53,6 +55,7 @@ import org.chromium.ui.test.util.DeviceRestriction;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 @EnableFeatures(ChromeFeatureList.BOOKMARK_PANE_ANDROID)
+@DisabledTest(message = "crbug.com/444494388")
 public class BookmarkPaneTest {
     @Rule
     public AutoResetCtaTransitTestRule mCtaTestRule =
@@ -76,7 +79,7 @@ public class BookmarkPaneTest {
 
     @Test
     @MediumTest
-    @Restriction({DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
+    @Restriction(DeviceFormFactor.PHONE)
     public void testBookmarkIsDisplayed() {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         String urlOne =
@@ -122,7 +125,7 @@ public class BookmarkPaneTest {
 
     @Test
     @MediumTest
-    @Restriction({DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
+    @Restriction(DeviceFormFactor.PHONE)
     public void testBookmarkClickOpens() {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         String urlOne =

@@ -36,7 +36,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 
 using content::BrowserThread;
 
@@ -523,10 +523,10 @@ bool ExtensionAssetsManagerChromeOS::CleanUpExtension(
         if (!extension_prefs || extension_prefs->pref_service()->ReadOnly())
           return false;
 
-        std::optional<ExtensionInfo> info =
+        std::optional<ExtensionPrefs::InstallRecord> info =
             extension_prefs->GetInstalledExtensionInfo(id);
         if (!info || info->extension_path != base::FilePath(*shared_path)) {
-          info = extension_prefs->GetDelayedInstallInfo(id);
+          info = extension_prefs->GetDelayedInstallExtensionInfo(id);
           if (!info || info->extension_path != base::FilePath(*shared_path)) {
             not_used = true;
           }

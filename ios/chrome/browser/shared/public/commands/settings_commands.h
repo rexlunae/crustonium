@@ -9,6 +9,8 @@
 
 #import <optional>
 
+#import "base/ios/block_types.h"
+
 namespace autofill {
 class AutofillProfile;
 class CreditCard;
@@ -31,8 +33,8 @@ enum class PushNotificationClientId;
             (UIViewController*)baseViewController
                           skipIfUINotAvailable:(BOOL)skipIfUINotAvailable;
 
-// Shows the BWG settings UI.
-- (void)showBWGSettings;
+// Shows the Gemini settings UI.
+- (void)showGeminiSettings;
 
 // TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
 // Shows the Google services settings UI, presenting from `baseViewController`.
@@ -43,6 +45,7 @@ enum class PushNotificationClientId;
 // TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
 // Shows the Sync settings UI, presenting from `baseViewController`.
 // If `baseViewController` is nil BVC will be used as presenterViewController.
+// The user must be signed-in and sign-in must be enabled.
 - (void)showSyncSettingsFromViewController:
     (UIViewController*)baseViewController;
 
@@ -53,14 +56,34 @@ enum class PushNotificationClientId;
 - (void)showSyncPassphraseSettingsFromViewController:
     (UIViewController*)baseViewController;
 
+// TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
+// Shows the sync encryption passphrase UI, presenting from
+// `baseViewController`. `completion` is executed after the UI is dismissed.
+// Does nothing if the current scene is blocked.
+- (void)showSyncPassphraseSettingsFromViewController:
+            (UIViewController*)baseViewController
+                                          completion:
+                                              (ProceduralBlock)completion;
+
 // Shows the list of saved passwords in the settings.
 - (void)showSavedPasswordsSettingsFromViewController:
     (UIViewController*)baseViewController;
 
+// Shows the saved passwords settings index. `shouldShowLevelUpWalkthroughIPH`
+// indicates whether the Level Up walkthrough IPH should be shown.
+- (void)showSavedPasswordsSettingsFromViewController:
+            (UIViewController*)baseViewController
+                     shouldShowLevelUpWalkthroughIPH:
+                         (BOOL)shouldShowLevelUpWalkthroughIPH;
+
+// Shows the Autofill and Passwords settings page.
+- (void)showAutofillAndPasswordsSettings;
+
 // Shows password manager on main page with a purpose to run the credential
 // exchange import flow. `UUID` is a token received from the OS during app
 // launch needed to receive credentials from an OS library.
-- (void)showPasswordManagerForCredentialImport:(NSUUID*)UUID;
+- (void)showPasswordManagerForCredentialImport:(NSUUID*)UUID
+    API_AVAILABLE(ios(26.0));
 
 // Shows the password details page for a credential. `editMode` indicates
 // whether the details page should be opened in edit mode.
@@ -95,6 +118,9 @@ enum class PushNotificationClientId;
                                             (DefaultBrowserSettingsPageSource)
                                                 source;
 
+// Shows the default search engine selection settings.
+- (void)showDefaultSearchEngineSettings;
+
 // Shows the Safety Check page and starts the Safety Check for `referrer`.
 - (void)showAndStartSafetyCheckForReferrer:
     (password_manager::PasswordCheckReferrer)referrer;
@@ -120,6 +146,9 @@ enum class PushNotificationClientId;
 // notification client with the given `clientID`.
 - (void)showNotificationsSettingsAndHighlightClient:
     (std::optional<PushNotificationClientId>)clientID;
+
+// Shows the Autofill settings UI.
+- (void)showAutofillSettings;
 
 @end
 

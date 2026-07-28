@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -166,7 +167,7 @@ std::optional<AccessCode> Authenticator::ValidateInRange(
                                  kAccessCodeGranularity.InMilliseconds();
   const int64_t end_interval = valid_to.InMillisecondsSinceUnixEpoch() /
                                kAccessCodeGranularity.InMilliseconds();
-  for (int i = start_interval; i <= end_interval; ++i) {
+  for (int64_t i = start_interval; i <= end_interval; ++i) {
     const base::Time generation_timestamp =
         base::Time::FromMillisecondsSinceUnixEpoch(
             i * kAccessCodeGranularity.InMilliseconds());

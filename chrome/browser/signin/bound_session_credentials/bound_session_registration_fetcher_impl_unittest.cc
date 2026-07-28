@@ -42,7 +42,7 @@ namespace {
 using ::testing::UnorderedPointwise;
 
 using unexportable_keys::ServiceErrorOr;
-using unexportable_keys::UnexportableKeyId;
+using unexportable_keys::UnexportableSigningKeyId;
 using RegistrationError =
     BoundSessionRegistrationFetcherImpl::RegistrationError;
 using RegistrationResultFuture = base::test::TestFuture<
@@ -270,7 +270,8 @@ TEST_F(BoundSessionRegistrationFetcherImplTest, ValidInput) {
 
   // Verify the wrapped key.
   std::string wrapped_key = future.Get<>()->wrapped_key();
-  base::test::TestFuture<ServiceErrorOr<UnexportableKeyId>>
+  base::test::TestFuture<
+      ServiceErrorOr<unexportable_keys::UnexportableSigningKeyId>>
       wrapped_key_to_key_id;
   unexportable_key_service().FromWrappedSigningKeySlowlyAsync(
       base::as_byte_span(wrapped_key),
@@ -280,7 +281,7 @@ TEST_F(BoundSessionRegistrationFetcherImplTest, ValidInput) {
   EXPECT_TRUE(wrapped_key_to_key_id.Get().has_value());
 
   // Verify that the request body contains a valid registration token.
-  UnexportableKeyId key_id = wrapped_key_to_key_id.Get().value();
+  UnexportableSigningKeyId key_id = wrapped_key_to_key_id.Get().value();
   EXPECT_TRUE(signin::VerifyJwtSignature(
       GetRequestBody(), *unexportable_key_service().GetAlgorithm(key_id),
       *unexportable_key_service().GetSubjectPublicKeyInfo(key_id)));

@@ -275,7 +275,7 @@ using base::UserMetricsAction;
     if ([self isBookmarkedPage]) {
       newTitle =
           l10n_util::GetNSStringWithFixup(IDS_IOS_KEYBOARD_EDIT_BOOKMARK);
-      command.image = DefaultSymbolWithConfiguration(kPencilSymbol, nil);
+      command.image = SymbolWithConfiguration(SymbolPencil, nil);
     }
   }
   // If a new title was determined, set it on the command.
@@ -456,7 +456,7 @@ using base::UserMetricsAction;
   [LayoutGuideCenterForBrowser(_browser.get())
       referenceView:nil
           underName:kVoiceSearchButtonGuide];
-  [_sceneHandler startVoiceSearch];
+  [_browserCoordinatorHandler startVoiceSearch];
 }
 
 - (void)keyCommand_showSettings {

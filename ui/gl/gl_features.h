@@ -25,8 +25,11 @@ GL_EXPORT bool UseCompositorClockVSyncInterval();
 // All features in alphabetical order. The features should be documented
 // alongside the definition of their values in the .cc file.
 GL_EXPORT BASE_DECLARE_FEATURE(kDefaultPassthroughCommandDecoder);
-GL_EXPORT BASE_DECLARE_FEATURE(kAddDelayToGLCompileShader);
 #endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+GL_EXPORT BASE_DECLARE_FEATURE(kFallbackToSWIfGLES3NotSupported);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN)
 GL_EXPORT BASE_DECLARE_FEATURE(kUseCompositorClockVSyncInterval);
@@ -42,6 +45,8 @@ GL_EXPORT void GetANGLEFeaturesFromCommandLineAndFinch(
     const base::CommandLine* command_line,
     std::vector<std::string>& enabled_angle_features,
     std::vector<std::string>& disabled_angle_features);
+
+GL_EXPORT bool ShouldFallbackToSWIfGLES3NotSupported();
 
 #if BUILDFLAG(ENABLE_SWIFTSHADER)
 GL_EXPORT BASE_DECLARE_FEATURE(kAllowSwiftShaderFallback);
@@ -61,8 +66,15 @@ GL_EXPORT bool IsSwiftShaderAllowedByFeature();
 // IsSwiftShaderAllowedByFeature.
 GL_EXPORT bool IsSwiftShaderAllowed(const base::CommandLine* command_line);
 
+// If SwiftShader is explicitly requested for WebGL via
+// --use-angle=swiftshader-webgl.
+GL_EXPORT bool IsSwiftShaderUsedForWebGLByCommandLine(
+    const base::CommandLine* command_line);
+
 #if BUILDFLAG(IS_WIN)
 GL_EXPORT BASE_DECLARE_FEATURE(kAllowD3D11WarpFallback);
+
+GL_EXPORT BASE_DECLARE_FEATURE(kDCompOnD3D12);
 #endif
 
 GL_EXPORT bool IsWARPAllowed(const base::CommandLine* command_line);
@@ -74,10 +86,6 @@ GL_EXPORT bool IsAnySoftwareGLAllowed(const base::CommandLine* command_line);
 // allowed.
 GL_EXPORT bool IsSoftwareGLFallbackDueToCrashesAllowed(
     const base::CommandLine* command_line);
-
-// Query the delay we add to glCompileShader.
-// Default is 0 if kAddDelayToGLCompileShader is off.
-GL_EXPORT base::TimeDelta GetGLCompileShaderDelay();
 
 #if BUILDFLAG(IS_ANDROID)
 GL_EXPORT BASE_DECLARE_FEATURE(kAndroidLimitRgb565DisplayToApi32);

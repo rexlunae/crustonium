@@ -64,7 +64,7 @@ class ExtensionApiTest : public ExtensionBrowserTest {
     bool use_extensions_root_dir = false;
 
     // If given, the Profile instance is used. Otherwise, the default Profile
-    // (i.e., taken by browser()->profile()) for the browser_test is used.
+    // (i.e., taken by browser()->GetProfile()) for the browser_test is used.
     raw_ptr<Profile> profile = nullptr;
   };
 
@@ -166,8 +166,8 @@ class ExtensionApiTest : public ExtensionBrowserTest {
 
   // TODO(https://crbug.com/423465927): Explore a better approach to make the
   // existing tests run with the prewarm feature enabled.
-  test::ScopedPrewarmFeatureList prewarm_feature_list_{
-      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
+  ::test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      ::test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
 
   // Hold details of the test, set in C++, which can be accessed by
   // javascript using chrome.test.getConfig().

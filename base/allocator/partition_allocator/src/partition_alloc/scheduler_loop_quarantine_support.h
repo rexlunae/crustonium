@@ -5,15 +5,16 @@
 #ifndef PARTITION_ALLOC_SCHEDULER_LOOP_QUARANTINE_SUPPORT_H_
 #define PARTITION_ALLOC_SCHEDULER_LOOP_QUARANTINE_SUPPORT_H_
 
+#include <array>
 #include <optional>
 #include <variant>
 
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
+#include "partition_alloc/internal/thread_cache_internal.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/memory/stack_allocated.h"
 #include "partition_alloc/scheduler_loop_quarantine.h"
-#include "partition_alloc/thread_cache.h"
 
 // Extra utilities for Scheduler-Loop Quarantine.
 // This is a separate header to avoid cyclic reference between "thread_cache.h"
@@ -32,9 +33,10 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
   ~ScopedSchedulerLoopQuarantineExclusion();
 
  private:
-  std::optional<internal::ThreadBoundSchedulerLoopQuarantineBranch::
-                    ScopedQuarantineExclusion>
-      instances_[kNumDefaultPartitions];
+  std::array<std::optional<internal::ThreadBoundSchedulerLoopQuarantineBranch::
+                               ScopedQuarantineExclusion>,
+             kNumPartitions>
+      instances_;
 };
 
 // An utility class to update Scheduler-Loop Quarantine's purging strategy for
@@ -81,29 +83,42 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
   uintptr_t tcache_address_ = 0;
 };
 
-// This is a lightweight version of `SchedulerLoopQuarantineScanPolicyUpdater`.
-// It calls `DisallowScanlessPurge` in the constructor and `AllowScanlessPurge`
+// This class manages the quarantine state during a task execution.
+// It calls `OnTaskStart` in the constructor and `OnTaskFinish`
 // in the destructor.
 class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
-    ScopedSchedulerLoopQuarantineDisallowScanlessPurge {
+    ScopedSchedulerLoopQuarantineTaskScope {
   // This is `PA_STACK_ALLOCATED()` to ensure that those two calls are made on
   // the same thread, allowing us to omit thread-safety analysis.
   PA_STACK_ALLOCATED();
 
  public:
-  PA_ALWAYS_INLINE ScopedSchedulerLoopQuarantineDisallowScanlessPurge() {
-    ThreadCache* tcache = ThreadCache::EnsureAndGetForQuarantine();
-    PA_CHECK(ThreadCache::IsValid(tcache));
+  PA_ALWAYS_INLINE ScopedSchedulerLoopQuarantineTaskScope() {
+    active_ = internal::ThreadCache::IsInitialized();
+    if (!active_) {
+      return;
+    }
 
-    tcache->GetSchedulerLoopQuarantineBranch().DisallowScanlessPurge();
+    internal::ThreadCache* tcache =
+        internal::ThreadCache::EnsureAndGetForQuarantine();
+    PA_CHECK(internal::ThreadCache::IsValid(tcache));
+
+    tcache->GetSchedulerLoopQuarantineBranch().OnTaskStart();
   }
 
-  PA_ALWAYS_INLINE ~ScopedSchedulerLoopQuarantineDisallowScanlessPurge() {
-    ThreadCache* tcache = ThreadCache::EnsureAndGetForQuarantine();
-    PA_CHECK(ThreadCache::IsValid(tcache));
+  PA_ALWAYS_INLINE ~ScopedSchedulerLoopQuarantineTaskScope() {
+    if (!active_) {
+      return;
+    }
 
-    tcache->GetSchedulerLoopQuarantineBranch().AllowScanlessPurge();
+    internal::ThreadCache* tcache =
+        internal::ThreadCache::EnsureAndGetForQuarantine();
+    PA_CHECK(internal::ThreadCache::IsValid(tcache));
+
+    tcache->GetSchedulerLoopQuarantineBranch().OnTaskFinish();
   }
+
+  bool active_ = false;
 };
 
 namespace internal {
@@ -117,6 +132,7 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
   bool IsQuarantined(void* object);
   size_t GetCapacityInBytes();
   void Purge();
+  int PausedCount();
 
  private:
   std::variant<internal::GlobalSchedulerLoopQuarantineBranch*,

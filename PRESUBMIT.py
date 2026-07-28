@@ -282,16 +282,17 @@ _BANNED_JAVA_FUNCTIONS: Sequence[BanRule] = (
          ),
         explanation=
         ('Usage of IS_DESKTOP_ANDROID build flag or DeviceInfo.isDesktop() '
-         'is discouraged. Use system affordances to determine feature '
-         'availablility. Refer to https://chromium.googlesource.com/chromium/src/+/HEAD/docs/ui/android/device_form_factor.md for guidelines. '
+         'is discouraged. Use system affordances (see guidelines link below) to determine feature '
+         'availablility. '
          'To request an exception, file a bug at '
          'https://b.corp.google.com/issues/new?component=1753515&template=2172655'
-         'Once approved, use centralized util DeviceInfo.isDesktop() '
+         ' . Once approved, use centralized util DeviceInfo.isDesktop() '
          'instead of direct build flag or PackageManager.FEATURE_PC checks. '
          'Allowances may be granted to only the directories below: '
          '[build/, chrome/, components/, extensions/, infra/, tools/] '
          'Note: in particular we need to avoid components shared with '
-         'WebView.', ),
+         'WebView. Refer to https://chromium.googlesource.com/chromium/src/+/HEAD/docs/ui/android/device_form_factor.md for guidelines. ',
+         ),
         treat_as_error=False,
         surface_as_gerrit_lint=True,
     ),
@@ -470,6 +471,8 @@ _BANNED_IOS_OBJC_FUNCTIONS = (
             # App extensions have restricted dependencies and thus can't use the
             # wrappers.
             r'^ios/chrome/\w+_extension/',
+            # content/ cannot depend on ios/chrome/, so use UIKit directly.
+            r'^content/',
         ),
     ),
     BanRule(
@@ -483,6 +486,16 @@ _BANNED_IOS_OBJC_FUNCTIONS = (
             'ios/web_view',
         ),
     ),
+    BanRule(
+        r'/\bUIDevice\b(.*?)\buserInterfaceIdiom\b',
+        ('UIDevice.currentDevice.userInterfaceIdiom should not be used.',
+         'Use GetDeviceFormFactor() instead.'),
+        True,
+        excluded_paths=(
+            r'^ui/base/device_form_factor_ios\.mm$',
+            r'^ios/third_party/',
+        ),
+    ),
 )
 
 _BANNED_IOS_EGTEST_FUNCTIONS: Sequence[BanRule] = (BanRule(
@@ -493,6 +506,21 @@ _BANNED_IOS_EGTEST_FUNCTIONS: Sequence[BanRule] = (BanRule(
 ), )
 
 _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
+    BanRule(
+        r'/\b(TimeTicks::UnixEpoch|SetSharedUnixEpoch)\b',
+        (
+            'base::TimeTicks::UnixEpoch() and base::TimeTicks::SetSharedUnixEpoch()',
+            'are deprecated and being removed (crbug.com/355423207). TimeTicks can',
+            'be suspended while a process is suspended, so it has no stable relation',
+            'to wall-clock time. Use base::Time instead.',
+        ),
+        True,
+        excluded_paths=(
+            r'base/time/time\.(h|cc)',
+            r'base/allocator/partition_allocator/.*/time/time\.(h|cc)',
+            _THIRD_PARTY_EXCEPT_BLINK,
+        ),
+    ),
     BanRule(
         '%#0',
         (
@@ -584,6 +612,21 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
          ),
         False,
         (),
+    ),
+    BanRule(
+        r'/\bMemoryPressureListener\b',
+        (
+            'base::MemoryPressureListener is deprecated. Use base::MemoryConsumer ',
+            'instead.',
+        ),
+        False,
+        (
+            r'^base/memory/memory_pressure_listener\.(cc|h)$',
+            r'^base/memory/memory_pressure_listener_unittest\.cc$',
+            r'^base/memory/mock_memory_pressure_listener\.(cc|h)$',
+            r'^content/browser/back_forward_cache/'
+            r'back_forward_cache_impl\.(cc|h)$',
+        ),
     ),
     BanRule(
         r'/\b(?!(Sequenced|SingleThread))\w*TaskRunner::(GetCurrentDefault|CurrentDefaultHandle)',
@@ -748,10 +791,11 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             # Needed for interop with third-party library.
             r'^third_party/blink/renderer/core/typed_arrays/array_buffer/' +
             r'array_buffer_contents\.(cc|h)',
-            r'^third_party/blink/renderer/core/inspector/devtools_session\.h',
+            r'^third_party/blink/renderer/core/inspector/v8_session_holder\.h',
             r'^third_party/blink/renderer/core/typed_arrays/dom_array_buffer\.cc',
             '^third_party/blink/renderer/bindings/core/v8/' +
             'v8_wasm_response_extensions.cc',
+            '^third_party/blink/renderer/bindings/core/v8/pass_as_span.h',
             r'^gin/array_buffer\.(cc|h)',
             r'^gin/per_isolate_data\.(cc|h)',
             '^chrome/services/sharing/nearby/',
@@ -945,11 +989,45 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             # The early zone registration can't use base or absl. So it uses
             # std.
             r'base/allocator/partition_allocator/src/partition_alloc/shim/early_zone_registration_utils_apple.h',
+            # Similarly, helpers for printing stack traces can't use base or absl.
+            r'base/debug/buffered_dwarf_reader\.cc',
+            r'base/debug/buffered_dwarf_reader\.h',
 
             # Needed to use QUICHE API.
-            r'components/legion/phosphor/.*',
+            r'components/private_ai/phosphor/.*',
             r'net/third_party/quiche/overrides/quiche_platform_impl/quiche_stack_trace_impl\.*',
             r'services/network/web_transport\.cc',
+
+            # Needed to implement WebRTC interfaces.
+            r'third_party/blink/renderer/modules/peerconnection/mock_peer_connection_impl\.h',
+            r'third_party/blink/renderer/modules/peerconnection/rtc_transport/rtc_transport\.cc',
+            r'third_party/blink/renderer/platform/webrtc/webrtc_video_frame_adapter\.cc',
+            r'third_party/blink/renderer/platform/webrtc/webrtc_video_frame_adapter\.h',
+
+            # Needed to implement Dawn wire interfaces.
+            r'gpu/command_buffer/client/dawn_client_memory_transfer_service\.cc',
+            r'gpu/command_buffer/client/dawn_client_memory_transfer_service\.h',
+            r'gpu/command_buffer/client/dawn_client_serializer\.cc',
+            r'gpu/command_buffer/client/dawn_client_serializer\.h',
+            r'gpu/command_buffer/client/dawn_wire_client\.cc',
+            r'gpu/command_buffer/service/dawn_service_memory_transfer_service\.cc',
+            r'gpu/command_buffer/service/dawn_service_memory_transfer_service\.h',
+            r'gpu/command_buffer/service/dawn_service_serializer\.cc',
+            r'gpu/command_buffer/service/dawn_service_serializer\.h',
+            r'gpu/command_buffer/service/dawn_wire_server\.cc',
+            r'third_party/blink/renderer/platform/graphics/gpu/dawn_command_serializers\.cc',
+            r'third_party/blink/renderer/platform/graphics/gpu/dawn_command_serializers\.h',
+
+            # Needed to implement and use Dawn caching interfaces.
+            r'gpu/command_buffer/service/dawn_caching_interface\.cc',
+            r'gpu/command_buffer/service/dawn_caching_interface\.h',
+            r'gpu/command_buffer/service/dawn_context_provider\.cc',
+            r'gpu/command_buffer/service/gpu_persistent_cache\.cc',
+            r'gpu/command_buffer/service/gpu_persistent_cache\.h',
+
+            # Clang tools do not depend on //base. Some are even emitting
+            # std::span rewrite for non chromium projects.
+            r'^tools/clang/.*',
 
             # Not an error in third_party folders.
             _THIRD_PARTY_EXCEPT_BLINK,
@@ -960,6 +1038,9 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         ('absl::StatusOr is banned. Use base::expected instead.', ),
         True,
         [
+            # Needed to use MediaPipe API.
+            r'components/media_effects/.*\.cc',
+
             # Needed to use liburlpattern API.
             r'components/url_pattern/.*',
             r'services/network/shared_dictionary/simple_url_pattern_matcher\.cc',
@@ -969,8 +1050,9 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             # Needed to use QUICHE API.
             r'net/quic/dedicated_web_transport_http3_client\.cc',
 
-            # Needed to use MediaPipe API.
-            r'components/media_effects/.*\.cc',
+            # Needed to use Ink API.
+            r'pdf/.*_ink.*\.cc',
+
             # Not an error in third_party folders.
             _THIRD_PARTY_EXCEPT_BLINK
         ],
@@ -1114,13 +1196,17 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             # TODO(https://crbug.com/1364579): Remove usage and exception list
             # entry.
             r'ui/views/controls/focus_ring\.h',
-
             # Various pre-existing uses in //tools that is low-priority to fix.
             r'tools/binary_size/libsupersize/viewer/caspian/diff\.cc',
             r'tools/binary_size/libsupersize/viewer/caspian/model\.cc',
             r'tools/binary_size/libsupersize/viewer/caspian/model\.h',
             r'tools/binary_size/libsupersize/viewer/caspian/tree_builder\.h',
             r'tools/clang/base_bind_rewriters/BaseBindRewriters\.cpp',
+            # Required for C++/Swift interop. std::function is used as a wrapper
+            # to transport base::{Once,Repeating}Callback objects across the
+            # C++/Swift boundary.
+            r'base/apple/swift_callback_helpers\.h',
+            r'.*/swift_interop/.*',
 
             # Not an error in third_party folders.
             _THIRD_PARTY_EXCEPT_BLINK
@@ -1383,6 +1469,8 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             'common_range',
             'viewable_range',
             'constant_range',
+            # Range conversions
+            'to',
             # Views
             'subrange',
             'subrange_kind',
@@ -1749,6 +1837,14 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         (),
     ),
     BanRule(
+        'CComBSTR',
+        ('New code should use base::ScopedBstr from base/win/scoped_bstr.h as ',
+         'a replacement for CComBSTR from ATL. See http://crbug.com/5027 for ',
+         'more details.'),
+        False,
+        (),
+    ),
+    BanRule(
         'CComPtr',
         ('New code should use Microsoft::WRL::ComPtr from wrl/client.h as a ',
          'replacement for CComPtr from ATL. See http://crbug.com/5027 for more ',
@@ -1777,7 +1873,7 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             'Please use TRACE_EVENT_BEGIN/END/INSTANT macros instead of ',
             'TRACE_EVENT_ASYNC_.. and TRACE_EVENT_NESTABLE_ASYNC_... (crbug.com/432427382).',
         ),
-        False,
+        True,
         (
             r'^base/trace_event/.*',
             r'^base/tracing/.*',
@@ -1789,7 +1885,7 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             'Please use perfetto::Flow instead of TRACE_EVENT_WITH_FLOW.. ',
             '(crbug.com/432427382).',
         ),
-        False,
+        True,
         (
             r'^base/trace_event/.*',
             r'^base/tracing/.*',
@@ -1804,6 +1900,43 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             r'^base/trace_event/.*',
             r'^base/tracing/.*',
         ),
+    ),
+    BanRule(
+        r'/\bTRACE_(COPY_)?COUNTER(_ID)?[12]\b',
+        (
+            'Please use TRACE_COUNTER macro with perfetto::CounterTrack ',
+            'instead of legacy TRACE_COUNTER1/2 macros which are not well ',
+            'supported in perfetto.',
+        ),
+        True,
+        (),
+    ),
+    BanRule(
+        r'/\bperfetto::Track(\(|\{|::(Global|FromPointer|ThreadScoped)\b)',
+        (
+            'Creating tracks directly with perfetto::Track is discouraged. ',
+            'Using unnamed tracks or tracks based on raw pointers (like ',
+            'Track::FromPointer) risks track name collisions, name aliasing ',
+            '(when addresses are reused), or missing names in the trace due ',
+            'to descriptor loss. Consider using NamedTrack instead to ensure ',
+            'the track has a stable, explicit name, or a named subclass like ',
+            'CounterTrack. ',
+            'See https://chromium.googlesource.com/chromium/src.git/+/main/docs/trace_events.md#named-tracks',
+        ),
+        False,
+        (),
+    ),
+    BanRule(
+        r'/\bperfetto::DynamicString\b',
+        (
+            'Using perfetto::DynamicString is discouraged because they are ',
+            'stripped/erased in field traces for privacy reasons, resulting ',
+            'in unnamed tracks or events. Prefer perfetto::StaticString if ',
+            'possible. ',
+            'See https://chromium.googlesource.com/chromium/src.git/+/main/docs/trace_events.md#static-strings',
+        ),
+        False,
+        (),
     ),
     BanRule(
         'RoInitialize',
@@ -1843,12 +1976,13 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
     ),
     BanRule(
         r'base::Feature k',
-        ('Please use BASE_DECLARE_FEATURE() or BASE_FEATURE() instead of ',
-         'directly declaring/defining features.'),
+        ('Please use the BASE_DECLARE_FEATURE() macro to declare features and ',
+         'the BASE_FEATURE() or BASE_RUNTIME_MUTABLE_FEATURE() macros to ',
+         'define features, rather than declaring/defining them directly.'),
         True,
         [
             # Implements BASE_DECLARE_FEATURE().
-            r'^base/feature_list\.h',
+            r'^base/feature\.h',
         ],
     ),
     BanRule(
@@ -2064,8 +2198,7 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         treat_as_error=False,
     ),
     BanRule(
-        pattern=(r'/FindBrowserWithUiElementContext|'
-                 r'FindBrowserWithTab|'
+        pattern=(r'/FindBrowserWithTab|'
                  r'FindBrowserWithGroup|'
                  r'FindTabbedBrowser|'
                  r'FindAnyBrowser|'
@@ -2193,7 +2326,6 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             r'^chromeos/ash/experiences/arc/session/serial_number_util_unittest\.cc',
             r'^components/history/core/browser/visit_annotations_database\.cc',
             r'^components/history/core/browser/visit_annotations_database_unittest\.cc',
-            r'^components/os_crypt/sync/os_crypt_unittest\.cc',
             r'^components/password_manager/core/browser/credentials_cleaner_unittest\.cc',
             r'^content/browser/file_system_access/file_system_access_file_writer_impl_unittest\.cc',
             r'^net/cookies/parsed_cookie_unittest\.cc',
@@ -2219,21 +2351,14 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         treat_as_error=False,
     ),
     BanRule(
-        pattern='WebContentsDestroyed',
+        pattern=r'/\bWebContentsDestroyed\b',
         explanation=
-        ('Do not use this method. It is invoked half-way through the '
+        ('Do not use WebContentsDestroyed. It is invoked half-way through the '
          'destructor of WebContentsImpl and using it often results in crashes '
          'or surprising behavior. Conceptually, this is only necessary by '
          'objects that depend on, but outlive the WebContents. These objects '
          'should instead coordinate with the owner of the WebContents which is '
          'responsible for destroying the WebContents.', ),
-        treat_as_error=False,
-    ),
-    BanRule(
-        pattern='IS_CHROMEOS_ASH',
-        explanation=
-        ('IS_CHROMEOS_ASH is deprecated. Please use the equivalent IS_CHROMEOS '
-         'instead (Lacros is gone).', ),
         treat_as_error=False,
     ),
     BanRule(
@@ -2272,12 +2397,13 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
          'WebView.', ),
         treat_as_error=False,
         surface_as_gerrit_lint=True,
+        excluded_paths=(r'.*test\.cc$', ),
     ),
     BanRule(
         pattern='PageActionIconView',
         explanation=
         ('PageActionIconView will soon be removed. Use PageActionView instead. '
-         'See chrome/browser/ui/views/page_action/README.md for details.'),
+         'See chrome/browser/ui/views/page_action/README.md for details.', ),
         treat_as_error=False,
     ),
     BanRule(
@@ -2305,6 +2431,41 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             r'^content/browser/fenced_frame/fenced_frame_browsertest\.cc',
         ],
     ),
+    BanRule(pattern=r"/\bjboolean\b",
+            treat_as_error=False,
+            explanation=("Use bool instead of jboolean", ),
+            excluded_paths=[
+                _THIRD_PARTY_EXCEPT_BLINK, "base/android/jni_array.cc",
+                "base/android/jni_array_unittest.cc"
+            ]),
+    BanRule(pattern=r"/\bjint\b\ (?!JNI_OnLoad)",
+            treat_as_error=False,
+            explanation=("Use int32_t instead of jint", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
+    BanRule(pattern=r"/\bjlong\b",
+            treat_as_error=False,
+            explanation=("Use int64_t instead of jlong", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
+    BanRule(pattern=r"/\bjfloat\b",
+            treat_as_error=False,
+            explanation=("Use float instead of jfloat", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
+    BanRule(pattern=r"/\bjdouble\b",
+            treat_as_error=False,
+            explanation=("Use double instead of jdouble", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
+    BanRule(pattern=r"/\bjbyte\b",
+            treat_as_error=False,
+            explanation=("Use int8_t instead of jbyte", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
+    BanRule(pattern=r"/\bjchar\b",
+            treat_as_error=False,
+            explanation=("Use uint16_t instead of jchar", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
+    BanRule(pattern=r"/\bjshort\b",
+            treat_as_error=False,
+            explanation=("Use int16_t instead of jshort", ),
+            excluded_paths=[_THIRD_PARTY_EXCEPT_BLINK]),
 )
 
 _DEPRECATED_SYNC_CONSENT_FUNCTION_WARNING = (
@@ -2339,30 +2500,6 @@ _DEPRECATED_SYNC_CONSENT_CPP_FUNCTIONS: Sequence[BanRule] = (
     ),
 )
 
-# Java functions related to signin::ConsentLevel::kSync which are deprecated.
-_DEPRECATED_SYNC_CONSENT_JAVA_FUNCTIONS: Sequence[BanRule] = (
-    BanRule(
-        'hasSyncConsent',
-        _DEPRECATED_SYNC_CONSENT_FUNCTION_WARNING,
-        False,
-    ),
-    BanRule(
-        'canSyncFeatureStart',
-        _DEPRECATED_SYNC_CONSENT_FUNCTION_WARNING,
-        False,
-    ),
-    BanRule(
-        'isSyncFeatureEnabled',
-        _DEPRECATED_SYNC_CONSENT_FUNCTION_WARNING,
-        False,
-    ),
-    BanRule(
-        'isSyncFeatureActive',
-        _DEPRECATED_SYNC_CONSENT_FUNCTION_WARNING,
-        False,
-    ),
-)
-
 _BANNED_MOJOM_PATTERNS: Sequence[BanRule] = (
     BanRule(
         'handle<shared_buffer>',
@@ -2386,6 +2523,26 @@ _BANNED_MOJOM_PATTERNS: Sequence[BanRule] = (
         excluded_paths=(r'^((?!extensions/).)*$', ),
     ),
 )
+
+_BANNED_GN_PATTERNS: Sequence[BanRule] = (BanRule(
+    pattern=r'/(?i)is_desktop_android',
+    explanation=(
+        'Usage of IS_DESKTOP_ANDROID build flag ',
+        'is discouraged. Use system affordances to determine feature ',
+        'availablility. Refer to https://chromium.googlesource.com/chromium/src/+/HEAD/docs/ui/android/device_form_factor.md for guidelines. ',
+        'To request an exception, file a bug at ',
+        'https://b.corp.google.com/issues/new?component=1753515&template=2172655',
+        'Once approved, use centralized util DeviceInfo.isDesktop() ',
+        'instead of direct build flag or PackageManager.FEATURE_PC checks. ',
+        'Allowances may be granted to only the directories below: ',
+        '[build/, chrome/, components/, extensions/, infra/, tools/] ',
+        'Note: in particular we need to avoid components shared with ',
+        'WebView.',
+    ),
+    treat_as_error=False,
+    surface_as_gerrit_lint=True,
+    excluded_paths=(r'^ui/webui/resources/', r'^chrome/test/data/webui/'),
+), )
 
 _IPC_ENUM_TRAITS_DEPRECATED = (
     'You are using IPC_ENUM_TRAITS() in your code. It has been deprecated.\n'
@@ -2430,7 +2587,9 @@ _ANDROID_SPECIFIC_PYDEPS_FILES = [
 ]
 
 _GENERIC_PYDEPS_FILES = [
+    'android_webview/tools/pinlist/generate_pinlist.pydeps',
     'android_webview/tools/run_cts.pydeps',
+    'base/win/embedded_i18n/create_string_rc.pydeps',
     'build/android/apk_operations.pydeps',
     'build/android/devil_chromium.pydeps',
     'build/android/gyp/aar.pydeps',
@@ -2481,8 +2640,6 @@ _GENERIC_PYDEPS_FILES = [
     'build/android/gyp/trace_event_bytecode_rewriter.pydeps',
     'build/android/gyp/tracereferences.pydeps',
     'build/android/gyp/turbine.pydeps',
-    'build/android/gyp/unused_resources.pydeps',
-    'build/android/gyp/validate_static_library_dex_references.pydeps',
     'build/android/gyp/write_build_config.pydeps',
     'build/android/gyp/write_native_libraries_java.pydeps',
     'build/android/gyp/zip.pydeps',
@@ -2492,19 +2649,30 @@ _GENERIC_PYDEPS_FILES = [
     'build/android/resource_sizes.pydeps',
     'build/android/test_runner.pydeps',
     'build/android/test_wrapper/logdog_wrapper.pydeps',
+    'build/fuchsia/starview/run_cuttlefish.pydeps',
+    'build/fuchsia/starview/run_cuttlefish_test.pydeps',
     'build/fuchsia/test/component_storage_test.pydeps',
     'build/protoc_java.pydeps',
+    'chrome/browser/resources/glic/glic_api_impl/generate_impl/parse.pydeps',
+    'chrome/browser/resources/glic/glic_api_impl/generate_impl/run_tsc.pydeps',
     'chrome/test/chromedriver/log_replay/client_replay_unittest.pydeps',
     'chrome/test/chromedriver/test/run_py_tests.pydeps',
     'chrome/test/media/performance/openscreen_cast_performance_test.pydeps',
+    'chrome/test/media/performance/openscreen_remoting_performance_test.pydeps',
     'chrome/test/media/performance/videostack_performance_test.pydeps',
     'chromecast/resource_sizes/chromecast_resource_sizes.pydeps',
+    'components/autofill/core/browser/data_model/autofill_ai/transpile_entity_schema.pydeps',
     'components/cronet/tools/check_combined_proguard_file.pydeps',
     'components/cronet/tools/generate_proguard_file.pydeps',
     'components/cronet/tools/jar_src.pydeps',
+    'components/language/content/browser/ulp_language_code_locator/ulp_serialized_to_static_c.pydeps',
     'components/module_installer/android/module_desc_java.pydeps',
+    'components/policy/tools/template_writers/template_formatter.pydeps',
     'content/public/android/generate_child_service.pydeps',
     'fuchsia_web/av_testing/av_sync_tests.pydeps',
+    'remoting/tools/build/remoting_copy_locales.pydeps',
+    'remoting/tools/build/remoting_localize.pydeps',
+    'testing/libfuzzer/research/fuzzilli_idl_fuzzing/generator.pydeps',
     'testing/scripts/run_isolated_script_test.pydeps',
     'testing/merge_scripts/standard_isolated_script_merge.pydeps',
     'testing/merge_scripts/standard_gtest_merge.pydeps',
@@ -2522,10 +2690,15 @@ _GENERIC_PYDEPS_FILES = [
     'tools/binary_size/sizes.pydeps',
     'tools/binary_size/supersize.pydeps',
     'tools/cygprofile/generate_orderfile.pydeps',
+    'tools/flags/generate_expired_list.pydeps',
+    'tools/grit/grit_info.pydeps',
     'tools/grit/grit.pydeps',
+    'tools/grit/pak_util.pydeps',
+    'tools/grit/preprocess_if_expr.pydeps',
     "tools/metrics/histograms/generate_allowlist_from_histograms_file.pydeps",
     'tools/perf/process_perf_results.pydeps',
     'tools/pgo/generate_profile.pydeps',
+    'tools/pgo/generate_profile_webview.pydeps',
 ]
 
 _ALL_PYDEPS_FILES = _ANDROID_SPECIFIC_PYDEPS_FILES + _GENERIC_PYDEPS_FILES
@@ -2716,6 +2889,10 @@ def CheckNoProductionCodeUsingTestOnlyFunctionsJava(input_api, output_api):
     # Ignore definitions. (Comments are ignored separately.)
     exclusion_re = input_api.re.compile(r'(%s)[^;]+\{' % name_pattern)
     allowlist_re = input_api.re.compile(r'// IN-TEST$')
+    # exclusion_re misses the closing ''''} when it wraps to the next line, support an on demand
+    # multi-line check as a last step.
+    multi_line_exclusion_re = input_api.re.compile(
+        r'(%s)[^;]+\{' % name_pattern, input_api.re.DOTALL)
 
     problems = []
     sources = lambda x: input_api.FilterSourceFile(
@@ -2727,6 +2904,7 @@ def CheckNoProductionCodeUsingTestOnlyFunctionsJava(input_api, output_api):
                                      file_filter=sources):
         local_path = f.LocalPath()
         is_inside_javadoc = False
+        cached_file_lines = None
         for line_number, line in f.ChangedContents():
             if is_inside_javadoc and javadoc_end_re.search(line):
                 is_inside_javadoc = False
@@ -2738,8 +2916,15 @@ def CheckNoProductionCodeUsingTestOnlyFunctionsJava(input_api, output_api):
                     and not annotation_re.search(line)
                     and not allowlist_re.search(line)
                     and not exclusion_re.search(line)):
-                problems.append('%s:%d\n    %s' %
-                                (local_path, line_number, line.strip()))
+
+                if cached_file_lines is None:
+                    cached_file_lines = input_api.ReadFile(f).splitlines()
+                full_text_from_line = '\n'.join(cached_file_lines[line_number -
+                                                                  1:])
+                match = multi_line_exclusion_re.search(full_text_from_line)
+                if not match or match.start() >= len(line):
+                    problems.append('%s:%d\n    %s' %
+                                    (local_path, line_number, line.strip()))
 
     if problems:
         return [
@@ -2886,6 +3071,44 @@ def CheckNoDISABLETypoInTests(input_api, output_api):
     ]
 
 
+def CheckNoOzonePlatformMacrosInTests(input_api, output_api):
+    """Warns if SUPPORTS_OZONE_WAYLAND or SUPPORTS_OZONE_X11 is used in tests.
+
+    These are compile-time macros and do not reflect the runtime environment.
+    Tests should use runtime checks instead.
+    """
+
+    def FilterFile(affected_file):
+        res = input_api.FilterSourceFile(
+            affected_file,
+            files_to_check=_TEST_CODE_EXCLUDED_PATHS,
+            files_to_skip=_EXCLUDED_PATHS)
+        return res
+
+    problems = []
+    ozone_macro_pattern = input_api.re.compile(
+        r'\bBUILDFLAG\(SUPPORTS_OZONE_(WAYLAND|X11)\)')
+
+    for f in input_api.AffectedSourceFiles(FilterFile):
+        for line_num, line in f.ChangedContents():
+            if ozone_macro_pattern.search(line):
+                problems.append(f'{f.LocalPath()}:{line_num}: {line.strip()}')
+
+    if not problems:
+        return []
+
+    return [
+        output_api.PresubmitPromptWarning(
+            'Use of SUPPORTS_OZONE_WAYLAND or SUPPORTS_OZONE_X11 in '
+            'test files:\n'
+            'These macros are compile-time configurations and do not '
+            'check if the\n'
+            'test is running on Wayland or X11 at runtime. Please '
+            'use runtime checks\n'
+            'instead (e.g., checking the ozone platform).', problems)
+    ]
+
+
 def CheckForgettingMAYBEInTests(input_api, output_api):
     """Checks to make sure tests disabled conditionally are not missing a
     corresponding MAYBE_ prefix.
@@ -2991,30 +3214,6 @@ def CheckNoDEPSGIT(input_api, output_api):
                 'See https://sites.google.com/a/chromium.org/dev/developers/how-tos/'
                 'get-the-code#Rolling_DEPS\n'
                 'for more information')
-        ]
-    return []
-
-
-def CheckCrosApiNeedBrowserTest(input_api, output_api):
-    """Check new crosapi should add browser test."""
-    has_new_crosapi = False
-    has_browser_test = False
-    for f in input_api.AffectedFiles():
-        path = f.UnixLocalPath()
-        if (path.startswith('chromeos/crosapi/mojom')
-                and _IsMojomFile(input_api, path) and f.Action() == 'A'):
-            has_new_crosapi = True
-        if path.endswith('browsertest.cc') or path.endswith('browser_test.cc'):
-            has_browser_test = True
-    if has_new_crosapi and not has_browser_test:
-        return [
-            output_api.PresubmitPromptWarning(
-                'You are adding a new crosapi, but there is no file ends with '
-                'browsertest.cc file being added or modified. It is important '
-                'to add crosapi browser test coverage to avoid version '
-                ' skew issues.\n'
-                'Check //docs/lacros/test_instructions.md for more information.'
-            )
         ]
     return []
 
@@ -3142,31 +3341,22 @@ def CheckNoBannedPatterns(input_api, output_api):
             for ban_rule in _BANNED_CPP_FUNCTIONS:
                 CheckForMatch(f, line_num, line, ban_rule)
 
-    # As of 05/2024, iOS fully migrated ConsentLevel::kSync to kSignin, and
-    # Android is in the process of preventing new users from entering kSync.
-    # So the warning is restricted to those platforms.
-    ios_pattern = input_api.re.compile(r'(^|[\W_])ios[\W_]')
-    file_filter = lambda f: (
-        f.LocalPath().endswith(('.cc', '.mm', '.h')) and
-        ('android' in f.LocalPath() or
-         # Simply checking for an 'ios' substring would
-         # catch unrelated cases, use a regex.
-         ios_pattern.search(f.LocalPath())))
+    file_filter = lambda f: (f.LocalPath().endswith(('.cc', '.mm', '.h')))
     for f in input_api.AffectedFiles(file_filter=file_filter):
         for line_num, line in f.ChangedContents():
             for ban_rule in _DEPRECATED_SYNC_CONSENT_CPP_FUNCTIONS:
-                CheckForMatch(f, line_num, line, ban_rule)
-
-    file_filter = lambda f: f.LocalPath().endswith(('.java'))
-    for f in input_api.AffectedFiles(file_filter=file_filter):
-        for line_num, line in f.ChangedContents():
-            for ban_rule in _DEPRECATED_SYNC_CONSENT_JAVA_FUNCTIONS:
                 CheckForMatch(f, line_num, line, ban_rule)
 
     file_filter = lambda f: f.LocalPath().endswith(('.mojom'))
     for f in input_api.AffectedFiles(file_filter=file_filter):
         for line_num, line in f.ChangedContents():
             for ban_rule in _BANNED_MOJOM_PATTERNS:
+                CheckForMatch(f, line_num, line, ban_rule)
+
+    file_filter = lambda f: f.LocalPath().endswith(('.gn', '.gni'))
+    for f in input_api.AffectedFiles(file_filter=file_filter):
+        for line_num, line in f.ChangedContents():
+            for ban_rule in _BANNED_GN_PATTERNS:
                 CheckForMatch(f, line_num, line, ban_rule)
 
     return results
@@ -3798,22 +3988,6 @@ def CheckAddedDepsHaveTargetApprovals(input_api, output_api):
         return []
     if 'PRESUBMIT_SKIP_NETWORK' in input_api.environ:
         return []
-    try:
-        if (input_api.change.issue
-                and input_api.gerrit.IsOwnersOverrideApproved(
-                    input_api.change.issue)):
-            # Skip OWNERS check when Owners-Override label is approved. This is
-            # intended for global owners, trusted bots, and on-call sheriffs.
-            # Review is still required for these changes.
-            return []
-    except Exception as e:
-        return [
-            output_api.PresubmitPromptWarning(
-                'Failed to retrieve owner override status - %s' % str(e))
-        ]
-
-    # A set of paths (that might not exist) that are being added as DEPS
-    # (via lines like "+foo/bar/baz").
     depended_on_paths = set()
 
     file_filter = lambda f: not input_api.re.match(r'^third_party/blink/.*',
@@ -3854,6 +4028,21 @@ def CheckAddedDepsHaveTargetApprovals(input_api, output_api):
                     "DEPS approval by OWNERS check failed: this change has "
                     "no change number, so we can't check it for approvals.")
             ]
+
+        # Try/except because this does a network call.
+        try:
+            # Skip OWNERS check when Owners-Override label is approved. This is
+            # intended for global owners, trusted bots, and on-call sheriffs.
+            # Review is still required for these changes.
+            if input_api.gerrit.IsOwnersOverrideApproved(
+                    input_api.change.issue):
+                return []
+        except Exception as e:
+            return [
+                output_api.PresubmitPromptWarning(
+                    'Failed to retrieve owner override status - %s' % str(e))
+            ]
+
         output = output_api.PresubmitError
     else:
         output = output_api.PresubmitNotifyResult
@@ -3958,6 +4147,9 @@ def CheckSpamLogging(input_api, output_api):
             r'^components/viz/service/display/'
             r'overlay_strategy_underlay_cast\.cc$',
             r'^components/zucchini/.*',
+            # Apéritif runs prior to system and //base static initializers, so it
+            # cannot depend on base logging.
+            r'^content/app/aperitif_mac\.cc$',
             # TODO(peter): Remove exception. https://crbug.com/534537
             r'^content/browser/notifications/notification_event_dispatcher_impl\.cc$',
             r'^content/common/gpu/client/gl_helper_benchmark\.cc$',
@@ -3970,6 +4162,8 @@ def CheckSpamLogging(input_api, output_api):
             r'^headless/app/headless_shell\.cc$',
             r'^ipc/ipc_logging\.cc$',
             r'^ios/chrome/app/perf_tests_hook_logging\.mm$',
+            # TODO(crbug.com/512863603): Remove exception.
+            r'^ios/chrome/browser/intelligence/actor/model/aggregated_journal\.mm$',
             r'^remoting/base/logging\.h$',
             r'^remoting/host/.*',
             r'^sandbox/linux/.*',
@@ -4867,7 +5061,6 @@ def _CheckAndroidDebuggableBuild(input_api, output_api):
     return results
 
 
-# TODO: add unit tests
 def _CheckAndroidToastUsage(input_api, output_api):
     """Checks that code uses org.chromium.ui.widget.Toast instead of
        android.widget.Toast (Chromium Toast doesn't force hardware
@@ -4944,7 +5137,6 @@ def _CheckAndroidCrLogUsage(input_api, output_api):
     tag_length_errors = []
     tag_errors = []
     tag_with_dot_errors = []
-    util_log_errors = []
 
     for f in input_api.AffectedSourceFiles(sources):
         file_content = input_api.ReadFile(f)
@@ -4966,12 +5158,6 @@ def _CheckAndroidCrLogUsage(input_api, output_api):
                     # Make sure it uses "TAG"
                     if not match.group('tag') == 'TAG':
                         tag_errors.append('%s:%d' % (f.LocalPath(), line_num))
-        else:
-            # Report non cr Log function calls in changed lines
-            for line_num, line in f.ChangedContents():
-                if (log_call_pattern.search(line)
-                        or has_some_log_import_pattern.search(line)):
-                    util_log_errors.append('%s:%d' % (f.LocalPath(), line_num))
 
         # Per file checks
         if has_modified_logs:
@@ -5005,12 +5191,6 @@ def _CheckAndroidCrLogUsage(input_api, output_api):
             output_api.PresubmitPromptWarning(
                 'Please use a variable named "TAG" for your log tags.\n' +
                 REF_MSG, tag_errors))
-
-    if util_log_errors:
-        results.append(
-            output_api.PresubmitPromptWarning(
-                'Please use org.chromium.base.Log for new logs.\n' + REF_MSG,
-                util_log_errors))
 
     if tag_with_dot_errors:
         results.append(
@@ -5443,8 +5623,10 @@ def CheckNoDeprecatedCss(input_api, output_api):
             # The NTP team prefers reserving -webkit-line-clamp for
             # ellipsis effect which can only be used with -webkit-box.
             r'ui/webui/resources/cr_components/most_visited/.*\.css$',
-            r'ui/webui/resources/cr_components/searchbox/searchbox_match.css$')
-    )
+            r'ui/webui/resources/cr_components/composebox/composebox_match.css$',
+            r'ui/webui/resources/cr_components/searchbox/searchbox_match.css$',
+            r'^chrome/browser/resources/new_tab_page/action_chips/action_chips\.css$'
+        ))
     file_filter = lambda f: input_api.FilterSourceFile(
         f, files_to_check=file_inclusion_pattern, files_to_skip=files_to_skip)
     for fpath in input_api.AffectedFiles(file_filter=file_filter):
@@ -5917,6 +6099,66 @@ def CheckFuzzTargetsOnUpload(input_api, output_api):
                                           items=files_with_missing_header,
                                           long_text=long_text)
     ]
+
+
+def CheckNewLLVMStyleFuzzersOnUpload(input_api, output_api):
+    """Nudges developers to use FUZZ_TEST instead of legacy LLVM-style fuzzers for new targets."""
+    fuzzer_targets = []
+    fuzzer_sources = []
+
+    # Regex to match fuzzer_test target definition in BUILD.gn
+    fuzzer_test_re = input_api.re.compile(r'^\s*fuzzer_test\s*\(')
+    # Regex to match LLVMFuzzerTestOneInput or
+    # DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN in C++ files.
+    # TODO(crbug.com/505034799): Add LPM fuzzers once we fully support using
+    # FuzzTests with protos.
+    llvm_fuzzer_re = input_api.re.compile(
+        r'\b(LLVMFuzzerTestOneInput|'
+        r'DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN)\b')
+
+    for f in input_api.AffectedFiles(include_deletes=False):
+        filename = f.LocalPath()
+        if filename.endswith('BUILD.gn'):
+            for line_num, line in f.ChangedContents():
+                if fuzzer_test_re.match(line):
+                    fuzzer_targets.append(f"{filename}:{line_num}")
+        elif filename.endswith(('.cc', '.cpp', '.h')):
+            for line_num, line in f.ChangedContents():
+                if llvm_fuzzer_re.search(line):
+                    fuzzer_sources.append(f"{filename}:{line_num}")
+
+    results = []
+    if fuzzer_targets or fuzzer_sources:
+        message = (
+            "You are adding a new LLVM Style Fuzzer (detected via "
+            "LLVMFuzzerTestOneInput, DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN, "
+            "or fuzzer_test in BUILD.gn).\n\n"
+            "FuzzTest is now recommended for all new fuzzers in Chromium.\n\n"
+            "Please consider using FUZZ_TEST instead of an LLVM-style fuzzer. "
+            "FuzzTest integrates with GTest and can be written in _unittest.cc "
+            "files next to existing unit tests. They are easier to write and maintain.\n\n"
+            "See the Getting Started with FuzzTest guide for details on how to "
+            "write a FuzzTest and configure the GN build target:\n"
+            "https://chromium.googlesource.com/chromium/src/+/main/testing/libfuzzer/getting_started.md\n\n"
+            "If you need to use MojoLPM, or are modifying an existing fuzzer, "
+            "you may bypass this warning."
+        )
+        items = []
+        if fuzzer_targets:
+            items.append("GN targets:")
+            items.extend(fuzzer_targets)
+        if fuzzer_sources:
+            items.append("C++ sources:")
+            items.extend(fuzzer_sources)
+
+        results.append(
+            output_api.PresubmitPromptWarning(
+                message=message,
+                items=items
+            )
+        )
+
+    return results
 
 
 def _CheckNewImagesWarning(input_api, output_api):
@@ -6719,6 +6961,83 @@ def CheckSyslogUseWarningOnUpload(input_api, output_api, src_file_filter=None):
     return []
 
 
+def CheckNoMainLayoutSwitcher(input_api, output_api):
+    """
+    Prevents MainLayoutSwitcher.java (a temporary and deprecated file)
+    from appearing in CLs.
+    """
+
+    # Skip this check if there are no diffs, such as running presubmit with "--all --no_diffs".
+    # Otherwise AffectedFiles() will include MainLayoutSwitcher.java even if it's not changed.
+    if input_api.no_diffs:
+        return []
+
+    # When //third_party/depot_tools/git_footers.py parses the footers in a commit message, it
+    # splits the key by hyphens (-) and applies title casing to each word.
+    #
+    # So here "Mainlayoutswitcher" should have lowercase l and s, i.e., "MainLayoutSwitcher"
+    # (uppercase L and S) will _not_ match the output of git_footers.py.
+    git_footers = input_api.change.GitFootersFromDescription()
+    if 'true' in [
+            footer.lower() for footer in git_footers.get(
+                u'Allow-Mainlayoutswitcher-Changes', [])
+    ]:
+        return []
+
+    results = []
+    for f in input_api.AffectedFiles(include_deletes=False):
+        if f.UnixLocalPath(
+        ) == 'chrome/android/java/src/org/chromium/chrome/browser/app/MainLayoutSwitcher.java':
+            results.append(
+                output_api.PresubmitError(
+                    'MainLayoutSwitcher.java is a temporary class to support the forked main layout '
+                    '(main_forked_with_secondary_ui_container.xml) during Android side panel '
+                    'development.\n'
+                    'Generally we should not need to change this file except deleting it, but if you '
+                    'must, add "Allow-Mainlayoutswitcher-Changes: true" (note: lowercase l and s in '
+                    'Mainlayoutswitcher) to your commit message footers and send the CL to the file '
+                    'owners.', [f]))
+    return results
+
+
+def CheckNoDirectRefToAndroidSidePanelCachedFlag(input_api, output_api):
+    """
+    Bans direct references to the cached flag 'sEnableAndroidSidePanel'
+    except in AndroidSidePanelEnabledFn.java.
+    """
+    if input_api.no_diffs:
+        return []
+
+    git_footers = input_api.change.GitFootersFromDescription()
+    if 'true' in [
+            footer.lower() for footer in git_footers.get(
+                u'No-Direct-Ref-To-Android-Side-Panel-Cached-Flag-False-Alarm',
+                [])
+    ]:
+        return []
+
+    results = []
+    pattern = input_api.re.compile(r'sEnableAndroidSidePanel\b')
+    for f in input_api.AffectedFiles(include_deletes=False):
+        local_path = f.LocalPath()
+        if ('AndroidSidePanelEnabledFn.java' in local_path
+                or 'ChromeFeatureList.java' in local_path
+                or 'PRESUBMIT.py' in local_path
+                or 'PRESUBMIT_test.py' in local_path):
+            continue
+        for line_num, line in f.ChangedContents():
+            if pattern.search(line):
+                results.append(
+                    output_api.PresubmitError(
+                        '%s:%d: sEnableAndroidSidePanel should not be referenced directly. '
+                        'Use AndroidSidePanelEnabledFn.isEnabled() instead. '
+                        'If this is a false alarm, add '
+                        '"No-Direct-Ref-To-Android-Side-Panel-Cached-Flag-False-Alarm: true" '
+                        'to the commit message footers' %
+                        (f.LocalPath(), line_num)))
+    return results
+
+
 def CheckChangeOnUpload(input_api, output_api):
     if input_api.version < [2, 0, 0]:
         return [
@@ -6730,6 +7049,9 @@ def CheckChangeOnUpload(input_api, output_api):
     results = []
     results.extend(
         input_api.canned_checks.CheckPatchFormatted(input_api, output_api))
+    results.extend(CheckNoMainLayoutSwitcher(input_api, output_api))
+    results.extend(
+        CheckNoDirectRefToAndroidSidePanelCachedFlag(input_api, output_api))
     return results
 
 
@@ -6757,6 +7079,9 @@ def CheckChangeOnCommit(input_api, output_api):
     results.extend(
         input_api.canned_checks.CheckChangeHasNoUnwantedTags(
             input_api, output_api))
+    results.extend(CheckNoMainLayoutSwitcher(input_api, output_api))
+    results.extend(
+        CheckNoDirectRefToAndroidSidePanelCachedFlag(input_api, output_api))
     return results
 
 
@@ -7457,7 +7782,6 @@ def CheckConsistentGrdChanges(input_api, output_api):
 def CheckAssertAshOnlyCode(input_api, output_api):
     """Errors if a BUILD.gn file in an ash/ directory doesn't include
     assert(is_chromeos).
-    For a transition period, assert(is_chromeos_ash) is also accepted.
     """
 
     def FileFilter(affected_file):
@@ -7470,7 +7794,7 @@ def CheckAssertAshOnlyCode(input_api, output_api):
             files_to_skip=(input_api.DEFAULT_FILES_TO_SKIP))
 
     errors = []
-    pattern = input_api.re.compile(r'assert\(is_chromeos(_ash)?\b')
+    pattern = input_api.re.compile(r'assert\(is_chromeos\b')
     for f in input_api.AffectedFiles(include_deletes=False,
                                      file_filter=FileFilter):
         if (not pattern.search(input_api.ReadFile(f))):
@@ -7603,6 +7927,8 @@ def CheckAndroidTestAnnotations(input_api, output_api):
             files_to_check=[r'.*Test\.java$'])
 
     for f in input_api.AffectedSourceFiles(_FilterFile):
+        if f.Action() != 'A':
+            continue
         batch_matched = None
         do_not_batch_matched = None
         is_instrumentation_test = True
@@ -7646,12 +7972,10 @@ def CheckAndroidTestAnnotations(input_api, output_api):
 
     if missing_annotation_errors:
         results.append(
-            output_api.PresubmitPromptWarning(
+            output_api.PresubmitError(
                 """
-A change was made to an on-device test that has neither been annotated with
-@Batch nor @DoNotBatch. If this is a new test, please add the annotation. If
-this is an existing test, please consider adding it if you are sufficiently
-familiar with the test (but do so as a separate change).
+An on-device test has been added that has neither been annotated with @Batch
+nor @DoNotBatch. Please add the annotation.
 
 See https://source.chromium.org/chromium/chromium/src/+/main:docs/testing/batching_instrumentation_tests.md
 """, missing_annotation_errors))
@@ -7988,9 +8312,12 @@ def CheckNoBrowserStarInUnittests(input_api, output_api):
 
 
 def CheckBaseFeatureMacro(input_api, output_api):
-    """Checks for correct usage of the BASE_FEATURE macro."""
+    """Checks for correct usage of the BASE_FEATURE macros.
+
+    Matches both BASE_FEATURE and BASE_RUNTIME_MUTABLE_FEATURE.
+    """
     pattern = input_api.re.compile(
-        r'\bBASE_FEATURE\s*\(\s*([^,]+)\s*,\s*([^,)]+)')
+        r'\bBASE_(?:RUNTIME_MUTABLE_)?FEATURE\s*\(\s*([^,]+)\s*,\s*([^,)]+)')
     warnings = []
 
     for f in input_api.AffectedFiles():
@@ -8026,7 +8353,8 @@ def CheckBaseFeatureMacro(input_api, output_api):
 
             if param2.startswith('"') and param2.endswith('"'):
                 warnings.append(
-                    '    %s:%d: The 3-argument BASE_FEATURE macro with a '
+                    '    %s:%d: Use of the 3-argument BASE_FEATURE and '
+                    'BASE_RUNTIME_MUTABLE_FEATURE macros with a '
                     'string literal is discouraged. Use the 2-argument '
                     'version instead.' % (f.LocalPath(), start_line))
 
@@ -8042,6 +8370,116 @@ def CheckBaseFeatureMacro(input_api, output_api):
     return [
         output_api.PresubmitPromptWarning('BASE_FEATURE() macro naming:',
                                           warnings)
+    ]
+
+
+def CheckBaseFeatureParamMacro(input_api, output_api):
+    """Checks for correct usage of BASE_FEATURE_PARAM/ENUM_PARAM macros."""
+    # Helpers mirroring testing/variations/presubmit/find_features.py so the
+    # macro arguments are tokenized consistently (e.g. commas inside quoted
+    # string literals or template arguments do not split args incorrectly).
+    # Matches a single C++ double-quoted string literal, handling backslash
+    # escape sequences such as \" or \\.
+    quote_str = r'"(?:\\.|[^"\\])*"'
+    # Matches a single macro argument, handling commas inside quoted strings,
+    # balanced parentheses (nested function calls), or balanced angle brackets
+    # (template types). quote_str is listed first in each alternation so
+    # quoted strings are matched atomically and any parens/angle brackets
+    # inside them are not counted as structural delimiters.
+    arg = (r'(?:' + quote_str + r'|[^,()<>"]'
+           r'|\((?:' + quote_str + r'|[^()"])*\)'
+           r'|<(?:' + quote_str + r'|[^<>"])*>)*')
+
+    # 5-arg BASE_FEATURE_PARAM(type, var, &feature, "name", default);
+    # The 4th arg is a string literal followed by a comma (discouraged form).
+    param_5_args_re = input_api.re.compile(
+        r'\bBASE_FEATURE_PARAM\(' + arg + r',\s*(\w+)\s*,' + arg + r','
+        r'\s*' + quote_str + r'\s*,(?:[^;"]|' + quote_str + r')*?\);',
+        input_api.re.MULTILINE | input_api.re.DOTALL)
+
+    # 4-arg BASE_FEATURE_PARAM(type, kVar, &feature, default);
+    # The 4th arg is NOT a string literal followed by a comma.
+    param_4_args_re = input_api.re.compile(
+        r'\bBASE_FEATURE_PARAM\(' + arg + r',\s*(\w+)\s*,' + arg + r','
+        r'\s*(?!' + quote_str + r'\s*,)(?:[^;,"]|' + quote_str + r')*?\);',
+        input_api.re.MULTILINE | input_api.re.DOTALL)
+
+    # 6-arg BASE_FEATURE_ENUM_PARAM(type, var, &feature, "name", default,
+    # &opts); The 4th arg is a string literal (discouraged form).
+    enum_param_6_args_re = input_api.re.compile(
+        r'\bBASE_FEATURE_ENUM_PARAM\(' + arg + r',\s*(\w+)\s*,' + arg + r','
+        r'\s*' + quote_str + r'\s*,' + arg + r',(?:[^;"]|' + quote_str +
+        r')*?\);', input_api.re.MULTILINE | input_api.re.DOTALL)
+
+    # 5-arg BASE_FEATURE_ENUM_PARAM(type, kVar, &feature, default, &opts);
+    # The 4th arg is NOT a string literal.
+    enum_param_5_args_re = input_api.re.compile(
+        r'\bBASE_FEATURE_ENUM_PARAM\(' + arg + r',\s*(\w+)\s*,' + arg + r','
+        r'\s*(?!' + quote_str + r'\s*,)' + arg + r',(?:[^;"]|' + quote_str +
+        r')*?\);', input_api.re.MULTILINE | input_api.re.DOTALL)
+
+    warnings = []
+
+    def _check_matches(f, contents, lines, changed_line_numbers, regex,
+                       discouraged_msg):
+        for match in regex.finditer(contents):
+            start_line = contents.count('\n', 0, match.start()) + 1
+            end_line = contents.count('\n', 0, match.end()) + 1
+
+            if not changed_line_numbers.intersection(
+                    range(start_line, end_line + 1)):
+                continue
+
+            if lines[start_line - 1].strip().startswith('//'):
+                continue
+
+            identifier = match.group(1).strip()
+
+            if discouraged_msg:
+                warnings.append('    %s:%d: %s' %
+                                (f.LocalPath(), start_line, discouraged_msg))
+
+            if not input_api.re.match(r'^k[A-Z]', identifier):
+                warnings.append(
+                    '    %s:%d: Feature param identifier "%s" should start '
+                    'with "k" followed by an uppercase letter.' %
+                    (f.LocalPath(), start_line, identifier))
+
+    for f in input_api.AffectedFiles():
+        if not f.LocalPath().endswith(('.cc', '.mm')):
+            continue
+
+        changed_line_numbers = {
+            line_num
+            for line_num, _ in f.ChangedContents()
+        }
+        if not changed_line_numbers:
+            continue
+
+        lines = list(f.NewContents())
+        contents = '\n'.join(lines)
+
+        _check_matches(
+            f, contents, lines, changed_line_numbers, param_5_args_re,
+            'The 5-argument BASE_FEATURE_PARAM macro with a string literal '
+            'name is discouraged. Use the 4-argument version instead.')
+        _check_matches(f, contents, lines, changed_line_numbers,
+                       param_4_args_re, None)
+        _check_matches(
+            f, contents, lines, changed_line_numbers, enum_param_6_args_re,
+            'The 6-argument BASE_FEATURE_ENUM_PARAM macro with a string '
+            'literal name is discouraged. Use the 5-argument version '
+            'instead.')
+        _check_matches(f, contents, lines, changed_line_numbers,
+                       enum_param_5_args_re, None)
+
+    if not warnings:
+        return []
+
+    return [
+        output_api.PresubmitPromptWarning(
+            'BASE_FEATURE_PARAM()/BASE_FEATURE_ENUM_PARAM() macro naming:',
+            warnings)
     ]
 
 
@@ -8084,13 +8522,196 @@ def CheckAyeAye(input_api, output_api):
     Gerrit. Running them locally should surface any warnings or errors
     earlier.
     """
-    try:
-        command = ['git', 'config', '--get', '--type=bool', 'localayeaye.enable']
-        opted_in = input_api.subprocess.check_output(command)
-        # TODO(crbug.com/467912454): Roll this out by default.
-        if not opted_in:
-            return []
-    except Exception:
-        return []
-    print("User opted-in to AyeAye checks as top-level presubmit...")
     return input_api.canned_checks.CheckAyeAye(input_api, output_api)
+
+
+def CheckSettingsChanges(input_api, output_api):
+    """Checks that Settings UI changes are reflected in the Search Index.
+
+    This check ensures that whenever a developer modifies a Settings Fragment
+    (e.g., dynamic summaries, visibility toggles, or Bundle arguments), they
+    also update the corresponding SearchIndexProvider logic.
+
+    It performs three levels of checks:
+      1. Identification: Uses heuristics (inheritance, methods) to find settings.
+      2. Structure: Ensures a SEARCH_INDEX_DATA_PROVIDER exists and is registered.
+      3. Parity: Scans changed UI code for triggers and verifies mirroring logic
+         exists in the indexing block (stripping comments to avoid false hits).
+    """
+    cc_list = ['jinsukkim@chromium.org', 'adelm@google.com']
+
+    registry_filename = 'SearchIndexProviderRegistry.java'
+
+    # Filter for Java files, excluding the registry file itself.
+    is_java_file = lambda f: (f.LocalPath().endswith('.java') and not f.
+                              LocalPath().endswith(registry_filename))
+    java_files = input_api.AffectedFiles(include_deletes=False,
+                                         file_filter=is_java_file)
+
+    if not java_files:
+        return []
+
+    # java_inheritance_re identifies Settings screens by their class declaration.
+    # It looks for classes extending standard bases (PreferenceFragmentCompat)
+    # or those following the Chromium naming convention (*Settings*Fragment*).
+    # Examples:
+    #   - class MySettings extends ChromeBaseSettingsFragment
+    #   - class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBase
+    #   - class CookieSettings extends BaseSiteSettingsFragment
+    java_inheritance_re = input_api.re.compile(
+        r'class\s+(\w+)\s+extends\s+'
+        r'(?:\w*Settings(?:Base)?Fragment|PreferenceFragmentCompat|SettingsFragment)'
+    )
+    class_name_re = input_api.re.compile(r'class\s+(\w+)')
+    provider_field_re = input_api.re.compile(
+        r'public\s+static\s+final\s+.*IndexProvider\s+SEARCH_INDEX_DATA_PROVIDER'
+    )
+
+    # If a line in ChangedContents() matches a trigger, the provider block must
+    # contain at least one of the satisfying keywords (excluding comments).
+    triggers = [
+        (input_api.re.compile(r'\.setSummary\('),
+         ['updateEntrySummaryForKey', '.setSummary', 'addEntryForKey'],
+         'A dynamic summary was set in the UI. Ensure updateDynamicPreferences mirrors '
+         'this using updateEntrySummaryForKey(), addEntryForKey(), or Entry.Builder.setSummary().'
+         ),
+        (input_api.re.compile(r'\.(?:setVisible|removePreference)\('),
+         ['removeEntry', 'removeEntryForKey', 'addEntry', 'addEntryForKey'],
+         'Preference visibility toggled. Ensure updateDynamicPreferences uses removeEntryForKey()/addEntryForKey().'
+         ),
+        (input_api.re.compile(r'\.addPreference\('),
+         ['addEntry', 'addEntryForKey', 'updateEntry', 'updateEntryForKey'],
+         'Preference added via Java. Ensure it is indexed in updateDynamicPreferences.'
+         ),
+        (input_api.re.compile(
+            r'(?:getArguments\(\)|bundle|extras|savedInstanceState)\.put\w*\('
+        ), ['getExtras'],
+         'Bundle extras (arguments) are modified. Ensure getExtras() provides these '
+         'so search results open the fragment correctly.'),
+        (input_api.re.compile(
+            r'(?:getArguments\(\)\.(?:get\w*|containsKey|is)|(?:bundle|extras|savedInstanceState)\.(?:get\w*|containsKey))'
+        ), ['getExtras'],
+         'The Fragment reads mandatory arguments from its Bundle. Ensure getExtras() '
+         'overrides this in the provider to pass these arguments when launched from search.'
+         )
+    ]
+
+    problems = []
+    relevant_files_found = False
+    registry_content = ''
+    registry_repo_path = (
+        'chrome/android/java/src/org/chromium/chrome/browser/settings/search/'
+        'SearchIndexProviderRegistry.java')
+    repo_root = input_api.change.RepositoryRoot()
+    registry_full_path = input_api.os_path.join(repo_root,
+                                                *registry_repo_path.split('/'))
+
+    registry_files = [
+        f for f in input_api.AffectedFiles(include_deletes=False)
+        if f.LocalPath().endswith(registry_filename)
+    ]
+    registry_file_in_cl = registry_files[0] if registry_files else None
+
+    if registry_file_in_cl:
+        # Read the staged content (what you just wrote in the cl you are uploading).
+        registry_content = input_api.ReadFile(registry_file_in_cl)
+    else:
+        # Fallback to using the absolute path.
+        try:
+            with open(registry_full_path, 'r') as f:
+                registry_content = f.read()
+        except IOError:
+            # If the registry cannot be read (e.g., file has been moved), we default
+            # to an empty string. It is better to skip the registration check than
+            # to block the entire presubmit.
+            pass
+
+    for f in java_files:
+        content = input_api.ReadFile(f)
+
+        inheritance_match = java_inheritance_re.search(content)
+        # Determine if the file is a Settings screen. We use three different checks
+        # to cover the different possible scenarios:
+        #   1. Inheritance: Does it extend a known Settings/Preference base class?
+        #   2. Field existence: Does it already define a SEARCH_INDEX_DATA_PROVIDER?
+        #   3. Signature methods: Does it override onCreatePreferences or
+        #      getPreferenceResource (the standard entry points for settings UIs)?
+        if not (inheritance_match or 'SEARCH_INDEX_DATA_PROVIDER' in content
+                or 'onCreatePreferences' in content):
+            continue
+
+        if 'abstract class' in content:
+            continue
+
+        relevant_files_found = True
+        # Extract class name for registry check
+        name_match = inheritance_match or class_name_re.search(content)
+        class_name = name_match.group(1) if name_match else None
+
+        if not provider_field_re.search(content):
+            problems.append(
+                f'{f.LocalPath()}:0\n'
+                f'    \tIssue:  Missing SEARCH_INDEX_DATA_PROVIDER field.\n'
+                f'    \tAction: Add "public static final SearchIndexProvider SEARCH_INDEX_DATA_PROVIDER" to the class.'
+            )
+
+        if registry_content and class_name:
+            registry_pattern = input_api.re.compile(
+                r'\b' + class_name + r'\s*\.\s*SEARCH_INDEX_DATA_PROVIDER')
+            if not registry_pattern.search(registry_content):
+                problems.append(
+                    f'{f.LocalPath()}:0\n'
+                    f'    \tIssue:  Fragment not found in SearchIndexProviderRegistry.java.\n'
+                    f'    \tAction: Register "{class_name}.SEARCH_INDEX_DATA_PROVIDER" in the registry file.'
+                )
+
+        provider_body_match = input_api.re.search(
+            r'SEARCH_INDEX_DATA_PROVIDER\s*=\s*new [^{]+{(.*?)};', content,
+            input_api.re.DOTALL)
+        provider_body = provider_body_match[1] if provider_body_match else ""
+
+        # Strip both single-line (//) and multi-line (/* */) comments from the
+        # provider body. This ensures that keywords found only in comments
+        # (e.g., "// TODO: implement getExtras") do not falsely satisfy the
+        # parity check.
+        #   - //.* matches everything after // on a single line.
+        #   - /\*.*?\*/ matches block comments across lines.
+        # We use two passes because we strip multi-line comments first (which
+        # require DOTALL to span lines) and then strip single-line comments
+        # (which cannot use DOTALL as it will match newlines).
+        clean_body = input_api.re.sub(r'/\*.*?\*/',
+                                      '',
+                                      provider_body,
+                                      flags=input_api.re.DOTALL)
+        clean_body = input_api.re.sub(r'//.*', '', clean_body)
+
+        for line_num, line in f.ChangedContents():
+            if line.strip().startswith(('//', '*', '/*')):
+                continue
+
+            for trigger_re, expected_api, msg in triggers:
+                if trigger_re.search(line):
+                    # If UI call found, ensure the provider body contains a mirroring API call.
+                    if not any(s in clean_body for s in expected_api):
+                        problems.append(f'{f.LocalPath()}:{line_num}\n'
+                                        f'    \tUI Code: {line.strip()}\n'
+                                        f'    \tIndexer: {msg}')
+
+    if relevant_files_found:
+        for cc in cc_list:
+            output_api.AppendCC(cc)
+
+    if not problems:
+        return []
+
+    return [
+        output_api.PresubmitPromptWarning(
+            'Potential Settings Search Indexing Issues:\n'
+            '  To ensure settings are searchable and prevent crashes, concrete\n'
+            '  fragments must define a SEARCH_INDEX_DATA_PROVIDER and be registered\n'
+            '  in SearchIndexProviderRegistry.java. UI changes (summaries, \n'
+            '  visibility, and arguments) must be mirrored in the indexer.\n\n'
+            '  Search Indexing API Reference:\n'
+            '  //components/browser_ui/settings/android/java/src/org/chromium/components/browser_ui/settings/search/SearchIndexProvider.java\n\n'
+            '  Detailed issues found in your changes:\n', problems)
+    ]

@@ -63,7 +63,9 @@ AuthenticatorSupportedOptions WinWebAuthnApiOptions(int api_version) {
     // request.
     options.max_cred_blob_length = 256;
   }
+  // The Windows API supports the HMAC secret extension in all its versions.
   options.supports_hmac_secret = true;
+  options.supports_hmac_secret_mc = api_version >= WEBAUTHN_API_VERSION_8;
   return options;
 }
 

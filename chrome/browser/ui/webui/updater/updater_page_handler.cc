@@ -14,33 +14,51 @@
 
 #include "base/barrier_closure.h"
 #include "base/containers/flat_map.h"
+#include "base/files/file.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/updater/updater_ui.mojom-shared.h"
 #include "chrome/browser/ui/webui/updater/updater_ui.mojom.h"
 #include "chrome/browser/updater/updater.h"
+#include "chrome/enterprise_companion/global_constants.h"
+#include "chrome/enterprise_companion/installer_paths.h"
 #include "chrome/updater/mojom/updater_service.mojom.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/util.h"
+#include "components/services/unzip/content/unzip_service.h"
+#include "components/services/unzip/public/cpp/unzip.h"
+#include "components/services/unzip/public/mojom/unzipper.mojom.h"
+#include "mojo/public/cpp/base/big_buffer.h"
 
 namespace {
 
-class DefaultUpdaterPageHandlerDelegate : public UpdaterPageHandler::Delegate {
+class DefaultUpdaterPageHandlerDelegate final
+    : public UpdaterPageHandler::Delegate {
  public:
-  std::optional<base::FilePath> GetInstallDirectory(
+  std::optional<base::FilePath> GetUpdaterInstallDirectory(
       updater::UpdaterScope scope) const override {
     return updater::GetInstallDirectory(scope);
+  }
+
+  std::optional<base::FilePath> GetEnterpriseCompanionInstallDirectory()
+      const override {
+    return enterprise_companion::GetInstallDirectory();
   }
 
   void GetSystemUpdaterState(
@@ -65,6 +83,22 @@ class DefaultUpdaterPageHandlerDelegate : public UpdaterPageHandler::Delegate {
     updater::GetUserPoliciesJson(std::move(callback));
   }
 
+  void GetSystemUpdaterAppStates(
+      base::OnceCallback<void(const std::vector<updater::mojom::AppState>&)>
+          callback) const override {
+    updater::GetSystemUpdaterAppStates(std::move(callback));
+  }
+
+  void GetUserUpdaterAppStates(
+      base::OnceCallback<void(const std::vector<updater::mojom::AppState>&)>
+          callback) const override {
+    updater::GetUserUpdaterAppStates(std::move(callback));
+  }
+
+  mojo::PendingRemote<unzip::mojom::Unzipper> CreateUnzipper() const override {
+    return unzip::LaunchUnzipper();
+  }
+
  private:
   ~DefaultUpdaterPageHandlerDelegate() override = default;
 };
@@ -77,7 +111,7 @@ std::vector<base::FilePath> GetUpdaterDirectories(
   for (updater::UpdaterScope scope :
        {updater::UpdaterScope::kSystem, updater::UpdaterScope::kUser}) {
     std::optional<base::FilePath> install_path =
-        delegate->GetInstallDirectory(scope);
+        delegate->GetUpdaterInstallDirectory(scope);
     if (install_path) {
       paths.push_back(*std::move(install_path));
     }
@@ -166,14 +200,93 @@ updater_ui::mojom::UpdaterStatePtr ToUpdaterState(
   return state;
 }
 
-[[nodiscard]] constexpr updater::UpdaterScope UpdaterScopeFromMojo(
-    updater_ui::mojom::UpdaterScope mojom_scope) {
-  switch (mojom_scope) {
-    case updater_ui::mojom::UpdaterScope::kSystem:
-      return updater::UpdaterScope::kSystem;
-    case updater_ui::mojom::UpdaterScope::kUser:
-      return updater::UpdaterScope::kUser;
+void PopulateUiAppStates(
+    std::back_insert_iterator<std::vector<updater_ui::mojom::AppStatePtr>>
+        output_iter,
+    const std::vector<updater::mojom::AppState>& in_app_states) {
+  std::ranges::transform(in_app_states, output_iter,
+                         [](const updater::mojom::AppState& app_state) {
+                           return updater_ui::mojom::AppState::New(
+                               app_state.app_id, app_state.version,
+                               app_state.cohort && !app_state.cohort->empty()
+                                   ? app_state.cohort
+                                   : std::nullopt);
+                         });
+}
+
+void UnzipUpdaterHistoryFilesImpl(
+    mojo::PendingRemote<unzip::mojom::Unzipper> unzipper,
+    mojo_base::BigBuffer zip_data,
+    UpdaterPageHandler::UnzipUpdaterHistoryFilesCallback callback) {
+  base::ScopedTempDir temp_dir;
+  if (!temp_dir.CreateUniqueTempDir()) {
+    std::move(callback).Run(
+        base::unexpected(updater_ui::mojom::UnzipUpdaterHistoryFilesError::New(
+            "Failed to create temporary directory")));
+    return;
   }
+
+  base::FilePath archive_path = temp_dir.GetPath().AppendASCII("input.zip");
+  base::File archive(archive_path,
+                     base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  if (!archive.IsValid() ||
+      !archive.WriteAtCurrentPosAndCheck(base::span(zip_data))) {
+    std::move(callback).Run(
+        base::unexpected(updater_ui::mojom::UnzipUpdaterHistoryFilesError::New(
+            "Failed to write user-supplied zip data to storage")));
+    return;
+  }
+
+  const base::FilePath output_path = temp_dir.GetPath().AppendASCII("output");
+  if (!base::CreateDirectory(output_path)) {
+    std::move(callback).Run(
+        base::unexpected(updater_ui::mojom::UnzipUpdaterHistoryFilesError::New(
+            "Failed to create output path in temporary directory")));
+    return;
+  }
+
+  unzip::Unzip(
+      std::move(unzipper), archive_path, output_path,
+      unzip::mojom::UnzipOptions::New(),
+      base::BindRepeating([](const base::FilePath& path) {
+        return base::FilePath::CompareEqualIgnoreCase(
+                   path.BaseName().value(),
+                   FILE_PATH_LITERAL("updater_history.jsonl")) ||
+               base::FilePath::CompareEqualIgnoreCase(
+                   path.BaseName().value(),
+                   FILE_PATH_LITERAL("updater_history.jsonl.old"));
+      }),
+      /*listener_callback=*/base::DoNothing(),
+      base::BindOnce(
+          [](base::ScopedTempDir, const base::FilePath& output_path,
+             UpdaterPageHandler::UnzipUpdaterHistoryFilesCallback callback,
+             bool result) {
+            if (!result) {
+              std::move(callback).Run(base::unexpected(
+                  updater_ui::mojom::UnzipUpdaterHistoryFilesError::New(
+                      "Failed to unzip user-supplied archive")));
+              return;
+            }
+
+            base::FileEnumerator it(output_path, /*recursive=*/true,
+                                    base::FileEnumerator::FILES);
+            auto response =
+                updater_ui::mojom::UnzipUpdaterHistoryFilesResponse::New();
+            for (base::FilePath path = it.Next(); !path.empty();
+                 path = it.Next()) {
+              std::string contents;
+              if (!base::ReadFileToString(path, &contents)) {
+                std::move(callback).Run(base::unexpected(
+                    updater_ui::mojom::UnzipUpdaterHistoryFilesError::New(
+                        base::StrCat(
+                            {"Failed to read ", path.AsUTF8Unsafe()}))));
+                return;
+              }
+              response->history_file_contents.push_back(std::move(contents));
+            }
+            std::move(callback).Run(std::move(response));
+          },
+          std::move(temp_dir), output_path, std::move(callback)));
 }
 
 }  // namespace
@@ -186,11 +299,9 @@ UpdaterPageHandler::Delegate::CreateDefault() {
 UpdaterPageHandler::UpdaterPageHandler(
     Profile* profile,
     mojo::PendingReceiver<updater_ui::mojom::PageHandler> receiver,
-    mojo::PendingRemote<updater_ui::mojom::Page> page,
     scoped_refptr<Delegate> delegate)
     : profile_(profile),
       receiver_(this, std::move(receiver)),
-      page_(std::move(page)),
       delegate_(delegate) {}
 
 UpdaterPageHandler::~UpdaterPageHandler() = default;
@@ -222,15 +333,16 @@ void UpdaterPageHandler::GetUpdaterStates(GetUpdaterStatesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   std::optional<base::FilePath> system_install_dir =
-      delegate_->GetInstallDirectory(updater::UpdaterScope::kSystem);
+      delegate_->GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem);
   std::optional<base::FilePath> user_install_dir =
-      delegate_->GetInstallDirectory(updater::UpdaterScope::kUser);
+      delegate_->GetUpdaterInstallDirectory(updater::UpdaterScope::kUser);
   if (!system_install_dir || !user_install_dir) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(
             std::move(callback),
-            base::unexpected(updater_ui::mojom::GetUpdaterStatesError::New())));
+            base::unexpected(updater_ui::mojom::GetUpdaterStatesError::New(
+                "Failed to determine updater installation directories"))));
     return;
   }
 
@@ -306,12 +418,85 @@ void UpdaterPageHandler::GetUpdaterStates(GetUpdaterStatesCallback callback) {
           *user_install_dir));
 }
 
-void UpdaterPageHandler::ShowUpdaterDirectory(
-    updater_ui::mojom::UpdaterScope scope) {
+void UpdaterPageHandler::GetEnterpriseCompanionState(
+    GetEnterpriseCompanionStateCallback callback) {
+  using updater_ui::mojom::EnterpriseCompanionState;
+  using updater_ui::mojom::GetEnterpriseCompanionStateError;
+  using updater_ui::mojom::GetEnterpriseCompanionStateResponse;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::optional<base::FilePath> install_dir =
-      delegate_->GetInstallDirectory(UpdaterScopeFromMojo(scope));
+  delegate_->GetSystemUpdaterAppStates(
+      base::BindOnce(
+          [](scoped_refptr<Delegate> delegate,
+             const std::vector<updater::mojom::AppState>& app_states)
+              -> GetEnterpriseCompanionStateResult {
+            auto it = std::ranges::find_if(
+                app_states, [](const updater::mojom::AppState& app_state) {
+                  return base::CompareCaseInsensitiveASCII(
+                             app_state.app_id,
+                             enterprise_companion::kCompanionAppId) == 0;
+                });
+            if (it == app_states.end()) {
+              return GetEnterpriseCompanionStateResponse::New();
+            }
+
+            std::optional<base::FilePath> install_dir =
+                delegate->GetEnterpriseCompanionInstallDirectory();
+            if (!install_dir) {
+              return base::unexpected(GetEnterpriseCompanionStateError::New(
+                  "Failed to determine Chrome Enterprise Companion App "
+                  "installation directory"));
+            }
+
+            return GetEnterpriseCompanionStateResponse::New(
+                EnterpriseCompanionState::New(
+                    /*version=*/it->version, *std::move(install_dir)));
+          },
+          delegate_)
+          .Then(base::BindPostTaskToCurrentDefault(std::move(callback))));
+}
+
+void UpdaterPageHandler::GetAppStates(GetAppStatesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  updater_ui::mojom::GetAppStatesResponsePtr response =
+      updater_ui::mojom::GetAppStatesResponse::New();
+  updater_ui::mojom::GetAppStatesResponse* response_ptr = response.get();
+  base::RepeatingClosure barrier_closure = base::BarrierClosure(
+      2, base::BindOnce(base::BindPostTaskToCurrentDefault(std::move(callback)),
+                        std::move(response)));
+
+  delegate_->GetSystemUpdaterAppStates(
+      base::BindOnce(&PopulateUiAppStates,
+                     std::back_inserter(response_ptr->system_apps))
+          .Then(barrier_closure));
+  delegate_->GetUserUpdaterAppStates(
+      base::BindOnce(&PopulateUiAppStates,
+                     std::back_inserter(response_ptr->user_apps))
+          .Then(barrier_closure));
+}
+
+void UpdaterPageHandler::ShowDirectory(
+    updater_ui::mojom::ShowDirectoryTarget target) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  base::UmaHistogramEnumeration("Browser.UpdaterWebUI.InstallPathLinkClicked",
+                                target);
+
+  std::optional<base::FilePath> install_dir;
+  switch (target) {
+    case updater_ui::mojom::ShowDirectoryTarget::kSystemUpdater:
+      install_dir =
+          delegate_->GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem);
+      break;
+    case updater_ui::mojom::ShowDirectoryTarget::kUserUpdater:
+      install_dir =
+          delegate_->GetUpdaterInstallDirectory(updater::UpdaterScope::kUser);
+      break;
+    case updater_ui::mojom::ShowDirectoryTarget::kEnterpriseCompanionApp:
+      install_dir = delegate_->GetEnterpriseCompanionInstallDirectory();
+      break;
+  }
   if (!install_dir) {
     return;
   }
@@ -319,4 +504,23 @@ void UpdaterPageHandler::ShowUpdaterDirectory(
   platform_util::OpenItem(profile_, *install_dir,
                           platform_util::OpenItemType::OPEN_FOLDER,
                           base::DoNothing());
+}
+
+void UpdaterPageHandler::RecordFilterChange(
+    updater_ui::mojom::HistoryFilter filter) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::UmaHistogramEnumeration("Browser.UpdaterWebUI.HistoryFilterChanged",
+                                filter);
+}
+
+void UpdaterPageHandler::UnzipUpdaterHistoryFiles(
+    mojo_base::BigBuffer zip_data,
+    UnzipUpdaterHistoryFilesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock()})
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(
+                     &UnzipUpdaterHistoryFilesImpl, delegate_->CreateUnzipper(),
+                     std::move(zip_data),
+                     base::BindPostTaskToCurrentDefault(std::move(callback))));
 }

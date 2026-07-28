@@ -23,19 +23,22 @@ class SigninUIError {
  public:
   // An error type.
   // Different types of UI might be shown for different error types.
+  // LINT.IfChange(SigninUIErrorType)
   enum class Type : int {
     kOk = 0,
     kUsernameNotAllowedByPatternFromPrefs = 1,
     kWrongReauthAccount = 2,
-    kAccountAlreadyUsedByAnotherProfile = 2,
-    kProfileWasUsedByAnotherAccount = 3,
-    kFromGoogleServiceAuthError = 4,
-    kFromCredentialProviderUiExitCode = 5,
-    kNoProfile = 6,
-    kSigninDisallowed = 7,
-    kSigninCookiesDisallowed = 8,
-    kNoIdentityManager = 9,
+    kAccountAlreadyUsedByAnotherProfile = 3,
+    kProfileWasUsedByAnotherAccount = 4,
+    kFromGoogleServiceAuthError = 5,
+    kFromCredentialProviderUiExitCode = 6,
+    kNoProfile = 7,
+    kSigninDisallowed = 8,
+    kSigninCookiesDisallowed = 9,
+    kNoIdentityManager = 10,
+    kMaxValue = kNoIdentityManager,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/profile/enums.xml:SigninUIErrorType)
 
   // Following static functions construct a `SigninUIError` with a corresponding
   // type and error message.

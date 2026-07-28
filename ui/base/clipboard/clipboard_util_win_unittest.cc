@@ -8,6 +8,10 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_hglobal.h"
 #include "base/win/shlwapi.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -111,6 +115,220 @@ class MockZipShellFolderDataObject
   const std::string kVirtualFileContents_ = "Virtual file contents from ZIP";
 };
 
+class MockVirtualFilesDataObject
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          IDataObject> {
+ public:
+  MockVirtualFilesDataObject() = default;
+
+  IFACEMETHODIMP GetData(FORMATETC* format_etc, STGMEDIUM* medium) override {
+    if (!format_etc || !medium) {
+      return E_INVALIDARG;
+    }
+
+    if (format_etc->cfFormat ==
+        ClipboardFormatType::FileDescriptorType().ToFormatEtc().cfFormat) {
+      size_t fgd_size = sizeof(FILEGROUPDESCRIPTORW) + sizeof(FILEDESCRIPTORW);
+      HGLOBAL hglobal = ::GlobalAlloc(GHND, fgd_size);
+      auto* fgd = static_cast<FILEGROUPDESCRIPTORW*>(::GlobalLock(hglobal));
+      fgd->cItems = 2;
+      // SAFETY: `fgd_size` allocates enough for 2 FILEDESCRIPTORW items.
+      auto fgd_span = UNSAFE_BUFFERS(base::span(fgd->fgd, 2u));
+      base::span(fgd_span[0].cFileName)
+          .copy_prefix_from(base::span(L"File1.txt"));
+      base::span(fgd_span[1].cFileName)
+          .copy_prefix_from(base::span(L"File2.txt"));
+      ::GlobalUnlock(hglobal);
+
+      medium->tymed = TYMED_HGLOBAL;
+      medium->hGlobal = hglobal;
+      medium->pUnkForRelease = nullptr;
+      return S_OK;
+    }
+
+    if (format_etc->cfFormat ==
+        ClipboardFormatType::FileContentAtIndexType(0).ToFormatEtc().cfFormat) {
+      HGLOBAL hglobal = ::GlobalAlloc(GHND, 4);
+      auto* data = static_cast<char*>(::GlobalLock(hglobal));
+      // SAFETY: `hglobal` size is 4.
+      UNSAFE_BUFFERS(base::span(data, 4u))
+          .copy_from(base::span_from_cstring("test"));
+      ::GlobalUnlock(hglobal);
+      medium->tymed = TYMED_HGLOBAL;
+      medium->hGlobal = hglobal;
+      medium->pUnkForRelease = nullptr;
+      return S_OK;
+    }
+
+    return DV_E_FORMATETC;
+  }
+
+  IFACEMETHODIMP QueryGetData(FORMATETC* format_etc) override {
+    if (!format_etc) {
+      return E_INVALIDARG;
+    }
+
+    if (format_etc->cfFormat ==
+            ClipboardFormatType::FileDescriptorType().ToFormatEtc().cfFormat ||
+        format_etc->cfFormat == ClipboardFormatType::FileContentAtIndexType(0)
+                                    .ToFormatEtc()
+                                    .cfFormat) {
+      return S_OK;
+    }
+
+    return DV_E_FORMATETC;
+  }
+
+  IFACEMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override {
+    return E_NOTIMPL;
+  }
+
+  IFACEMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override {
+    return E_NOTIMPL;
+  }
+
+  IFACEMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override {
+    return E_NOTIMPL;
+  }
+
+  IFACEMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override {
+    return E_NOTIMPL;
+  }
+
+  IFACEMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
+    return E_NOTIMPL;
+  }
+
+  IFACEMETHODIMP DUnadvise(DWORD) override { return E_NOTIMPL; }
+
+  IFACEMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return E_NOTIMPL; }
+};
+
+// Emits a FILEGROUPDESCRIPTORW that allocates room for `allocated_items`
+// descriptors but reports `claimed_items` in cItems. Callers decide what those
+// counts represent.
+class MockMalformedVirtualFilesDataObject
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          IDataObject> {
+ public:
+  MockMalformedVirtualFilesDataObject(size_t allocated_items,
+                                      unsigned int claimed_items)
+      : allocated_items_(allocated_items), claimed_items_(claimed_items) {}
+
+  IFACEMETHODIMP GetData(FORMATETC* format_etc, STGMEDIUM* medium) override {
+    if (!format_etc || !medium) {
+      return E_INVALIDARG;
+    }
+    if (format_etc->cfFormat ==
+        ClipboardFormatType::FileDescriptorType().ToFormatEtc().cfFormat) {
+      size_t fgd_size = sizeof(FILEGROUPDESCRIPTORW) +
+                        allocated_items_ * sizeof(FILEDESCRIPTORW);
+      HGLOBAL hglobal = ::GlobalAlloc(GHND, fgd_size);
+      auto* fgd = static_cast<FILEGROUPDESCRIPTORW*>(::GlobalLock(hglobal));
+      fgd->cItems = claimed_items_;
+      ::GlobalUnlock(hglobal);
+      medium->tymed = TYMED_HGLOBAL;
+      medium->hGlobal = hglobal;
+      medium->pUnkForRelease = nullptr;
+      return S_OK;
+    }
+    return DV_E_FORMATETC;
+  }
+
+  IFACEMETHODIMP QueryGetData(FORMATETC* format_etc) override {
+    if (!format_etc) {
+      return E_INVALIDARG;
+    }
+    if (format_etc->cfFormat ==
+        ClipboardFormatType::FileDescriptorType().ToFormatEtc().cfFormat) {
+      return S_OK;
+    }
+    return DV_E_FORMATETC;
+  }
+
+  IFACEMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC*) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP DUnadvise(DWORD) override { return E_NOTIMPL; }
+  IFACEMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return E_NOTIMPL; }
+
+ private:
+  const size_t allocated_items_;
+  const unsigned int claimed_items_;
+};
+
+// Serves CF_UNICODETEXT from an HGLOBAL holding the supplied wide text with
+// NO trailing NUL, mimicking an untrusted external source.
+class MockUnterminatedTextDataObject
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          IDataObject> {
+ public:
+  explicit MockUnterminatedTextDataObject(std::wstring text)
+      : text_(std::move(text)) {}
+
+  IFACEMETHODIMP GetData(FORMATETC* format_etc, STGMEDIUM* medium) override {
+    if (!format_etc || !medium) {
+      return E_INVALIDARG;
+    }
+    if (format_etc->cfFormat == CF_UNICODETEXT) {
+      HGLOBAL hGlobal = ::GlobalAlloc(GHND, text_.size() * sizeof(wchar_t));
+      auto* dst = static_cast<wchar_t*>(::GlobalLock(hGlobal));
+      // SAFETY: `hGlobal` holds exactly `text_.size()` wchar_t elements.
+      UNSAFE_BUFFERS(base::span(dst, text_.size()))
+          .copy_from(base::span(text_));
+      ::GlobalUnlock(hGlobal);
+      medium->tymed = TYMED_HGLOBAL;
+      medium->hGlobal = hGlobal;
+      medium->pUnkForRelease = nullptr;
+      return S_OK;
+    }
+    return DV_E_FORMATETC;
+  }
+
+  IFACEMETHODIMP QueryGetData(FORMATETC* format_etc) override {
+    if (!format_etc) {
+      return E_INVALIDARG;
+    }
+    return format_etc->cfFormat == CF_UNICODETEXT ? S_OK : DV_E_FORMATETC;
+  }
+
+  IFACEMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC*) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
+    return E_NOTIMPL;
+  }
+  IFACEMETHODIMP DUnadvise(DWORD) override { return E_NOTIMPL; }
+  IFACEMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return E_NOTIMPL; }
+
+ private:
+  std::wstring text_;
+};
+
 using ClipboardUtilWinTest = PlatformTest;
 
 TEST_F(ClipboardUtilWinTest, EmptyHtmlToCFHtml) {
@@ -162,5 +380,93 @@ TEST_F(ClipboardUtilWinTest,
   EXPECT_FALSE(clipboard_util::HasRealFiles(data_object.Get()));
   EXPECT_TRUE(clipboard_util::HasVirtualFilenames(data_object.Get()));
 }
+
+// Unit test for GetFilenames(HDROP) with a HDROP structure.
+TEST_F(ClipboardUtilWinTest, GetFilenamesFromHDROP) {
+  const std::wstring file1 = L"C:\\foo\\bar.txt";
+  // Long path
+  std::wstring file2 = L"D:\\long_path\\";
+  file2.append(5000, L'a');
+  file2 += L"\\file.txt";
+
+  // Double-null-terminated list
+  std::wstring files_block = file1 + L'\0' + file2 + L'\0' + L'\0';
+  const SIZE_T dropfiles_size = sizeof(DROPFILES);
+  const SIZE_T total_size =
+      dropfiles_size + files_block.size() * sizeof(wchar_t);
+  HGLOBAL hglobal = ::GlobalAlloc(GHND, total_size);
+  ASSERT_NE(hglobal, nullptr);
+  base::ScopedClosureRunner free_hglobal(
+      base::BindOnce([](HGLOBAL h) { ::GlobalFree(h); }, hglobal));
+
+  base::win::ScopedHGlobal<DROPFILES*> locked_mem(hglobal);
+  DROPFILES* dropfiles = locked_mem.data();
+  ASSERT_NE(dropfiles, nullptr);
+
+  dropfiles->pFiles = sizeof(DROPFILES);
+  dropfiles->fWide = TRUE;
+
+  // SAFETY: `total_size` explicitly includes space for `DROPFILES` plus
+  // `files_block.size()` wchar_t elements immediately following it.
+  auto data_span = UNSAFE_BUFFERS(base::span<wchar_t>(
+      reinterpret_cast<wchar_t*>(dropfiles + 1), files_block.size()));
+  data_span.copy_from(base::span<const wchar_t>(files_block));
+
+  std::vector<std::wstring> filenames =
+      clipboard_util::GetFilenames(static_cast<HDROP>(hglobal));
+
+  ASSERT_EQ(filenames.size(), 2u);
+  EXPECT_EQ(filenames[0], file1);
+  EXPECT_EQ(filenames[1], file2);
+}
+
+TEST_F(ClipboardUtilWinTest, GetVirtualFilenames) {
+  Microsoft::WRL::ComPtr<IDataObject> data_object =
+      Microsoft::WRL::Make<MockVirtualFilesDataObject>();
+
+  std::optional<std::vector<base::FilePath>> filenames =
+      clipboard_util::GetVirtualFilenames(data_object.Get());
+
+  ASSERT_TRUE(filenames.has_value());
+  ASSERT_EQ(filenames->size(), 2u);
+  EXPECT_EQ(filenames->at(0).value(), L"File1.txt");
+  EXPECT_EQ(filenames->at(1).value(), L"File2.txt");
+}
+
+TEST_F(ClipboardUtilWinTest, GetFileContents) {
+  Microsoft::WRL::ComPtr<IDataObject> data_object =
+      Microsoft::WRL::Make<MockVirtualFilesDataObject>();
+
+  std::wstring filename;
+  std::vector<uint8_t> file_contents;
+  EXPECT_TRUE(clipboard_util::GetFileContents(data_object.Get(), &filename,
+                                              &file_contents));
+  EXPECT_EQ(filename, L"File1.txt");
+  EXPECT_EQ(base::span(file_contents), base::byte_span_from_cstring("test"));
+}
+
+TEST_F(ClipboardUtilWinTest, GetVirtualFilenamesRejectsOversizedItemCount) {
+  // Buffer holds one descriptor but claims twenty, modeling a malicious OLE
+  // drag source; must be rejected with no out-of-bounds read.
+  Microsoft::WRL::ComPtr<IDataObject> data_object =
+      Microsoft::WRL::Make<MockMalformedVirtualFilesDataObject>(
+          /*allocated_items=*/1u, /*claimed_items=*/20u);
+
+  std::optional<std::vector<base::FilePath>> filenames =
+      clipboard_util::GetVirtualFilenames(data_object.Get());
+
+  EXPECT_FALSE(filenames.has_value());
+}
+
+TEST_F(ClipboardUtilWinTest, GetPlainTextBoundsToHGlobalSize) {
+  const std::wstring text(64, L'a');
+  Microsoft::WRL::ComPtr<IDataObject> data_object =
+      Microsoft::WRL::Make<MockUnterminatedTextDataObject>(text);
+
+  std::u16string out;
+  ASSERT_TRUE(clipboard_util::GetPlainText(data_object.Get(), &out));
+  EXPECT_EQ(out, base::WideToUTF16(text));
+}
+
 }  // namespace
 }  // namespace ui

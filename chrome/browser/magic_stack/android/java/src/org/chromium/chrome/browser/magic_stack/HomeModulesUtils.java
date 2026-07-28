@@ -10,22 +10,25 @@ import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.DEFAULT_BROWSER_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.ENHANCED_SAFE_BROWSING_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.HISTORY_SYNC_PROMO;
+import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.NTP_THEME_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.PASSWORD_CHECKUP_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.PRICE_CHANGE;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.QUICK_DELETE_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SAFETY_HUB;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SAVE_PASSWORDS_PROMO;
+import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SETUP_LIST_CELEBRATORY_PROMO;
+import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SETUP_LIST_TWO_CELL_CONTAINER;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SIGN_IN_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SINGLE_TAB;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.TAB_GROUP_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.TAB_GROUP_SYNC_PROMO;
-import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.TIPS_NOTIFICATIONS_PROMO;
 
 import android.content.Context;
 import android.os.SystemClock;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.Log;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.build.annotations.NullMarked;
@@ -48,6 +51,9 @@ import java.util.Objects;
 /** Utility class for the magic stack. */
 @NullMarked
 public class HomeModulesUtils {
+
+    private static final String TAG = "XplatSyncedSetup";
+
     static final long INVALID_TIMESTAMP = -1;
     static final int INVALID_FRESHNESS_SCORE = -1;
     static final int INVALID_IMPRESSION_COUNT_BEFORE_INTERACTION = 0;
@@ -70,12 +76,14 @@ public class HomeModulesUtils {
                             TAB_GROUP_SYNC_PROMO,
                             QUICK_DELETE_PROMO,
                             HISTORY_SYNC_PROMO,
-                            TIPS_NOTIFICATIONS_PROMO,
                             ENHANCED_SAFE_BROWSING_PROMO,
                             ADDRESS_BAR_PLACEMENT_PROMO,
                             SIGN_IN_PROMO,
                             SAVE_PASSWORDS_PROMO,
-                            PASSWORD_CHECKUP_PROMO));
+                            PASSWORD_CHECKUP_PROMO,
+                            SETUP_LIST_TWO_CELL_CONTAINER,
+                            SETUP_LIST_CELEBRATORY_PROMO,
+                            NTP_THEME_PROMO));
 
     static boolean belongsToEducationalTipModule(@ModuleType int moduleType) {
         return sEducationalTipCardList.contains(moduleType);
@@ -123,13 +131,15 @@ public class HomeModulesUtils {
             case TAB_GROUP_PROMO:
             case TAB_GROUP_SYNC_PROMO:
             case QUICK_DELETE_PROMO:
+            case NTP_THEME_PROMO:
             case HISTORY_SYNC_PROMO:
-            case TIPS_NOTIFICATIONS_PROMO:
             case ENHANCED_SAFE_BROWSING_PROMO:
             case ADDRESS_BAR_PLACEMENT_PROMO:
             case SIGN_IN_PROMO:
             case SAVE_PASSWORDS_PROMO:
             case PASSWORD_CHECKUP_PROMO:
+            case SETUP_LIST_TWO_CELL_CONTAINER:
+            case SETUP_LIST_CELEBRATORY_PROMO:
                 // All tips use the same name.
                 return context.getString(R.string.educational_tip_module_name);
             case AUXILIARY_SEARCH:
@@ -328,6 +338,15 @@ public class HomeModulesUtils {
             // Default value should not be read since we already checked that the key was set.
             boolean value =
                     sharedPreferencesManager.readBoolean(javaKey, /* defaultValue= */ false);
+            if (ChromeFeatureList.isEnabled(
+                    ChromeFeatureList.CROSS_DEVICE_PREF_TRACKER_EXTRA_LOGS)) {
+                Log.i(
+                        TAG,
+                        "HomeModulesUtils:updateBooleanUserPrefs - setting "
+                                + cKey
+                                + " to "
+                                + value);
+            }
             UserPrefs.get(profile).setBoolean(cKey, value);
         }
     }

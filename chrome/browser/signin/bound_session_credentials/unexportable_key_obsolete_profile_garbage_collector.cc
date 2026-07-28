@@ -42,14 +42,6 @@ constexpr std::string_view kObsoleteProfilesHistogramPrefix =
 constexpr std::string_view kDestroyedProfilesHistogramPrefix =
     "Crypto.UnexportableKeys.GarbageCollection.DestroyedProfiles.";
 
-std::string GetApplicationTag(crypto::UnexportableKeyProvider::Config config) {
-#if BUILDFLAG(IS_MAC)
-  return std::move(config.application_tag);
-#else
-  return std::string();
-#endif  // BUILDFLAG(IS_MAC)
-}
-
 }  // namespace
 
 UnexportableKeyObsoleteProfileGarbageCollector::
@@ -78,7 +70,6 @@ void UnexportableKeyObsoleteProfileGarbageCollector::
           GetConfigForProfilePath(profile->GetPath()));
   CHECK_DEREF(profile_service)
       .DeleteAllKeysSlowlyAsync(
-          BackgroundTaskPriority::kBestEffort,
           base::BindOnce(
               [](std::unique_ptr<UnexportableKeyService>,
                  ServiceErrorOr<size_t> count_or_error) {
@@ -95,22 +86,34 @@ void UnexportableKeyObsoleteProfileGarbageCollector::
               std::move(profile_service)));
 }
 
+void UnexportableKeyObsoleteProfileGarbageCollector::
+    OnProfileManagerDestroying() {
+  // Invalidate all weak pointers to prevent any further calls to the profile
+  // manager after it has been destroyed. This should only happen on shutdown.
+  // The profile manager checks in its destructor that no observers are left,
+  // thus it is not sufficient to just rely on the destructor of this class.
+  // See https://crbug.com/485300762.
+  weak_ptr_factory_.InvalidateWeakPtrs();
+  profile_manager_observation_.Reset();
+}
+
 void UnexportableKeyObsoleteProfileGarbageCollector::StartGarbageCollection() {
-  user_data_dir_service_->GetAllSigningKeysForGarbageCollectionSlowlyAsync(
+  user_data_dir_service_->GetAllKeysForGarbageCollectionSlowlyAsync(
       BackgroundTaskPriority::kBestEffort,
       base::BindOnce(&UnexportableKeyObsoleteProfileGarbageCollector::
-                         OnGetAllSigningKeysForGarbageCollection,
+                         OnGetAllKeysForGarbageCollection,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void UnexportableKeyObsoleteProfileGarbageCollector::
-    OnGetAllSigningKeysForGarbageCollection(
-        ServiceErrorOr<std::vector<UnexportableKeyId>> key_ids_or_error) {
+    OnGetAllKeysForGarbageCollection(
+        ServiceErrorOr<std::vector<UnexportableSigningKeyId>>
+            key_ids_or_error) {
   if (!key_ids_or_error.has_value() || key_ids_or_error->empty()) {
     return;
   }
 
-  std::vector<UnexportableKeyId>& key_ids = *key_ids_or_error;
+  std::vector<UnexportableSigningKeyId>& key_ids = *key_ids_or_error;
   const size_t key_count = key_ids.size();
   base::UmaHistogramCounts100(
       base::StrCat({kObsoleteProfilesHistogramPrefix, "TotalKeyCount"}),
@@ -133,20 +136,12 @@ void UnexportableKeyObsoleteProfileGarbageCollector::
 
   // Filter `key_ids`, removing ids where we can't obtain the key's tag, or the
   // tag is known to be active.
-  std::erase_if(key_ids, [&](UnexportableKeyId key_id) -> bool {
-    ASSIGN_OR_RETURN(std::string key_tag,
-                     user_data_dir_service_->GetKeyTag(key_id),
-                     [](auto) { return true; });
-    // Since `active_application_tag_prefixes` is sorted, a possible prefix of
-    // `key_tag` must come right before `key_tag` if it was in the set.
-    auto it = active_application_tag_prefixes.upper_bound(key_tag);
-    return it != active_application_tag_prefixes.begin() &&
-           key_tag.starts_with(*std::prev(it));
-  });
+  size_t used_key_count = FilterUnexportableKeysByActiveApplicationTags(
+      key_ids, *user_data_dir_service_, active_application_tag_prefixes);
 
   base::UmaHistogramCounts100(
       base::StrCat({kObsoleteProfilesHistogramPrefix, "UsedKeyCount"}),
-      key_count - key_ids.size());
+      used_key_count);
 
   base::UmaHistogramCounts100(
       base::StrCat({kObsoleteProfilesHistogramPrefix, "ObsoleteKeyCount"}),

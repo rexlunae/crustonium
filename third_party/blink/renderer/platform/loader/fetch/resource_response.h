@@ -366,7 +366,7 @@ class PLATFORM_EXPORT ResourceResponse final {
   int64_t EncodedDataLength() const { return encoded_data_length_; }
   void SetEncodedDataLength(int64_t value);
 
-  int64_t EncodedBodyLength() const { return encoded_body_length_; }
+  uint64_t EncodedBodyLength() const { return encoded_body_length_; }
   void SetEncodedBodyLength(uint64_t value);
 
   int64_t DecodedBodyLength() const { return decoded_body_length_; }
@@ -469,7 +469,7 @@ class PLATFORM_EXPORT ResourceResponse final {
       // This flag should only be set for http(s) resources, because others
       // would end up blocked in the browser process anyway (see
       // code_cache_host_impl.cc).
-      CHECK(CurrentRequestUrl().ProtocolIsInHTTPFamily());
+      CHECK(CurrentRequestUrl().ProtocolIsInHttpFamily());
     }
     should_use_source_hash_for_js_code_cache_ =
         should_use_source_hash_for_js_code_cache;

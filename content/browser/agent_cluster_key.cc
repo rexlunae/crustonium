@@ -13,9 +13,11 @@ namespace content {
 
 AgentClusterKey::CrossOriginIsolationKey::CrossOriginIsolationKey(
     const url::Origin& common_coi_origin,
-    blink::mojom::CrossOriginIsolationMode cross_origin_isolation_mode)
+    blink::mojom::CrossOriginIsolationMode cross_origin_isolation_mode,
+    bool cross_origin_isolated_through_dip)
     : common_coi_origin(common_coi_origin),
-      cross_origin_isolation_mode(cross_origin_isolation_mode) {}
+      cross_origin_isolation_mode(cross_origin_isolation_mode),
+      cross_origin_isolated_through_dip(cross_origin_isolated_through_dip) {}
 
 AgentClusterKey::CrossOriginIsolationKey::CrossOriginIsolationKey(
     const CrossOriginIsolationKey& other) = default;
@@ -23,7 +25,14 @@ AgentClusterKey::CrossOriginIsolationKey::CrossOriginIsolationKey(
 AgentClusterKey::CrossOriginIsolationKey::~CrossOriginIsolationKey() = default;
 
 bool AgentClusterKey::CrossOriginIsolationKey::operator==(
-    const CrossOriginIsolationKey& b) const = default;
+    const CrossOriginIsolationKey& b) const {
+  // We intentionally omit |cross_origin_isolated_through_dip| here, as two
+  // cross-origin isolated contexts with the same origin should share the same
+  // AgentCluster and process regardless of the manner in which they were
+  // cross-origin isolated.
+  return common_coi_origin == b.common_coi_origin &&
+         cross_origin_isolation_mode == b.cross_origin_isolation_mode;
+}
 
 // static
 AgentClusterKey AgentClusterKey::CreateSiteKeyed(const GURL& site_url,
@@ -207,6 +216,21 @@ std::ostream& operator<<(std::ostream& out,
   out << "}";
 
   return out;
+}
+
+std::ostream& operator<<(std::ostream& out,
+                         const AgentClusterKey::OACStatus& status) {
+  switch (status) {
+    case AgentClusterKey::OACStatus::kOriginKeyedByHeader:
+      return out << "kOriginKeyedByHeader";
+    case AgentClusterKey::OACStatus::kSiteKeyedByHeader:
+      return out << "kSiteKeyedByHeader";
+    case AgentClusterKey::OACStatus::kOriginKeyedByDefault:
+      return out << "kOriginKeyedByDefault";
+    case AgentClusterKey::OACStatus::kSiteKeyedByDefault:
+      return out << "kSiteKeyedByDefault";
+  }
+  NOTREACHED();
 }
 
 }  // namespace content

@@ -70,8 +70,7 @@ public class TabListGroupMenuCoordinator extends TabGroupOverflowMenuCoordinator
         return new TabActionListener() {
             @Override
             public void run(View view, int tabId, @Nullable MotionEventInfo triggeringMotion) {
-                @Nullable TabModel tabModel = getTabModel();
-                if (tabModel == null) return;
+                TabModel tabModel = getTabModel();
 
                 @Nullable Tab tab = tabModel.getTabById(tabId);
                 if (tab == null) return;
@@ -209,7 +208,6 @@ public class TabListGroupMenuCoordinator extends TabGroupOverflowMenuCoordinator
                 .withTitleRes(stringId)
                 .withMenuId(R.id.share_group)
                 .withStartIconRes(R.drawable.ic_group_24dp)
-                .withTextAppearanceStyle(R.style.TextAppearance_TextLarge_Primary_Baseline_Light)
                 .build();
     }
 
@@ -223,7 +221,6 @@ public class TabListGroupMenuCoordinator extends TabGroupOverflowMenuCoordinator
                 .withMenuId(menuId)
                 .withStartIconRes(startIconId)
                 .withIsIncognito(isIncognito)
-                .withTextAppearanceStyle(R.style.TextAppearance_TextLarge_Primary_Baseline_Light)
                 .build();
     }
 }

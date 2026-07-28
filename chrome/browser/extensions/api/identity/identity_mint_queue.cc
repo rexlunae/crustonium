@@ -30,38 +30,47 @@ IdentityMintRequestQueue::~IdentityMintRequestQueue() {
   }
 }
 
+// static
+perfetto::NamedTrack IdentityMintRequestQueue::GetRequestTrack(
+    Request* request) {
+  return perfetto::NamedTrack::FromPointer(
+      "extensions::IdentityMintRequestQueue", request);
+}
+
 void IdentityMintRequestQueue::RequestStart(
     IdentityMintRequestQueue::MintType type,
     const ExtensionTokenKey& key,
     IdentityMintRequestQueue::Request* request) {
   TRACE_EVENT_BEGIN("identity", "IdentityMintRequestQueue",
-                    perfetto::Track::FromPointer(request), "type", type);
+                    GetRequestTrack(request), "type", type);
   RequestQueue& request_queue = GetRequestQueueMap(type)[key];
   request_queue.push_back(request);
   // If this is the first request, start it now. RequestComplete will start
   // all other requests.
-  if (request_queue.size() == 1)
+  if (request_queue.size() == 1) {
     RunRequest(type, request_queue);
+  }
 }
 
 void IdentityMintRequestQueue::RequestComplete(
     IdentityMintRequestQueue::MintType type,
     const ExtensionTokenKey& key,
     IdentityMintRequestQueue::Request* request) {
-  TRACE_EVENT_END("identity", perfetto::Track::FromPointer(request),
-                  "completed", "RequestComplete");
+  TRACE_EVENT_END("identity", GetRequestTrack(request), "completed",
+                  "RequestComplete");
   RequestQueue& request_queue = GetRequestQueueMap(type)[key];
   CHECK_EQ(request_queue.front(), request);
   request_queue.pop_front();
-  if (!request_queue.empty())
+  if (!request_queue.empty()) {
     RunRequest(type, request_queue);
+  }
 }
 
 void IdentityMintRequestQueue::RequestCancel(
     const ExtensionTokenKey& key,
     IdentityMintRequestQueue::Request* request) {
-  TRACE_EVENT_END("identity", perfetto::Track::FromPointer(request),
-                  "completed", "RequestCancel");
+  TRACE_EVENT_END("identity", GetRequestTrack(request), "completed",
+                  "RequestCancel");
   GetRequestQueueMap(MINT_TYPE_INTERACTIVE)[key].remove(request);
   GetRequestQueueMap(MINT_TYPE_NONINTERACTIVE)[key].remove(request);
 }
@@ -84,7 +93,7 @@ void IdentityMintRequestQueue::RunRequest(
     IdentityMintRequestQueue::MintType type,
     RequestQueue& request_queue) {
   TRACE_EVENT_INSTANT("identity", "RunRequest",
-                      perfetto::Track::FromPointer(request_queue.front()));
+                      GetRequestTrack(request_queue.front()));
   request_queue.front()->StartMintToken(type);
 }
 

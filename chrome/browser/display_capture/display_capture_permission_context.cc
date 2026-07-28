@@ -4,6 +4,7 @@
 
 #include "chrome/browser/display_capture/display_capture_permission_context.h"
 
+#include "base/notreached.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_prompt_decision.h"
@@ -21,6 +22,7 @@ void DisplayCapturePermissionContext::DecidePermission(
     permissions::BrowserPermissionCallback callback) {
   NotifyPermissionSet(*request_data, std::move(callback),
                       /*persist=*/false,
+                      /*permission_result=*/nullptr,
                       permissions::PermissionPromptDecision{
                           .overall_decision = PermissionDecision::kNone,
                           .prompt_options = std::monostate(),
@@ -34,9 +36,9 @@ ContentSetting DisplayCapturePermissionContext::GetContentSettingStatusInternal(
   return CONTENT_SETTING_ASK;
 }
 
-void DisplayCapturePermissionContext::UpdateContentSetting(
+void DisplayCapturePermissionContext::UpdateSetting(
     const permissions::PermissionRequestData& request_data,
-    ContentSetting content_setting,
+    const PermissionSetting& setting,
     bool is_one_time) {
   NOTREACHED();
 }

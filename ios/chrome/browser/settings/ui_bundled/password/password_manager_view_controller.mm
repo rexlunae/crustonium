@@ -34,7 +34,6 @@
 #import "components/sync/service/sync_service_utils.h"
 #import "components/sync/service/sync_user_settings.h"
 #import "ios/chrome/browser/net/model/crurl.h"
-#import "ios/chrome/browser/passwords/coordinator/password_utils.h"
 #import "ios/chrome/browser/passwords/model/password_checkup_metrics.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/inline_promo_cell.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/inline_promo_item.h"
@@ -46,6 +45,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_delegate.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_items.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_presentation_delegate.h"
+#import "ios/chrome/browser/settings/ui_bundled/password/password_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_consumer.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_settings_commands.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_table_view_constants.h"
@@ -192,7 +192,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 }  // namespace
 
 @interface PasswordManagerViewController () <
-    IdentityManagerObserverBridgeDelegate,
+    IdentityManagerObserving,
     PopoverLabelViewControllerDelegate,
     TableViewIllustratedEmptyViewDelegate>
 
@@ -428,6 +428,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   [super viewDidAppear:animated];
   _hasViewAppeared = YES;
   [self maybeFocusSearchBar];
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -505,6 +506,20 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   if ([self.scrimView isDescendantOfView:self.view]) {
     [self.view bringSubviewToFront:self.scrimView];
   }
+}
+
+- (void)deleteItemAtIndexPathsForTesting:(NSArray<NSIndexPath*>*)indexPaths {
+  [self deleteItemAtIndexPaths:indexPaths];
+}
+
+- (NSIndexPath*)indexPathForLevelUpWalkthrough {
+  if ([self.tableViewModel hasItemForItemType:ItemTypePasswordCheckStatus
+                            sectionIdentifier:SectionIdentifierPasswordCheck]) {
+    return [self.tableViewModel
+        indexPathForItemType:ItemTypePasswordCheckStatus
+           sectionIdentifier:SectionIdentifierPasswordCheck];
+  }
+  return nil;
 }
 
 #pragma mark - SettingsRootTableViewController
@@ -928,6 +943,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   [self reconfigurePasswordCheckSectionCellsWithState:state];
 
   _passwordCheckState = state;
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 - (void)setSavingPasswordsToAccount:(BOOL)savingPasswordsToAccount {
@@ -1055,10 +1071,15 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   } else if (_affiliatedGroups.empty() && _blockedSites.empty()) {
     [self setEditing:NO animated:YES];
   }
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 - (void)setShouldShowPasswordManagerWidgetPromo:
     (BOOL)shouldShowPasswordManagerWidgetPromo {
+  if (_shouldShowPasswordManagerWidgetPromo ==
+      shouldShowPasswordManagerWidgetPromo) {
+    return;
+  }
   _shouldShowPasswordManagerWidgetPromo = shouldShowPasswordManagerWidgetPromo;
 
   // Reload data to display the promo. No need to reload before the view is
@@ -1074,6 +1095,9 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 
 - (void)setShouldShowTrustedVaultWidgetPromo:
     (BOOL)shouldShowTrustedVaultWidgetPromo {
+  if (_shouldShowTrustedVaultWidgetPromo == shouldShowTrustedVaultWidgetPromo) {
+    return;
+  }
   _shouldShowTrustedVaultWidgetPromo = shouldShowTrustedVaultWidgetPromo;
 
   // Reload data to display the promo. No need to reload before the view is
@@ -1242,6 +1266,14 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 
 #pragma mark - Private methods
 
+// Attempts to show the Level Up Password Checkup IPH bubble.
+- (void)maybeShowLevelUpWalkthroughIPH {
+  if (_hasViewAppeared && _didReceivePasswords) {
+    [self.view layoutIfNeeded];
+    [self.presentationDelegate showLevelUpWalkthroughIPH];
+  }
+}
+
 // Records the Trusted Vault Widget Promo impression (if it hasn't been recorded
 // yet).
 - (void)recordTrustedVaultWidgetPromoImpression {
@@ -1313,6 +1345,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   _didReceivePasswords = YES;
   [self updateUIForEditState];
   [self reloadData];
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 // Dismisses the search controller when there's a touch event on the scrim.
@@ -2008,10 +2041,6 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   return ![self hasPasswords] && _blockedSites.empty();
 }
 
-- (void)deleteItemAtIndexPathsForTesting:(NSArray<NSIndexPath*>*)indexPaths {
-  [self deleteItemAtIndexPaths:indexPaths];
-}
-
 // Reconfigures the cells of the Password Check section. Adds or removes the
 // check button from the table view if needed.
 - (void)reconfigurePasswordCheckSectionCellsWithState:
@@ -2365,9 +2394,9 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   [self reloadData];
 }

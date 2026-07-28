@@ -8,15 +8,19 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/model/migration_behavior.h"
+#include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/scheduler/apply_manifest_migration_result.h"
 #include "chrome/browser/web_applications/test/fake_web_app_origin_association_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
+#include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -24,6 +28,7 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "components/webapps/common/web_app_id.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -37,6 +42,17 @@ using base::BucketsAre;
 // Unit tests verifying successful app migrations.
 class ApplyManifestMigrationCommandTest : public WebAppTest {
  public:
+  // Options used to install the web app so that it can be set up for
+  // various migration use-cases. These vary as per the test case, and
+  // is hence constructed as a separate struct.
+  struct InstallOptionsForMigration {
+    proto::InstallState install_state =
+        proto::InstallState::INSTALLED_WITH_OS_INTEGRATION;
+    bool set_valid_migration_source = true;
+    webapps::WebappInstallSource install_source =
+        webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON;
+  };
+
   ApplyManifestMigrationCommandTest() {
     scoped_feature_list_.InitAndEnableFeature(
         blink::features::kWebAppMigrationApi);
@@ -48,7 +64,7 @@ class ApplyManifestMigrationCommandTest : public WebAppTest {
     FakeWebAppProvider* provider = FakeWebAppProvider::Get(profile());
     provider->UseRealOsIntegrationManager();
     auto origin_association_manager =
-        std::make_unique<FakeWebAppOriginAssociationManager>();
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
     association_manager_ = origin_association_manager.get();
     provider->SetOriginAssociationManager(
         std::move(origin_association_manager));
@@ -66,12 +82,17 @@ class ApplyManifestMigrationCommandTest : public WebAppTest {
  protected:
   ApplyManifestMigrationResult RunMigrationAndGetResult(
       const webapps::AppId& from_app_id,
-      const webapps::AppId& to_app_id) {
+      const webapps::AppId& to_app_id,
+      const MigrationBehavior migration_behavior =
+          MigrationBehavior::kSuggest) {
     base::test::TestFuture<ApplyManifestMigrationResult> result_future;
     fake_provider().scheduler().ApplyManifestMigration(
-        from_app_id, to_app_id, /*keep_alive=*/nullptr,
+        from_app_id, to_app_id, migration_behavior, /*keep_alive=*/nullptr,
         /*profile_keep_alive=*/nullptr, result_future.GetCallback());
-    EXPECT_TRUE(result_future.Wait());
+    if (!result_future.Wait()) {
+      // This avoids a crash if there is a timeout.
+      return ApplyManifestMigrationResult::kSystemShutdown;
+    }
     return result_future.Get();
   }
 
@@ -82,16 +103,13 @@ class ApplyManifestMigrationCommandTest : public WebAppTest {
     return bitmap;
   }
 
-  // TODO(crbug.com/465762477): Maybe have a struct of parameters instead of
-  // multiple function parameters like this.
+  // TODO(crbug.com/465762477): Create a struct of parameters to create the app
+  // instead of passing them into the function one by one.
   webapps::AppId InstallAppWithInstallState(
       const GURL app_url,
       std::u16string name,
-      std::map<SquareSizePx, SkBitmap> icon_map,
-      proto::InstallState install_state,
-      bool set_valid_migration_source = true,
-      webapps::WebappInstallSource install_source =
-          webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON) {
+      OrderedSizeToBitmap icon_map,
+      InstallOptionsForMigration install_options) {
     std::unique_ptr<WebAppInstallInfo> info =
         WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
     info->title = name;
@@ -101,25 +119,26 @@ class ApplyManifestMigrationCommandTest : public WebAppTest {
         result;
 
     web_app::WebAppInstallParams params;
-    params.install_state = install_state;
-    bool do_os_integration =
-        install_state == proto::InstallState::INSTALLED_WITH_OS_INTEGRATION;
+    params.install_state = install_options.install_state;
+    bool do_os_integration = install_options.install_state ==
+                             proto::InstallState::INSTALLED_WITH_OS_INTEGRATION;
     params.add_to_applications_menu = do_os_integration;
     params.add_to_desktop = do_os_integration;
     params.add_to_quick_launch_bar = do_os_integration;
-    params.add_to_search = do_os_integration;
 
-    if (set_valid_migration_source) {
+    if (install_options.set_valid_migration_source) {
       web_app::proto::WebAppMigrationSource source;
       source.set_manifest_id("https://app.source.com/");
       source.set_behavior(
           proto::WebAppMigrationBehavior::WEB_APP_MIGRATION_BEHAVIOR_SUGGEST);
-      info->migration_sources.push_back(std::move(source));
+      info->migration_sources.emplace_back(
+          webapps::ManifestId(GURL("https://app.source.com/")),
+          MigrationBehavior::kSuggest);
     }
 
     fake_provider().scheduler().InstallFromInfoWithParams(
         std::move(info), /*overwrite_existing_manifest_fields=*/true,
-        install_source, result.GetCallback(), params);
+        install_options.install_source, result.GetCallback(), params);
     bool success = result.Wait();
     EXPECT_TRUE(success);
     if (!success) {
@@ -135,12 +154,58 @@ class ApplyManifestMigrationCommandTest : public WebAppTest {
     return histogram_tester_.GetAllSamples("WebApp.Migration.ApplyResult");
   }
 
+  bool IsMigratedAppSetForSync(const webapps::ManifestId& source_manifest_id,
+                               const webapps::AppId& migrated_app_id) {
+    const WebApp* migrated_app =
+        fake_provider().registrar_unsafe().GetAppById(migrated_app_id);
+    return migrated_app->IsSynced() &&
+           migrated_app->sync_proto().has_migrated_from_manifest_id() &&
+           webapps::ManifestId(GURL(migrated_app->sync_proto()
+                                        .migrated_from_manifest_id())) ==
+               source_manifest_id;
+  }
+
   bool IsOsIntegrationSupported() {
 #if BUILDFLAG(IS_CHROMEOS)
     return false;
 #else
     return true;
 #endif  // BUILDFLAG(IS_CHROMEOS)
+  }
+
+  SkColor GetShortcutColor(const webapps::AppId& app_id,
+                           const std::string& app_name) {
+    if (!IsOsIntegrationSupported()) {
+      return SK_ColorTRANSPARENT;
+    }
+
+#if BUILDFLAG(IS_WIN)
+    std::optional<SkColor> desktop_color =
+        fake_os_integration().GetShortcutIconTopLeftColor(
+            profile(), fake_os_integration().desktop(), app_id, app_name);
+    std::optional<SkColor> application_menu_icon_color =
+        fake_os_integration().GetShortcutIconTopLeftColor(
+            profile(), fake_os_integration().application_menu(), app_id,
+            app_name);
+    EXPECT_EQ(desktop_color.value(), application_menu_icon_color.value());
+    return desktop_color.value();
+#elif BUILDFLAG(IS_MAC)
+    std::optional<SkColor> icon_color =
+        fake_os_integration().GetShortcutIconTopLeftColor(
+            profile(), fake_os_integration().chrome_apps_folder(), app_id,
+            app_name);
+    EXPECT_TRUE(icon_color.has_value());
+    return icon_color.value();
+#elif BUILDFLAG(IS_LINUX)
+    std::optional<SkColor> icon_color =
+        fake_os_integration().GetShortcutIconTopLeftColor(
+            profile(), fake_os_integration().desktop(), app_id, app_name,
+            kLauncherIconSize);
+    EXPECT_TRUE(icon_color.has_value());
+    return icon_color.value();
+#else
+    NOTREACHED() << "Shortcuts not supported for other OS";
+#endif
   }
 
   FakeWebAppOriginAssociationManager& origin_association_manager() {
@@ -157,18 +222,25 @@ TEST_F(ApplyManifestMigrationCommandTest,
        SuccessDestinationAppAlreadyInstalled) {
   base::HistogramTester histogram_tester;
   // Install the source app first with complete OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   std::u16string source_app_name = u"Source app";
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
+
+  InstallOptionsForMigration install_options;
   const webapps::AppId& source_app_id = InstallAppWithInstallState(
       GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
-      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION);
+      install_options);
+
+  std::optional<webapps::ManifestId> valid_source_manifest_id =
+      fake_provider().registrar_unsafe().GetAppManifestId(source_app_id);
+  EXPECT_TRUE(valid_source_manifest_id.has_value());
+  const webapps::ManifestId& source_manifest_id = *valid_source_manifest_id;
 
   auto state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
           source_app_id);
-  EXPECT_TRUE(state.has_value());
+  ASSERT_TRUE(state.has_value());
   EXPECT_TRUE(state.value().has_shortcut());
   if (IsOsIntegrationSupported()) {
     EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
@@ -176,7 +248,7 @@ TEST_F(ApplyManifestMigrationCommandTest,
   }
 
   // Install the destination app also with OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map2;
+  OrderedSizeToBitmap icon_map2;
   std::u16string destination_app_name = u"Destination app";
   icon_map2[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorRED);
@@ -188,7 +260,106 @@ TEST_F(ApplyManifestMigrationCommandTest,
 
   const webapps::AppId& destination_app_id = InstallAppWithInstallState(
       GURL("https://app.destination.com/"), destination_app_name,
-      std::move(icon_map2), proto::InstallState::INSTALLED_WITH_OS_INTEGRATION);
+      std::move(icon_map2), install_options);
+
+  auto destination_state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          destination_app_id);
+  ASSERT_TRUE(destination_state.has_value());
+  EXPECT_TRUE(destination_state.value().has_shortcut());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), destination_app_id,
+        base::UTF16ToUTF8(destination_app_name)));
+  }
+
+  base::test::TestFuture<const webapps::AppId&, const webapps::AppId&> future;
+  WebAppInstallManagerObserverAdapter observer(
+      &fake_provider().install_manager());
+  observer.SetWebAppMigratedDelegate(future.GetRepeatingCallback());
+
+  // Trigger the command, and verify a successful migration.
+  // Note: The FakeWebAppUiManager has launches fail for unit tests, the launch
+  // is tested in the browser test.
+  ApplyManifestMigrationResult result =
+      RunMigrationAndGetResult(source_app_id, destination_app_id);
+  ASSERT_EQ(ApplyManifestMigrationResult::
+                kAppMigrationAppliedSuccessfullyLaunchFailed,
+            result);
+
+  ASSERT_TRUE(future.Wait());
+  EXPECT_EQ(future.Get<0>(), source_app_id);
+  EXPECT_EQ(future.Get<1>(), destination_app_id);
+
+  EXPECT_THAT(
+      GetApplyMigrationHistograms(),
+      BucketsAre(base::Bucket(ApplyManifestMigrationResult::
+                                  kAppMigrationAppliedSuccessfullyLaunchFailed,
+                              1)));
+
+  // Source app is not in the registrar, and has no OS integration left over.
+  EXPECT_FALSE(fake_provider().registrar_unsafe().AppMatches(
+      source_app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsShortcutCreated(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Destination app is in the registrar with no changes.
+  ASSERT_TRUE(IsMigratedAppSetForSync(source_manifest_id, destination_app_id));
+  EXPECT_TRUE(fake_provider().registrar_unsafe().AppMatches(
+      destination_app_id,
+      WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), destination_app_id,
+        base::UTF16ToUTF8(destination_app_name)));
+  }
+}
+
+TEST_F(ApplyManifestMigrationCommandTest,
+       SuccessForcedMigrationFullyInstalled) {
+  base::HistogramTester histogram_tester;
+  const SkColor source_color = SK_ColorGREEN;
+  const SkColor dest_color = SK_ColorRED;
+  // Install the source app first with complete OS integration.
+  OrderedSizeToBitmap icon_map;
+  std::u16string source_app_name = u"Source app";
+  icon_map[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, source_color);
+
+  InstallOptionsForMigration install_options;
+  const webapps::AppId& source_app_id = InstallAppWithInstallState(
+      GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
+      install_options);
+
+  std::optional<webapps::ManifestId> valid_source_manifest_id =
+      fake_provider().registrar_unsafe().GetAppManifestId(source_app_id);
+  EXPECT_TRUE(valid_source_manifest_id.has_value());
+  const webapps::ManifestId& source_manifest_id = *valid_source_manifest_id;
+
+  auto state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          source_app_id);
+  ASSERT_TRUE(state.has_value());
+  EXPECT_TRUE(state.value().has_shortcut());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Install the destination app as if it was suggested for migration.
+  OrderedSizeToBitmap icon_map2;
+  std::u16string destination_app_name = u"Destination app";
+  icon_map2[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, dest_color);
+
+  origin_association_manager().SetMigrationSourcesData(
+      {webapps::ManifestId(GURL("https://app.source.com/"))});
+
+  const webapps::AppId& destination_app_id = InstallAppWithInstallState(
+      GURL("https://app.destination.com/"), destination_app_name,
+      std::move(icon_map2), install_options);
 
   auto destination_state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
@@ -202,15 +373,19 @@ TEST_F(ApplyManifestMigrationCommandTest,
   }
 
   // Trigger the command, and verify a successful migration.
-  ApplyManifestMigrationResult result =
-      RunMigrationAndGetResult(source_app_id, destination_app_id);
-  ASSERT_EQ(ApplyManifestMigrationResult::kAppMigrationAppliedSuccessfully,
+  // Note: The FakeWebAppUiManager has launches fail for unit tests, the launch
+  // is tested in the browser test.
+  ApplyManifestMigrationResult result = RunMigrationAndGetResult(
+      source_app_id, destination_app_id, MigrationBehavior::kForce);
+  ASSERT_EQ(ApplyManifestMigrationResult::
+                kAppMigrationAppliedSuccessfullyLaunchFailed,
             result);
 
   EXPECT_THAT(
       GetApplyMigrationHistograms(),
-      BucketsAre(base::Bucket(
-          ApplyManifestMigrationResult::kAppMigrationAppliedSuccessfully, 1)));
+      BucketsAre(base::Bucket(ApplyManifestMigrationResult::
+                                  kAppMigrationAppliedSuccessfullyLaunchFailed,
+                              1)));
 
   // Source app is not in the registrar, and has no OS integration left over.
   EXPECT_FALSE(fake_provider().registrar_unsafe().AppMatches(
@@ -220,7 +395,203 @@ TEST_F(ApplyManifestMigrationCommandTest,
         profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
   }
 
-  // Destination app is in the registrar with no changes.
+  // Destination app is in the registrar with full OS integration, and matching
+  // the name and icon of the source app.
+  ASSERT_TRUE(IsMigratedAppSetForSync(source_manifest_id, destination_app_id));
+  EXPECT_TRUE(fake_provider().registrar_unsafe().AppMatches(
+      destination_app_id,
+      WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), destination_app_id, base::UTF16ToUTF8(source_app_name)));
+    EXPECT_EQ(source_color,
+              GetShortcutColor(destination_app_id,
+                               base::UTF16ToUTF8(source_app_name)));
+  }
+}
+
+TEST_F(ApplyManifestMigrationCommandTest,
+       SuccessForcedMigrationNotFullyInstalled) {
+  base::HistogramTester histogram_tester;
+  const SkColor source_color = SK_ColorGREEN;
+  const SkColor dest_color = SK_ColorRED;
+  // Install the source app first with complete OS integration.
+  OrderedSizeToBitmap icon_map;
+  std::u16string source_app_name = u"Source app";
+  icon_map[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, source_color);
+
+  InstallOptionsForMigration install_options;
+  const webapps::AppId& source_app_id = InstallAppWithInstallState(
+      GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
+      install_options);
+  std::optional<webapps::ManifestId> valid_source_manifest_id =
+      fake_provider().registrar_unsafe().GetAppManifestId(source_app_id);
+  EXPECT_TRUE(valid_source_manifest_id.has_value());
+  const webapps::ManifestId& source_manifest_id = *valid_source_manifest_id;
+
+  auto state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          source_app_id);
+  ASSERT_TRUE(state.has_value());
+  EXPECT_TRUE(state.value().has_shortcut());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Install the destination app as if it was suggested for migration.
+  OrderedSizeToBitmap icon_map2;
+  std::u16string destination_app_name = u"Destination app";
+  icon_map2[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, dest_color);
+
+  origin_association_manager().SetMigrationSourcesData(
+      {webapps::ManifestId(GURL("https://app.source.com/"))});
+
+  install_options.install_state = proto::InstallState::SUGGESTED_FROM_MIGRATION;
+  const webapps::AppId& destination_app_id = InstallAppWithInstallState(
+      GURL("https://app.destination.com/"), destination_app_name,
+      std::move(icon_map2), install_options);
+
+  auto destination_state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          destination_app_id);
+  EXPECT_TRUE(destination_state.has_value());
+  EXPECT_FALSE(destination_state.value().has_shortcut());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsShortcutCreated(
+        profile(), destination_app_id,
+        base::UTF16ToUTF8(destination_app_name)));
+  }
+
+  // Trigger the command, and verify a successful migration.
+  // Note: The FakeWebAppUiManager has launches fail for unit tests, the launch
+  // is tested in the browser test.
+  ApplyManifestMigrationResult result = RunMigrationAndGetResult(
+      source_app_id, destination_app_id, MigrationBehavior::kForce);
+  ASSERT_EQ(ApplyManifestMigrationResult::
+                kAppMigrationAppliedSuccessfullyLaunchFailed,
+            result);
+
+  EXPECT_THAT(
+      GetApplyMigrationHistograms(),
+      BucketsAre(base::Bucket(ApplyManifestMigrationResult::
+                                  kAppMigrationAppliedSuccessfullyLaunchFailed,
+                              1)));
+
+  // Source app is not in the registrar, and has no OS integration left over.
+  EXPECT_FALSE(fake_provider().registrar_unsafe().AppMatches(
+      source_app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsShortcutCreated(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Destination app is in the registrar with full OS integration, and matching
+  // the name and icon of the source app.
+  ASSERT_TRUE(IsMigratedAppSetForSync(source_manifest_id, destination_app_id));
+  EXPECT_TRUE(fake_provider().registrar_unsafe().AppMatches(
+      destination_app_id,
+      WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), destination_app_id, base::UTF16ToUTF8(source_app_name)));
+    EXPECT_EQ(source_color,
+              GetShortcutColor(destination_app_id,
+                               base::UTF16ToUTF8(source_app_name)));
+  }
+}
+
+TEST_F(ApplyManifestMigrationCommandTest, SuccessSuggestedForMigration) {
+  base::HistogramTester histogram_tester;
+  // Install the source app first with complete OS integration.
+  OrderedSizeToBitmap icon_map;
+  std::u16string source_app_name = u"Source app";
+  icon_map[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
+
+  InstallOptionsForMigration install_options;
+  const webapps::AppId& source_app_id = InstallAppWithInstallState(
+      GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
+      install_options);
+
+  std::optional<webapps::ManifestId> valid_source_manifest_id =
+      fake_provider().registrar_unsafe().GetAppManifestId(source_app_id);
+  EXPECT_TRUE(valid_source_manifest_id.has_value());
+  const webapps::ManifestId& source_manifest_id = *valid_source_manifest_id;
+
+  auto state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          source_app_id);
+  ASSERT_TRUE(state.has_value());
+  EXPECT_TRUE(state.value().has_shortcut());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Install the destination app as if it was suggested for migration.
+  OrderedSizeToBitmap icon_map2;
+  std::u16string destination_app_name = u"Destination app";
+  icon_map2[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, SK_ColorRED);
+
+  origin_association_manager().SetMigrationSourcesData(
+      {webapps::ManifestId(GURL("https://app.source.com/"))});
+
+  install_options.install_state = proto::InstallState::SUGGESTED_FROM_MIGRATION;
+  const webapps::AppId& destination_app_id = InstallAppWithInstallState(
+      GURL("https://app.destination.com/"), destination_app_name,
+      std::move(icon_map2), install_options);
+
+  auto destination_state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          destination_app_id);
+  EXPECT_TRUE(destination_state.has_value());
+  EXPECT_FALSE(destination_state.value().has_shortcut());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsShortcutCreated(
+        profile(), destination_app_id,
+        base::UTF16ToUTF8(destination_app_name)));
+  }
+
+  const WebApp* pre_migration_dest_app =
+      fake_provider().registrar_unsafe().GetAppById(destination_app_id);
+  EXPECT_FALSE(pre_migration_dest_app->first_install_time().is_null());
+  EXPECT_FALSE(pre_migration_dest_app->latest_install_time().is_null());
+
+  base::Time source_first_install_time = fake_provider()
+                                             .registrar_unsafe()
+                                             .GetAppById(source_app_id)
+                                             ->first_install_time();
+  EXPECT_FALSE(source_first_install_time.is_null());
+
+  // Trigger the command, and verify a successful migration.
+  // Note: The FakeWebAppUiManager has launches fail for unit tests, the launch
+  // is tested in the browser test.
+  ApplyManifestMigrationResult result =
+      RunMigrationAndGetResult(source_app_id, destination_app_id);
+  ASSERT_EQ(ApplyManifestMigrationResult::
+                kAppMigrationAppliedSuccessfullyLaunchFailed,
+            result);
+
+  EXPECT_THAT(
+      GetApplyMigrationHistograms(),
+      BucketsAre(base::Bucket(ApplyManifestMigrationResult::
+                                  kAppMigrationAppliedSuccessfullyLaunchFailed,
+                              1)));
+
+  // Source app is not in the registrar, and has no OS integration left over.
+  EXPECT_FALSE(fake_provider().registrar_unsafe().AppMatches(
+      source_app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsShortcutCreated(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Destination app is in the registrar with full OS integration.
+  ASSERT_TRUE(IsMigratedAppSetForSync(source_manifest_id, destination_app_id));
   EXPECT_TRUE(fake_provider().registrar_unsafe().AppMatches(
       destination_app_id,
       WebAppFilter::InstalledInOperatingSystemForTesting()));
@@ -229,23 +600,126 @@ TEST_F(ApplyManifestMigrationCommandTest,
         profile(), destination_app_id,
         base::UTF16ToUTF8(destination_app_name)));
   }
+
+  const WebApp* destination_app =
+      fake_provider().registrar_unsafe().GetAppById(destination_app_id);
+  EXPECT_EQ(destination_app->first_install_time(), source_first_install_time);
+  EXPECT_FALSE(destination_app->latest_install_time().is_null());
+}
+
+TEST_F(ApplyManifestMigrationCommandTest, RunOnOsLoginMigrated) {
+  base::HistogramTester histogram_tester;
+  // Install the source app first with complete OS integration.
+  OrderedSizeToBitmap icon_map;
+  std::u16string source_app_name = u"Source app";
+  icon_map[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
+
+  InstallOptionsForMigration install_options;
+  const webapps::AppId& source_app_id = InstallAppWithInstallState(
+      GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
+      install_options);
+  std::optional<webapps::ManifestId> valid_source_manifest_id =
+      fake_provider().registrar_unsafe().GetAppManifestId(source_app_id);
+  EXPECT_TRUE(valid_source_manifest_id.has_value());
+  const webapps::ManifestId& source_manifest_id = *valid_source_manifest_id;
+
+  // Set up Run on OS login for the web app to be opened in a windowed mode.
+  base::test::TestFuture<void> future;
+  provider().scheduler().SetRunOnOsLoginMode(
+      source_app_id, RunOnOsLoginMode::kWindowed, future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+
+  auto state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          source_app_id);
+  ASSERT_TRUE(state.has_value());
+  EXPECT_TRUE(state->has_run_on_os_login());
+  EXPECT_EQ(proto::os_state::RunOnOsLogin::MODE_WINDOWED,
+            state->run_on_os_login().run_on_os_login_mode());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsRunOnOsLoginEnabled(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Install the destination app as if it was suggested for migration.
+  OrderedSizeToBitmap icon_map2;
+  std::u16string destination_app_name = u"Destination app";
+  icon_map2[icon_size::k128] =
+      CreateSolidColorIcon(icon_size::k128, SK_ColorRED);
+
+  origin_association_manager().SetMigrationSourcesData(
+      {webapps::ManifestId(GURL("https://app.source.com/"))});
+
+  install_options.install_state =
+      proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION;
+  const webapps::AppId& destination_app_id = InstallAppWithInstallState(
+      GURL("https://app.destination.com/"), destination_app_name,
+      std::move(icon_map2), install_options);
+
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsRunOnOsLoginEnabled(
+        profile(), destination_app_id,
+        base::UTF16ToUTF8(destination_app_name)));
+  }
+
+  // Trigger the command, and verify a successful migration.
+  // Note: The FakeWebAppUiManager has launches fail for unit tests, the launch
+  // is tested in the browser test.
+  ApplyManifestMigrationResult result =
+      RunMigrationAndGetResult(source_app_id, destination_app_id);
+  ASSERT_EQ(ApplyManifestMigrationResult::
+                kAppMigrationAppliedSuccessfullyLaunchFailed,
+            result);
+
+  EXPECT_THAT(
+      GetApplyMigrationHistograms(),
+      BucketsAre(base::Bucket(ApplyManifestMigrationResult::
+                                  kAppMigrationAppliedSuccessfullyLaunchFailed,
+                              1)));
+
+  // Source app is not in the registrar, and has no OS integration for run on OS
+  // login left over.
+  EXPECT_FALSE(fake_provider().registrar_unsafe().AppMatches(
+      source_app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
+  if (IsOsIntegrationSupported()) {
+    EXPECT_FALSE(fake_os_integration().IsRunOnOsLoginEnabled(
+        profile(), source_app_id, base::UTF16ToUTF8(source_app_name)));
+  }
+
+  // Destination app is in the registrar with full OS integration.
+  ASSERT_TRUE(IsMigratedAppSetForSync(source_manifest_id, destination_app_id));
+  auto dest_state =
+      fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
+          destination_app_id);
+  EXPECT_TRUE(dest_state.has_value());
+  EXPECT_TRUE(dest_state->has_run_on_os_login());
+  EXPECT_EQ(proto::os_state::RunOnOsLogin::MODE_WINDOWED,
+            state->run_on_os_login().run_on_os_login_mode());
+  if (IsOsIntegrationSupported()) {
+    EXPECT_TRUE(fake_os_integration().IsRunOnOsLoginEnabled(
+        profile(), destination_app_id,
+        base::UTF16ToUTF8(destination_app_name)));
+  }
 }
 
 TEST_F(ApplyManifestMigrationCommandTest, DoNotSetValidatedSources) {
   base::HistogramTester histogram_tester;
   // Install the source app first with complete OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   std::u16string source_app_name = u"Source app";
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
+
+  InstallOptionsForMigration install_options;
   const webapps::AppId& source_app_id = InstallAppWithInstallState(
       GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
-      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION);
+      install_options);
 
   auto state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
           source_app_id);
-  EXPECT_TRUE(state.has_value());
+  ASSERT_TRUE(state.has_value());
   EXPECT_TRUE(state.value().has_shortcut());
   if (IsOsIntegrationSupported()) {
     EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
@@ -253,7 +727,7 @@ TEST_F(ApplyManifestMigrationCommandTest, DoNotSetValidatedSources) {
   }
 
   // Install the destination app also with OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map2;
+  OrderedSizeToBitmap icon_map2;
   std::u16string destination_app_name = u"Destination app";
   icon_map2[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorRED);
@@ -265,8 +739,7 @@ TEST_F(ApplyManifestMigrationCommandTest, DoNotSetValidatedSources) {
 
   const webapps::AppId& destination_app_id = InstallAppWithInstallState(
       GURL("https://app.destination.com/"), destination_app_name,
-      std::move(icon_map2), proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-      /*set_valid_migration_source=*/false);
+      std::move(icon_map2), {.set_valid_migration_source = false});
 
   auto destination_state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
@@ -294,20 +767,19 @@ TEST_F(ApplyManifestMigrationCommandTest, DoNotSetValidatedSources) {
 TEST_F(ApplyManifestMigrationCommandTest, SourceAppPolicyInstalled) {
   base::HistogramTester histogram_tester;
   // Install the source app first with complete OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   std::u16string source_app_name = u"Source app";
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
   const webapps::AppId& source_app_id = InstallAppWithInstallState(
       GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
-      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-      /*set_valid_migration_source=*/false,
-      webapps::WebappInstallSource::EXTERNAL_POLICY);
+      {.set_valid_migration_source = false,
+       .install_source = webapps::WebappInstallSource::EXTERNAL_POLICY});
 
   auto state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
           source_app_id);
-  EXPECT_TRUE(state.has_value());
+  ASSERT_TRUE(state.has_value());
   EXPECT_TRUE(state.value().has_shortcut());
   if (IsOsIntegrationSupported()) {
     EXPECT_TRUE(fake_os_integration().IsShortcutCreated(
@@ -315,7 +787,7 @@ TEST_F(ApplyManifestMigrationCommandTest, SourceAppPolicyInstalled) {
   }
 
   // Install the destination app also with OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map2;
+  OrderedSizeToBitmap icon_map2;
   std::u16string destination_app_name = u"Destination app";
   icon_map2[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorRED);
@@ -327,8 +799,7 @@ TEST_F(ApplyManifestMigrationCommandTest, SourceAppPolicyInstalled) {
 
   const webapps::AppId& destination_app_id = InstallAppWithInstallState(
       GURL("https://app.destination.com/"), destination_app_name,
-      std::move(icon_map2), proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-      /*set_valid_migration_source=*/false);
+      std::move(icon_map2), {.set_valid_migration_source = false});
 
   auto destination_state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
@@ -355,7 +826,7 @@ TEST_F(ApplyManifestMigrationCommandTest, SourceAppPolicyInstalled) {
 TEST_F(ApplyManifestMigrationCommandTest, NoSourceApp) {
   base::HistogramTester histogram_tester;
   // Install the destination app with OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map2;
+  OrderedSizeToBitmap icon_map2;
   std::u16string destination_app_name = u"Destination app";
   icon_map2[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorRED);
@@ -367,8 +838,7 @@ TEST_F(ApplyManifestMigrationCommandTest, NoSourceApp) {
 
   const webapps::AppId& destination_app_id = InstallAppWithInstallState(
       GURL("https://app.destination.com/"), destination_app_name,
-      std::move(icon_map2), proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-      /*set_valid_migration_source=*/false);
+      std::move(icon_map2), {.set_valid_migration_source = false});
 
   auto destination_state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
@@ -395,18 +865,20 @@ TEST_F(ApplyManifestMigrationCommandTest, NoSourceApp) {
 TEST_F(ApplyManifestMigrationCommandTest, NoDestinationApp) {
   base::HistogramTester histogram_tester;
   // Install the source app first with complete OS integration.
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   std::u16string source_app_name = u"Source app";
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
+
+  InstallOptionsForMigration install_options;
   const webapps::AppId& source_app_id = InstallAppWithInstallState(
       GURL("https://app.source.com/"), source_app_name, std::move(icon_map),
-      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION);
+      install_options);
 
   auto state =
       fake_provider().registrar_unsafe().GetAppCurrentOsIntegrationState(
           source_app_id);
-  EXPECT_TRUE(state.has_value());
+  ASSERT_TRUE(state.has_value());
   EXPECT_TRUE(state.value().has_shortcut());
   if (IsOsIntegrationSupported()) {
     EXPECT_TRUE(fake_os_integration().IsShortcutCreated(

@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/android/jni_android.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/android/customtabs/custom_tab_session_state_tracker.h"
@@ -74,8 +75,7 @@ void AutofillObserverImpl::OnAfterSelectControlSelectionChanged(
 void AutofillObserverImpl::OnAfterTextFieldValueChanged(
     autofill::AutofillManager&,
     autofill::FormGlobalId,
-    autofill::FieldGlobalId,
-    const std::u16string&) {
+    autofill::FieldGlobalId) {
   OnFormInteraction();
 }
 
@@ -286,7 +286,7 @@ static ScopedJavaLocalRef<jobject> JNI_TabInteractionRecorder_GetFromTab(
     const JavaRef<jobject>& jtab) {
   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
   if (!tab || !tab->web_contents() || tab->web_contents()->IsBeingDestroyed()) {
-    return ScopedJavaLocalRef<jobject>::Adopt(env, nullptr);
+    return nullptr;
   }
 
   auto* recorder =
@@ -300,7 +300,7 @@ static ScopedJavaLocalRef<jobject> JNI_TabInteractionRecorder_CreateForTab(
     const JavaRef<jobject>& jtab) {
   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
   if (!tab || !tab->web_contents() || tab->web_contents()->IsBeingDestroyed()) {
-    return ScopedJavaLocalRef<jobject>::Adopt(env, nullptr);
+    return nullptr;
   }
 
   TabInteractionRecorderAndroid::CreateForWebContents(tab->web_contents());

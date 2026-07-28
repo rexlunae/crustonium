@@ -53,6 +53,7 @@ class CompositorView : public content::CompositorClient,
   ui::ResourceManager* GetResourceManager();
   base::android::ScopedJavaLocalRef<jobject> GetResourceManager(JNIEnv* env);
   void SetNeedsComposite(JNIEnv* env);
+  void SetDrawPaused(JNIEnv* env, bool paused);
   void FinalizeLayers(JNIEnv* env);
   void SetLayoutBounds(JNIEnv* env);
   void SurfaceCreated(JNIEnv* env);
@@ -69,7 +70,8 @@ class CompositorView : public content::CompositorClient,
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jweb_contents,
       int32_t width,
-      int32_t height);
+      int32_t height,
+      bool is_fluid_resize);
   void OnControlsResizeViewChanged(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jweb_contents,

@@ -4,6 +4,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/web_app_id_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -102,7 +103,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   void EnableExtensions(bool skip_session_components) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
     extensions::ComponentLoader::Get(profile)->AddDefaultComponentExtensions(
         skip_session_components);
@@ -142,7 +143,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
                                apps::Readiness expected_readiness,
                                bool blocked_icon,
                                const VisibilityFlags& expected_visibility) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile);
     ASSERT_TRUE(registry->enabled_extensions().GetByID(app_id));
@@ -154,7 +155,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
                       apps::Readiness expected_readiness,
                       bool blocked_icon,
                       const VisibilityFlags& expected_visibility) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
 
     bool exist = proxy->AppRegistryCache().ForOneApp(
@@ -177,7 +178,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   void InstallSWAs() {
-    ash::SystemWebAppManager::GetForTest(browser()->profile())
+    ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
   }
 
@@ -186,7 +187,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
     web_app_info->scope = app_url.GetWithoutFilename();
     webapps::AppId installed_app_id = web_app::test::InstallWebApp(
-        browser()->profile(), std::move(web_app_info));
+        browser()->GetProfile(), std::move(web_app_info));
     EXPECT_EQ(app_id, installed_app_id);
   }
 
@@ -567,7 +568,7 @@ IN_PROC_BROWSER_TEST_F(SystemFeaturesPolicyTest, RedirectCroshURL) {
   system_features.Append(kCroshFeature);
   UpdateSystemFeaturesDisableList(std::move(system_features), nullptr);
 
-  GURL crosh_url = GURL(chrome::kChromeUIUntrustedCroshURL);
+  GURL crosh_url = GURL(ash::kChromeUIUntrustedCroshURL);
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_CHROME_URLS_DISABLED_PAGE_HEADER),
             GetWebUITitle(crosh_url, false));
 

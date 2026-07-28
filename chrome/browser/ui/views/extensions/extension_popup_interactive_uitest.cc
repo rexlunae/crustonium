@@ -11,6 +11,7 @@
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/extensions/security_dialog_tracker.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
@@ -31,9 +32,11 @@
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/native_ui_types.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/unique_widget_ptr.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -103,7 +106,7 @@ base::WeakPtr<views::Widget> WaitForLastExtensionPopupVisible() {
 base::WeakPtr<views::Widget> OpenExtensionPopup(
     Browser* browser,
     const extensions::Extension* extension) {
-  extensions::ExtensionHostTestHelper popup_waiter(browser->profile(),
+  extensions::ExtensionHostTestHelper popup_waiter(browser->GetProfile(),
                                                    extension->id());
   popup_waiter.RestrictToType(extensions::mojom::ViewType::kExtensionPopup);
   ExtensionActionTestHelper::Create(browser)->Press(extension->id());
@@ -127,7 +130,7 @@ class ExtensionPopupInteractiveUiTest : public extensions::ExtensionApiTest {
 };
 
 // Tests unloading an extension while its popup is actively under inspection.
-// Regression test for https://crbug.com/1304499.
+// Regression test for https://crbug.com/40826546.
 IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
                        UnloadExtensionWhileInspectingPopup) {
   static constexpr char kManifest[] =
@@ -168,7 +171,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
 }
 
 // Tests that the extension popup does not render over an anchored permissions
-// bubble. Regression test for https://crbug.com/1300006.
+// bubble. Regression test for https://crbug.com/40058873.
 IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
                        ExtensionPopupOverPermissions) {
   // Geolocation requires HTTPS. Since we programmatically show the geolocation
@@ -219,7 +222,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
   LocationBar* lb = browser_view->toolbar()->location_bar();
   if (lb->GetChipController()->IsPermissionPromptChipVisible() &&
       !lb->GetChipController()->IsBubbleShowing()) {
-    views::test::ButtonTestApi(lb->GetChipController()->chip())
+    views::test::ButtonTestApi(
+        views::AsViewClass<views::Button>(
+            views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+                PermissionChipView::kPermissionRequestChipElementId,
+                views::ElementTrackerViews::GetContextForView(browser_view))))
         .NotifyClick(ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(),
                                     gfx::Point(), ui::EventTimeForNow(),
                                     ui::EF_LEFT_MOUSE_BUTTON, 0));
@@ -293,7 +300,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
   // However, on Linux activating the browser window does not cause the
   // extension popup to deactivate, thus we also explicitly call Deactivate().
   extension_popup_widget->Deactivate();
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
   views::test::WaitForWidgetActive(extension_popup_widget.get(), false);
   ASSERT_TRUE(extension_popup_widget);
   EXPECT_TRUE(extension_popup_widget->IsVisible());
@@ -309,7 +316,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
 
   // Activating the browser window should cause the extension popup to be
   // deactivated and closed.
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
   ExpectWidgetDestroy(extension_popup_widget);
 }
 
@@ -356,7 +363,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
   dialog->CloseModalDialog();
   // Activating the browser window should cause the extension popup to be
   // deactivated and closed.
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
 
   // The extension popup should close.
   ExpectWidgetDestroy(extension_popup_widget);
@@ -423,7 +430,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
       .CloseAllDialogs();
   // Activating the browser window should cause the extension popup to be
   // deactivated and closed.
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
 
   // The extension popup should close.
   ExpectWidgetDestroy(extension_popup_widget);
@@ -498,16 +505,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
       OpenExtensionPopup(browser(), extension);
 
   // Activate the browser window should close the extension popup.
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
   ExpectWidgetDestroy(extension_popup_widget);
 }
 
 #if BUILDFLAG(IS_MAC)
 // Tests that an extension popup closes when activating the browser window
 // in macOS fullscreen.
+// TODO(crbug.com/514169818): Re-enable the test
 IN_PROC_BROWSER_TEST_F(
     ExtensionPopupInteractiveUiTest,
-    ExtensionPopupClosesOnActivatingBrowserWindowMacFullscreen) {
+    DISABLED_ExtensionPopupClosesOnActivatingBrowserWindowMacFullscreen) {
   // Install a test extension.
   static constexpr char kManifest[] =
       R"({
@@ -531,7 +539,7 @@ IN_PROC_BROWSER_TEST_F(
       OpenExtensionPopup(browser(), extension);
 
   // Activate the browser window should close the extension popup.
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
   ExpectWidgetDestroy(extension_popup_widget);
 }
 #endif
@@ -601,7 +609,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
   ASSERT_TRUE(extension);
 
   // Try to open an extension by API.
-  extensions::ExtensionHostTestHelper popup_waiter(browser()->profile(),
+  extensions::ExtensionHostTestHelper popup_waiter(browser()->GetProfile(),
                                                    extension->id());
   popup_waiter.RestrictToType(extensions::mojom::ViewType::kExtensionPopup);
   BrowserView& browser_view = browser()->GetBrowserView();
@@ -659,7 +667,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPopupInteractiveUiTest,
   ASSERT_TRUE(extension);
 
   // Try to open an extension.
-  extensions::ExtensionHostTestHelper popup_waiter(browser()->profile(),
+  extensions::ExtensionHostTestHelper popup_waiter(browser()->GetProfile(),
                                                    extension->id());
   popup_waiter.RestrictToType(extensions::mojom::ViewType::kExtensionPopup);
   ExtensionActionTestHelper::Create(browser())->Press(extension->id());

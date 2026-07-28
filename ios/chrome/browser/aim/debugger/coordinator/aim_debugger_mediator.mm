@@ -54,6 +54,10 @@
                           _service->IsAimAllowedByDse());
   eligibility.PutOrRemove(AimEligibilityCheck::kIsServerEligibilityEnabled,
                           _service->IsServerEligibilityEnabled());
+  eligibility.PutOrRemove(AimEligibilityCheck::kIsCobrowseEligible,
+                          _service->IsCobrowseEligible());
+  eligibility.PutOrRemove(AimEligibilityCheck::kIsFuseboxEligible,
+                          _service->IsFuseboxEligible());
 
   const auto& response = _service->GetMostRecentResponse();
   eligibility.PutOrRemove(AimEligibilityCheck::kIsEligibleByServer,
@@ -95,6 +99,14 @@
         base::SysNSStringToUTF8(base64Response));
     [self updateConsumer];
   }
+}
+
+- (void)didTapCopyResponse:(NSString*)base64Response {
+  UIPasteboard.generalPasteboard.string = base64Response;
+  [self.snackbarHandler showSnackbarWithMessage:@"Response Copied"
+                                     buttonText:nil
+                                  messageAction:nil
+                               completionAction:nil];
 }
 
 - (void)didTapCopyViewLink:(NSString*)base64Response {

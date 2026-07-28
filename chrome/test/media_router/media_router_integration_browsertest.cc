@@ -20,7 +20,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/media/router/mojo/media_router_desktop.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/media_router/media_cast_mode.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -84,18 +83,17 @@ class NoRoutesObserver : public MediaRoutesObserver {
 MediaRouterIntegrationBrowserTest::MediaRouterIntegrationBrowserTest(
     UiForBrowserTest test_ui_type)
     : test_ui_type_(test_ui_type) {
+#if BUILDFLAG(IS_CHROMEOS)
   feature_list_.InitWithFeatures(
       {
-          media::kGlobalMediaControls,
-#if BUILDFLAG(IS_CHROMEOS)
           // Without this flag, SodaInstaller::GetInstance() fails a DCHECK
           // on Chrome OS. The call to SodaInstaller::GetInstance() is in
           // MediaDialogView::AddedToWidget(), which is called indirectly
           // from MediaDialogView::ShowDialogForPresentationRequest().
           ash::features::kOnDeviceSpeechRecognition,
-#endif
       },
       {});
+#endif
 }
 
 MediaRouterIntegrationBrowserTest::~MediaRouterIntegrationBrowserTest() =
@@ -158,7 +156,7 @@ void MediaRouterIntegrationBrowserTest::SetUpInProcessBrowserTestFixture() {
 
 void MediaRouterIntegrationBrowserTest::SetUpOnMainThread() {
   MediaRouterDesktop* router = static_cast<MediaRouterDesktop*>(
-      MediaRouterFactory::GetApiForBrowserContext(browser()->profile()));
+      MediaRouterFactory::GetApiForBrowserContext(browser()->GetProfile()));
   mojo::PendingRemote<mojom::MediaRouter> media_router_remote;
   mojo::PendingRemote<mojom::MediaRouteProvider> provider_remote;
   router->BindToMojoReceiver(
@@ -312,7 +310,7 @@ base::FilePath MediaRouterIntegrationBrowserTest::GetResourceFile(
           .Append(FILE_PATH_LITERAL("media_router/browser_test_resources/"))
           .Append(relative_path);
   {
-    // crbug.com/724573
+    // crbug.com/40521736
     base::ScopedAllowBlockingForTesting allow_blocking;
     CHECK(PathExists(full_path));
   }

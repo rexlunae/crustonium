@@ -34,7 +34,7 @@
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -605,13 +605,13 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, IFrameDNSError) {
   EXPECT_TRUE(IsDisplayingText(child_frame, "mock.failed.request"));
 }
 
-// This test fails regularly on win_rel trybots. See crbug.com/121540
+// This test fails regularly on win_rel trybots. See crbug.com/40769902
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_IFrameDNSError_GoBack DISABLED_IFrameDNSError_GoBack
 #else
 #define MAYBE_IFrameDNSError_GoBack IFrameDNSError_GoBack
 #endif
-// Test that a DNS error occuring in an iframe does not result in an
+// Test that a DNS error occurring in an iframe does not result in an
 // additional session history entry.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, MAYBE_IFrameDNSError_GoBack) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -621,15 +621,15 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, MAYBE_IFrameDNSError_GoBack) {
   GoBackAndWaitForTitle("Title Of Awesomeness");
 }
 
-// This test fails regularly on win_rel trybots. See crbug.com/121540
+// This test fails regularly on win_rel trybots. See crbug.com/40769902
 //
-// This fails on linux_aura bringup: http://crbug.com/163931
+// This fails on linux_aura bringup: http://crbug.com/40295645
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) && defined(USE_AURA))
 #define MAYBE_IFrameDNSError_GoBackAndForward DISABLED_IFrameDNSError_GoBackAndForward
 #else
 #define MAYBE_IFrameDNSError_GoBackAndForward IFrameDNSError_GoBackAndForward
 #endif
-// Test that a DNS error occuring in an iframe does not result in an
+// Test that a DNS error occurring in an iframe does not result in an
 // additional session history entry.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest,
                        MAYBE_IFrameDNSError_GoBackAndForward) {
@@ -639,7 +639,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest,
   GoForwardAndWaitForTitle("Blah");
 }
 
-// Test that a DNS error occuring in an iframe, once the main document is
+// Test that a DNS error occurring in an iframe, once the main document is
 // completed loading, does not result in an additional session history entry.
 // To ensure that the main document has completed loading, JavaScript is used to
 // inject an iframe after loading is done.
@@ -1071,7 +1071,7 @@ class ErrorPageForIDNTest : public InProcessBrowserTest {
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
     // Clear AcceptLanguages to force punycode decoding.
-    browser()->profile()->GetPrefs()->SetString(
+    browser()->GetProfile()->GetPrefs()->SetString(
         language::prefs::kAcceptLanguages, std::string());
   }
 
@@ -1095,7 +1095,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, Http09WeirdPort) {
 }
 
 // Test that redirects to invalid URLs show an error. See
-// https://crbug.com/462272.
+// https://crbug.com/41159736.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, RedirectToInvalidURL) {
   GURL url = embedded_test_server()->GetURL("/server-redirect?https://:");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
@@ -1155,8 +1155,10 @@ IN_PROC_BROWSER_TEST_F(ErrorPageOfflineAppLaunchTest, DiagnosticsConnectivity) {
   EXPECT_TRUE(observer.last_navigation_succeeded());
 
   // The active screen should be Connectivity Diagnostics app.
-  content::WebContents* contents =
-      ::chrome::FindLastActive()->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* contents = GlobalBrowserCollection::GetInstance()
+                                       ->GetLastActiveBrowser()
+                                       ->GetTabStripModel()
+                                       ->GetActiveWebContents();
   EXPECT_EQ(expected_url, contents->GetVisibleURL());
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)

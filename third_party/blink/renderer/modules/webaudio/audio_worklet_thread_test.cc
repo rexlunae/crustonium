@@ -105,9 +105,10 @@ class AudioWorkletThreadTest : public PageTestBase, public ModuleTestBase {
             nullptr /* web_worker_fetch_context */,
             Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
             Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-            window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-            window->IsSecureContext(), window->GetHttpsState(),
-            nullptr /* worker_clients */, nullptr /* content_settings_client */,
+            window->GetReferrerPolicy(), DocumentPolicy::DocumentPolicyBundle{},
+            window->GetSecurityOrigin(), window->IsSecureContext(),
+            window->GetHttpsState(), nullptr /* worker_clients */,
+            nullptr /* content_settings_client */,
             OriginTrialContext::GetInheritedTrialFeatures(window).get(),
             base::UnguessableToken::Create(), nullptr /* worker_settings */,
             mojom::blink::V8CacheOptions::kDefault,
@@ -379,7 +380,7 @@ TEST_P(AudioWorkletThreadInteractionTest,
 
   // Cleaning up remaining worklet threads.
   for (auto& worklet_thread : worklet_threads) {
-    if (worklet_thread.get()) {
+    if (worklet_thread) {
       worklet_thread->Terminate();
       worklet_thread->WaitForShutdownForTesting();
     }
@@ -461,8 +462,10 @@ class AudioWorkletThreadPriorityTest
     base::ThreadType actual_priority =
         base::PlatformThread::GetCurrentEffectiveThreadTypeForTest();
 
-    // TODO(crbug.com/1022888): The worklet thread priority is always NORMAL
-    // on OS_LINUX and OS_CHROMEOS regardless of the thread priority setting.
+    // TODO(crbug.com/40106808): On Linux/ChromeOS, sandboxed renderers cannot
+    // acquire SCHED_RR, so the thread remains in SCHED_NORMAL. However,
+    // ChromeOS applies specific optimizations (Nice -10 and uclamp boost)
+    // that are not present on standard Linux.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     if (expected_priority == base::ThreadType::kRealtimeAudio ||
         expected_priority == base::ThreadType::kPresentation) {
@@ -558,7 +561,7 @@ TEST_F(AudioWorkletRealtimePeriodTestMac, CheckRealtimePeriod) {
       realtime_buffer_durations[4], realtime_buffer_durations[3]));
 
   for (auto& worklet_thread : worklet_threads) {
-    if (worklet_thread.get()) {
+    if (worklet_thread) {
       worklet_thread->Terminate();
       worklet_thread->WaitForShutdownForTesting();
     }

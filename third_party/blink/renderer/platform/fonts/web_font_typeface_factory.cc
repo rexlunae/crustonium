@@ -147,7 +147,8 @@ bool WebFontTypefaceFactory::CreateTypeface(
   CHECK(!typeface);
 
   if (!format_check.IsVariableFont() && !format_check.IsColorFont() &&
-      !format_check.IsCff2OutlineFont()) {
+      !format_check.IsCff2OutlineFont() &&
+      !format_check.IsEbdtEblcMonochromeFont()) {
     typeface = instantiator.make_system(data);
     if (typeface) {
       ReportInstantiationResult(
@@ -175,6 +176,9 @@ bool WebFontTypefaceFactory::CreateTypeface(
       // We don't expect variable CBDT/CBLC or Sbix variable fonts for now.
       {&FontFormatCheck::IsCbdtCblcColorFont, &MakeFontationsFallbackPreferred,
        InstantiationResult::kSuccessCbdtCblcColorFont, std::nullopt},
+      {&FontFormatCheck::IsEbdtEblcMonochromeFont,
+       &MakeFontationsFallbackPreferred,
+       InstantiationResult::kSuccessCbdtCblcColorFont, std::nullopt},
       {&FontFormatCheck::IsColrCpalColorFontV1,
        &MakeFontationsFallbackPreferred,
        InstantiationResult::kSuccessColrV1Font, std::nullopt},
@@ -182,6 +186,8 @@ bool WebFontTypefaceFactory::CreateTypeface(
        InstantiationResult::kSuccessSbixFont, std::nullopt},
       {&FontFormatCheck::IsCff2OutlineFont, &MakeFontationsFallbackPreferred,
        InstantiationResult::kSuccessCff2Font, std::nullopt},
+      {&FontFormatCheck::IsAvar2Font, &MakeFontationsFallbackPreferred,
+       InstantiationResult::kSuccessAvar2Font, std::nullopt},
       // We need to special case variable COLRv0 for backend instantiation as
       // certain Mac and Windows versions supported COLRv0 only without
       // variations.

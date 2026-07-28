@@ -46,7 +46,8 @@ class TestAutofillKeyboardAccessoryControllerAutofillClient
     if (!suggestion_controller_) {
       suggestion_controller_ =
           (new Controller(manager.external_delegate().GetWeakPtrForTest(),
-                          &GetWebContents(), gfx::RectF()))
+                          &GetWebContents(), manager.driver().GetFrameToken(),
+                          gfx::RectF()))
               ->GetWeakPtr();
       test_api(cast_suggestion_controller())
           .SetView(std::make_unique<MockAutofillKeyboardAccessoryView>());
@@ -64,6 +65,12 @@ class TestAutofillKeyboardAccessoryControllerAutofillClient
                      test_api(cast_suggestion_controller()).view())
                : nullptr;
   }
+
+  MOCK_METHOD(void,
+              ShowAtMemoryBottomSheet,
+              (base::span<const Suggestion>,
+               base::WeakPtr<AutofillSuggestionDelegate>),
+              (override));
 
  private:
   void DoHide(SuggestionHidingReason reason) {

@@ -148,7 +148,10 @@ base::WeakPtr<HistoryClustersService> HistoryClustersService::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
 
-void HistoryClustersService::Shutdown() {}
+void HistoryClustersService::Shutdown() {
+  context_clusterer_observer_.reset();
+  history_service_observation_.Reset();
+}
 
 bool HistoryClustersService::IsJourneysEnabledAndVisible() const {
   const bool journeys_is_managed =
@@ -536,9 +539,6 @@ void HistoryClustersService::PopulateClusterKeywordCache(
         static_cast<int>(cache->size()));
     WriteAllCacheToPrefs();
   } else {
-    base::UmaHistogramCounts100000(
-        "History.Clusters.Backend.KeywordCache.ShortKeywordsCount",
-        static_cast<int>(cache->size()));
     WriteShortCacheToPrefs();
   }
 

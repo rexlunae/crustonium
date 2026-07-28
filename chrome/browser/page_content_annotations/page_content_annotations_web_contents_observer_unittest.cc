@@ -80,14 +80,6 @@ GenerateMockRelatedSearchExtractorResults(
   return results;
 }
 
-// Generates a unique id for tab's WebContents that's sufficient for test
-// purposes.
-// TODO(crbug.com/440643544): Update if/when a usable tab ID is implemented in
-// production for all platforms.
-std::optional<int64_t> MakeTabId(content::WebContents* web_contents) {
-  return reinterpret_cast<int64_t>(web_contents);
-}
-
 }  // namespace
 
 const TemplateURLService::Initializer kTemplateURLData[] = {
@@ -115,7 +107,6 @@ class FakePageContentAnnotationsService : public PageContentAnnotationsService {
                                       zero_suggest_cache_service,
                                       nullptr,
                                       base::FilePath(),
-                                      nullptr,
                                       nullptr,
                                       nullptr,
                                       nullptr,
@@ -221,15 +212,10 @@ class PageContentAnnotationsWebContentsObserverTest
 
     PageContentAnnotationsWebContentsObserver::CreateForWebContents(
         web_contents(),
-        *PageContentAnnotationsServiceFactory::GetForProfile(profile()),
-        PageContentExtractionServiceFactory::GetForProfile(profile()),
-        // Passing DoNothing() since fetching the page context is not required
-        // in the tests below.
-        base::DoNothing(), base::BindRepeating(&MakeTabId));
+        *PageContentAnnotationsServiceFactory::GetForProfile(profile()));
   }
 
   void TearDown() override {
-    history_service()->Shutdown();
     task_environment()->RunUntilIdle();
 
     DeleteContents();

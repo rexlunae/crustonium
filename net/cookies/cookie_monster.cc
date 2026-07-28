@@ -66,6 +66,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
@@ -473,12 +474,14 @@ void RecordPersistanceHistograms(const CanonicalCookie& cookie,
 CookieMonster::CookieMonster(scoped_refptr<PersistentCookieStore> store,
                              NetLog* net_log,
                              std::unique_ptr<PrefDelegate> pref_delegate)
-    : CookieMonster(std::move(store),
+    : CookieMonster(base::PassKey<CookieMonster>(),
+                    std::move(store),
                     base::Seconds(kDefaultAccessUpdateThresholdSeconds),
                     net_log,
                     std::move(pref_delegate)) {}
 
-CookieMonster::CookieMonster(scoped_refptr<PersistentCookieStore> store,
+CookieMonster::CookieMonster(base::PassKey<CookieMonster>,
+                             scoped_refptr<PersistentCookieStore> store,
                              base::TimeDelta last_access_threshold,
                              NetLog* net_log,
                              std::unique_ptr<PrefDelegate> pref_delegate)
@@ -492,6 +495,17 @@ CookieMonster::CookieMonster(scoped_refptr<PersistentCookieStore> store,
   net_log_.BeginEvent(NetLogEventType::COOKIE_STORE_ALIVE, [&] {
     return NetLogCookieMonsterConstructorParams(store_ != nullptr);
   });
+}
+
+// static
+std::unique_ptr<CookieMonster> CookieMonster::CreateForTesting(
+    scoped_refptr<PersistentCookieStore> store,
+    base::TimeDelta last_access_threshold,
+    NetLog* net_log,
+    std::unique_ptr<PrefDelegate> pref_delegate) {
+  return std::make_unique<CookieMonster>(
+      base::PassKey<CookieMonster>(), std::move(store), last_access_threshold,
+      net_log, std::move(pref_delegate));
 }
 
 // Asynchronous CookieMonster API
@@ -770,7 +784,7 @@ void CookieMonster::GetCookieListWithOptions(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   std::optional<base::ElapsedTimer> timer;
-  if (metrics_subsampler_.ShouldSample(kHistogramSampleProbability)) {
+  if (base::ShouldRecordSubsampledMetric(kHistogramSampleProbability)) {
     timer.emplace();
   }
 
@@ -1404,7 +1418,7 @@ void CookieMonster::FilterCookiesWithOptions(
     // without considering shadowing domain cookies. Recording them on every
     // resource sequest results in unnecessarily large amounts of samples
     // and has a non-zero runtime cost, so only collect 1/1000 times.
-    if (metrics_subsampler_.ShouldSample(kHistogramSampleProbability) &&
+    if (base::ShouldRecordSubsampledMetric(kHistogramSampleProbability) &&
         access_result.status.IsInclude()) {
       int destination_port = url.EffectiveIntPort();
 
@@ -1692,7 +1706,7 @@ CookieMonster::InternalInsertCookie(const std::string& key,
     inserted = cookie_it;
   }
 
-  if (metrics_subsampler_.ShouldSample(kHistogramSampleProbability)) {
+  if (base::ShouldRecordSubsampledMetric(kHistogramSampleProbability)) {
     LogStoredCookieToUMA(*cc_ptr, access_result);
   }
 
@@ -1719,18 +1733,7 @@ void CookieMonster::SetCanonicalCookie(
     std::optional<CookieAccessResult> cookie_access_result) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   bool collect_metrics =
-      metrics_subsampler_.ShouldSample(kHistogramSampleProbability);
-// TODO(crbug.com/40281870): Fix macos specific issue with CHECK_IS_TEST
-// crashing network service process.
-#if !BUILDFLAG(IS_MAC)
-  // Only tests should be adding new cookies with source type kUnknown. If this
-  // line causes a fatal track down the callsite and have it correctly set the
-  // source type to kOther (or kHTTP/kScript where applicable). See
-  // CookieSourceType in net/cookies/cookie_constants.h for more.
-  if (cc->SourceType() == CookieSourceType::kUnknown) {
-    CHECK_IS_TEST();
-  }
-#endif
+      base::ShouldRecordSubsampledMetric(kHistogramSampleProbability);
 
   bool delegate_treats_url_as_trustworthy =
       cookie_access_delegate() &&
@@ -1888,7 +1891,7 @@ void CookieMonster::SetAllCookies(CookieList list,
     if (cookie.IsExpired(creation_time))
       continue;
 
-    if (metrics_subsampler_.ShouldSample(kHistogramSampleProbability)) {
+    if (base::ShouldRecordSubsampledMetric(kHistogramSampleProbability)) {
       RecordPersistanceHistograms(cookie, creation_time);
     }
 
@@ -2830,17 +2833,7 @@ bool CookieMonster::DoRecordPeriodicStats() {
             GURL(base::StrCat({url::kHttpsScheme, "://", domain})));
       }
     }
-    std::optional<base::flat_map<SchemefulSite, FirstPartySetEntry>>
-        maybe_sets = cookie_access_delegate()->FindFirstPartySetEntries(
-            sites,
-            base::BindOnce(&CookieMonster::RecordPeriodicFirstPartySetsStats,
-                           weak_ptr_factory_.GetWeakPtr()));
-    if (maybe_sets.has_value())
-      RecordPeriodicFirstPartySetsStats(maybe_sets.value());
   }
-
-  // Can be up to kMaxCookies.
-  UMA_HISTOGRAM_COUNTS_10000("Cookie.NumKeys", num_keys_);
 
   std::map<std::string, size_t> n_same_site_none_cookies;
   size_t n_bytes = 0;
@@ -2903,26 +2896,6 @@ bool CookieMonster::DoRecordPeriodicStats() {
   return true;
 }
 
-void CookieMonster::RecordPeriodicFirstPartySetsStats(
-    base::flat_map<SchemefulSite, FirstPartySetEntry> sets) const {
-  base::flat_map<SchemefulSite, std::set<SchemefulSite>> grouped_by_owner;
-  for (const auto& [site, entry] : sets) {
-    grouped_by_owner[entry.primary()].insert(site);
-  }
-  for (const auto& set : grouped_by_owner) {
-    int sample = std::accumulate(
-        set.second.begin(), set.second.end(), 0,
-        [this](int acc, const net::SchemefulSite& site) -> int {
-          DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-          if (!site.has_registrable_domain_or_host())
-            return acc;
-          return acc + cookies_.count(GetKey(site.GetURL().GetHost()));
-        });
-    base::UmaHistogramCustomCounts("Cookie.PerFirstPartySetCount", sample, 0,
-                                   4000, 50);
-  }
-}
-
 void CookieMonster::DoCookieCallback(base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -2939,6 +2912,21 @@ void CookieMonster::DoCookieCallback(base::OnceClosure callback) {
   }
 
   std::move(callback).Run();
+}
+
+void CookieMonster::OnPreconnect(const GURL& url) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  constexpr std::string_view kCookieOnPreconnectLoadCookie =
+      "Cookie.OnPreconnect.LoadCookie";
+  if (finished_fetching_all_cookies_) {
+    base::UmaHistogramBoolean(kCookieOnPreconnectLoadCookie, false);
+    return;
+  }
+  base::UmaHistogramBoolean(kCookieOnPreconnectLoadCookie, true);
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&CookieMonster::DoCookieCallbackForHostOrDomain,
+                                weak_ptr_factory_.GetWeakPtr(),
+                                base::DoNothing(), std::string(url.host())));
 }
 
 void CookieMonster::DoCookieCallbackForURL(base::OnceClosure callback,

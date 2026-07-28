@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_TOASTS_API_TOAST_ID_H_
 
 #include <string>
+#include <string_view>
 
 // Each toast is supposed to have its own unique toast id and corresponding
 // string name. New additions to ToastId enum should also be added to
@@ -25,7 +26,7 @@ enum class ToastId {
   kAddedToReadingList = 3,
   // kLensOverlay = 4,
   kNonMilestoneUpdate = 5,
-  kAddedToComparisonTable = 6,
+  // kAddedToComparisonTable = 6,
   kClearBrowsingData = 7,
   kPlusAddressOverride = 8,
   kSyncEsbOn = 9,
@@ -45,13 +46,42 @@ enum class ToastId {
   kEnhancedBundledSecuritySettings = 23,
   kSkillSaved = 24,
   kSkillDeleted = 25,
-  kMaxValue = kSkillDeleted,
+  kAutofillAiFetchEntityErrorMessage = 26,
+  kTranslate = 27,
+  kAutofillAiSaveToWalletErrorMessage = 28,
+  kRecordReplay = 29,
+  kAutoSignIn = 30,
+  kMultistepFilterSuggestion = 31,        // Deprecated: Feature removed.
+  kMultistepFilterSuggestionRecent = 32,  // Deprecated: Feature removed.
+  kSkillSavedWithoutInvokeButton = 33,
+  kSendTabToSelfTabOpened = 34,
+  kSendTabToSelfTabsOpenedInBackground = 35,
+  kSendTabToSelfSuccess = 36,
+  kReportUnsafeSiteConfirmation = 37,
+  kSendTabToSelfFailure = 38,
+  kSendTabToSelfSuccessThrottled = 39,
+  kDefaultBrowserUpdateSuccess = 40,
+  kSendTabToSelfNoInternetConnection = 41,
+  kIndigoInvokeError = 42,
+  kTabStripSwitchDelayedHorizontal = 43,
+  kTabStripSwitchDelayedVertical = 44,
+  kAutofillAiPreFetchErrorMessage = 45,
+  kEnterpriseCopyAudit = 46,
+  kEnterpriseCopyKeptInManagedChrome = 47,
+  kDictationError = 48,
+  kDictationStopped = 49,
+  kGlicSelectionHiddenForSite = 50,
+  kEnterpriseCopyWarning = 51,
+  kEnterpriseCopyBlocked = 52,
+  kIndigoDeleteError = 53,
+  kIndigoDeleteSuccess = 54,
+  kMaxValue = kIndigoDeleteSuccess,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/toasts/enums.xml:ToastId)
 
 // Returns the string equivalent name persisted to logs for `toast_id`.
 // New additions should also be added to
 // tools/metrics/histograms/metadata/toasts/histograms.xml
-std::string GetToastName(ToastId toast_id);
+std::string_view GetToastName(ToastId toast_id);
 
 #endif  // CHROME_BROWSER_UI_TOASTS_API_TOAST_ID_H_

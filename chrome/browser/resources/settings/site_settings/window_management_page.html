@@ -7,10 +7,10 @@
   </div>
   <settings-category-default-radio-group
       category="[[contentSettingsTypesEnum_.WINDOW_MANAGEMENT]]"
-      allow-option-label="$i18n{siteSettingsWindowManagementAsk}"
-      allow-option-icon="privacy:select-window"
+      ask-option-label="$i18n{siteSettingsWindowManagementAsk}"
+      ask-option-icon="[[getSelectWindowIcon_()]]"
       block-option-label="$i18n{siteSettingsWindowManagementBlocked}"
-      block-option-icon="privacy:select-window-off">
+      block-option-icon="[[getSelectWindowOffIcon_()]]">
   </settings-category-default-radio-group>
   <category-setting-exceptions
       category="[[contentSettingsTypesEnum_.WINDOW_MANAGEMENT]]"

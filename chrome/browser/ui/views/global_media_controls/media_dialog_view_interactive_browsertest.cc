@@ -8,6 +8,7 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/router/chrome_media_router_factory.h"
@@ -34,6 +35,7 @@
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/live_caption/caption_util.h"
 #include "components/live_caption/pref_names.h"
+#include "components/media_router/browser/media_router_factory.h"
 #include "components/media_router/browser/media_routes_observer.h"
 #include "components/media_router/browser/presentation/web_contents_presentation_manager.h"
 #include "components/media_router/browser/test/mock_media_router.h"
@@ -132,11 +134,9 @@ class TestMediaRouter : public media_router::MockMediaRouter {
 class MediaDialogViewBrowserTest : public InProcessBrowserTest {
  public:
   MediaDialogViewBrowserTest() {
-    feature_list_.InitWithFeatures(
-        {media::kGlobalMediaControls,
-         feature_engagement::kIPHLiveCaptionFeature,
-         media::kFeatureManagementLiveTranslateCrOS, media::kLiveTranslate},
-        {});
+    feature_list_.InitWithFeatures({feature_engagement::kIPHLiveCaptionFeature,
+                                    media::kFeatureManagementLiveTranslateCrOS},
+                                   {});
   }
 
   MediaDialogViewBrowserTest(const MediaDialogViewBrowserTest&) = delete;
@@ -174,11 +174,11 @@ class MediaDialogViewBrowserTest : public InProcessBrowserTest {
   }
 
   void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
-    media_router_ = static_cast<TestMediaRouter*>(
+    auto* media_router = static_cast<TestMediaRouter*>(
         media_router::ChromeMediaRouterFactory::GetInstance()
             ->SetTestingFactoryAndUse(
                 context, base::BindRepeating(&TestMediaRouter::Create)));
-    ON_CALL(*media_router_, RegisterMediaSinksObserver)
+    ON_CALL(*media_router, RegisterMediaSinksObserver)
         .WillByDefault(testing::Return(true));
   }
 
@@ -284,7 +284,7 @@ class MediaDialogViewBrowserTest : public InProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
     base::RunLoop run_loop;
     PrefChangeRegistrar change_observer;
-    change_observer.Init(browser()->profile()->GetPrefs());
+    change_observer.Init(browser()->GetProfile()->GetPrefs());
     change_observer.Add(prefs::kLiveCaptionEnabled, run_loop.QuitClosure());
 
     ASSERT_TRUE(MediaDialogView::IsShowing());
@@ -298,7 +298,7 @@ class MediaDialogViewBrowserTest : public InProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
     base::RunLoop run_loop;
     PrefChangeRegistrar change_observer;
-    change_observer.Init(browser()->profile()->GetPrefs());
+    change_observer.Init(browser()->GetProfile()->GetPrefs());
     change_observer.Add(prefs::kLiveTranslateEnabled, run_loop.QuitClosure());
 
     ASSERT_TRUE(MediaDialogView::IsShowing());
@@ -396,18 +396,23 @@ class MediaDialogViewBrowserTest : public InProcessBrowserTest {
         speech::LanguageCode::kEnUs);
   }
 
+  TestMediaRouter* GetMediaRouter() {
+    return static_cast<TestMediaRouter*>(
+        media_router::MediaRouterFactory::GetApiForBrowserContext(
+            browser()->GetProfile()));
+  }
+
  protected:
   std::unique_ptr<TestWebContentsPresentationManager> presentation_manager_;
-  raw_ptr<TestMediaRouter, DanglingUntriaged> media_router_ = nullptr;
-  MediaDialogUiForTest ui_{base::BindRepeating(&InProcessBrowserTest::browser,
-                                               base::Unretained(this))};
+  MediaDialogUiForTest ui_{base::BindLambdaForTesting(
+      [this]() -> BrowserWindowInterface* { return browser(); })};
 
  private:
   // Finds a global_media_controls::MediaItemUIUpdatedView by title.
   global_media_controls::MediaItemUIUpdatedView* GetViewByTitle(
       const std::u16string& title) {
-    for (const auto& item_pair : MediaDialogView::GetDialogViewForTesting()
-                                     ->GetUpdatedItemsForTesting()) {
+    for (const auto& item_pair :
+         MediaDialogView::GetDialogViewForTesting()->GetItemsForTesting()) {
       if (item_pair.second->GetTitleLabelForTesting()->GetText() == title) {
         return item_pair.second;
       }
@@ -636,7 +641,7 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, ShowsCastSession) {
                                  "sink_id", route_description, true);
   route.set_media_sink_name("My Sink");
   route.set_controller_type(media_router::RouteControllerType::kGeneric);
-  media_router_->NotifyMediaRoutesChanged({route});
+  GetMediaRouter()->NotifyMediaRoutesChanged({route});
   base::RunLoop().RunUntilIdle();
   presentation_manager_->NotifyPresentationsChanged(true);
 
@@ -648,12 +653,12 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, ShowsCastSession) {
 }
 
 #if BUILDFLAG(IS_MAC)
-// https://crbug.com/1224071
+// https://crbug.com/40187901
 #define MAYBE_PictureInPicture DISABLED_PictureInPicture
 #else
 #define MAYBE_PictureInPicture PictureInPicture
 #endif
-// Test is flaky crbug.com/1213256.
+// Test is flaky crbug.com/40768654.
 IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_PictureInPicture) {
   // Open a tab and play media.
   OpenTestURL();
@@ -693,7 +698,7 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
   ui_.WaitForPictureInPictureButtonVisibility(true);
 }
 
-// Flaky on multiple platforms (crbug.com/1218003,crbug.com/1383904).
+// Flaky on multiple platforms (crbug.com/40771400,crbug.com/40878114).
 IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
                        DISABLED_PlayingSessionAlwaysDisplayFirst) {
   OpenTestURL();
@@ -727,8 +732,10 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
   EXPECT_TRUE(IsPlayingSessionDisplayedFirst());
 }
 
-// TODO(crbug.com/40898509): Live captioning not supported on Arm64 Windows.
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64) || BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40898509): Live captioning not supported on Arm64 Windows or
+// Linux.
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)) && defined(ARCH_CPU_ARM64) || \
+    BUILDFLAG(IS_MAC)
 #define MAYBE_LiveCaption DISABLED_LiveCaption
 #else
 #define MAYBE_LiveCaption LiveCaption
@@ -753,16 +760,16 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_LiveCaption) {
 
   // Click the Live Caption toggle to toggle it on.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_TRUE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_TRUE(GetLiveCaptionTitleLabel()->GetVisible());
   EXPECT_EQ("Live Caption - English",
             base::UTF16ToUTF8(GetLiveCaptionTitleLabel()->GetText()));
 
   // Click the Live Caption toggle again to toggle it off.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_FALSE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_TRUE(GetLiveCaptionTitleLabel()->GetVisible());
   EXPECT_EQ("Live Caption",
             base::UTF16ToUTF8(GetLiveCaptionTitleLabel()->GetText()));
@@ -770,8 +777,8 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_LiveCaption) {
   // Close dialog and enable live caption preference. Reopen dialog.
   ui_.ClickToolbarIcon();
   EXPECT_FALSE(ui_.IsDialogVisible());
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kLiveCaptionEnabled,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kLiveCaptionEnabled,
+                                                  true);
   ui_.ClickToolbarIcon();
   EXPECT_TRUE(ui_.WaitForDialogOpened());
   EXPECT_TRUE(ui_.IsDialogVisible());
@@ -781,8 +788,8 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_LiveCaption) {
 
   // Click the Live Caption toggle to toggle it off.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_FALSE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_TRUE(GetLiveCaptionTitleLabel()->GetVisible());
   EXPECT_EQ("Live Caption",
             base::UTF16ToUTF8(GetLiveCaptionTitleLabel()->GetText()));
@@ -803,11 +810,12 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_LiveCaption) {
             GetLiveCaptionTitleLabel()->GetText());
 }
 
-#if (BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)) || BUILDFLAG(IS_MAC)
-// https://crbug.com/1222873
-// Flaky on all Mac bots: https://crbug.com/1274967
-// TODO(crbug.com/40898509): Renable on WinArm64 when live captioning is
-// enabled.
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)) && defined(ARCH_CPU_ARM64) || \
+    BUILDFLAG(IS_MAC)
+// https://crbug.com/40187385
+// Flaky on all Mac bots: https://crbug.com/40807988
+// TODO(crbug.com/40898509): Renable on WinArm64 or Linux Arm64 when live
+// captioning is enabled.
 #define MAYBE_LiveCaptionProgressUpdate DISABLED_LiveCaptionProgressUpdate
 #else
 #define MAYBE_LiveCaptionProgressUpdate LiveCaptionProgressUpdate
@@ -840,8 +848,8 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
 
   // Click the Live Caption toggle again to toggle it off.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_FALSE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_TRUE(GetLiveCaptionTitleLabel()->GetVisible());
   EXPECT_EQ("Downloading… 12%",
             base::UTF16ToUTF8(GetLiveCaptionTitleLabel()->GetText()));
@@ -854,8 +862,8 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
 
   // Click the Live Caption toggle again to toggle it on.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_TRUE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_TRUE(GetLiveCaptionTitleLabel()->GetVisible());
   EXPECT_EQ("Downloading… 42%",
             base::UTF16ToUTF8(GetLiveCaptionTitleLabel()->GetText()));
@@ -873,10 +881,11 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
             base::UTF16ToUTF8(GetLiveCaptionTitleLabel()->GetText()));
 }
 
-// TODO(crbug.com/1225531, crbug.com/1222873): Flaky.
-// TODO(crbug.com/40898509): Renable on WinArm64 when live captioning is
-// enabled.
-#if (BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)) || BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40775869, crbug.com/40187385): Flaky.
+// TODO(crbug.com/40898509): Renable on WinArm64 or Linux Arm64 when live
+// captioning is enabled.
+#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)) && defined(ARCH_CPU_ARM64) || \
+    BUILDFLAG(IS_MAC)
 #define MAYBE_LiveCaptionShowLanguage DISABLED_LiveCaptionShowLanguage
 #else
 #define MAYBE_LiveCaptionShowLanguage LiveCaptionShowLanguage
@@ -909,8 +918,8 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
   // Close dialog and change live caption language. Reopen dialog.
   ui_.ClickToolbarIcon();
   EXPECT_FALSE(ui_.IsDialogVisible());
-  browser()->profile()->GetPrefs()->SetString(prefs::kLiveCaptionLanguageCode,
-                                              "de-DE");
+  browser()->GetProfile()->GetPrefs()->SetString(
+      prefs::kLiveCaptionLanguageCode, "de-DE");
   ui_.ClickToolbarIcon();
   EXPECT_TRUE(ui_.WaitForDialogOpened());
   EXPECT_TRUE(ui_.IsDialogVisible());
@@ -952,8 +961,8 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_LiveTranslate) {
 
   // Click the Live Caption toggle to toggle it on.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_TRUE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
 
   // The Live Translate title should appear.
   EXPECT_TRUE(GetLiveTranslateTitleLabel()->GetVisible());
@@ -962,15 +971,15 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest, MAYBE_LiveTranslate) {
 
   // Click the Live Translate toggle to toggle it on.
   ClickEnableLiveTranslateOnDialog();
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kLiveTranslateEnabled));
 
   // Click the Live Caption toggle to toggle it off, which does not toggle off
   // Translate.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_FALSE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kLiveTranslateEnabled));
 }
 
@@ -997,30 +1006,30 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewBrowserTest,
   ui_.ClickToolbarIcon();
   EXPECT_TRUE(ui_.WaitForDialogOpened());
   EXPECT_TRUE(ui_.IsDialogVisible());
-  EXPECT_FALSE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_FALSE(GetLiveTranslateDropdown()->GetVisible());
 
   // Click the Live Caption toggle to toggle it on. The dropdown should be
   // hidden.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_TRUE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
   EXPECT_FALSE(GetLiveTranslateDropdown()->GetVisible());
 
   // Click the Live Translate toggle to toggle it on. The dropdown should be
   // visible.
   ClickEnableLiveTranslateOnDialog();
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kLiveTranslateEnabled));
   EXPECT_TRUE(GetLiveTranslateDropdown()->GetVisible());
 
   // Click the Live Caption toggle to toggle it off. Live Translate should still
   // be enabled but the dropdown should be hidden.
   ClickEnableLiveCaptionOnDialog();
-  EXPECT_FALSE(
-      browser()->profile()->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
+      prefs::kLiveCaptionEnabled));
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kLiveTranslateEnabled));
   EXPECT_FALSE(GetLiveTranslateDropdown()->GetVisible());
 }

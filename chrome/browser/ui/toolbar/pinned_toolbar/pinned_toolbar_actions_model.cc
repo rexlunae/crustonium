@@ -217,28 +217,20 @@ void PinnedToolbarActionsModel::ResetToDefault() {
   pref_service_->ClearPref(prefs::kShowHomeButton);
   pref_service_->ClearPref(prefs::kShowForwardButton);
   pref_service_->ClearPref(prefs::kPinSplitTabButton);
-  pref_service_->ClearPref(prefs::kPinContextualTaskButton);
   pref_service_->ClearPref(prefs::kPinnedActions);
 }
 
 bool PinnedToolbarActionsModel::IsDefault() const {
-  const bool action_are_default =
-      pref_service_->GetDefaultPrefValue(prefs::kPinnedActions)->GetList() ==
-      pref_service_->GetList(prefs::kPinnedActions);
-
-  auto is_default_pref_value = [&](const std::string pref_path) {
-    return pref_service_->GetDefaultPrefValue(pref_path)->GetBool() ==
-           pref_service_->GetBoolean(pref_path);
+  const auto is_default_pref_value = [&](std::string_view pref_path) {
+    const auto* default_value = pref_service_->GetDefaultPrefValue(pref_path);
+    return *default_value == pref_service_->GetValue(pref_path);
   };
-  const bool home_is_default = is_default_pref_value(prefs::kShowHomeButton);
-  const bool forward_is_default =
-      is_default_pref_value(prefs::kShowForwardButton);
-  const bool open_split_is_default =
-      is_default_pref_value(prefs::kPinSplitTabButton);
-  const bool contextual_task_is_default =
-      is_default_pref_value(prefs::kPinContextualTaskButton);
-  return action_are_default && home_is_default && forward_is_default &&
-         open_split_is_default && contextual_task_is_default;
+
+  return std::ranges::all_of(
+      std::initializer_list{prefs::kPinnedActions, prefs::kShowHomeButton,
+                            prefs::kShowForwardButton,
+                            prefs::kPinSplitTabButton},
+      is_default_pref_value);
 }
 
 void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
@@ -249,16 +241,19 @@ void PinnedToolbarActionsModel::MaybeMigrateExistingPinnedStates() {
     UpdatePinnedState(kActionShowChromeLabs, true);
     pref_service_->SetBoolean(prefs::kPinnedChromeLabsMigrationComplete, true);
   }
-  if (features::HasTabSearchToolbarButton() &&
-      !pref_service_->GetBoolean(prefs::kTabSearchMigrationComplete)) {
-    UpdatePinnedState(kActionTabSearch, true);
-    pref_service_->SetBoolean(prefs::kTabSearchMigrationComplete, true);
-  }
   if (!pref_service_->GetBoolean(prefs::kPinnedCastMigrationComplete)) {
     bool previously_pinned =
         pref_service_->GetBoolean(prefs::kShowCastIconInToolbar);
     UpdatePinnedState(kActionRouteMedia, previously_pinned);
     pref_service_->SetBoolean(prefs::kPinnedCastMigrationComplete, true);
+  }
+  if (base::FeatureList::IsEnabled(
+          features::kTabsFromOtherDevicesSidePanelPinnedByDefault) &&
+      !pref_service_->GetBoolean(
+          prefs::kTabsFromOtherDevicesAutoPinnedMigration)) {
+    UpdatePinnedState(kActionSidePanelShowTabsFromOtherDevices, true);
+    pref_service_->SetBoolean(prefs::kTabsFromOtherDevicesAutoPinnedMigration,
+                              true);
   }
 }
 

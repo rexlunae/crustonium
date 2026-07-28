@@ -12,6 +12,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/wallet/core/browser/network/wallet_http_client.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -28,6 +29,8 @@ class SimpleURLLoader;
 
 namespace wallet {
 
+class WalletRequest;
+
 class WalletHttpClientImpl : public WalletHttpClient {
  public:
   WalletHttpClientImpl(
@@ -39,17 +42,20 @@ class WalletHttpClientImpl : public WalletHttpClient {
   WalletHttpClientImpl& operator=(const WalletHttpClientImpl&) = delete;
 
   // WalletHttpClient:
-  void SavePass(const WalletablePass& pass, SavePassCallback callback) override;
+  void UpsertPublicPass(Pass pass, UpsertPublicPassCallback callback) override;
+  void UpsertPrivatePass(
+      PrivatePass pass,
+      std::optional<consent_auditor::ConsentAuditor::SessionId> session_id,
+      UpsertPrivatePassCallback callback) override;
+  void GetUnmaskedPass(std::string_view pass_id,
+                       GetUnmaskedPassCallback callback) override;
 
  private:
   using UrlLoaderList = std::list<std::unique_ptr<network::SimpleURLLoader>>;
-  using HttpResponse = base::expected<std::string, WalletRequestError>;
   using TokenReadyCallback =
       base::OnceCallback<void(std::optional<std::string>)>;
 
-  void SendRequest(const std::string& request_path,
-                   const std::string& request_body,
-                   base::OnceCallback<void(HttpResponse)> response_callback);
+  void SendRequest(std::unique_ptr<WalletRequest> request);
 
   // Initiates a request for a new OAuth token. If the request succeeds, this
   // runs `on_fetched` with the retrieved token.
@@ -60,23 +66,16 @@ class WalletHttpClientImpl : public WalletHttpClient {
                       signin::AccessTokenInfo access_token_info);
 
   // Continues sending the request after the token is fetched.
-  void SendRequestInternal(
-      const std::string& request_path,
-      const std::string& request_body,
-      base::OnceCallback<void(HttpResponse)> response_callback,
-      std::optional<std::string> access_token);
+  void SendRequestInternal(std::unique_ptr<WalletRequest> request,
+                           std::optional<std::string> access_token);
 
   // Called when the `SimpleURLLoader` referenced by `it` completes. Removes the
   // loader from `active_loaders_` and runs `response_callback` with the
   // response body or an error.
-  void OnSimpleLoaderComplete(
-      UrlLoaderList::iterator it,
-      base::OnceCallback<void(HttpResponse)> response_callback,
-      std::optional<std::string> response_body);
-
-  // Parses `http_response` and runs `callback` with the result.
-  void OnSavePassResponse(SavePassCallback callback,
-                          HttpResponse http_response);
+  void OnSimpleLoaderComplete(UrlLoaderList::iterator it,
+                              std::unique_ptr<WalletRequest> request,
+                              base::TimeTicks request_start,
+                              std::optional<std::string> response_body);
 
   // The IdentityManager instance for the current profile.
   const raw_ref<signin::IdentityManager> identity_manager_;

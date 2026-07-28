@@ -8,24 +8,34 @@
  * Users can add, edit, or delete their saved document details, as well as opt
  * out of the autofill functionality entirely.
  */
-
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
+import '/shared/settings/controls/extension_controlled_indicator.js';
 import '/shared/settings/prefs/prefs.js';
 import '../autofill_page/autofill_ai_entries_list.js';
 import '../autofill_page/your_saved_info_shared.css.js';
 import '../controls/settings_toggle_button.js';
 import '../settings_page/settings_subpage.js';
+import '../settings_shared.css.js';
 
 import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import {CrSettingsPrefs} from '/shared/settings/prefs/prefs_types.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {AiEnterpriseFeaturePrefName} from '../ai_page/constants.js';
+import type {ModelExecutionEnterprisePolicyValue} from '../ai_page/constants.js';
 import {EntityTypeName} from '../autofill_ai_enums.mojom-webui.js';
 import type {EntityDataManagerProxy} from '../autofill_page/entity_data_manager_proxy.js';
 import {EntityDataManagerProxyImpl} from '../autofill_page/entity_data_manager_proxy.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {loadTimeData} from '../i18n_setup.js';
+import type {MetricsBrowserProxy} from '../metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl, SuggestionsFromGeminiEntryPoint} from '../metrics_browser_proxy.js';
+import {routes} from '../route.js';
+import {Router} from '../router.js';
 import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
 
 import {getTemplate} from './identity_docs_page.html.js';
+import {checkAutofillPoliciesAndModifyPrefIfNecessary} from './policy_utils.js';
 
 export interface SettingsIdentityDocsPageElement {
   $: {
@@ -102,24 +112,35 @@ export class SettingsIdentityDocsPageElement extends
        */
       identityDocsOptedIn_: {
         type: Object,
-        computed:
-            'computeIdentityDocsOptedIn_(enhancedAutofillEligibleUser_, ' +
-            'enhancedAutofillOptedIn_, ' +
-            'prefs.autofill.autofill_ai.identity_entities_enabled, ' +
-            'prefs.autofill.profile_enabled.value)',
+        computed: `computeIdentityDocsOptedIn_(enhancedAutofillEligibleUser_,
+              enhancedAutofillOptedIn_,
+              prefs.autofill.autofill_ai.identity_entities_enabled,
+              prefs.autofill.profile_enabled.value,
+              prefs.${AiEnterpriseFeaturePrefName.AUTOFILL_AI},
+              prefsInitialized_)`,
       },
 
       /**
         If true, Autofill AI does not depend on whether Autofill for addresses
         is enabled.
       */
-      // TODO(crbug.com/466345561): remove when enhanced autofill will stop
-      // depending on addresses autofill
-      autofillAiIgnoresWhetherAddressFillingIsEnabled_: {
+      autofillSettingsEnterprisePolicyEnabled_: {
         type: Boolean,
         value() {
           return loadTimeData.getBoolean(
-              'AutofillAiIgnoresWhetherAddressFillingIsEnabled');
+              'AutofillSettingsEnterprisePolicyEnabled');
+        },
+      },
+
+      prefsInitialized_: {
+        type: Boolean,
+        value: false,
+      },
+
+      showSuggestionsFromGeminiSettings_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('showSuggestionsFromGeminiSettings');
         },
       },
     };
@@ -136,21 +157,32 @@ export class SettingsIdentityDocsPageElement extends
   declare private autofillAiAvailableByDefault_: boolean;
   declare private canEnableOrDisableAutofillAi_: boolean;
   declare private identityDocsOptedIn_: chrome.settingsPrivate.PrefObject;
-  declare private autofillAiIgnoresWhetherAddressFillingIsEnabled_: boolean;
+  declare private autofillSettingsEnterprisePolicyEnabled_: boolean;
+  declare private prefsInitialized_: boolean;
+  declare private showSuggestionsFromGeminiSettings_: boolean;
 
   private entityDataManager_: EntityDataManagerProxy =
       EntityDataManagerProxyImpl.getInstance();
 
+  private metricsBrowserProxy_: MetricsBrowserProxy =
+      MetricsBrowserProxyImpl.getInstance();
 
   override connectedCallback() {
     super.connectedCallback();
+
+    CrSettingsPrefs.initialized.then(() => {
+      this.prefsInitialized_ = true;
+    });
   }
 
   private optInToggleDisabled_(): boolean {
+    if (!this.prefsInitialized_) {
+      return true;
+    }
+
     const addressAutofillOptInStatus =
         this.getPref<boolean>('autofill.profile_enabled').value;
-    const ignoreAddressAutofill =
-        this.autofillAiIgnoresWhetherAddressFillingIsEnabled_;
+    const ignoreAddressAutofill = this.autofillSettingsEnterprisePolicyEnabled_;
     if (this.autofillAiAvailableByDefault_) {
       return !this.canEnableOrDisableAutofillAi_ ||
           (!ignoreAddressAutofill && !addressAutofillOptInStatus);
@@ -185,14 +217,27 @@ export class SettingsIdentityDocsPageElement extends
     const fakePref: chrome.settingsPrivate.PrefObject<boolean> = {
       key: 'fake',
       type: chrome.settingsPrivate.PrefType.BOOLEAN,
-      value: this.getPref<boolean>(
-                     'autofill.autofill_ai.identity_entities_enabled')
-                 .value,
+      value: false,
     };
+
+    if (!this.prefsInitialized_) {
+      return fakePref;
+    }
+
+    fakePref.value =
+        this.getPref<boolean>('autofill.autofill_ai.identity_entities_enabled')
+            .value;
 
     if (this.optInToggleDisabled_()) {
       fakePref.value = false;
     }
+
+    const addressPolicy = this.getPref<boolean>('autofill.profile_enabled');
+    const autofillAiPolicy = this.getPref<ModelExecutionEnterprisePolicyValue>(
+        AiEnterpriseFeaturePrefName.AUTOFILL_AI);
+
+    checkAutofillPoliciesAndModifyPrefIfNecessary(
+        fakePref, addressPolicy, autofillAiPolicy);
 
     return fakePref;
   }
@@ -209,6 +254,37 @@ export class SettingsIdentityDocsPageElement extends
       EntityTypeName.kNationalIdCard,
       EntityTypeName.kPassport,
     ]);
+  }
+
+  private getMetricEntityTypes_(): Record<EntityTypeName, string> {
+    return {
+      [EntityTypeName.kDriversLicense]: 'DriversLicense',
+      [EntityTypeName.kNationalIdCard]: 'NationalIdCard',
+      [EntityTypeName.kPassport]: 'Passport',
+    } as Record<EntityTypeName, string>;
+  }
+
+  private extensionControlledIndicatorIsVisible_(): boolean {
+    if (!this.prefsInitialized_) {
+      return false;
+    }
+
+    const addressAutofillEnabled =
+        this.getPref<boolean>('autofill.profile_enabled');
+
+    return !!addressAutofillEnabled.extensionId &&
+        !addressAutofillEnabled.value;
+  }
+
+  private onSuggestionsFromGeminiClick_() {
+    this.metricsBrowserProxy_.recordSuggestionsFromGeminiEntryPointClick(
+        SuggestionsFromGeminiEntryPoint.IDENTITY_DOCS);
+    Router.getInstance().navigateTo(routes.SUGGESTIONS_FROM_GEMINI);
+  }
+
+  // SettingsViewMixin implementation.
+  override focusBackButton() {
+    this.shadowRoot!.querySelector('settings-subpage')!.focusBackButton();
   }
 }
 

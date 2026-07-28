@@ -9,7 +9,20 @@
 //! performance-critical code may need to use the lower-level types in the
 //! `mojo_rust_system_bindings` crate instead.
 
+mod multiplex_router;
+
+mod marker_types;
+mod pending_associated_endpoint;
+mod pending_associated_endpoint_parsing;
+mod pending_endpoint;
+
 pub mod interface;
 pub mod message;
 pub mod message_header;
 pub mod message_pipe_watcher;
+pub mod receiver;
+pub mod remote;
+
+pub mod for_testing {
+    pub use crate::pending_associated_endpoint_parsing::DummyRegistrarForTesting;
+}

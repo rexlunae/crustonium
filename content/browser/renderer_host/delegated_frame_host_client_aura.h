@@ -34,7 +34,7 @@ class CONTENT_EXPORT DelegatedFrameHostClientAura
   }
 
   // DelegatedFrameHostClient implementation.
-  ui::Layer* DelegatedFrameHostGetLayer() const override;
+  ui::LayerSurface* GetDelegatedFrameHostLayer() const override;
   bool DelegatedFrameHostIsVisible() const override;
   SkColor DelegatedFrameHostGetGutterColor() const override;
   void OnFrameTokenChanged(uint32_t frame_token,
@@ -43,6 +43,7 @@ class CONTENT_EXPORT DelegatedFrameHostClientAura
   void InvalidateLocalSurfaceIdOnEviction() override;
   viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction() override;
   bool ShouldShowStaleContentOnEviction() override;
+  cc::DeadlinePolicy GetResizeDeadlinePolicy() const override;
 
  private:
   raw_ptr<RenderWidgetHostViewAura> render_widget_host_view_;

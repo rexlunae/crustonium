@@ -7,10 +7,12 @@
 #include <algorithm>
 #include <atomic>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
 #include "base/compiler_specific.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
@@ -275,8 +277,8 @@ void VizDebugger::ApplyFilters(VizDebugger::StaticSource* src) {
     if (filter_match.empty() || source_str == nullptr) {
       return true;
     }
-    return UNSAFE_TODO(std::strstr(source_str, filter_match.c_str())) !=
-           nullptr;
+    return std::string_view(source_str).find(filter_match) !=
+           std::string_view::npos;
   };
 
   for (const auto& filter_block : cached_filters_) {

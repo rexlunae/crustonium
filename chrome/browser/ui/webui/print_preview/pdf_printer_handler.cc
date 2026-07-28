@@ -26,11 +26,12 @@
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/printing/print_preview_sticky_settings.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/account_id/account_id.h"
 #include "components/cloud_devices/common/printer_description.h"
+#include "components/pdf/common/constants.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -311,7 +312,8 @@ void PdfPrinterHandler::StartPrint(
   bool is_savable = false;
   if (initiator) {
     initiator_url = initiator->GetLastCommittedURL();
-    is_savable = initiator->IsSavable();
+    is_savable = initiator->IsSavable() ||
+                 initiator->GetContentsMimeType() == pdf::kPDFMimeType;
   }
   base::FilePath path = GetFileName(initiator_url, job_title, is_savable);
 

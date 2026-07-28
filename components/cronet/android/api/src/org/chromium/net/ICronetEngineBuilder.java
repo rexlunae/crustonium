@@ -3,8 +3,6 @@
 // found in the LICENSE file.
 package org.chromium.net;
 
-import androidx.annotation.Nullable;
-
 import java.util.Collections;
 import java.util.Date;
 import java.util.Set;
@@ -16,7 +14,7 @@ import java.util.Set;
  * org.chromium.net.CronetEngine.Builder} and {@link
  * org.chromium.net.ExperimentalCronetEngine.Builder}.
  *
- * <p>{@hide internal class}
+ * @hide
  */
 public abstract class ICronetEngineBuilder {
     // The fields below list values which are known to getSupportedConfigOptions().
@@ -70,8 +68,13 @@ public abstract class ICronetEngineBuilder {
         return this;
     }
 
-    public ICronetEngineBuilder setProxyOptions(@Nullable ProxyOptions proxyOptions) {
-        // API layer last resort: prevents calling setProxyOptions on an implementation that does
+    // This was originally named setProxyOptions. While experimental, Cronet's proxy API received
+    // many non-ABI stable changes. To avoid a call to setProxyOptions to succeed, only for
+    // Proxy.HttpConnectCallback to fail later on (due to ABI mismatch), this has been renamed to
+    // setProxyOptionsV2. This way, callers will always get an UnsupportedOperationException at
+    // CronetEngine.Builder#setProxyOptions time, if the implementation being used is too old.
+    public ICronetEngineBuilder setProxyOptionsV2(ProxyOptions proxyOptions) {
+        // API layer last resort: prevents calling setProxyOptionsV2 on an implementation that does
         // not know about it.
         throw new UnsupportedOperationException(
                 "This Cronet implementation does not support ProxyOptions");

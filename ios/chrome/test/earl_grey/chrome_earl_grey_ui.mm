@@ -9,8 +9,9 @@
 #import "base/test/ios/wait_util.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_app_interface.h"
+#import "ios/chrome/browser/infobars/ui_bundled/banners/infobar_banner_constants.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/clear_browsing_data/public/quick_delete_constants.h"
+#import "ios/chrome/browser/settings/clear_browsing_data/public/quick_delete_constants.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_constants.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -41,12 +42,11 @@ using base::test::ios::kWaitForClearBrowsingDataTimeout;
 using base::test::ios::kWaitForUIElementTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
 using chrome_test_util::BrowsingDataButtonMatcher;
-using chrome_test_util::BrowsingDataConfirmButtonMatcher;
+using chrome_test_util::BrowsingDataDoneButtonMatcher;
 using chrome_test_util::ButtonWithAccessibilityLabelId;
 using chrome_test_util::ClearAutofillButton;
 using chrome_test_util::ClearBrowsingDataButton;
 using chrome_test_util::ClearBrowsingDataView;
-using chrome_test_util::ClearSavedPasswordsButton;
 using chrome_test_util::ContextMenuItemWithAccessibilityLabel;
 using chrome_test_util::SettingsActionButton;
 using chrome_test_util::SettingsDestinationButton;
@@ -87,7 +87,7 @@ id<GREYAction> PageSheetScrollDown() {
   }
 
   // And for iOS 26, the updated table view layout also makes this too big.
-  if (@available(iOS 19.0, *)) {
+  if (@available(iOS 26.0, *)) {
     menu_scroll_displacement = 250;
   }
   return grey_scrollInDirection(kGREYDirectionDown, menu_scroll_displacement);
@@ -102,6 +102,12 @@ id<GREYAction> ScrollRight() {
   // down the scroll.
   CGFloat const kMenuScrollDisplacement = 150;
   return grey_scrollInDirection(kGREYDirectionRight, kMenuScrollDisplacement);
+}
+
+// Returns a matcher for the title of the Quick Delete Browsing Data page.
+id<GREYMatcher> QuickDeleteBrowsingDataPageTitleMatcher() {
+  return chrome_test_util::NavigationBarTitleWithAccessibilityLabelId(
+      IDS_IOS_DELETE_BROWSING_DATA_TITLE);
 }
 
 bool IsAppCompactWidth() {
@@ -120,20 +126,44 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
 
 @implementation ChromeEarlGreyUIImpl
 
-- (void)openToolsMenu {
-  // TODO(crbug.com/41271107): Add logic to ensure the app is in the correct
-  // state, for example DCHECK if no tabs are displayed.
-  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:
-                      grey_allOf(chrome_test_util::ToolsMenuButton(),
-                                 grey_sufficientlyVisible(), nil)];
+// Helper to open the tools menu using the given `buttonMatcher`.
+- (void)openToolsMenuWithMatcher:(id<GREYMatcher>)buttonMatcher {
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:grey_allOf(buttonMatcher,
+                                                     grey_sufficientlyVisible(),
+                                                     nil)];
   [[[EarlGrey
-      selectElementWithMatcher:grey_allOf(chrome_test_util::ToolsMenuButton(),
+      selectElementWithMatcher:grey_allOf(buttonMatcher,
                                           grey_sufficientlyVisible(), nil)]
          usingSearchAction:grey_swipeSlowInDirection(kGREYDirectionDown)
       onElementWithMatcher:chrome_test_util::WebStateScrollViewMatcher()]
       performAction:grey_tap()];
-  // TODO(crbug.com/41271101): Add webViewScrollView matcher so we don't have
-  // to always find it.
+}
+
+- (void)openToolsMenu {
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    // Dismiss infobar banner if present, as it might cover the tools menu
+    // button.
+    NSError* error = nil;
+    [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                            kInfobarBannerViewIdentifier)]
+        assertWithMatcher:grey_sufficientlyVisible()
+                    error:&error];
+    if (!error) {
+      [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                              kInfobarBannerViewIdentifier)]
+          performAction:grey_swipeFastInDirection(kGREYDirectionUp)];
+    }
+  }
+
+  // TODO(crbug.com/41271107): Add logic to ensure the app is in the correct
+  // state, for example DCHECK if no tabs are displayed.
+  if ([ChromeEarlGrey isChromeNextEnabled] && ![ChromeEarlGrey isIPadIdiom] &&
+      ![ChromeEarlGrey isIncognitoMode] && [ChromeEarlGrey isCurrentTabNTP]) {
+    [self openToolsMenuWithMatcher:chrome_test_util::ToolsMenuNTPButton()];
+  } else {
+    [self openToolsMenuWithMatcher:chrome_test_util::ToolsMenuButton()];
+  }
 }
 
 - (void)closeToolsMenu {
@@ -243,13 +273,13 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
       performAction:grey_tap()];
 }
 
-- (void)openAndClearBrowsingDataFromHistory {
-  // Open Clear Browsing Data Button
+- (void)clearBrowsingDataFromHistory {
+  // Open Clear Browsing Data Button.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
                                           HistoryClearBrowsingDataButton()]
       performAction:grey_tap()];
   [self waitForClearBrowsingDataViewVisible:YES];
-  [self selectAllBrowsingDataAndClear];
+  [self deleteAllBrowsingData];
 }
 
 - (void)assertHistoryHasNoEntries {
@@ -363,11 +393,16 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
 }
 
 - (void)openNewTab {
-  [self openToolsMenu];
-  id<GREYMatcher> newTabButtonMatcher =
-      grey_accessibilityID(kToolsMenuNewTabId);
-  [[EarlGrey selectElementWithMatcher:newTabButtonMatcher]
-      performAction:grey_tap()];
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::NewTabButton()]
+        performAction:grey_tap()];
+  } else {
+    [self openToolsMenu];
+    id<GREYMatcher> newTabButtonMatcher =
+        grey_accessibilityID(kToolsMenuNewTabId);
+    [[EarlGrey selectElementWithMatcher:newTabButtonMatcher]
+        performAction:grey_tap()];
+  }
   [self waitForAppToIdle];
 }
 
@@ -413,8 +448,33 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
 }
 
 - (void)openShareMenu {
+  NSError* error = nil;
+  // In ChromeNext IA, the share button may be hidden on the toolbar in portrait
+  // mode and moved to the overflow menu. Check if it's visible on the toolbar
+  // first, and if not, fall back to opening the tools menu and tapping the
+  // share action there.
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
+      assertWithMatcher:grey_sufficientlyVisible()
+                  error:&error];
+  if (error) {
+    [self openToolsMenu];
+    [self tapToolsMenuAction:chrome_test_util::ButtonWithAccessibilityLabelId(
+                                 IDS_IOS_TOOLS_MENU_SHARE_THIS_PAGE)];
+    return;
+  }
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
       performAction:grey_tap()];
+}
+
+- (void)shareCurrentPage {
+  if ([ChromeEarlGrey isChromeNextEnabled] &&
+      ![ChromeEarlGrey isCompactHeight]) {
+    [self openToolsMenu];
+    [self tapToolsMenuAction:chrome_test_util::OverflowMenuShareButton()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
+        performAction:grey_tap()];
+  }
 }
 
 - (void)waitForToolbarVisible:(BOOL)isVisible {
@@ -545,8 +605,8 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
 #pragma mark - Private
 
 // Clears all browsing data from the device. This method needs to be called when
-// the "Clear Browsing Data" panel is opened.
-- (void)selectAllBrowsingDataAndClear {
+// the "Delete Browsing Data" panel is opened.
+- (void)deleteAllBrowsingData {
   // Set 'Time Range' to 'All Time'.
   [[EarlGrey selectElementWithMatcher:
                  grey_text(l10n_util::GetNSString(
@@ -564,20 +624,19 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
   // Tap on the browsing data subpage.
   [ChromeEarlGreyUI tapPrivacyMenuButton:BrowsingDataButtonMatcher()];
 
-  // Check "Saved Passwords" and "Autofill Data" which are unchecked by
-  // default.
-  [ChromeEarlGrey
-      waitForSufficientlyVisibleElementWithMatcher:ClearSavedPasswordsButton()];
-  [[EarlGrey selectElementWithMatcher:ClearSavedPasswordsButton()]
-      performAction:grey_tap()];
+  // Wait for the "Browsing data" page to appear.
+  [ChromeEarlGrey waitForSufficientlyVisibleElementWithMatcher:
+                      QuickDeleteBrowsingDataPageTitleMatcher()];
+
+  // Check "Autofill Data" which is unchecked by default.
   [[[EarlGrey
       selectElementWithMatcher:grey_allOf(ClearAutofillButton(),
                                           grey_sufficientlyVisible(), nil)]
          usingSearchAction:grey_swipeSlowInDirection(kGREYDirectionUp)
       onElementWithMatcher:ClearBrowsingDataView()] performAction:grey_tap()];
 
-  // Tap the confirm button to save the prefs.
-  [[EarlGrey selectElementWithMatcher:BrowsingDataConfirmButtonMatcher()]
+  // Tap the done button to save the prefs.
+  [[EarlGrey selectElementWithMatcher:BrowsingDataDoneButtonMatcher()]
       performAction:grey_tap()];
 
   // Clear data, and confirm.

@@ -87,7 +87,7 @@ size_t TimeToSampleFrame(double time,
   //
   // The oversampling factor MUST be a power of two so as not to introduce
   // additional round-off in computing the oversample frame number.
-  const double oversample_factor = 1024;
+  constexpr double oversample_factor = 1024;
   double frame =
       round(time * sample_rate * oversample_factor) / oversample_factor;
 
@@ -205,7 +205,7 @@ const std::string GetDeviceEnumerationForTracing(
     const Vector<WebMediaDeviceInfo>& device_infos) {
   std::ostringstream s;
 
-  for (auto device_info : device_infos) {
+  for (const auto& device_info : device_infos) {
     s << "{ label: " << device_info.label
       << ", device_id: " << device_info.device_id
       << ", group_id: " << device_info.group_id << " }";

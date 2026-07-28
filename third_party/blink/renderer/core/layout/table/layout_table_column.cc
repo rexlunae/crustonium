@@ -71,7 +71,7 @@ void LayoutTableColumn::StyleDidChange(
         if (StyleRef().HasBackground() || old_style->HasBackground())
           table->SetBackgroundNeedsFullPaintInvalidation();
       }
-      if (diff.NeedsLayout()) {
+      if (diff.NeedsFullLayout()) {
         table->SetIntrinsicLogicalWidthsDirty();
         if (old_style &&
             TableTypes::CreateColumn(*old_style,
@@ -162,7 +162,7 @@ void LayoutTableColumn::UpdateFromElement() {
         layout_invalidation_reason::kAttributeChanged);
     if (LayoutTable* table = Table()) {
       table->GridBordersChanged();
-      if (Style()->HasBackground() || TableHasColumnsWithBackground(table)) {
+      if (StyleRef().HasBackground() || TableHasColumnsWithBackground(table)) {
         table->SetBackgroundNeedsFullPaintInvalidation();
       }
     }

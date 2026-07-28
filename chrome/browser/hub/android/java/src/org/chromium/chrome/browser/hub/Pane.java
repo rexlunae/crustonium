@@ -12,6 +12,8 @@ import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
 import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController.MenuOrKeyboardActionHandler;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 
@@ -24,6 +26,19 @@ public interface Pane extends BackPressHandler {
 
     /** Returns the {@link ViewGroup} containing the contents of the Pane. */
     ViewGroup getRootView();
+
+    /**
+     * Returns whether a touch event at the given coordinates (relative to the pane's root view) is
+     * on an interactive element (such as a tab card) that should handle touch gestures instead of
+     * triggering pane switching.
+     *
+     * @param x The x-coordinate of the touch event relative to the pane's root view.
+     * @param y The y-coordinate of the touch event relative to the pane's root view.
+     * @return whether the touch event is on an interactive element.
+     */
+    default boolean isTouchOnInteractiveElement(float x, float y) {
+        return false;
+    }
 
     /** Returns the {@link MenuOrKeyboardActionHandler} for the Pane. */
     @Nullable MenuOrKeyboardActionHandler getMenuOrKeyboardActionHandler();

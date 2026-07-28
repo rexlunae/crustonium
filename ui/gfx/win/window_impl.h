@@ -19,6 +19,8 @@ namespace gfx {
 // ProcessWindowMessage is implemented by the BEGIN_MESSAGE_MAP_EX macro.
 class MessageMapInterface {
  public:
+  virtual ~MessageMapInterface() = default;
+
   // Processes one message from the window's message queue.
   virtual BOOL ProcessWindowMessage(HWND window,
                                     UINT message,
@@ -45,7 +47,7 @@ class COMPONENT_EXPORT(GFX) WindowImpl : public MessageMapInterface {
   WindowImpl(const WindowImpl&) = delete;
   WindowImpl& operator=(const WindowImpl&) = delete;
 
-  virtual ~WindowImpl();
+  ~WindowImpl() override;
 
   // Causes all generated windows classes to be unregistered at exit.
   // This can cause result in errors for tests that don't destroy all instances
@@ -70,6 +72,10 @@ class COMPONENT_EXPORT(GFX) WindowImpl : public MessageMapInterface {
   // Sets the extended window styles. See comment about |set_window_style|.
   void set_window_ex_style(DWORD style) { window_ex_style_ = style; }
   DWORD window_ex_style() const { return window_ex_style_; }
+
+  void set_window_name(const wchar_t* name) { window_name_ = name; }
+
+  void set_window_class_name(const wchar_t* name) { class_name_ = name; }
 
   // Sets the class style to use. The default is CS_DBLCLKS.
   void set_initial_class_style(UINT class_style) {
@@ -117,6 +123,12 @@ class COMPONENT_EXPORT(GFX) WindowImpl : public MessageMapInterface {
 
   // Style of the class to use.
   UINT class_style_;
+
+  // Name of the window class to use. Otherwise one will be generated.
+  const wchar_t* class_name_ = nullptr;
+
+  // Name of the window to use.  Otherwise it will be null.
+  const wchar_t* window_name_ = nullptr;
 
   // Our hwnd.
   HWND hwnd_ = nullptr;

@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Process;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 
@@ -66,7 +67,8 @@ public class ThreadedInputConnectionFactory implements ChromiumBaseInputConnecti
 
         static {
             HandlerThread handlerThread =
-                    new HandlerThread("InputConnectionHandlerThread", HandlerThread.NORM_PRIORITY);
+                    new HandlerThread(
+                            "InputConnectionHandlerThread", Process.THREAD_PRIORITY_URGENT_DISPLAY);
             handlerThread.start();
             sHandler = new Handler(handlerThread.getLooper());
         }
@@ -304,7 +306,7 @@ public class ThreadedInputConnectionFactory implements ChromiumBaseInputConnecti
 
     @Override
     public void onWindowFocusChanged(boolean gainFocus) {
-        if (DEBUG_LOGS) Log.d(TAG, "onWindowFocusChanged: " + gainFocus);
+        if (DEBUG_LOGS) Log.d(TAG, "onWindowFocusChanged: %b", gainFocus);
         if (!gainFocus && mCheckInvalidator != null) mCheckInvalidator.invalidate();
         if (mProxyView != null) mProxyView.onOriginalViewWindowFocusChanged(gainFocus);
         if (!gainFocus) {
@@ -318,7 +320,7 @@ public class ThreadedInputConnectionFactory implements ChromiumBaseInputConnecti
 
     @Override
     public void onViewFocusChanged(boolean gainFocus) {
-        if (DEBUG_LOGS) Log.d(TAG, "onViewFocusChanged: " + gainFocus);
+        if (DEBUG_LOGS) Log.d(TAG, "onViewFocusChanged: %b", gainFocus);
         if (!gainFocus && mCheckInvalidator != null) mCheckInvalidator.invalidate();
         if (mProxyView != null) mProxyView.onOriginalViewFocusChanged(gainFocus);
         if (mFocusState == FocusState.WINDOW_FOCUS_LOST) {

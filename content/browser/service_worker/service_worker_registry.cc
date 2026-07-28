@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/check_is_test.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -119,35 +120,23 @@ void CheckForClientWriteFailure(
   }
 }
 
-void FindRegistrationForClientUrlTraceEventBegin(int64_t trace_event_id,
-                                                 const GURL& client_url) {
-  CHECK(client_url.is_valid());
-  TRACE_EVENT_BEGIN("ServiceWorker",
-                    "ServiceWorkerRegistry::FindRegistrationForClientUrl",
-                    perfetto::NamedTrack(
-                        "ServiceWorkerRegistry::FindRegistrationForClientUrl",
-                        trace_event_id),
-                    "URL", client_url.spec());
-}
-
-void FindRegistrationForClientUrlTraceEventEnd(
+void FindRegistrationForClientUrlTraceEventStatus(
     int64_t trace_event_id,
     blink::ServiceWorkerStatusCode status,
     std::optional<std::string> info) {
   // ServiceWorkerRegistry::FindRegistrationForClientUrl
   if (info) {
-    TRACE_EVENT_END("ServiceWorker",
-                    perfetto::NamedTrack(
-                        "ServiceWorkerRegistry::FindRegistrationForClientUrl",
-                        trace_event_id),
-                    "Status", blink::ServiceWorkerStatusToString(status),
-                    "Info", *info);
+    TRACE_EVENT(
+        "ServiceWorker",
+        "ServiceWorkerRegistry::FindRegistrationForClientUrlStatus",
+        perfetto::Flow::ProcessScoped(trace_event_id, "ServiceWorkerRegistry"),
+        "Status", blink::ServiceWorkerStatusToString(status), "Info", *info);
   } else {
-    TRACE_EVENT_END("ServiceWorker",
-                    perfetto::NamedTrack(
-                        "ServiceWorkerRegistry::FindRegistrationForClientUrl",
-                        trace_event_id),
-                    "Status", blink::ServiceWorkerStatusToString(status));
+    TRACE_EVENT(
+        "ServiceWorker",
+        "ServiceWorkerRegistry::FindRegistrationForClientUrlStatus",
+        perfetto::Flow::ProcessScoped(trace_event_id, "ServiceWorkerRegistry"),
+        "Status", blink::ServiceWorkerStatusToString(status));
   }
 }
 
@@ -301,6 +290,10 @@ void ServiceWorkerRegistry::CreateNewVersion(
     scoped_refptr<ServiceWorkerRegistration> registration,
     const GURL& script_url,
     blink::mojom::ScriptType script_type,
+    const std::optional<base::UnguessableToken>&
+        creator_network_restrictions_id,
+    const std::optional<base::UnguessableToken>& network_restrictions_id,
+    const PolicyContainerPolicies& creator_policies,
     NewVersionCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(registration);
@@ -308,7 +301,9 @@ void ServiceWorkerRegistry::CreateNewVersion(
       &storage::mojom::ServiceWorkerStorageControl::GetNewVersionId,
       base::BindOnce(&ServiceWorkerRegistry::DidGetNewVersionId,
                      weak_factory_.GetWeakPtr(), registration, script_url,
-                     script_type, std::move(callback)));
+                     script_type, creator_network_restrictions_id,
+                     network_restrictions_id, creator_policies.Clone(),
+                     std::move(callback)));
 }
 
 void ServiceWorkerRegistry::FindRegistrationForClientUrl(
@@ -396,8 +391,7 @@ void ServiceWorkerRegistry::FindRegistrationForClientUrl(
       // Since FindFromLiveRegistrationsForId() can return std::nullopt or
       // nullptr, both cases must be checked.
       if (registration.has_value() && registration.value()) {
-        FindRegistrationForClientUrlTraceEventBegin(trace_event_id, client_url);
-        FindRegistrationForClientUrlTraceEventEnd(
+        FindRegistrationForClientUrlTraceEventStatus(
             trace_event_id, blink::ServiceWorkerStatusCode::kOk, std::nullopt);
         CompleteFindNow(std::move(*registration),
                         blink::ServiceWorkerStatusCode::kOk,
@@ -422,10 +416,9 @@ void ServiceWorkerRegistry::FindRegistrationForClientUrl(
     callback = base::DoNothing();
   }
 
-  FindRegistrationForClientUrlTraceEventBegin(trace_event_id, client_url);
-
   if (service_worker_loader_helpers::IsEligibleForSyntheticResponse(
-          context_->wrapper()->browser_context(), client_url)) {
+          context_->wrapper()->browser_context(),
+          context_->wrapper()->storage_partition(), client_url)) {
     // If `client_url` is eligible for SyntheticResponse, create a fake
     // ServiceWorker registration so that the navigation is handled by
     // ServiceWorker main resource loader.
@@ -439,8 +432,8 @@ void ServiceWorkerRegistry::FindRegistrationForClientUrl(
     // `ServiceWorkerBackgroundUpdateForFindRegistrationForClientUrl`) will
     // eliminate this IPC overhead.
     storage::mojom::ServiceWorkerFindRegistrationResultPtr result =
-        service_worker_loader_helpers::CreateSyntheticRegistration(client_url,
-                                                                   key);
+        service_worker_loader_helpers::GetOrCreateSyntheticRegistration(
+            &*context_, client_url, key);
     DidFindRegistrationForClientUrl(
         client_url, key, trace_event_id, std::move(callback),
         storage::mojom::ServiceWorkerDatabaseStatus::kOk, std::move(result),
@@ -645,12 +638,13 @@ void ServiceWorkerRegistry::StoreRegistration(
     return;
   }
 
-  uint64_t resources_total_size_bytes = 0;
+  base::ByteSize resources_total_size;
   for (const auto& resource : resources) {
-    DCHECK_GE(resource->size_bytes, 0);
-    resources_total_size_bytes += resource->size_bytes;
+    // `content_length` can be -1 if error; sub in 0 here if failed.
+    // TODO(https://crbug.com/474382520): Add in error handling.
+    resources_total_size += resource->size.value();
   }
-  data->resources_total_size_bytes = resources_total_size_bytes;
+  data->resources_total_size = resources_total_size;
 
   ClearInternalCacheForStorageKey(registration->key());
 
@@ -658,7 +652,7 @@ void ServiceWorkerRegistry::StoreRegistration(
       &storage::mojom::ServiceWorkerStorageControl::StoreRegistration,
       base::BindOnce(&ServiceWorkerRegistry::DidStoreRegistration,
                      weak_factory_.GetWeakPtr(), registration->id(),
-                     resources_total_size_bytes, registration->scope(),
+                     resources_total_size.InBytes(), registration->scope(),
                      registration->key(), std::move(callback)),
       std::move(data), std::move(resources));
 }
@@ -1200,8 +1194,10 @@ ServiceWorkerRegistry::GetOrCreateRegistration(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   scoped_refptr<ServiceWorkerRegistration> registration =
       context_->GetLiveRegistration(data.registration_id);
-  if (registration)
+  if (registration) {
+    CHECK_EQ(registration->key(), data.key);
     return registration;
+  }
 
   blink::mojom::ServiceWorkerRegistrationOptions options(
       data.scope, data.script_type, data.update_via_cache);
@@ -1209,16 +1205,29 @@ ServiceWorkerRegistry::GetOrCreateRegistration(
       options, data.key, data.registration_id, context_->AsWeakPtr(),
       data.ancestor_frame_type);
   registration->SetStored();
-  registration->set_resources_total_size_bytes(data.resources_total_size_bytes);
+  registration->set_resources_total_size(data.resources_total_size);
   registration->set_last_update_check(data.last_update_check);
   DCHECK(!uninstalling_registrations_.contains(data.registration_id));
 
   scoped_refptr<ServiceWorkerVersion> version =
       context_->GetLiveVersion(data.version_id);
-  if (!version) {
+  if (version) {
+    CHECK_EQ(version->key(), data.key);
+  } else {
     version = base::MakeRefCounted<ServiceWorkerVersion>(
         registration.get(), data.script, data.script_type, data.version_id,
-        std::move(version_reference), context_->AsWeakPtr());
+        std::move(version_reference), context_->AsWeakPtr(),
+        // Creator network restrictions are not inherited for restored
+        // registrations, as the connection allowlist origin trial is only
+        // valid for network responses.
+        /*creator_network_restrictions_id=*/std::nullopt,
+        // Restored versions will generate a new network restrictions ID when
+        // they are next started.
+        /*network_restrictions_id=*/std::nullopt,
+        data.policy_container_policies
+            ? PolicyContainerPolicies(*data.policy_container_policies,
+                                      /*is_web_secure_context=*/true)
+            : PolicyContainerPolicies());
     version->set_fetch_handler_type(data.fetch_handler_type);
     // `has_hid_event_handlers_` in ServiceWorkerVersion should be set before
     // changing the status to ACTIVATED.
@@ -1306,10 +1315,9 @@ void ServiceWorkerRegistry::DidFindRegistrationForClientUrl(
     storage::mojom::ServiceWorkerDatabaseStatus database_status,
     storage::mojom::ServiceWorkerFindRegistrationResultPtr result,
     const std::optional<std::vector<GURL>>& scopes) {
-  TRACE_EVENT("ServiceWorker",
-              "ServiceWorkerRegistry::DidFindRegistrationForClientUrl",
-              perfetto::TerminatingFlow::ProcessScoped(
-                  trace_event_id, "ServiceWorkerRegistry"));
+  TRACE_EVENT(
+      "ServiceWorker", "ServiceWorkerRegistry::DidFindRegistrationForClientUrl",
+      perfetto::Flow::ProcessScoped(trace_event_id, "ServiceWorkerRegistry"));
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // Discard RegistrationScopes from storage_shared_buffer.
   storage_shared_buffer().TakeRegistrationScopes();
@@ -1318,7 +1326,6 @@ void ServiceWorkerRegistry::DidFindRegistrationForClientUrl(
   if (database_status != storage::mojom::ServiceWorkerDatabaseStatus::kOk &&
       database_status !=
           storage::mojom::ServiceWorkerDatabaseStatus::kErrorNotFound) {
-    DCHECK(!scopes);
     // The following `ScheduleDeleteAndStartOver()` calls
     // `ClearAllInternalCache()`. Therefore, no need to call
     // `ClearInternalCacheForStorageKey()` here.
@@ -1346,7 +1353,7 @@ void ServiceWorkerRegistry::DidFindRegistrationForClientUrl(
           installing_registration->is_deleted()
               ? blink::ServiceWorkerStatusCode::kErrorNotFound
               : blink::ServiceWorkerStatusCode::kOk;
-      FindRegistrationForClientUrlTraceEventEnd(
+      FindRegistrationForClientUrlTraceEventStatus(
           trace_event_id, status,
           (installing_status == blink::ServiceWorkerStatusCode::kOk)
               ? "Installing registration is found"
@@ -1382,8 +1389,8 @@ void ServiceWorkerRegistry::DidFindRegistrationForClientUrl(
     }
   }
 
-  FindRegistrationForClientUrlTraceEventEnd(trace_event_id, status,
-                                            std::nullopt);
+  FindRegistrationForClientUrlTraceEventStatus(trace_event_id, status,
+                                               std::nullopt);
   if (kServiceWorkerMergeFindRegistrationForClientUrlEnabled) {
     RunFindRegistrationCallbacks(client_url, key, std::move(registration),
                                  status);
@@ -1570,8 +1577,7 @@ void ServiceWorkerRegistry::DidGetAllRegistrations(
     info.key = registration_data->key;
     info.update_via_cache = registration_data->update_via_cache;
     info.registration_id = registration_data->registration_id;
-    info.stored_version_size_bytes =
-        registration_data->resources_total_size_bytes;
+    info.stored_version_size = registration_data->resources_total_size;
     info.navigation_preload_enabled =
         registration_data->navigation_preload_state->enabled;
     info.navigation_preload_header_length =
@@ -1690,8 +1696,9 @@ void ServiceWorkerRegistry::NotifyRegistrationStored(
     StatusCallback callback) {
   registered_storage_keys_.insert(key);
 
-  context_->NotifyRegistrationStored(stored_registration_id, stored_scope, key,
-                                     stored_resources_total_size_bytes);
+  context_->NotifyRegistrationStored(
+      stored_registration_id, stored_scope, key,
+      base::ByteSize(stored_resources_total_size_bytes));
 
   if (storage_policy_observer_) {
     storage_policy_observer_->StartTrackingOrigin(key.origin());
@@ -1884,6 +1891,10 @@ void ServiceWorkerRegistry::DidGetNewVersionId(
     scoped_refptr<ServiceWorkerRegistration> registration,
     const GURL& script_url,
     blink::mojom::ScriptType script_type,
+    const std::optional<base::UnguessableToken>&
+        creator_network_restrictions_id,
+    const std::optional<base::UnguessableToken>& network_restrictions_id,
+    const PolicyContainerPolicies& creator_policies,
     NewVersionCallback callback,
     int64_t version_id,
     mojo::PendingRemote<storage::mojom::ServiceWorkerLiveVersionRef>
@@ -1895,7 +1906,14 @@ void ServiceWorkerRegistry::DidGetNewVersionId(
   }
   auto version = base::MakeRefCounted<ServiceWorkerVersion>(
       registration.get(), script_url, script_type, version_id,
-      std::move(version_reference), context_->AsWeakPtr());
+      std::move(version_reference), context_->AsWeakPtr(),
+      // Passed through from the registration job to subject the script fetch
+      // itself to the creator's connection allowlists (via
+      // creator_network_restrictions_id) and to establish the worker's own
+      // restrictions for subsequent subresource requests (via
+      // network_restrictions_id).
+      creator_network_restrictions_id, network_restrictions_id,
+      creator_policies.Clone());
   std::move(callback).Run(std::move(version));
 }
 

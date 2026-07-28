@@ -66,7 +66,6 @@ using base::android::ConvertJavaStringToUTF8;
 using base::android::ConvertUTF16ToJavaString;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
-using base::android::RunRunnableAndroid;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 using base::android::ToJavaArrayOfStringArray;
@@ -244,9 +243,8 @@ WebContentsAndroid::WebContentsAndroid(WebContentsImpl* web_contents)
       navigation_controller_(&(web_contents->GetController())) {
   GetAllocatedWebContentsAndroids().insert(this);
   JNIEnv* env = AttachCurrentThread();
-  obj_.Reset(
-      env, Java_WebContentsImpl_create(env, reinterpret_cast<intptr_t>(this),
-                                       navigation_controller_.GetJavaObject()));
+  Java_WebContentsImpl_create(env, reinterpret_cast<intptr_t>(this),
+                              navigation_controller_.GetJavaObject());
 }
 
 WebContentsAndroid::~WebContentsAndroid() {
@@ -256,12 +254,18 @@ WebContentsAndroid::~WebContentsAndroid() {
   offset_tag_mediator_ = nullptr;
   for (auto& observer : destruction_observers_)
     observer.WebContentsAndroidDestroyed(this);
-  Java_WebContentsImpl_clearNativePtr(AttachCurrentThread(), obj_);
+
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> java_obj = GetJavaObject();
+  CHECK(!java_obj.is_null());
+  Java_WebContentsImpl_clearNativePtr(env, java_obj);
 }
 
 base::android::ScopedJavaLocalRef<jobject>
 WebContentsAndroid::GetJavaObject() {
-  return base::android::ScopedJavaLocalRef<jobject>(obj_);
+  JNIEnv* env = AttachCurrentThread();
+  return Java_WebContentsImpl_getJavaObject(env,
+                                            reinterpret_cast<intptr_t>(this));
 }
 
 void WebContentsAndroid::CaptureContentAsBitmapForTesting(
@@ -712,36 +716,31 @@ void WebContentsAndroid::RequestSmartClipExtract(
 void WebContentsAndroid::AXTreeSnapshotCallback(
     const JavaRef<jobject>& view_structure_root,
     const JavaRef<jobject>& view_structure_builder,
-    const JavaRef<jobject>& callback,
+    base::OnceClosure&& callback,
     ui::AXTreeUpdate& result) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  if (result.nodes.empty()) {
-    RunRunnableAndroid(callback);
-    return;
+  if (!result.nodes.empty()) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    std::unique_ptr<ui::AssistantTree> assistant_tree =
+        ui::CreateAssistantTree(result);
+    CreateJavaAXSnapshot(env, assistant_tree.get(),
+                         assistant_tree->nodes.front().get(),
+                         view_structure_root, view_structure_builder, true);
+    AddTreeLevelDataToViewStructure(env, view_structure_root,
+                                    view_structure_builder, result);
   }
-  std::unique_ptr<ui::AssistantTree> assistant_tree =
-      ui::CreateAssistantTree(result);
-  CreateJavaAXSnapshot(env, assistant_tree.get(),
-                       assistant_tree->nodes.front().get(), view_structure_root,
-                       view_structure_builder, true);
-  AddTreeLevelDataToViewStructure(env, view_structure_root,
-                                  view_structure_builder, result);
-  RunRunnableAndroid(callback);
+  std::move(callback).Run();
 }
 
 void WebContentsAndroid::RequestAccessibilitySnapshot(
     JNIEnv* env,
     const JavaRef<jobject>& view_structure_root,
     const JavaRef<jobject>& view_structure_builder,
-    const JavaRef<jobject>& callback) {
+    base::OnceClosure&& callback) {
   // Secure the Java objects in scoped objects and give ownership of them to the
   // base::OnceCallback below.
-  ScopedJavaGlobalRef<jobject> j_callback;
-  j_callback.Reset(env, callback);
-  ScopedJavaGlobalRef<jobject> j_view_structure_root;
-  j_view_structure_root.Reset(env, view_structure_root);
-  ScopedJavaGlobalRef<jobject> j_view_structure_builder;
-  j_view_structure_builder.Reset(env, view_structure_builder);
+  ScopedJavaGlobalRef<jobject> j_view_structure_root(env, view_structure_root);
+  ScopedJavaGlobalRef<jobject> j_view_structure_builder(env,
+                                                        view_structure_builder);
 
   // Set a timeout of 2.0 seconds to compute the snapshot of the
   // accessibility tree because Google Assistant ignores results that
@@ -752,7 +751,7 @@ void WebContentsAndroid::RequestAccessibilitySnapshot(
           base::BindOnce(
               &WebContentsAndroid::AXTreeSnapshotCallback,
               weak_factory_.GetWeakPtr(), std::move(j_view_structure_root),
-              std::move(j_view_structure_builder), std::move(j_callback)),
+              std::move(j_view_structure_builder), std::move(callback)),
           ui::AXMode(ui::kAXModeComplete.flags() | ui::AXMode::kHTML |
                      ui::AXMode::kHTMLMetadata),
           /* max_nodes= */ 5000,
@@ -765,12 +764,8 @@ ScopedJavaLocalRef<jstring> WebContentsAndroid::GetEncoding(JNIEnv* env) const {
                                                 web_contents_->GetEncoding());
 }
 
-void WebContentsAndroid::Discard(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& on_discarded) {
-  web_contents_->Discard(base::BindOnce(
-      &base::android::RunRunnableAndroid,
-      base::android::ScopedJavaGlobalRef<jobject>(on_discarded)));
+void WebContentsAndroid::Discard(base::OnceClosure&& on_discarded) {
+  web_contents_->Discard(std::move(on_discarded));
 }
 
 void WebContentsAndroid::SetOverscrollRefreshHandler(
@@ -779,8 +774,10 @@ void WebContentsAndroid::SetOverscrollRefreshHandler(
   WebContentsViewAndroid* view =
       static_cast<WebContentsViewAndroid*>(web_contents_->GetView());
   view->SetOverscrollRefreshHandler(
-      std::make_unique<ui::OverscrollRefreshHandler>(
-          overscroll_refresh_handler));
+      overscroll_refresh_handler.is_null()
+          ? nullptr
+          : std::make_unique<ui::OverscrollRefreshHandler>(
+                overscroll_refresh_handler));
 }
 
 void WebContentsAndroid::SetSpatialNavigationDisabled(JNIEnv* env,
@@ -805,7 +802,7 @@ int WebContentsAndroid::DownloadImage(
       url::GURLAndroid::ToNativeGURL(env, jurl), is_fav_icon, preferred_size,
       max_bitmap_size, bypass_cache,
       base::BindOnce(&WebContentsAndroid::OnFinishDownloadImage,
-                     weak_factory_.GetWeakPtr(), obj_,
+                     weak_factory_.GetWeakPtr(),
                      ScopedJavaGlobalRef<jobject>(env, jcallback)));
 }
 
@@ -839,6 +836,10 @@ int WebContentsAndroid::GetWidth(JNIEnv* env) {
   return web_contents_->GetNativeView()->GetSizeDIPs().width();
 }
 
+bool WebContentsAndroid::IsBeingCaptured(JNIEnv* env) {
+  return web_contents_->IsBeingCaptured();
+}
+
 int WebContentsAndroid::GetHeight(JNIEnv* env) {
   return web_contents_->GetNativeView()->GetSizeDIPs().height();
 }
@@ -850,7 +851,6 @@ ScopedJavaLocalRef<jobject> WebContentsAndroid::GetOrCreateEventForwarder(
 }
 
 void WebContentsAndroid::OnFinishDownloadImage(
-    const JavaRef<jobject>& obj,
     const JavaRef<jobject>& callback,
     int id,
     int http_status_code,
@@ -865,7 +865,7 @@ void WebContentsAndroid::OnFinishDownloadImage(
   ScopedJavaLocalRef<jobject> jurl = url::GURLAndroid::FromNativeGURL(env, url);
 
   for (const SkBitmap& bitmap : bitmaps) {
-    // WARNING: convering to java bitmaps results in duplicate memory
+    // WARNING: converting to java bitmaps results in duplicate memory
     // allocations, which increases the chance of OOMs if DownloadImage() is
     // misused.
     ScopedJavaLocalRef<jobject> jbitmap = gfx::ConvertToJavaBitmap(bitmap);
@@ -875,8 +875,9 @@ void WebContentsAndroid::OnFinishDownloadImage(
     Java_WebContentsImpl_createSizeAndAddToList(env, jsizes, size.width(),
                                                 size.height());
   }
-  Java_WebContentsImpl_onDownloadImageFinished(
-      env, obj, callback, id, http_status_code, jurl, jbitmaps, jsizes);
+  Java_WebContentsImpl_onDownloadImageFinished(env, GetJavaObject(), callback,
+                                               id, http_status_code, jurl,
+                                               jbitmaps, jsizes);
 }
 
 void WebContentsAndroid::SendOrientationChangeEvent(JNIEnv* env,
@@ -895,6 +896,7 @@ void WebContentsAndroid::SendOrientationChangeEvent(JNIEnv* env,
 void WebContentsAndroid::OnScaleFactorChanged(JNIEnv* env) {
   RenderWidgetHostViewAndroid* rwhva = GetRenderWidgetHostViewAndroid();
   if (rwhva) {
+    rwhva->UpdateScreenInfo();
     // |SendScreenRects()| indirectly calls GetViewSize() that asks Java layer.
     web_contents_->SendScreenRects();
     rwhva->SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),

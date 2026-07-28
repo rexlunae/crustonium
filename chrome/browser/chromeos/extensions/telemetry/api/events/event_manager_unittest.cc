@@ -12,18 +12,16 @@
 #include "base/memory/scoped_refptr.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/app_ui_observer.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/events/event_router.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/events/fake_events_service.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/events/fake_events_service_factory.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/common/chromeos/extensions/api/events.h"
 #include "chrome/common/chromeos/extensions/chromeos_system_extension_info.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "chromeos/ash/components/telemetry_extension/events/telemetry_event_service_ash.h"
-#include "chromeos/crosapi/mojom/telemetry_event_service.mojom.h"
+#include "chromeos/ash/components/mojo_service_manager/fake_mojo_service_manager.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/web_contents.h"
@@ -41,7 +39,6 @@
 namespace chromeos {
 
 namespace {
-namespace crosapi = ::crosapi::mojom;
 
 constexpr char kExtensionId1[] = "gogonhoemckpdpadfnjnpgbjpbjnodgc";
 constexpr char kPwaPattern1[] =
@@ -67,11 +64,6 @@ class TelemetryExtensionEventManagerTest : public BrowserWithTestWindowTest {
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
     web_app::test::AwaitStartWebAppProviderAndSubsystems(profile());
-
-    fake_events_service_factory_.SetCreateInstanceResponse(
-        std::make_unique<FakeEventsService>());
-    ash::TelemetryEventServiceAsh::Factory::SetForTesting(
-        &fake_events_service_factory_);
   }
 
  protected:
@@ -130,6 +122,20 @@ class TelemetryExtensionEventManagerTest : public BrowserWithTestWindowTest {
     }
   }
 
+  // TODO(crbug.com/480103891): We should not be faking browser activation state
+  // via indirect means (such as direct calls to `DidBecomeActive()`). We should
+  // instead convert this to an interactive browser test and directly activate
+  // the browser's backing ui::BaseWindow.
+  void ActivateBrowser(BrowserWindowInterface* browser) {
+    // We must fake deactivation the previously activated browser first.
+    GetLastActiveBrowserWindowInterfaceWithAnyProfile()
+        ->GetBrowserForMigrationOnly()
+        ->DidBecomeInactive();
+
+    // Simulate activation of `browser`.
+    browser->GetBrowserForMigrationOnly()->DidBecomeActive();
+  }
+
   EventManager* event_manager() { return EventManager::Get(profile()); }
 
   base::flat_map<extensions::ExtensionId, std::unique_ptr<AppUiObserver>>&
@@ -140,14 +146,14 @@ class TelemetryExtensionEventManagerTest : public BrowserWithTestWindowTest {
   EventRouter& event_router() { return event_manager()->event_router_; }
 
  private:
-  FakeEventsServiceFactory fake_events_service_factory_;
+  ash::mojo_service_manager::FakeMojoServiceManager fake_service_manager_;
 };
 
 TEST_F(TelemetryExtensionEventManagerTest, RegisterEventNoExtension) {
   EXPECT_EQ(
       EventManager::kAppUiClosed,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 }
 
 TEST_F(TelemetryExtensionEventManagerTest, RegisterEventAppUiClosed) {
@@ -156,7 +162,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventAppUiClosed) {
   EXPECT_EQ(
       EventManager::kAppUiClosed,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 }
 
 TEST_F(TelemetryExtensionEventManagerTest, RegisterEventSuccess) {
@@ -167,7 +173,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventSuccess) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
 
@@ -188,11 +194,11 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Closing the tab cuts the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(/*index=*/1,
@@ -209,16 +215,16 @@ TEST_F(TelemetryExtensionEventManagerTest,
                                           /*cert_status=*/net::OK);
   auto new_browser =
       CreateBrowser(GetProfile(), Browser::Type::TYPE_NORMAL, false);
-  BrowserList::SetLastActive(new_browser.get());
+  ActivateBrowser(new_browser.get());
 
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Closing the tab cuts the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(/*index=*/0,
@@ -239,7 +245,7 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kAppUiNotFocused,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_FALSE(app_ui_observers().contains(kExtensionId1));
   EXPECT_FALSE(event_router().IsExtensionObserving(kExtensionId1));
 
@@ -258,12 +264,12 @@ TEST_F(TelemetryExtensionEventManagerTest,
                                           /*cert_status=*/net::OK);
   auto new_browser =
       CreateBrowser(GetProfile(), Browser::Type::TYPE_NORMAL, false);
-  BrowserList::SetLastActive(new_browser.get());
+  ActivateBrowser(new_browser.get());
 
   EXPECT_EQ(EventManager::kAppUiNotFocused,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_FALSE(app_ui_observers().contains(kExtensionId1));
   EXPECT_FALSE(event_router().IsExtensionObserving(kExtensionId1));
 
@@ -285,24 +291,24 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Regular events are not affected by focus changes.
   SimulateFocusEvent(kExtensionId1, /*is_focused=*/false);
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   SimulateFocusEvent(kExtensionId1, /*is_focused=*/true);
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Closing the tab cuts the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(/*index=*/0,
@@ -320,23 +326,26 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   SimulateFocusEvent(kExtensionId1, /*is_focused=*/false);
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_FALSE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   SimulateFocusEvent(kExtensionId1, /*is_focused=*/true);
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Closing the tab cuts the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(/*index=*/0,
@@ -349,9 +358,9 @@ TEST_F(TelemetryExtensionEventManagerTest,
        RegisterRegularAndFocusRestrictedEventWithAppUiSwitchFocusSuccess) {
   CreateExtension(kExtensionId1, {kPwaPattern1});
 
-  auto regular_event_type = crosapi::TelemetryEventCategoryEnum::kAudioJack;
+  auto regular_event_type = chromeos::api::os_events::EventCategory::kAudioJack;
   auto restricted_event_type =
-      crosapi::TelemetryEventCategoryEnum::kTouchpadConnected;
+      chromeos::api::os_events::EventCategory::kTouchpadConnected;
   OpenAppUiUrlAndSetCertificateWithStatus(GURL(kPwaUrl1),
                                           /*cert_status=*/net::OK);
   EXPECT_EQ(EventManager::kSuccess, event_manager()->RegisterExtensionForEvent(
@@ -400,17 +409,17 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Second register will still succeed.
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 }
 
 TEST_F(TelemetryExtensionEventManagerTest,
@@ -422,17 +431,18 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Second register will still succeed.
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
 }
 
 TEST_F(TelemetryExtensionEventManagerTest,
@@ -444,7 +454,7 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
 
@@ -455,7 +465,7 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Close the first tab (index 1). The observer shouldn't be cut.
   browser()->tab_strip_model()->CloseWebContentsAt(1,
@@ -463,7 +473,7 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Closing the second tab (the last one) cuts the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(0,
@@ -481,11 +491,12 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Open second tab. As the focus-restricted event is originated from the first
   // tab, the event is now blocked.
@@ -495,18 +506,20 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_FALSE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Try to observe the same event in the second tab. The event should now be
   // unblocked.
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Close the first tab (index 1). The observer shouldn't be cut.
   browser()->tab_strip_model()->CloseWebContentsAt(1,
@@ -514,7 +527,8 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Closing the second tab (the last one) cuts the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(0,
@@ -527,9 +541,9 @@ TEST_F(TelemetryExtensionEventManagerTest,
        RegisterRegularAndFocusRestricedEventMultipleTabsOpenSuccess) {
   CreateExtension(kExtensionId1, {kPwaPattern1});
 
-  auto regular_event_type = crosapi::TelemetryEventCategoryEnum::kAudioJack;
+  auto regular_event_type = chromeos::api::os_events::EventCategory::kAudioJack;
   auto restricted_event_type =
-      crosapi::TelemetryEventCategoryEnum::kTouchpadConnected;
+      chromeos::api::os_events::EventCategory::kTouchpadConnected;
   OpenAppUiUrlAndSetCertificateWithStatus(GURL(kPwaUrl1),
                                           /*cert_status=*/net::OK);
   EXPECT_EQ(EventManager::kSuccess, event_manager()->RegisterExtensionForEvent(
@@ -583,7 +597,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventAppUiNotSecure) {
   EXPECT_EQ(
       EventManager::kAppUiClosed,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_FALSE(app_ui_observers().contains(kExtensionId1));
   EXPECT_FALSE(event_router().IsExtensionObserving(kExtensionId1));
 
@@ -593,11 +607,11 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventAppUiNotSecure) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Close the secure one will cause the EventManager stop observing events.
   browser()->tab_strip_model()->CloseWebContentsAt(0,
@@ -614,18 +628,18 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterRegularEventNavigateOut) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Navigation in the same domain shouldn't affect the observation.
   NavigateAndCommitActiveTab(GURL(kPwaUrl1SameDomain));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Navigation to other URL should cut the observation.
   NavigateAndCommitActiveTab(GURL(kNotMatchedPwaUrl));
@@ -642,18 +656,20 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Navigation in the same domain shouldn't affect the observation.
   NavigateAndCommitActiveTab(GURL(kPwaUrl1SameDomain));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Navigation to other URL should cut the observation.
   NavigateAndCommitActiveTab(GURL(kNotMatchedPwaUrl));
@@ -671,15 +687,15 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterRegularEventTwoExtension) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_EQ(
       EventManager::kAppUiClosed,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId2, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId2, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_FALSE(app_ui_observers().contains(kExtensionId2));
   EXPECT_FALSE(event_router().IsExtensionObserving(kExtensionId2));
 
@@ -690,15 +706,15 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterRegularEventTwoExtension) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId2, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId2, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId2, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId2, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Close the app UI of extension 1.
   browser()->tab_strip_model()->CloseWebContentsAt(1,
@@ -708,7 +724,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterRegularEventTwoExtension) {
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId2, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId2, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Close the app UI of extension 2.
   browser()->tab_strip_model()->CloseWebContentsAt(0,
@@ -730,15 +746,16 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId1,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_EQ(EventManager::kAppUiNotFocused,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId2,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_FALSE(app_ui_observers().contains(kExtensionId2));
   EXPECT_FALSE(event_router().IsExtensionObserving(kExtensionId2));
 
@@ -749,15 +766,17 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_EQ(EventManager::kSuccess,
             event_manager()->RegisterExtensionForEvent(
                 kExtensionId2,
-                crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+                chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_FALSE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId1,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId2, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId2,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Close the app UI of extension 1.
   browser()->tab_strip_model()->CloseWebContentsAt(1,
@@ -767,7 +786,8 @@ TEST_F(TelemetryExtensionEventManagerTest,
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId2));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId2, crosapi::TelemetryEventCategoryEnum::kTouchpadConnected));
+      kExtensionId2,
+      chromeos::api::os_events::EventCategory::kTouchpadConnected));
 
   // Close the app UI of extension 2.
   browser()->tab_strip_model()->CloseWebContentsAt(0,
@@ -786,7 +806,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RemoveExtensionCutsConnection) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
 
@@ -820,11 +840,11 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventIWASuccess) {
   EXPECT_EQ(
       EventManager::kSuccess,
       event_manager()->RegisterExtensionForEvent(
-          kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+          kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Open IWA.
   AddTab(browser(), GURL("about:blank"));
@@ -837,7 +857,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventIWASuccess) {
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Close the PWA. This shouldn't affect the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(1,
@@ -845,7 +865,7 @@ TEST_F(TelemetryExtensionEventManagerTest, RegisterEventIWASuccess) {
   EXPECT_TRUE(app_ui_observers().contains(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionObserving(kExtensionId1));
   EXPECT_TRUE(event_router().IsExtensionAllowedForCategory(
-      kExtensionId1, crosapi::TelemetryEventCategoryEnum::kAudioJack));
+      kExtensionId1, chromeos::api::os_events::EventCategory::kAudioJack));
 
   // Close the IWA (last tab) should cut the observation.
   browser()->tab_strip_model()->CloseWebContentsAt(0,

@@ -5,12 +5,15 @@
 #ifndef ASH_SYSTEM_STATUS_AREA_WIDGET_H_
 #define ASH_SYSTEM_STATUS_AREA_WIDGET_H_
 
+#include <cstdint>
+
 #include "ash/ash_export.h"
 #include "ash/login_status.h"
 #include "ash/public/cpp/session/session_observer.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/shelf/shelf_component.h"
 #include "ash/shell_observer.h"
+#include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -52,7 +55,6 @@ struct TrayIconConfiguration;
 class UnifiedSystemTray;
 class VideoConferenceTray;
 class VirtualKeyboardTray;
-class WmModeButtonTray;
 
 // Widget showing the system tray, notification tray, and other tray views in
 // the bottom-right of the screen. Exists separately from ShelfView/ShelfWidget
@@ -153,7 +155,6 @@ class ASH_EXPORT StatusAreaWidget : public SessionObserver,
 
   MouseKeysTray* mouse_keys_tray() { return mouse_keys_tray_; }
   SelectToSpeakTray* select_to_speak_tray() { return select_to_speak_tray_; }
-  WmModeButtonTray* wm_mode_button_tray() { return wm_mode_button_tray_; }
 
   Shelf* shelf() { return shelf_; }
 
@@ -224,6 +225,10 @@ class ASH_EXPORT StatusAreaWidget : public SessionObserver,
   }
 
   TrayBubbleView* open_shelf_pod_bubble() { return open_shelf_pod_bubble_; }
+
+  base::flat_set<uint64_t> custom_tray_buttons_ids_for_test() {
+    return custom_tray_buttons_ids_;
+  }
 
  private:
   friend class TrayBackgroundViewTest;
@@ -338,7 +343,7 @@ class ASH_EXPORT StatusAreaWidget : public SessionObserver,
       nullptr;
   raw_ptr<SelectToSpeakTray, DanglingUntriaged> select_to_speak_tray_ = nullptr;
   raw_ptr<HoldingSpaceTray, DanglingUntriaged> holding_space_tray_ = nullptr;
-  raw_ptr<WmModeButtonTray, DanglingUntriaged> wm_mode_button_tray_ = nullptr;
+  base::flat_set<uint64_t> custom_tray_buttons_ids_;
 
   // Vector of the tray buttons above. The ordering is used to determine which
   // tray buttons are hidden when they overflow the available width.

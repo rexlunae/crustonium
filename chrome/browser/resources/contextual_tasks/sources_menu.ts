@@ -6,24 +6,23 @@ import './icons.html.js';
 import '//resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import '//resources/cr_elements/cr_icon/cr_icon.js';
 import '//resources/cr_elements/cr_auto_img/cr_auto_img.js';
-import 'chrome://resources/cr_components/composebox/icons.html.js';
+import '//resources/cr_elements/cr_url_list_item/cr_url_list_item.js';
 
 import {AnchorAlignment} from '//resources/cr_elements/cr_action_menu/cr_action_menu.js';
-import {assert} from '//resources/js/assert.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import type {Image, Tab, UploadedFile} from './contextual_tasks.mojom-webui.js';
+import type {ContextInfo} from './contextual_tasks.mojom-webui.js';
 import type {BrowserProxy} from './contextual_tasks_browser_proxy.js';
 import {BrowserProxyImpl} from './contextual_tasks_browser_proxy.js';
 import {getCss} from './sources_menu.css.js';
 import {getHtml} from './sources_menu.html.js';
+import {hideUnboundedMenu, recordAction, showUnboundedMenu} from './utils.js';
 
 export interface SourcesMenuElement {
-  $: {
-    menu: CrActionMenuElement,
-  };
+  $: {menu: CrActionMenuElement};
 }
 
 export class SourcesMenuElement extends CrLitElement {
@@ -41,62 +40,70 @@ export class SourcesMenuElement extends CrLitElement {
 
   static override get properties() {
     return {
-      attachedTabs: {type: Array},
-      attachedFiles: {type: Array},
-      attachedImages: {type: Array},
+      contextInfos: {type: Array},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
-  accessor attachedTabs: Tab[] = [];
-  accessor attachedFiles: UploadedFile[] = [];
-  accessor attachedImages: Image[] = [];
+  accessor contextInfos: ContextInfo[] = [];
+
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
   private browserProxy_: BrowserProxy = BrowserProxyImpl.getInstance();
+
+  private get isUnboundedMenuEnabled_(): boolean {
+    return loadTimeData.valueExists('contextualTasksUnboundedMenuEnabled') &&
+        loadTimeData.getBoolean('contextualTasksUnboundedMenuEnabled');
+  }
 
   showAt(target: HTMLElement) {
     this.$.menu.showAt(target, {
       noOffset: true,
       anchorAlignmentY: AnchorAlignment.AFTER_END,
     });
+    showUnboundedMenu(this.$.menu, this.isUnboundedMenuEnabled_, 'sources');
   }
 
   close() {
     this.$.menu.close();
   }
 
+  protected onOpenChanged_(e: CustomEvent<{value: boolean}>) {
+    const menu = e.currentTarget as CrActionMenuElement;
+    hideUnboundedMenu(
+        menu, this.isUnboundedMenuEnabled_, e.detail.value, 'sources');
+  }
+
+  private getContextInfoFromEvent_(e: Event): ContextInfo {
+    const index = Number((e.currentTarget as HTMLElement).dataset['index']);
+    return this.contextInfos[index]!;
+  }
+
   protected onTabClick_(e: Event) {
     this.close();
 
-    const currentTarget = e.currentTarget as HTMLElement;
-    const index = Number(currentTarget.dataset['index']);
-    const tab = this.attachedTabs[index];
-    assert(tab);
-
-    chrome.metricsPrivate.recordUserAction(
-        'ContextualTasks.WebUI.UserAction.TabFromSourcesMenuClicked');
-    chrome.metricsPrivate.recordBoolean(
-        'ContextualTasks.WebUI.UserAction.TabFromSourcesMenuClicked', true);
-    this.browserProxy_.handler.onTabClickedFromSourcesMenu(tab.tabId, tab.url);
+    recordAction('ContextualTasks.WebUI.UserAction.TabFromSourcesMenuClicked');
+    const contextInfo = this.getContextInfoFromEvent_(e);
+    this.browserProxy_.handler.onTabClickedFromSourcesMenu(
+        contextInfo.tab!.tabId, contextInfo.tab!.url);
   }
 
   protected onFileClick_(e: Event) {
     this.close();
 
-    const currentTarget = e.currentTarget as HTMLElement;
-    const index = Number(currentTarget.dataset['index']);
-    const file = this.attachedFiles[index];
-    assert(file);
-    this.browserProxy_.handler.onFileClickedFromSourcesMenu(file.url);
+    const contextInfo = this.getContextInfoFromEvent_(e);
+    this.browserProxy_.handler.onFileClickedFromSourcesMenu(
+        contextInfo.file!.url);
   }
 
   protected onImageClick_(e: Event) {
     this.close();
-    const index = Number((e.currentTarget as HTMLElement).dataset['index']);
-    const image = this.attachedImages[index];
-    assert(image);
-    this.browserProxy_.handler.onImageClickedFromSourcesMenu(image.url);
+    const contextInfo = this.getContextInfoFromEvent_(e);
+    this.browserProxy_.handler.onImageClickedFromSourcesMenu(
+        contextInfo.image!.url);
   }
 
-  protected faviconUrl_(tab: Tab): string {
-    return getFaviconForPageURL(tab.url, false);
+  protected faviconUrl_(url: string): string {
+    return getFaviconForPageURL(url, false);
   }
 
   protected getHostname_(url: string): string {

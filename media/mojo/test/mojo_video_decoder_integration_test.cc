@@ -149,8 +149,8 @@ class MockVideoDecoder : public VideoDecoder {
         scoped_refptr<gpu::ClientSharedImage> shared_image =
             gpu::ClientSharedImage::CreateForTesting(metadata);
         scoped_refptr<VideoFrame> frame = VideoFrame::WrapSharedImage(
-            PIXEL_FORMAT_ARGB, shared_image, gpu::SyncToken(),
-            GetReleaseMailboxCB(), config_.coded_size(), config_.visible_rect(),
+            PIXEL_FORMAT_ABGR, shared_image, gpu::SyncToken(),
+            GetReleaseMailboxCB(), config_.visible_rect(),
             config_.natural_size(), buffer->timestamp());
         frame->set_color_space(shared_image->color_space());
         frame->metadata().power_efficient = true;

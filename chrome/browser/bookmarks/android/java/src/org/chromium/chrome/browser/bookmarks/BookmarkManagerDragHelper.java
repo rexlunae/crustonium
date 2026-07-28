@@ -7,7 +7,7 @@ package org.chromium.chrome.browser.bookmarks;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.PointerIcon;
 import android.view.View;
@@ -26,7 +26,6 @@ import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelega
  */
 @NullMarked
 public class BookmarkManagerDragHelper implements View.OnAttachStateChangeListener {
-    private static final int DEFAULT_DRAG_START_DELAY_MS = 500;
     private static final int DRAG_START_DELAY_MS = 100;
     private static final int SELECTION_START_DELAY_MS = 500;
     private static final int HIDE_HANDLE_DELAY_MS = 50;
@@ -122,18 +121,13 @@ public class BookmarkManagerDragHelper implements View.OnAttachStateChangeListen
             mIsLongPressTriggered = false;
 
             boolean isSelected = mSelectionDelegate.isItemSelected(mBookmarkId);
-            boolean selectionEnabled = mSelectionDelegate.isSelectionEnabled();
 
             if (isSelected) {
-                // Scenario 2: Row is selected. -> 100ms drag timer.
+                // Row is selected. -> 100ms drag timer.
                 mHandler.postDelayed(mStartDragRunnable, DRAG_START_DELAY_MS);
-            } else if (selectionEnabled) {
-                // Scenario 3: Row is unselected but there is another row that is selected. -> 500ms
-                // drag timer (no selection toggle).
-                mHandler.postDelayed(mStartDragRunnable, DEFAULT_DRAG_START_DELAY_MS);
             } else {
-                // Scenario 1: No rows currently selected. -> 500ms select timer -> 100ms drag
-                // timer.
+                // If the row is unselected (regardless of whether selection mode is already active
+                // due to another item being selected): -> 500ms select timer -> 100ms drag timer.
                 mHandler.postDelayed(mSelectRunnable, SELECTION_START_DELAY_MS);
             }
             // Consume event.
@@ -191,7 +185,10 @@ public class BookmarkManagerDragHelper implements View.OnAttachStateChangeListen
         if (!mIsDragEnabled) return false;
 
         int action = event.getActionMasked();
-        boolean isMouse = event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE;
+        // Captures both traditional mice and modern Android trackpads.
+        boolean isMouse =
+                event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
+                        || (event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0;
 
         if (action == MotionEvent.ACTION_DOWN) {
             mHandleDownX = event.getRawX();
@@ -235,30 +232,6 @@ public class BookmarkManagerDragHelper implements View.OnAttachStateChangeListen
                 // Main command.
                 startDrag();
 
-                // Dispatch a fake ACTION_MOVE to the parent RecyclerView. This is because when
-                // startDrag() is called, the ItemTouchHelper attached to the RecyclerView
-                // intercepts the touch stream. This causes the framework to automatically send an
-                // ACTION_CANCEL to this child view (the drag handle). The drag handle's onTouch
-                // listener responds to ACTION_CANCEL by resetting the cursor to an "open hand"
-                // (thus reversing our "closed hand" on drag). This fake event forces the
-                // RecyclerView to immediately process a move event while dragging is active,
-                // overriding that reset and ensuring the "closed hand" cursor persists correctly
-                // during the drag.
-                long now = SystemClock.uptimeMillis();
-                MotionEvent fakeMove =
-                        MotionEvent.obtain(
-                                now,
-                                now,
-                                MotionEvent.ACTION_MOVE,
-                                event.getRawX(),
-                                event.getRawY(),
-                                0);
-
-                if (mRecyclerView != null) {
-                    mRecyclerView.dispatchTouchEvent(fakeMove);
-                }
-                fakeMove.recycle();
-
                 // Reset flag since dragging has started.
                 mIsHandleTouched = false;
                 v.setPressed(false);
@@ -271,7 +244,13 @@ public class BookmarkManagerDragHelper implements View.OnAttachStateChangeListen
             v.setPressed(false);
             mIsHandleTouched = false;
 
-            if (isMouse) {
+            // When startDrag() is called, the ItemTouchHelper attached to the RecyclerView
+            // intercepts the touch stream. This causes the framework to automatically send an
+            // ACTION_CANCEL to this child view (the drag handle). The drag handle's onTouch
+            // listener responds to ACTION_CANCEL by resetting the cursor to an "open hand"
+            // thus reversing our "closed hand" on drag. We guard against this by checking
+            // !mDragInteractionActive.
+            if (isMouse && !mDragInteractionActive) {
                 // Revert the Handle's icon from closed hand to open hand.
                 PointerIcon grab = PointerIcon.getSystemIcon(mContext, PointerIcon.TYPE_GRAB);
                 v.setPointerIcon(grab);

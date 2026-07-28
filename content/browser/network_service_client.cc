@@ -45,6 +45,10 @@
 #include "base/android/content_uri_utils.h"
 #endif
 
+#if BUILDFLAG(IS_WIN)
+#include "content/browser/network/network_service_process_tracker_win.h"
+#endif
+
 #if BUILDFLAG(IS_MAC)
 #include "base/task/current_thread.h"
 #endif
@@ -175,7 +179,7 @@ void NetworkServiceClient::OnConnectionTypeChanged(
   network_change_manager_->OnNetworkChanged(
       false /* dns_changed */,
       network::mojom::IPAddressChangeType::IP_ADDRESS_CHANGE_NONE,
-      true /* connection_type_changed */, network::mojom::ConnectionType(type),
+      true /* connection_type_changed */, type,
       false /* connection_subtype_changed */,
       network::mojom::ConnectionSubtype(
           net::NetworkChangeNotifier::GetConnectionSubtype()));
@@ -189,7 +193,7 @@ void NetworkServiceClient::OnMaxBandwidthChanged(
   network_change_manager_->OnNetworkChanged(
       false /* dns_changed */,
       network::mojom::IPAddressChangeType::IP_ADDRESS_CHANGE_NONE,
-      false /* connection_type_changed */, network::mojom::ConnectionType(type),
+      false /* connection_type_changed */, type,
       true /* connection_subtype_changed */,
       network::mojom::ConnectionSubtype(
           net::NetworkChangeNotifier::GetConnectionSubtype()));
@@ -200,8 +204,7 @@ void NetworkServiceClient::OnIPAddressChanged(
   network_change_manager_->OnNetworkChanged(
       false /* dns_changed */, network::mojom::IPAddressChangeType(change_type),
       false /* connection_type_changed */,
-      network::mojom::ConnectionType(
-          net::NetworkChangeNotifier::GetConnectionType()),
+      net::NetworkChangeNotifier::GetConnectionType(),
       false /* connection_subtype_changed */,
       network::mojom::ConnectionSubtype(
           net::NetworkChangeNotifier::GetConnectionSubtype()));
@@ -211,6 +214,7 @@ void NetworkServiceClient::OnIPAddressChanged(
 #if BUILDFLAG(IS_WIN)
 mojo::PendingRemote<network::mojom::SocketBroker>
 NetworkServiceClient::BindSocketBroker() {
+  EnsureNetworkServiceListenerStarted();
   return socket_broker_.BindNewRemote();
 }
 #endif  // BUILDFLAG(IS_WIN)
@@ -302,6 +306,11 @@ void NetworkServiceClient::OnLocalNetworkAccessPermissionRequired(
   std::move(callback).Run(network::mojom::LocalNetworkAccessResult::kDenied);
 }
 
+void NetworkServiceClient::OnPlatformLocalNetworkPermissionRequired(
+    OnPlatformLocalNetworkPermissionRequiredCallback callback) {
+  std::move(callback).Run(/*granted=*/false);
+}
+
 void NetworkServiceClient::OnClearSiteData(
     const GURL& url,
     const std::string& header_value,
@@ -336,21 +345,17 @@ void NetworkServiceClient::OnSharedStorageHeaderReceived(
   std::move(callback).Run();
 }
 
-void NetworkServiceClient::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
-
 void NetworkServiceClient::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
         observer) {
   url_loader_network_service_observers_.Add(this, std::move(observer));
 }
 
-void NetworkServiceClient::OnWebSocketConnectedToPrivateNetwork(
+void NetworkServiceClient::OnWebSocketConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace ip_address_space) {}
 
-void NetworkServiceClient::OnUrlLoaderConnectedToPrivateNetwork(
+void NetworkServiceClient::OnUrlLoaderConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace response_address_space,
     network::mojom::IPAddressSpace client_address_space,

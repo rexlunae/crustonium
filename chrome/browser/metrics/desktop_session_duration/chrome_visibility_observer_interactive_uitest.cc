@@ -148,19 +148,20 @@ IN_PROC_BROWSER_TEST_F(ChromeVisibilityObserverInteractiveTest,
   // Observer should now be active as there is one active browser.
   WaitForActive(/*active=*/true);
 
-// BrowserWindow::Deactivate() not implemented on Mac (https://crbug.com/51364).
+// BrowserWindow::Deactivate() not implemented on Mac
+// (https://crbug.com/41190559).
 #if !BUILDFLAG(IS_MAC)
   // Deactivating and activating the browser should affect the observer
   // accordingly.
-  browser()->window()->Deactivate();
+  browser()->GetWindow()->Deactivate();
   WaitForActive(/*active=*/false);
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   WaitForActive(/*active=*/true);
 #endif  // !BUILDFLAG(IS_MAC)
 
   // Creating and closing new browsers should keep the observer active.
-  Browser* new_browser = CreateBrowser(browser()->profile());
+  Browser* new_browser = CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(new_browser));
   WaitForActive(/*active=*/true);
 

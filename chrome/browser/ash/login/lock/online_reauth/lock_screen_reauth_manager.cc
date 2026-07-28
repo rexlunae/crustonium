@@ -8,11 +8,13 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/login/login_screen_controller.h"
 #include "ash/public/cpp/reauth_reason.h"
 #include "ash/shell.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -22,14 +24,11 @@
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/ash/login/auth/chrome_safe_mode_delegate.h"
 #include "chrome/browser/ash/login/helper.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/profile_auth_data.h"
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/saml/in_session_password_sync_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_reauth_dialogs.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/login/auth/auth_session_authenticator.h"
 #include "chromeos/ash/components/login/auth/password_update_flow.h"
 #include "chromeos/ash/components/login/auth/public/authentication_error.h"
@@ -63,12 +62,14 @@ void RunAuthConfigExitIfNotNull(
 
 }  // namespace
 
-LockScreenReauthManager::LockScreenReauthManager(Profile* primary_profile)
-    : primary_profile_(primary_profile),
+LockScreenReauthManager::LockScreenReauthManager(PrefService* local_state,
+                                                 Profile* primary_profile)
+    : local_state_(CHECK_DEREF(local_state)),
+      primary_profile_(primary_profile),
       primary_user_(ProfileHelper::Get()->GetUserByProfile(primary_profile)),
       clock_(base::DefaultClock::GetInstance()),
       in_session_password_sync_manager_(
-          InSessionPasswordSyncManager(primary_profile_)) {
+          InSessionPasswordSyncManager(local_state, primary_profile_)) {
   CHECK(primary_user_);
   auto* session_manager = session_manager::SessionManager::Get();
   // Extra check as SessionManager may be not initialized in some unit
@@ -90,7 +91,7 @@ LockScreenReauthManager::~LockScreenReauthManager() {
 
 bool LockScreenReauthManager::ShouldPasswordSyncTriggerReauth() {
   return primary_profile_->GetPrefs()->GetBoolean(
-      prefs::kLockScreenReauthenticationEnabled);
+      ash::prefs::kLockScreenReauthenticationEnabled);
 }
 
 void LockScreenReauthManager::MaybeForceReauthOnLockScreen(
@@ -123,7 +124,8 @@ void LockScreenReauthManager::MaybeForceReauthOnLockScreenInternal(
 
   // Record the reauth reason in case the user signed out without going through
   // lock screen online flow.
-  RecordReauthReason(primary_user_->GetAccountId(), reauth_reason);
+  RecordReauthReason(local_state_.get(), primary_user_->GetAccountId(),
+                     reauth_reason);
 
   if (reauth_reason == ReauthReason::kSamlPasswordSyncTokenValidationFailed) {
     is_reauth_required_by_saml_token_mismatch_ = true;
@@ -212,7 +214,7 @@ void LockScreenReauthManager::ForceOnlineReauth() {
       account_id, proximity_auth::mojom::AuthType::ONLINE_SIGN_IN, u"");
 
   const bool auto_start_reauth = primary_profile_->GetPrefs()->GetBoolean(
-      ::prefs::kLockScreenAutoStartOnlineReauth);
+      ash::prefs::kLockScreenAutoStartOnlineReauth);
   if (auto_start_reauth) {
     SYSLOG(INFO) << "(LOGIN) LoginScreenReauthManager::ForceOnlineReauth "
                     "ShowGaiaSignin()";
@@ -224,12 +226,12 @@ void LockScreenReauthManager::ForceOnlineReauth() {
 void LockScreenReauthManager::ResetOnlineReauth() {
   user_manager::UserManager::Get()->SaveForceOnlineSignin(
       primary_user_->GetAccountId(), false);
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   base::Time current_time = clock_->Now();
   known_user.SetLastOnlineSignin(primary_user_->GetAccountId(), current_time);
   // Also adding this information to prefs, because ephemeral users cannot
   // access local state properly.
-  primary_profile_->GetPrefs()->SetTime(prefs::kLastOnlineSignInTime,
+  primary_profile_->GetPrefs()->SetTime(ash::prefs::kLastOnlineSignInTime,
                                         current_time);
 }
 
@@ -267,7 +269,7 @@ void LockScreenReauthManager::OnCookiesTransferred() {
         base::MakeRefCounted<AuthSessionAuthenticator>(
             this, std::make_unique<ChromeSafeModeDelegate>(),
             /*user_recorder=*/base::DoNothing(),
-            /* new_user_can_be_owner=*/false, g_browser_process->local_state());
+            /* new_user_can_be_owner=*/false, &local_state_.get());
   }
   // Perform a fast ("verify-only") check of the current password. This is an
   // optimization: if the password wasn't actually changed the check will

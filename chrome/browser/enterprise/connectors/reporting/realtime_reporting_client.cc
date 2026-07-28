@@ -265,6 +265,8 @@ void AddCrowdstrikeSignalsToEvent(
     case Event::kSuspiciousUrlEvent:
     case Event::kPrototypeRawEvent:
     case Event::kTelomereEvent:
+    case Event::kSaasUsageReportEvent:
+    case Event::kBrowserLaunchEvent:
       break;
   }
 }

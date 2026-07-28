@@ -6,13 +6,17 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/values_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -55,7 +59,6 @@ constexpr char kAPKey[] = "ap_key";
 constexpr char kLang[] = "lang";
 
 constexpr char kHadApps[] = "had_apps";
-constexpr char kUsageStatsEnabledKey[] = "usage_stats_enabled";
 constexpr char kRemoteLoggingCookie[] = "remote_logging_cookie";
 constexpr char kNextAllowedLoggingAttemptTime[] = "next_logging_attempt_time";
 constexpr char kEulaRequired[] = "eula_required";
@@ -796,35 +799,40 @@ std::optional<OSVERSIONINFOEX> PersistedData::GetLastOSVersion() const {
     return std::nullopt;
   }
 
-  const std::optional<std::vector<uint8_t>> decoded_os_version =
-      base::Base64Decode(encoded_os_version);
-  if (!decoded_os_version ||
-      decoded_os_version->size() != sizeof(OSVERSIONINFOEX)) {
-    return std::nullopt;
-  }
+  return base::Base64Decode(encoded_os_version)
+      .and_then([](const std::vector<uint8_t>& decoded)
+                    -> std::optional<OSVERSIONINFOEX> {
+        if (decoded.size() != sizeof(OSVERSIONINFOEX)) {
+          return std::nullopt;
+        }
+        auto reader = base::SpanReader(base::span(decoded));
+        OSVERSIONINFOEX info;
+        info.dwOSVersionInfoSize =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwMajorVersion =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwMinorVersion =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwBuildNumber =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        info.dwPlatformId =
+            base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
+        base::as_writable_byte_span(info.szCSDVersion)
+            .copy_from(
+                *reader.Read<sizeof((OSVERSIONINFOEX){}.szCSDVersion)>());
+        info.wServicePackMajor =
+            base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
+        info.wServicePackMinor =
+            base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
+        info.wSuiteMask =
+            base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
+        info.wProductType =
+            base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
+        info.wReserved = base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
 
-  auto reader = base::SpanReader(base::span(*decoded_os_version));
-  OSVERSIONINFOEX info;
-  info.dwOSVersionInfoSize =
-      base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwMajorVersion =
-      base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwMinorVersion =
-      base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwBuildNumber = base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  info.dwPlatformId = base::U32FromNativeEndian(*reader.Read<sizeof(DWORD)>());
-  base::as_writable_byte_span(info.szCSDVersion)
-      .copy_from(*reader.Read<sizeof((OSVERSIONINFOEX){}.szCSDVersion)>());
-  info.wServicePackMajor =
-      base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
-  info.wServicePackMinor =
-      base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
-  info.wSuiteMask = base::U16FromNativeEndian(*reader.Read<sizeof(WORD)>());
-  info.wProductType = base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
-  info.wReserved = base::U8FromNativeEndian(*reader.Read<sizeof(BYTE)>());
-
-  CHECK_EQ(reader.remaining(), 0u);
-  return info;
+        CHECK_EQ(reader.remaining(), 0u);
+        return info;
+      });
 }
 
 void PersistedData::SetLastOSVersion() {
@@ -858,14 +866,6 @@ void RegisterPersistedDataPrefs(scoped_refptr<PrefRegistrySimple> registry) {
   registry->RegisterTimePref(kLastStarted, {});
   registry->RegisterStringPref(kLastOSVersion, {});
   registry->RegisterDictionaryPref(kRemoteLoggingCookie, {});
-
-  // TODO(crbug.com/422187975): Remove obsolete pref no earlier than 6/3/2026.
-  registry->RegisterBooleanPref(kUsageStatsEnabledKey, false);
-}
-
-void MigrateObsoletePersistedDataPrefs(PrefService* pref_service) {
-  // TODO(crbug.com/422187975): Remove obsolete pref no earlier than 6/3/2026.
-  pref_service->ClearPref(kUsageStatsEnabledKey);
 }
 
 }  // namespace updater

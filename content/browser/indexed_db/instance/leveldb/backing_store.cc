@@ -5,6 +5,7 @@
 #include "content/browser/indexed_db/instance/leveldb/backing_store.h"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cstdint>
 #include <list>
@@ -17,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/span.h"
@@ -35,7 +35,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/numerics/byte_conversions.h"
@@ -75,7 +74,6 @@
 #include "content/browser/indexed_db/instance/backing_store_util.h"
 #include "content/browser/indexed_db/instance/bucket_context.h"
 #include "content/browser/indexed_db/instance/leveldb/active_blob_registry.h"
-#include "content/browser/indexed_db/instance/leveldb/cleanup_scheduler.h"
 #include "content/browser/indexed_db/instance/leveldb/compaction_task.h"
 #include "content/browser/indexed_db/instance/leveldb/tombstone_sweeper.h"
 #include "content/browser/indexed_db/mock_browsertest_indexed_db_class_factory.h"
@@ -88,6 +86,7 @@
 #include "third_party/blink/public/common/indexeddb/indexeddb_metadata.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
+#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-shared.h"
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
@@ -130,12 +129,6 @@ std::string ComputeOriginIdentifier(
          "@1";
 }
 
-void LogVerificationEvent(
-    BackingStore::InSessionCleanupVerificationEvent event) {
-  base::UmaHistogramEnumeration(
-      "IndexedDB.LevelDB.InSessionCleanupVerificationEvent", event);
-}
-
 std::string WriteBlobToFileResultToString(
     storage::mojom::WriteBlobToFileResult result) {
   switch (result) {
@@ -172,13 +165,6 @@ leveldb_env::Options GetLevelDBOptions() {
   // Thread-safe: static local construction, and `leveldb::Cache` implements
   // internal synchronization.
   options.block_cache = leveldb_chrome::GetSharedWebBlockCache();
-
-  // Thread-safe: calls base histogram `FactoryGet()` methods, which are
-  // thread-safe.
-  options.on_get_error = base::BindRepeating(
-      ReportLevelDBError, "WebCore.IndexedDB.LevelDBReadErrors");
-  options.on_write_error = base::BindRepeating(
-      ReportLevelDBError, "WebCore.IndexedDB.LevelDBWriteErrors");
 
   // Thread-safe: static local construction, and `BloomFilterPolicy` state is
   // read-only after construction.
@@ -1138,13 +1124,12 @@ BackingStore::RecordIdentifier CreateRecordIdentifier(const IndexedDBKey& key,
 
 }  // namespace
 
-BackingStore::BackingStore(
-    Mode backing_store_mode,
-    const storage::BucketLocator& bucket_locator,
-    const base::FilePath& blob_path,
-    std::unique_ptr<TransactionalLevelDBDatabase> db,
-    BlobFilesCleanedCallback blob_files_cleaned,
-    ReportOutstandingBlobsCallback report_outstanding_blobs)
+BackingStore::BackingStore(Mode backing_store_mode,
+                           const storage::BucketLocator& bucket_locator,
+                           const base::FilePath& blob_path,
+                           std::unique_ptr<TransactionalLevelDBDatabase> db,
+                           BlobFilesCleanedCallback blob_files_cleaned,
+                           base::RepeatingClosure on_can_close)
     : backing_store_mode_(backing_store_mode),
       bucket_locator_(bucket_locator),
       blob_path_(backing_store_mode == Mode::kInMemory ? base::FilePath()
@@ -1152,9 +1137,10 @@ BackingStore::BackingStore(
       origin_identifier_(ComputeOriginIdentifier(bucket_locator)),
       db_(std::move(db)),
       blob_files_cleaned_(std::move(blob_files_cleaned)),
-      level_db_cleanup_scheduler_(db_->db(), this) {
+      on_can_close_(std::move(on_can_close)) {
   active_blob_registry_ = std::make_unique<ActiveBlobRegistry>(
-      std::move(report_outstanding_blobs),
+      base::BindRepeating(&BackingStore::OnOutstandingBlobsChanged,
+                          weak_factory_.GetWeakPtr()),
       base::BindRepeating(&BackingStore::ReportBlobUnused,
                           weak_factory_.GetWeakPtr()));
   InitializeGlobalSweepAndCompactionTimes();
@@ -1278,12 +1264,11 @@ Status BackingStore::Initialize(bool clean_active_journal) {
 }
 
 bool BackingStore::CanOpportunisticallyClose() const {
-  // For LevelDB, the logic here is implemented at the BucketContext level, so
-  // just return true here.
-  return true;
+  return !active_blob_registry_->HasOutstandingBlobs();
 }
 
-void BackingStore::TearDown(base::WaitableEvent* signal_on_destruction) {
+void BackingStore::SignalWhenDestructionComplete(
+    base::WaitableEvent* signal_on_destruction) && {
   if (IsBlobCleanupPending()) {
     ForceRunBlobCleanup();
   }
@@ -1291,8 +1276,13 @@ void BackingStore::TearDown(base::WaitableEvent* signal_on_destruction) {
   db()->leveldb_state()->RequestDestruction(signal_on_destruction);
 }
 
-void BackingStore::InvalidateBlobReferences() {
+void BackingStore::OnForceClosing() {
+  // Invalidate blob references.
   active_blob_registry()->ForceShutdown();
+  // Don't run the preclosing tasks during ForceClose, whether or not we've
+  // started them. Compaction in particular can run long and cannot be
+  // interrupted, so it can cause shutdown hangs.
+  StopPreCloseTasks();
 }
 
 Status BackingStore::UpgradeBlobEntriesToV4(
@@ -1458,9 +1448,6 @@ std::unique_ptr<indexed_db::BackingStore::Transaction>
 BackingStore::Database::CreateTransaction(
     blink::mojom::IDBTransactionDurability durability,
     blink::mojom::IDBTransactionMode mode) {
-  if (backing_store_) {
-    backing_store_->level_db_cleanup_scheduler_.OnTransactionStart();
-  }
   return std::make_unique<Transaction>(weak_factory_.GetWeakPtr(), durability,
                                        mode);
 }
@@ -1478,13 +1465,6 @@ bool BackingStore::ShouldSyncOnCommit(
   }
 }
 
-void BackingStore::OnTransactionComplete(bool tombstone_threshold_exceeded) {
-  if (tombstone_threshold_exceeded) {
-    level_db_cleanup_scheduler_.Initialize();
-  }
-  level_db_cleanup_scheduler_.OnTransactionComplete();
-}
-
 // static
 std::tuple<std::unique_ptr<BackingStore>,
            Status,
@@ -1496,7 +1476,9 @@ BackingStore::DoOpenAndVerify(BucketContext& bucket_context,
                               base::FilePath blob_path,
                               PartitionedLockManager* lock_manager,
                               bool is_first_attempt,
-                              bool create_if_missing) {
+                              bool create_if_missing,
+                              bool skip_create_on_data_loss,
+                              base::RepeatingClosure on_can_close) {
   CHECK_EQ(database_path.empty(), data_directory.empty());
   CHECK_EQ(blob_path.empty(), data_directory.empty());
   TRACE_EVENT0("IndexedDB", "BackingStore::OpenAndVerify");
@@ -1507,7 +1489,7 @@ BackingStore::DoOpenAndVerify(BucketContext& bucket_context,
   bool in_memory = data_directory.empty();
   Status status;
   IndexedDBDataLossInfo data_loss_info;
-  if (!in_memory) {
+  if (!in_memory && create_if_missing) {
     // Check for previous corruption, and if found then try to delete the
     // database.
     std::string corruption_message =
@@ -1522,6 +1504,10 @@ BackingStore::DoOpenAndVerify(BucketContext& bucket_context,
       data_loss_info.status = blink::mojom::IDBDataLoss::Total;
       data_loss_info.message = base::StrCat(
           {"IndexedDB (database was corrupt): ", corruption_message});
+      if (skip_create_on_data_loss) {
+        return {nullptr, Status::NotFound("Skipped creation due to data loss"),
+                std::move(data_loss_info), /*is_disk_full=*/false};
+      }
       // This is a special case where we want to make sure the database is
       // deleted, so we try to delete again.
       status = DestroyDatabase(database_path);
@@ -1546,7 +1532,7 @@ BackingStore::DoOpenAndVerify(BucketContext& bucket_context,
       if (!ldb_status.IsNotFound()) {
         ReportLevelDBError("WebCore.IndexedDB.LevelDBOpenErrors", ldb_status);
       }
-      return {nullptr, std::move(ldb_status), IndexedDBDataLossInfo(),
+      return {nullptr, std::move(ldb_status), std::move(data_loss_info),
               is_disk_full};
     }
   }
@@ -1605,15 +1591,14 @@ BackingStore::DoOpenAndVerify(BucketContext& bucket_context,
       backing_store_mode, bucket_locator, blob_path, std::move(database),
       base::BindRepeating(bucket_context.delegate().on_files_written,
                           /*flushed=*/true),
-      base::BindRepeating(&BucketContext::ReportOutstandingBlobs,
-                          bucket_context.AsWeakPtr()));
+      std::move(on_can_close));
   status = backing_store->Initialize(/*clean_active_blob_journal=*/!in_memory);
   if (!status.ok()) [[unlikely]] {
-    base::WaitableEvent leveldb_destruct_event;
-    backing_store->TearDown(&leveldb_destruct_event);
+    base::WaitableEvent destruct_event;
+    std::move(*backing_store).SignalWhenDestructionComplete(&destruct_event);
     backing_store.reset();
-    leveldb_destruct_event.Wait();
-    return {nullptr, status, IndexedDBDataLossInfo(), /*is_disk_full=*/false};
+    destruct_event.Wait();
+    return {nullptr, status, std::move(data_loss_info), /*is_disk_full=*/false};
   }
   backing_store->db()->scopes()->StartRecoveryAndCleanupTasks();
   backing_store->bucket_context_ = &bucket_context;
@@ -1633,10 +1618,13 @@ BackingStore::OpenAndVerify(BucketContext& bucket_context,
                             base::FilePath blob_path,
                             PartitionedLockManager* lock_manager,
                             bool is_first_attempt,
-                            bool create_if_missing) {
+                            bool create_if_missing,
+                            bool skip_create_on_data_loss,
+                            base::RepeatingClosure on_can_close) {
   auto return_values =
       DoOpenAndVerify(bucket_context, data_directory, database_path, blob_path,
-                      lock_manager, is_first_attempt, create_if_missing);
+                      lock_manager, is_first_attempt, create_if_missing,
+                      skip_create_on_data_loss, std::move(on_can_close));
 
   Status& status = std::get<Status>(return_values);
   if (status.IsCorruption()) {
@@ -1767,7 +1755,7 @@ Status BackingStore::Database::DeleteDatabase(
     base::OnceClosure on_complete) {
   TRACE_EVENT0("IndexedDB", "BackingStore::DeleteDatabase");
 
-  scoped_refptr<TransactionalLevelDBTransaction> transaction =
+  std::unique_ptr<TransactionalLevelDBTransaction> transaction =
       GetTransactionalLevelDBFactory()->CreateLevelDBTransaction(
           backing_store_->db(),
           backing_store_->db()->scopes()->CreateScope(std::move(locks)));
@@ -2607,6 +2595,12 @@ BackingStore::Transaction::KeyExistsInObjectStore(int64_t object_store_id,
   return CreateRecordIdentifier(key, version);
 }
 
+void BackingStore::OnOutstandingBlobsChanged(bool blobs_outstanding) {
+  if (!blobs_outstanding) {
+    on_can_close_.Run();
+  }
+}
+
 void BackingStore::ReportBlobUnused(int64_t database_id, int64_t blob_number) {
   DCHECK(KeyPrefix::IsValidDatabaseId(database_id));
   bool all_blobs = blob_number == DatabaseMetaDataKey::kAllBlobsNumber;
@@ -2931,85 +2925,6 @@ bool BackingStore::UpdateEarliestCompactionTime() {
          txn->Commit().ok();
 }
 
-void BackingStore::OnCleanupStarted() {
-  static int cleanup_count = 0;
-  // Verification is a potentially expensive operation which is meant to catch
-  // errors in cleanup (particularly tombstone sweeping) before the in-session
-  // sweeper is launched to a broader audience. To limit the performance impact,
-  // it's only performed on databases under a certain size limit and only at
-  // most once per 100 cleanups (per restart).
-  if (!in_memory() &&
-      base::FeatureList::IsEnabled(kIdbVerifyInSessionDbCleanup) &&
-      (cleanup_count++ % 100 == 0) &&
-      base::ComputeDirectorySize(database_path_) < base::MiB(25).InBytes()) {
-    CHECK(!dbs_snapshot_.has_value());
-    LogVerificationEvent(InSessionCleanupVerificationEvent::kCleanupStarted);
-    StatusOr<base::ListValue> dbs_snapshot =
-        SnapshotAllDatabases(/*before_cleanup=*/true);
-    if (dbs_snapshot.has_value()) {
-      dbs_snapshot_ = *std::move(dbs_snapshot);
-    }
-  }
-}
-
-void BackingStore::OnCleanupStopped(bool completed) {
-  if (dbs_snapshot_.has_value()) {
-    base::ListValue dbs_snapshot_before = *std::move(dbs_snapshot_);
-    dbs_snapshot_.reset();
-    StatusOr<base::ListValue> dbs_snapshot_after =
-        SnapshotAllDatabases(/*before_cleanup=*/false);
-    if (!dbs_snapshot_after.has_value()) {
-      return;
-    }
-    if (*dbs_snapshot_after == dbs_snapshot_before) {
-      LogVerificationEvent(InSessionCleanupVerificationEvent::kMatchedSnapshot);
-    } else {
-      LogVerificationEvent(
-          InSessionCleanupVerificationEvent::kMismatchedSnapshot);
-    }
-  }
-
-  if (completed) {
-    // Update the timers for traditional sweeper.
-    UpdateEarliestSweepTime();
-    UpdateEarliestCompactionTime();
-  }
-}
-
-StatusOr<base::ListValue> BackingStore::SnapshotAllDatabases(
-    bool before_cleanup) {
-  auto start = base::TimeTicks::Now();
-
-  base::ListValue dbs_snapshot;
-  StatusOr<std::vector<std::u16string>> names = GetDatabaseNames();
-  if (!names.has_value()) {
-    return base::unexpected(names.error());
-  }
-  for (const std::u16string& name : *names) {
-    StatusOr<std::unique_ptr<indexed_db::BackingStore::Database>> database =
-        CreateOrOpenDatabase(name);
-    if (!database.has_value()) {
-      LogVerificationEvent(
-          before_cleanup
-              ? InSessionCleanupVerificationEvent::kErrorOpeningBefore
-              : InSessionCleanupVerificationEvent::kErrorOpeningAfter);
-      return base::unexpected(database.error());
-    }
-    StatusOr<base::DictValue> snapshot = SnapshotDatabase(**database);
-    if (!snapshot.has_value()) {
-      LogVerificationEvent(
-          before_cleanup
-              ? InSessionCleanupVerificationEvent::kErrorSnapshottingBefore
-              : InSessionCleanupVerificationEvent::kErrorSnapshottingAfter);
-      return base::unexpected(snapshot.error());
-    }
-    dbs_snapshot.Append(*std::move(snapshot));
-  }
-  base::UmaHistogramTimes("IndexedDB.LevelDB.InSessionCleanupSnapshotTime",
-                          base::TimeTicks::Now() - start);
-  return dbs_snapshot;
-}
-
 Status BackingStore::Transaction::PutIndexDataForRecord(
     int64_t object_store_id,
     int64_t index_id,
@@ -3077,7 +2992,7 @@ Status BackingStore::Transaction::FindKeyInIndex(
     std::string_view slice(it->Value());
 
     int64_t version;
-    if (!DecodeVarInt(&slice, &version)) {
+    if (!DecodeVarInt(&slice, &version) || slice.empty()) {
       INTERNAL_READ_ERROR(FIND_KEY_IN_INDEX);
       return InternalInconsistencyStatus();
     }
@@ -3160,6 +3075,12 @@ uintptr_t BackingStore::GetIdentifierForMemoryDump() {
   // This pointer is used to match the pointer used in
   // TransactionalLevelDBDatabase::OnMemoryDump.
   return reinterpret_cast<uintptr_t>(db()->db());
+}
+
+void BackingStore::ReportMemoryUsage(base::trace_event::ProcessMemoryDump* pmd,
+                                     const std::string& dump_name) {
+  // Intentionally empty. The LevelDB backend reports its memory usage via
+  // TransactionalLevelDBDatabase::OnMemoryDump.
 }
 
 StatusOr<std::vector<blink::mojom::IDBNameAndVersionPtr>>
@@ -3308,11 +3229,7 @@ BackingStore::Cursor::Cursor(base::WeakPtr<Transaction> transaction,
   DCHECK(transaction_);
 }
 
-BackingStore::Cursor::~Cursor() {
-  if (tombstones_count_ > LevelDBCleanupScheduler::kTombstoneThreshold) {
-    transaction_->SetTombstoneThresholdExceeded(true);
-  }
-}
+BackingStore::Cursor::~Cursor() = default;
 
 const blink::IndexedDBKey& BackingStore::Cursor::GetKey() const {
   return current_key_;
@@ -3633,8 +3550,6 @@ bool BackingStore::Cursor::IsPastBounds() const {
 void BackingStore::Cursor::RemoveTombstoneOrIncrementCount(Status* s) {
   if (cursor_options_.mode != blink::mojom::IDBTransactionMode::ReadOnly) {
     *s = transaction_->transaction()->Remove(iterator_->Key());
-  } else {
-    tombstones_count_++;
   }
 }
 
@@ -4187,7 +4102,6 @@ BackingStore::Transaction::Transaction(
 
 BackingStore::Transaction::~Transaction() {
   DCHECK(!committing_);
-  backing_store_->OnTransactionComplete(tombstone_threshold_exceeded_);
 }
 
 Status BackingStore::Transaction::Begin(std::vector<PartitionedLock> locks) {
@@ -4657,7 +4571,8 @@ bool BackingStore::Transaction::WriteNewBlobs(BlobWriteCallback callback) {
                                 backing_store_->GetBlobFileName(
                                     database_id(), entry.blob_number()),
                                 BackingStore::ShouldSyncOnCommit(durability_),
-                                last_modified, write_result_callback);
+                                last_modified, entry.size(),
+                                write_result_callback);
           break;
         }
         case IndexedDBExternalObject::ObjectType::kFileSystemAccessHandle: {

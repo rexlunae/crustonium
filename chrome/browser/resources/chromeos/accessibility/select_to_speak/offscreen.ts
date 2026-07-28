@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-type MessageSender = chrome.runtime.MessageSender;
+import {ExtensionUtil} from '/common/extension_util.js';
 
-let AudioAndCopyHandlerObject;
+type MessageSender = chrome.runtime.MessageSender;
 
 // Number of milliseconds to wait after requesting a clipboard read
 // before clipboard change and paste events are ignored.
@@ -49,8 +49,11 @@ class AudioAndCopyHandler {
 
     // Handle messages from the service worker.
     chrome.runtime.onMessage.addListener(
-        (message: any|undefined, _sender: MessageSender,
+        (message: any|undefined, sender: MessageSender,
          _sendResponse: (value: any) => void) => {
+          if (!ExtensionUtil.isValidSender(sender)) {
+            return false;
+          }
           switch (message['command']) {
             case 'playNullSelectionTone':
               this.audioElement_.play();
@@ -83,7 +86,7 @@ class AudioAndCopyHandler {
       this.lastReadClipboardDataTime_ = new Date(0);
       // Clear the clipboard data by copying nothing (the current document).
       // Do this in a timeout to avoid a recursive warning per
-      // https://crbug.com/363288.
+      // https://crbug.com/41101400.
       setTimeout(() => this.clearClipboard_(), 0);
 
       // @ts-ignore: TODO(crbug.com/270623046): clipboardData can be null.
@@ -114,5 +117,5 @@ class AudioAndCopyHandler {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  AudioAndCopyHandlerObject = new AudioAndCopyHandler();
+  Object.assign(window, {AudioAndCopyHandlerObject: new AudioAndCopyHandler()});
 });

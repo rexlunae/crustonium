@@ -47,9 +47,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
     : public OverlayProcessorInterface {
  public:
   using CandidateList = OverlayCandidateList;
-  // TODO(crbug.com/444264038): Delete this declaration when the RPDQ refactor
-  // is finished. Need to avoid hiding the base class' overload.
-  using OverlayProcessorInterface::ProcessForOverlays;
 
   OverlayProcessorUsingStrategy(const OverlayProcessorUsingStrategy&) = delete;
   OverlayProcessorUsingStrategy& operator=(
@@ -69,13 +66,10 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const FilterOperationsMap& render_pass_filters,
-      const FilterOperationsMap& render_pass_backdrop_filters,
       SurfaceDamageRectList surface_damage_rect_list,
-      std::optional<OverlayCandidate>& primary_plane,
+      const PrimaryPlaneParams& primary_plane_params,
       CandidateList* overlay_candidates,
-      gfx::Rect* damage_rect,
-      std::vector<gfx::Rect>* content_bounds)
+      gfx::Rect* damage_rect)
       // TODO(petermcneeley) : Restore to "final" once
       // |OverlayProcessorDelegated| has been reintegrated into
       // |OverlayProcessorOzone|.
@@ -148,8 +142,12 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // confirmed in `OverlayProcessorOzone::ReceiveHardwareCapabilities`.
   int max_overlays_considered_ = 1;
 
-#if BUILDFLAG(IS_CHROMEOS)
  protected:
+  // This is used by `OverlayProcessorAndroid` and `OverlayProcessorWebView`,
+  // which do not use an overlay for the primary plane.
+  virtual bool ShouldCreatePrimaryPlane() const;
+
+#if BUILDFLAG(IS_CHROMEOS)
   // TODO(b/181974042):  Remove when color space is plumbed.
   gfx::ColorSpace primary_plane_color_space_;
 #endif
@@ -204,15 +202,11 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // |primary_plane|'s blending setting.
   bool AttemptWithStrategies(
       const SkM44& output_color_matrix,
-      const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-      const OverlayProcessorInterface::FilterOperationsMap&
-          render_pass_backdrop_filters,
       const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
       std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidates,
-      std::vector<gfx::Rect>* content_bounds,
       gfx::Rect* incoming_damage);
 
   // Skips overlay when we have recently had copy output requests

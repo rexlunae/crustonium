@@ -8,6 +8,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback_helpers.h"
+#include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -23,16 +24,16 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/chrome_content_verifier_delegate.h"
+#include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_management_constants.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
 #include "chrome/browser/extensions/extension_service_test_with_install.h"
 #include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
 #include "chrome/browser/extensions/load_error_waiter.h"
-#include "chrome/browser/extensions/shared_module_service.h"
+#include "chrome/browser/extensions/shared_module_service_factory.h"
 #include "chrome/browser/extensions/sync/extension_sync_data.h"
 #include "chrome/browser/extensions/sync/extension_sync_service.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
@@ -42,7 +43,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/extension_test_util.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -62,6 +62,7 @@
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "extensions/browser/content_verifier/test_utils.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_dialog_auto_confirm.h"
 #include "extensions/browser/extension_host.h"
@@ -74,6 +75,7 @@
 #include "extensions/browser/install_verifier.h"
 #include "extensions/browser/pending_extension_manager.h"
 #include "extensions/browser/scoped_ignore_content_verifier_for_test.h"
+#include "extensions/browser/shared_module_service.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/browser/unpacked_installer.h"
 #include "extensions/browser/updater/extension_cache_fake.h"
@@ -86,6 +88,8 @@
 #include "extensions/common/manifest_handlers/shared_module_info.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/verifier_formats.h"
+#include "extensions/test/test_extension_dir.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "third_party/blink/public/common/switches.h"
@@ -95,7 +99,7 @@
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
-#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"  // nogncheck
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -319,7 +323,8 @@ class ExtensionPolicyTest : public ExtensionPolicyTestBase {
   }
 
   extensions::SharedModuleService* shared_module_service() {
-    return extensions::SharedModuleService::Get(profile());
+    return extensions::SharedModuleServiceFactory::GetForBrowserContext(
+        profile());
   }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -417,7 +422,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
                        ExtensionInstallBlocklistComponentApps) {
   // Load all component extensions.
   extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
-  auto* loader = extensions::ComponentLoader::Get(browser()->profile());
+  auto* loader = extensions::ComponentLoader::Get(browser()->GetProfile());
   loader->AddDefaultComponentExtensions(false);
   base::RunLoop().RunUntilIdle();
 
@@ -1525,8 +1530,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest, UpdateManifestOrderedAppTags) {
 
 // Verifies that corrupted non-webstore policy-based extension is automatically
 // repaired (reinstalled).
+
+// TODO(crbug.com/511917153): Re-enable this test on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_CorruptedNonWebstoreExtensionRepaired \
+  DISABLED_CorruptedNonWebstoreExtensionRepaired
+#else
+#define MAYBE_CorruptedNonWebstoreExtensionRepaired \
+  CorruptedNonWebstoreExtensionRepaired
+#endif
 IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
-                       CorruptedNonWebstoreExtensionRepaired) {
+                       MAYBE_CorruptedNonWebstoreExtensionRepaired) {
   // Mark as enterprise managed.
   policy::ScopedDomainEnterpriseManagement scoped_domain;
   ignore_content_verifier_.reset();
@@ -1595,8 +1609,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
 
 // Verifies that corrupted non-webstore policy-based extension is automatically
 // repaired (reinstalled) even if hashes file is damaged too.
-// crbug.com/1131634: flaky on win
-#if BUILDFLAG(IS_WIN)
+// crbug.com/40150293: flaky on win
+// crbug.com/512086953: flaky on android
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 #define MAYBE_CorruptedNonWebstoreExtensionWithDamagedHashesRepaired \
   DISABLED_CorruptedNonWebstoreExtensionWithDamagedHashesRepaired
 #else
@@ -1677,11 +1692,20 @@ IN_PROC_BROWSER_TEST_F(
 // Verifies that corrupted non-webstore policy-based extension is not repaired
 // if there are no computed_hashes.json for it. Note that this behavior will
 // change in the future.
-// See https://crbug.com/958794#c22 for details.
+// See https://crbug.com/40625642#comment23 for details.
 // TODO(crbug.com/40669814): Change this test so extension without hashes
 // will be also reinstalled.
-IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
-                       CorruptedNonWebstoreExtensionWithoutHashesRemained) {
+// TODO(crbug.com/511917153): Re-enable this test on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_CorruptedNonWebstoreExtensionWithoutHashesRemained \
+  DISABLED_CorruptedNonWebstoreExtensionWithoutHashesRemained
+#else
+#define MAYBE_CorruptedNonWebstoreExtensionWithoutHashesRemained \
+  CorruptedNonWebstoreExtensionWithoutHashesRemained
+#endif
+IN_PROC_BROWSER_TEST_F(
+    ExtensionPolicyTest,
+    MAYBE_CorruptedNonWebstoreExtensionWithoutHashesRemained) {
   // Mark as enterprise managed.
   policy::ScopedDomainEnterpriseManagement scoped_domain;
   ignore_content_verifier_.reset();
@@ -1864,7 +1888,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
 
 // Verifies that the browser doesn't crash on shutdown. If the extensions are
 // being installed, and the browser is shutdown, it should not lead to a crash
-// as in (crbug/1114191).
+// as in (crbug.com/40710676).
 IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
                        ExtensionInstallForcelistShutdownBeforeInstall) {
   ExtensionRequestInterceptor interceptor;
@@ -2340,6 +2364,43 @@ IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest, ExtensionBlockedHostWhenDisabled) {
       extension->permissions_data()->CanAccessPage(test_url, tab_id, error));
 }
 
+// Regression test for https://crbug.com/513089253.
+// Verifies that intersecting an enterprise policy allowing an extension scheme
+// URL with an extension requesting <all_urls> (but lacking extension scheme
+// permissions) results in an empty intersection rather than a crash.
+IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest, ValidSchemeAndPatternIntersection) {
+  std::string json = R"({
+    "*": {
+      "installation_mode": "allowed",
+      "runtime_allowed_hosts": [
+        "chrome-extension://abcdefghijklmnoabcdefghijklmno"
+      ]
+    }
+  })";
+  std::optional<base::Value> settings =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(settings);
+
+  PolicyMap policies;
+  policies.Set(key::kExtensionSettings, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+               std::move(settings.value()), nullptr);
+  UpdateProviderPolicy(policies);
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(R"({
+    "name": "All URLs Extension",
+    "version": "1.0",
+    "manifest_version": 3,
+    "host_permissions": ["<all_urls>"]
+  })");
+
+  extensions::ChromeTestExtensionLoader loader(profile());
+  scoped_refptr<const extensions::Extension> extension =
+      loader.LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+}
+
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // Similar to ExtensionPolicyTest but sets the WebAppInstallForceList policy
 // before the browser is started.
@@ -2383,9 +2444,9 @@ class WebAppInstallForceListPolicyTest : public ExtensionPolicyTest {
 
 IN_PROC_BROWSER_TEST_F(WebAppInstallForceListPolicyTest, StartUpInstallation) {
   const web_app::WebAppRegistrar& registrar =
-      web_app::WebAppProvider::GetForTest(browser()->profile())
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile())
           ->registrar_unsafe();
-  web_app::WebAppTestInstallObserver install_observer(browser()->profile());
+  web_app::WebAppTestInstallObserver install_observer(browser()->GetProfile());
   std::optional<webapps::AppId> app_id = registrar.FindBestAppWithUrlInScope(
       policy_app_url_,
       web_app::WebAppFilter::InstalledInOperatingSystemForTesting());
@@ -2417,9 +2478,9 @@ IN_PROC_BROWSER_TEST_F(
     WebAppInstallForceListPolicyWithAppFallbackNameManifestTest,
     StartUpInstallationPWAFallbackName) {
   const web_app::WebAppRegistrar& registrar =
-      web_app::WebAppProvider::GetForTest(browser()->profile())
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile())
           ->registrar_unsafe();
-  web_app::WebAppTestInstallObserver install_observer(browser()->profile());
+  web_app::WebAppTestInstallObserver install_observer(browser()->GetProfile());
   std::optional<webapps::AppId> app_id = registrar.FindBestAppWithUrlInScope(
       policy_app_url_,
       web_app::WebAppFilter::InstalledInOperatingSystemForTesting());
@@ -2451,9 +2512,9 @@ class WebAppInstallForceListPolicySAATest
 IN_PROC_BROWSER_TEST_F(WebAppInstallForceListPolicySAATest,
                        StartUpInstallationSAA) {
   const web_app::WebAppRegistrar& registrar =
-      web_app::WebAppProvider::GetForTest(browser()->profile())
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile())
           ->registrar_unsafe();
-  web_app::WebAppTestInstallObserver install_observer(browser()->profile());
+  web_app::WebAppTestInstallObserver install_observer(browser()->GetProfile());
   std::optional<webapps::AppId> app_id = registrar.FindBestAppWithUrlInScope(
       policy_app_url_,
       web_app::WebAppFilter::InstalledInOperatingSystemForTesting());
@@ -2482,9 +2543,9 @@ class WebAppInstallForceListPolicyWithAppFallbackNameSAATest
 IN_PROC_BROWSER_TEST_F(WebAppInstallForceListPolicyWithAppFallbackNameSAATest,
                        StartUpInstallationSAAFallbackName) {
   const web_app::WebAppRegistrar& registrar =
-      web_app::WebAppProvider::GetForTest(browser()->profile())
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile())
           ->registrar_unsafe();
-  web_app::WebAppTestInstallObserver install_observer(browser()->profile());
+  web_app::WebAppTestInstallObserver install_observer(browser()->GetProfile());
   std::optional<webapps::AppId> app_id = registrar.FindBestAppWithUrlInScope(
       policy_app_url_,
       web_app::WebAppFilter::InstalledInOperatingSystemForTesting());
@@ -2513,14 +2574,21 @@ class WebAppInstallForceListPolicyPlaceholderWithAppFallbackNameTest
       delete;
 };
 
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_StartUpInstallationPlaceholderFallbackName \
+  DISABLED_StartUpInstallationPlaceholderFallbackName
+#else
+#define MAYBE_StartUpInstallationPlaceholderFallbackName \
+  StartUpInstallationPlaceholderFallbackName
+#endif
 IN_PROC_BROWSER_TEST_F(
     WebAppInstallForceListPolicyPlaceholderWithAppFallbackNameTest,
-    StartUpInstallationPlaceholderFallbackName) {
+    MAYBE_StartUpInstallationPlaceholderFallbackName) {
   const web_app::WebAppRegistrar& registrar =
-      web_app::WebAppProvider::GetForTest(browser()->profile())
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile())
           ->registrar_unsafe();
   web_app::WebAppTestInstallWithOsHooksObserver install_observer(
-      browser()->profile());
+      browser()->GetProfile());
   std::optional<webapps::AppId> app_id = registrar.FindBestAppWithUrlInScope(
       policy_app_url_,
       web_app::WebAppFilter::InstalledInOperatingSystemForTesting());

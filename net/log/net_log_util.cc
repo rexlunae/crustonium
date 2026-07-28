@@ -4,6 +4,8 @@
 
 #include "net/log/net_log_util.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -87,7 +89,7 @@ const StringToConstant kLoadStateTable[] = {
 #undef LOAD_STATE
 };
 
-const short kNetErrors[] = {
+const int16_t kNetErrors[] = {
 #define NET_ERROR(label, value) value,
 #include "net/base/net_error_list.h"
 #undef NET_ERROR
@@ -128,7 +130,8 @@ base::Value GetActiveFieldTrialList() {
   base::FieldTrialList::GetActiveFieldTrialGroups(&active_groups);
   base::ListValue field_trial_groups;
   for (const auto& group : active_groups) {
-    field_trial_groups.Append(group.trial_name + ":" + group.group_name);
+    field_trial_groups.Append(
+        base::StrCat({group.trial_name, ":", group.group_name}));
   }
   return base::Value(std::move(field_trial_groups));
 }
@@ -175,7 +178,7 @@ base::DictValue GetNetConstants(NetConstantsRequestMode request_mode) {
 
   // LINT.IfChange(CertVerifyProc.VerifyFlags)
   {
-    static_assert(CertVerifyProc::VERIFY_FLAGS_LAST == (1 << 4),
+    static_assert(CertVerifyProc::VERIFY_FLAGS_LAST == (1 << 3),
                   "Update with new flags");
     constants_dict.Set(
         "certVerifyFlags",
@@ -184,31 +187,12 @@ base::DictValue GetNetConstants(NetConstantsRequestMode request_mode) {
                  CertVerifyProc::VERIFY_REV_CHECKING_ENABLED)
             .Set("VERIFY_REV_CHECKING_REQUIRED_LOCAL_ANCHORS",
                  CertVerifyProc::VERIFY_REV_CHECKING_REQUIRED_LOCAL_ANCHORS)
-            .Set("VERIFY_ENABLE_SHA1_LOCAL_ANCHORS",
-                 CertVerifyProc::VERIFY_ENABLE_SHA1_LOCAL_ANCHORS)
             .Set("VERIFY_DISABLE_NETWORK_FETCHES",
                  CertVerifyProc::VERIFY_DISABLE_NETWORK_FETCHES)
             .Set("VERIFY_SXG_CT_REQUIREMENTS",
                  CertVerifyProc::VERIFY_SXG_CT_REQUIREMENTS));
   }
   // LINT.ThenChange(/net/cert/cert_verify_proc.h:CertVerifyProc.VerifyFlags)
-
-  {
-    static_assert(
-        bssl::SimplePathBuilderDelegate::DigestPolicy::kMaxValue ==
-            bssl::SimplePathBuilderDelegate::DigestPolicy::kWeakAllowSha1,
-        "Update with new flags");
-
-    constants_dict.Set(
-        "certPathBuilderDigestPolicy",
-        base::DictValue()
-            .Set("kStrong",
-                 static_cast<int>(
-                     bssl::SimplePathBuilderDelegate::DigestPolicy::kStrong))
-            .Set("kWeakAllowSha1",
-                 static_cast<int>(bssl::SimplePathBuilderDelegate::
-                                      DigestPolicy::kWeakAllowSha1)));
-  }
 
   // Add a dictionary with information about the relationship between load flag
   // enums and their symbolic names.

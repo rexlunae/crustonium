@@ -16,11 +16,13 @@
 #include "base/syslog_logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/sync/glue/extensions_activity_monitor.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/browser_sync/sync_engine_factory_impl.h"
+#include "components/network_time/network_time_tracker.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/supervised_user/core/browser/family_link_settings_service.h"
@@ -97,6 +99,11 @@ signin::IdentityManager* ChromeSyncClient::GetIdentityManager() {
   return identity_manager_;
 }
 
+network_time::NetworkTimeTracker* ChromeSyncClient::GetNetworkTimeTracker() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  return g_browser_process->network_time_tracker();
+}
+
 base::FilePath ChromeSyncClient::GetLocalSyncBackendFolder() {
   base::FilePath local_sync_backend_folder =
       GetPrefService()->GetFilePath(syncer::prefs::kLocalSyncBackendDir);
@@ -114,7 +121,7 @@ base::FilePath ChromeSyncClient::GetLocalSyncBackendFolder() {
   // all machines, which is not a given. It is to be defined if only the
   // Default profile should get this treatment or all profile as is the case
   // now.
-  // TODO(pastarmovj): http://crbug.com/674928 Decide if only the Default one
+  // TODO(pastarmovj): http://crbug.com/41291598 Decide if only the Default one
   // should be considered roamed. For now the code assumes all profiles are
   // created in the same order on all machines.
   local_sync_backend_folder =

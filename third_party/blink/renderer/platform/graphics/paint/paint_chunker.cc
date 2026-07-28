@@ -80,7 +80,7 @@ bool PaintChunker::EnsureCurrentChunk(const PaintChunk::Id& id,
     MarkClientForValidation(next_chunk_id_->second);
     chunks_.emplace_back(begin, begin, next_chunk_id_->second,
                          next_chunk_id_->first, current_properties_,
-                         current_effectively_invisible_, canvas_subtree_id_);
+                         current_effectively_invisible_);
     next_chunk_id_ = std::nullopt;
     will_force_new_chunk_ = false;
     return true;
@@ -222,17 +222,24 @@ bool PaintChunker::AddRegionCaptureDataToCurrentChunk(
 bool PaintChunker::AddTrackedElementDataToCurrentChunk(
     const PaintChunk::Id& id,
     const DisplayItemClient& client,
-    const TrackedElementId& tracked_element_id,
-    const gfx::Rect& rect) {
+    const gfx::Rect& element_paint_rect,
+    const TrackedElementSubRects& tracked_element_sub_rects) {
   CheckNotFinished();
-  DCHECK(!tracked_element_id->is_zero());
   bool created_new_chunk = EnsureCurrentChunk(id, client);
-  auto& chunk = chunks_.back();
-  if (!chunk.tracked_element_data) {
-    chunk.tracked_element_data = MakeGarbageCollected<TrackedElementData>();
-  }
+  for (const auto& [feature, sub_rect] : tracked_element_sub_rects) {
+    DCHECK(!sub_rect.id->is_zero());
+    gfx::Rect bounds = sub_rect.GetEffectiveBounds(element_paint_rect);
+    TrackedElementRect tracked_element_rect(
+        sub_rect.id, bounds, sub_rect.should_add_to_compositor_frame_metadata,
+        sub_rect.should_exclude_fixed_and_sticky_occlusions,
+        sub_rect.frame_token, sub_rect.parent_frame_token);
 
-  chunk.tracked_element_data->map.insert_or_assign(tracked_element_id, rect);
+    auto& chunk = chunks_.back();
+    if (!chunk.tracked_element_rects) {
+      chunk.tracked_element_rects = MakeGarbageCollected<TrackedElementRects>();
+    }
+    chunk.tracked_element_rects->map[feature].push_back(tracked_element_rect);
+  }
   return created_new_chunk;
 }
 

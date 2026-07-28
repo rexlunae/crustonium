@@ -21,6 +21,8 @@
 
 #include "third_party/blink/renderer/core/css/style_rule.h"
 
+#include <limits>
+
 #include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/css/css_apply_mixin_rule.h"
 #include "third_party/blink/renderer/core/css/css_container_rule.h"
@@ -47,6 +49,7 @@
 #include "third_party/blink/renderer/core/css/css_page_rule.h"
 #include "third_party/blink/renderer/core/css/css_position_try_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_rule.h"
+#include "third_party/blink/renderer/core/css/css_result_rule.h"
 #include "third_party/blink/renderer/core/css/css_route_rule.h"
 #include "third_party/blink/renderer/core/css/css_scope_rule.h"
 #include "third_party/blink/renderer/core/css/css_starting_style_rule.h"
@@ -65,6 +68,7 @@
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/core/css/parser/css_supports_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
+#include "third_party/blink/renderer/core/css/parser/navigation_parser.h"
 #include "third_party/blink/renderer/core/css/style_rule_counter_style.h"
 #include "third_party/blink/renderer/core/css/style_rule_font_feature_values.h"
 #include "third_party/blink/renderer/core/css/style_rule_font_palette_values.h"
@@ -82,6 +86,7 @@
 #include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -192,6 +197,9 @@ void StyleRuleBase::Trace(Visitor* visitor) const {
     case kMixin:
       To<StyleRuleMixin>(this)->TraceAfterDispatch(visitor);
       return;
+    case kResult:
+      To<StyleRuleResult>(this)->TraceAfterDispatch(visitor);
+      return;
     case kApplyMixin:
       To<StyleRuleApplyMixin>(this)->TraceAfterDispatch(visitor);
       return;
@@ -293,6 +301,9 @@ void StyleRuleBase::FinalizeGarbageCollectedObject() {
       return;
     case kMixin:
       To<StyleRuleMixin>(this)->~StyleRuleMixin();
+      return;
+    case kResult:
+      To<StyleRuleResult>(this)->~StyleRuleResult();
       return;
     case kApplyMixin:
       To<StyleRuleApplyMixin>(this)->~StyleRuleApplyMixin();
@@ -429,6 +440,10 @@ CSSRule* StyleRuleBase::CreateCSSOMWrapper(wtf_size_t position_hint,
       rule = MakeGarbageCollected<CSSMixinRule>(To<StyleRuleMixin>(self),
                                                 parent_sheet);
       break;
+    case kResult:
+      rule = MakeGarbageCollected<CSSResultRule>(To<StyleRuleResult>(self),
+                                                 parent_sheet);
+      break;
     case kApplyMixin:
       rule = MakeGarbageCollected<CSSApplyMixinRule>(
           To<StyleRuleApplyMixin>(self), parent_sheet);
@@ -515,6 +530,16 @@ MutableCSSPropertyValueSet& StyleRule::MutableProperties() {
   return *To<MutableCSSPropertyValueSet>(properties_.Get());
 }
 
+wtf_size_t StyleRule::ReplaceChildRuleIfExists(StyleRuleBase* old_rule,
+                                               StyleRuleBase* new_rule,
+                                               wtf_size_t position_hint) {
+  if (child_rules_) {
+    return ReplaceStyleRuleInVector(old_rule, new_rule, position_hint,
+                                    *child_rules_);
+  }
+  return std::numeric_limits<wtf_size_t>::max();  // Not found.
+}
+
 void StyleRule::WrapperInsertRule(CSSStyleSheet* parent_sheet,
                                   unsigned index,
                                   StyleRuleBase* rule) {
@@ -580,26 +605,17 @@ StyleRuleBase* CloneGroupRule(
                               mixin_parameter_bindings));
 }
 
-// Make sure that the FakeParentRuleForDeclarations, if any,
-// gets our parent as parent. In particular, we'd like any
-// StyleRuleNestedDeclarations in there to get our selector
-// (it copies the parent selector during clone), not the
-// dummy parent selector that's there from parsing and which
-// may have the wrong specificity.
-StyleRule* CloneFakeParentRule(
-    StyleRule* old_inner_rule,
-    StyleRule* new_parent,
-    const MixinParameterBindings* mixin_parameter_bindings) {
-  HeapVector<CSSSelector> selectors =
-      CSSSelectorList::Copy(new_parent->FirstSelector());
-  auto* new_rule = StyleRule::Create(
-      selectors, old_inner_rule->Properties().ImmutableCopyIfNeeded(),
-      mixin_parameter_bindings);
-  for (StyleRuleBase* child_rule : *old_inner_rule->ChildRules()) {
-    new_rule->AddChildRule(
-        child_rule->Clone(new_rule, mixin_parameter_bindings));
+HeapVector<CSSSelector> CloneSelectorListWithDummyFallback(
+    StyleRule* new_parent) {
+  if (new_parent) {
+    return CSSSelectorList::Copy(new_parent->FirstSelector());
   }
-  return new_rule;
+  // A StyleRule cannot have an empty selector; create a dummy.
+  HeapVector<CSSSelector> selectors;
+  selectors.emplace_back(/*parent_rule=*/nullptr, /*is_implicit=*/true);
+  selectors.back().SetLastInSelectorList(true);
+  selectors.back().SetLastInComplexSelector(true);
+  return selectors;
 }
 
 }  // namespace
@@ -641,8 +657,8 @@ StyleRuleBase* StyleRuleBase::Clone(
     case kContainer: {
       StyleRuleContainer* container_rule = To<StyleRuleContainer>(this);
       return MakeGarbageCollected<StyleRuleContainer>(
-          *MakeGarbageCollected<ContainerQuery>(
-              container_rule->GetContainerQuery()),
+          *MakeGarbageCollected<ContainerQuerySet>(
+              container_rule->GetContainerQuerySet()),
           CloneRules(container_rule->ChildRules(), new_parent,
                      mixin_parameter_bindings));
     }
@@ -670,29 +686,19 @@ StyleRuleBase* StyleRuleBase::Clone(
     case kMixin:
       return CloneGroupRule(To<StyleRuleMixin>(this), new_parent,
                             mixin_parameter_bindings);
-    case kApplyMixin: {
-      auto* apply_rule = To<StyleRuleApplyMixin>(this);
-      StyleRule* old_inner_rule = apply_rule->FakeParentRuleForDeclarations();
-      if (!old_inner_rule || !old_inner_rule->ChildRules()) {
-        return this;
-      }
-      return MakeGarbageCollected<StyleRuleApplyMixin>(
-          apply_rule->GetName(), apply_rule->GetArguments(),
-          CloneFakeParentRule(old_inner_rule, new_parent,
-                              mixin_parameter_bindings));
-    }
-    case kContents: {
-      auto* contents_rule = To<StyleRuleContentsStatement>(this);
-      StyleRule* old_inner_rule = contents_rule->FakeParentRuleForFallback();
-      if (!old_inner_rule || !old_inner_rule->ChildRules()) {
-        return this;
-      }
-      return MakeGarbageCollected<StyleRuleContentsStatement>(
-          CloneFakeParentRule(old_inner_rule, new_parent,
-                              mixin_parameter_bindings));
-    }
+    case kResult:
+      return CloneGroupRule(To<StyleRuleResult>(this), new_parent,
+                            mixin_parameter_bindings);
+    case kApplyMixin:
+      return CloneGroupRule(To<StyleRuleApplyMixin>(this), new_parent,
+                            mixin_parameter_bindings);
+    case kContents:
+      return CloneGroupRule(To<StyleRuleContentsStatement>(this), new_parent,
+                            mixin_parameter_bindings);
     case kNestedDeclarations: {
       auto* nested_declarations_rule = To<StyleRuleNestedDeclarations>(this);
+      HeapVector<CSSSelector> selectors;
+      StyleRule* old_inner_rule = nested_declarations_rule->InnerStyleRule();
       // Nested declaration rules are different from regular nested style rules,
       // since they don't refer to their parent rule with any '&' selector.
       // Instead the outer selector list is *copied* parse-time. Now that we're
@@ -703,11 +709,10 @@ StyleRuleBase* StyleRuleBase::Clone(
       // by @scope rules, however, since they always just behave like
       // :where(:scope).
       if (nested_declarations_rule->NestingType() == CSSNestingType::kScope) {
-        return this;
+        selectors = CSSSelectorList::Copy(old_inner_rule->FirstSelector());
+      } else {
+        selectors = CloneSelectorListWithDummyFallback(new_parent);
       }
-      StyleRule* old_inner_rule = nested_declarations_rule->InnerStyleRule();
-      HeapVector<CSSSelector> selectors =
-          CSSSelectorList::Copy(new_parent->FirstSelector());
       auto* new_inner_rule = StyleRule::Create(
           selectors, old_inner_rule->Properties().ImmutableCopyIfNeeded(),
           mixin_parameter_bindings);
@@ -745,30 +750,49 @@ StyleRuleBase* StyleRuleBase::Clone(
           To<StyleRuleFontFeature>(*this));
     case kImport:
       return MakeGarbageCollected<StyleRuleImport>(To<StyleRuleImport>(*this));
-    case kKeyframes:
+    case kKeyframes: {
+      StyleRuleKeyframes* keyframes_rule = To<StyleRuleKeyframes>(this);
+      HeapVector<Member<StyleRuleKeyframe>> new_keyframes;
+      for (const Member<StyleRuleKeyframe>& keyframe :
+           keyframes_rule->Keyframes()) {
+        new_keyframes.push_back(To<StyleRuleKeyframe>(
+            keyframe->Clone(new_parent, mixin_parameter_bindings)));
+      }
       return MakeGarbageCollected<StyleRuleKeyframes>(
-          To<StyleRuleKeyframes>(*this));
+          std::move(new_keyframes), keyframes_rule->GetName(),
+          keyframes_rule->Version(), keyframes_rule->IsVendorPrefixed());
+    }
     case kLayerStatement:
       return MakeGarbageCollected<StyleRuleLayerStatement>(
           To<StyleRuleLayerStatement>(*this));
     case kNamespace:
       return MakeGarbageCollected<StyleRuleNamespace>(
           To<StyleRuleNamespace>(*this));
-    case kCounterStyle:
+    case kCounterStyle: {
+      auto* counter_style = To<StyleRuleCounterStyle>(this);
       return MakeGarbageCollected<StyleRuleCounterStyle>(
-          To<StyleRuleCounterStyle>(*this));
-    case kKeyframe:
+          counter_style->GetName(),
+          counter_style->Properties().ImmutableCopyIfNeeded());
+    }
+    case kKeyframe: {
+      auto* keyframe_rule = To<StyleRuleKeyframe>(this);
+      std::unique_ptr<Vector<KeyframeOffset>> keys =
+          std::make_unique<Vector<KeyframeOffset>>(keyframe_rule->Keys());
       return MakeGarbageCollected<StyleRuleKeyframe>(
-          To<StyleRuleKeyframe>(*this));
+          std::move(keys), keyframe_rule->Properties().ImmutableCopyIfNeeded());
+    }
     case kCharset:
       return MakeGarbageCollected<StyleRuleCharset>(
           To<StyleRuleCharset>(*this));
     case kViewTransition:
       return MakeGarbageCollected<StyleRuleViewTransition>(
           To<StyleRuleViewTransition>(*this));
-    case kPositionTry:
+    case kPositionTry: {
+      auto* position_try = To<StyleRulePositionTry>(this);
       return MakeGarbageCollected<StyleRulePositionTry>(
-          To<StyleRulePositionTry>(*this));
+          position_try->Name(),
+          position_try->Properties().ImmutableCopyIfNeeded());
+    }
     case kCustomMedia:
       return MakeGarbageCollected<StyleRuleCustomMedia>(
           To<StyleRuleCustomMedia>(*this));
@@ -850,6 +874,13 @@ void StyleRuleScope::TraceAfterDispatch(blink::Visitor* visitor) const {
 StyleRuleGroup::StyleRuleGroup(RuleType type,
                                HeapVector<Member<StyleRuleBase>> rules)
     : StyleRuleBase(type), child_rules_(std::move(rules)) {}
+
+wtf_size_t StyleRuleGroup::ReplaceChildRuleIfExists(StyleRuleBase* old_rule,
+                                                    StyleRuleBase* new_rule,
+                                                    wtf_size_t position_hint) {
+  return ReplaceStyleRuleInVector(old_rule, new_rule, position_hint,
+                                  child_rules_);
+}
 
 void StyleRuleGroup::WrapperInsertRule(CSSStyleSheet* parent_sheet,
                                        unsigned index,
@@ -1001,6 +1032,7 @@ StyleRuleSupports::StyleRuleSupports(const StyleRuleSupports& other,
 
 void StyleRuleSupports::SetConditionText(
     const ExecutionContext* execution_context,
+    StyleSheetContents* parent_sheet_contents,
     String value) {
   CSSParserTokenStream stream(value);
   auto* context = MakeGarbageCollected<CSSParserContext>(*execution_context);
@@ -1010,33 +1042,59 @@ void StyleRuleSupports::SetConditionText(
       CSSSupportsParser::ConsumeSupportsCondition(stream, parser);
   condition_text_ = value;
   condition_is_supported_ = result == CSSSupportsParser::Result::kSupported;
+  if (parent_sheet_contents) {
+    parent_sheet_contents->NotifyRuleChanged(this);
+  }
 }
 
-StyleRuleContainer::StyleRuleContainer(ContainerQuery& container_query,
-                                       HeapVector<Member<StyleRuleBase>> rules)
+StyleRuleContainer::StyleRuleContainer(
+    const ContainerQuerySet& container_query_set,
+    HeapVector<Member<StyleRuleBase>> rules)
     : StyleRuleCondition(kContainer,
-                         container_query.ToString(),
+                         container_query_set.ToString(),
                          std::move(rules)),
-      container_query_(&container_query) {}
+      container_query_set_(&container_query_set) {}
 
 StyleRuleContainer::StyleRuleContainer(const StyleRuleContainer& other,
                                        HeapVector<Member<StyleRuleBase>> rules)
-    : StyleRuleContainer(*other.container_query_, std::move(rules)) {}
+    : StyleRuleContainer(*other.container_query_set_, std::move(rules)) {}
 
 void StyleRuleContainer::SetConditionText(
     const ExecutionContext* execution_context,
     StyleSheetContents* parent_sheet_contents,
     String value) {
   auto* context = MakeGarbageCollected<CSSParserContext>(*execution_context);
+
+  if (const ContainerQuerySet* container_query_set =
+          ContainerQueryParser::ParseContainerQuerySet(value, *context)) {
+    condition_text_ = container_query_set->ToString();
+    container_query_set_ = container_query_set;
+    if (parent_sheet_contents) {
+      parent_sheet_contents->NotifyRuleChanged(this);
+    }
+  }
+}
+
+void StyleRuleContainer::SetQueryText(const ExecutionContext* execution_context,
+                                      StyleSheetContents* parent_sheet_contents,
+                                      String value) {
+  const ContainerQuery* query = container_query_set_->SingleQuery();
+  if (!query) {
+    return;
+  }
+  auto* context = MakeGarbageCollected<CSSParserContext>(*execution_context);
   ContainerQueryParser parser(*context);
 
   if (const ConditionalExpNode* exp_node = parser.ParseCondition(value)) {
     condition_text_ = exp_node->Serialize();
 
-    ContainerSelector selector(container_query_->Selector().Name(), exp_node);
-    container_query_ =
-        MakeGarbageCollected<ContainerQuery>(std::move(selector), exp_node);
+    ContainerSelector selector(query->Selector().Name(), exp_node);
 
+    HeapVector<Member<const ContainerQuery>> queries;
+    queries.push_back(
+        MakeGarbageCollected<ContainerQuery>(std::move(selector), exp_node));
+    container_query_set_ =
+        MakeGarbageCollected<ContainerQuerySet>(std::move(queries));
     if (parent_sheet_contents) {
       parent_sheet_contents->NotifyRuleChanged(this);
     }
@@ -1044,7 +1102,7 @@ void StyleRuleContainer::SetConditionText(
 }
 
 void StyleRuleContainer::TraceAfterDispatch(blink::Visitor* visitor) const {
-  visitor->Trace(container_query_);
+  visitor->Trace(container_query_set_);
   StyleRuleCondition::TraceAfterDispatch(visitor);
 }
 
@@ -1063,6 +1121,21 @@ StyleRuleNavigation::StyleRuleNavigation(
 void StyleRuleNavigation::TraceAfterDispatch(Visitor* v) const {
   v->Trace(navigation_query_);
   StyleRuleCondition::TraceAfterDispatch(v);
+}
+
+void StyleRuleNavigation::SetConditionText(
+    const ExecutionContext* execution_context,
+    StyleSheetContents* parent_sheet_contents,
+    String value) {
+  CSSParserTokenStream stream(value);
+  NavigationQuery* query = NavigationParser::ParseQuery(stream);
+
+  if (query) {
+    navigation_query_ = query;
+    if (parent_sheet_contents) {
+      parent_sheet_contents->NotifyRuleChanged(this);
+    }
+  }
 }
 
 StyleRuleStartingStyle::StyleRuleStartingStyle(
@@ -1107,32 +1180,56 @@ void StyleRuleMixin::TraceAfterDispatch(blink::Visitor* visitor) const {
   visitor->Trace(parameters_);
 }
 
+StyleRuleResult::StyleRuleResult(HeapVector<Member<StyleRuleBase>> child_rules)
+    : StyleRuleGroup(kResult, child_rules) {}
+
+StyleRuleResult::StyleRuleResult(const StyleRuleResult& other,
+                                 HeapVector<Member<StyleRuleBase>> child_rules)
+    : StyleRuleGroup(kResult, child_rules) {}
+
+void StyleRuleResult::TraceAfterDispatch(blink::Visitor* visitor) const {
+  StyleRuleGroup::TraceAfterDispatch(visitor);
+}
+
+StyleRuleApplyMixin::StyleRuleApplyMixin(
+    const StyleRuleApplyMixin& other,
+    HeapVector<Member<StyleRuleBase>> child_rules)
+    : StyleRuleGroup(kApplyMixin, child_rules),
+      name_(other.name_),
+      arguments_(other.arguments_),
+      has_contents_block_(other.has_contents_block_) {}
+
 void StyleRuleApplyMixin::TraceAfterDispatch(blink::Visitor* visitor) const {
-  StyleRuleBase::TraceAfterDispatch(visitor);
-  visitor->Trace(fake_parent_rule_for_declarations_);
+  StyleRuleGroup::TraceAfterDispatch(visitor);
   visitor->Trace(arguments_);
 }
 
+StyleRuleContentsStatement::StyleRuleContentsStatement(
+    const StyleRuleContentsStatement& other,
+    HeapVector<Member<StyleRuleBase>> child_rules)
+    : StyleRuleGroup(kContents, child_rules) {}
+
 void StyleRuleContentsStatement::TraceAfterDispatch(
     blink::Visitor* visitor) const {
-  StyleRuleBase::TraceAfterDispatch(visitor);
-  visitor->Trace(fake_parent_rule_for_fallback_);
+  StyleRuleGroup::TraceAfterDispatch(visitor);
 }
 
 StyleRuleCustomMedia::StyleRuleCustomMedia(AtomicString name,
                                            MediaQuerySet* media_query_set)
     : StyleRuleBase(kCustomMedia),
       name_(std::move(name)),
-      value_(media_query_set) {}
+      media_query_value_(media_query_set) {
+  CHECK(media_query_set);
+}
 
 StyleRuleCustomMedia::StyleRuleCustomMedia(AtomicString name, bool value)
-    : StyleRuleBase(kCustomMedia), name_(std::move(name)), value_(value) {}
+    : StyleRuleBase(kCustomMedia),
+      name_(std::move(name)),
+      boolean_value_(value) {}
 
 void StyleRuleCustomMedia::TraceAfterDispatch(blink::Visitor* visitor) const {
   StyleRuleBase::TraceAfterDispatch(visitor);
-  if (IsMediaQueryValue()) {
-    visitor->Trace(std::get<Member<const MediaQuerySet>>(value_));
-  }
+  visitor->Trace(media_query_value_);
 }
 
 unsigned MixinParameterBindings::ComputeHash() const {
@@ -1140,6 +1237,10 @@ unsigned MixinParameterBindings::ComputeHash() const {
   for (const auto& [key, value] : bindings_) {
     hash = HashInts(hash, HashInts(key.Impl()->GetHash(),
                                    value.value ? value.value->Hash() : 5678));
+  }
+  for (const auto& [key, value] : base_locals_) {
+    hash =
+        HashInts(hash, HashInts(key.Impl()->GetHash() ^ 4321, value->Hash()));
   }
   return hash;
 }
@@ -1149,7 +1250,15 @@ bool MixinParameterBindings::operator==(
   if (bindings_ != other.bindings_) {
     return false;
   }
+  if (base_locals_ != other.base_locals_) {
+    return false;
+  }
   return base::ValuesEquivalent(parent_mixin_, other.parent_mixin_);
+}
+
+void MixinParameterBindings::CQDependentValue::Trace(Visitor* visitor) const {
+  visitor->Trace(data);
+  visitor->Trace(container_queries);
 }
 
 }  // namespace blink

@@ -19,7 +19,6 @@
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "components/back_forward_cache/back_forward_cache_disable.h"
@@ -46,6 +45,7 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 
 using content::BrowserThread;
@@ -234,7 +234,7 @@ void TrimElements(const std::set<int> target_ids,
             resource_id_to_url[element.resource_id()];
         resources->erase(resource_url);
       }
-      element_iter = elements->erase(element_iter);
+      elements->erase(element_iter++);
     } else {
       ++element_iter;
     }
@@ -683,7 +683,7 @@ void ThreatDetails::FinishCollection(
     if (auto it = iframe_key_to_frame_tree_id_map_.find(element_key);
         it != iframe_key_to_frame_tree_id_map_.end()) {
       content::FrameTreeNodeId frame_tree_id_of_iframe_renderer = it->second;
-      const std::unordered_set<int>& child_ids =
+      const absl::flat_hash_set<int>& child_ids =
           frame_tree_id_to_children_map_[frame_tree_id_of_iframe_renderer];
       for (const int child_id : child_ids) {
         element->add_child_ids(child_id);

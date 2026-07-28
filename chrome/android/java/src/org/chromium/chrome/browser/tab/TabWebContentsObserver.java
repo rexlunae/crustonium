@@ -260,7 +260,7 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
                 String failingUrl, String description, int errorCode) {
             assert description != null;
 
-            PolicyAuditor auditor = PolicyAuditor.maybeCreate();
+            PolicyAuditor auditor = PolicyAuditor.maybeGetInstance();
             if (auditor != null) {
                 auditor.notifyAuditEvent(
                         ContextUtils.getApplicationContext(),
@@ -286,6 +286,7 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
         public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
             if (!navigation.isSameDocument()) {
                 mTab.didStartPageLoad(navigation.getUrl());
+                mTab.setNavigationStartMs(navigation.getNavigationStartMs());
             }
 
             RewindableIterator<TabObserver> observers = mTab.getTabObservers();
@@ -318,7 +319,11 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
 
             mTab.updateTitle();
             mTab.handleDidFinishNavigation(
-                    navigation.getUrl(), navigation.pageTransition(), navigation.isPdf());
+                    navigation.getUrl(),
+                    navigation.pageTransition(),
+                    navigation.isPdf(),
+                    navigation.isRendererInitiated(),
+                    navigation.getInitiatorOrigin());
             mTab.setIsShowingErrorPage(navigation.isErrorPage());
 
             // TODO(crbug.com/40264745) remove this call. onUrlUpdated should have been called
@@ -359,6 +364,13 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
         @Override
         public void didChangeThemeColor() {
             mTab.updateThemeColor(assumeNonNull(mTab.getWebContents()).getThemeColor());
+        }
+
+        @Override
+        public void didChangeVisibleSecurityState() {
+            if (!mTab.isThemingAllowed()) {
+                mTab.updateThemeColor(assumeNonNull(mTab.getWebContents()).getThemeColor());
+            }
         }
 
         @Override

@@ -15,7 +15,6 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.ADDRESS_INFO;
-import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.PLUS_ADDRESS_SECTION;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.TITLE;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.getType;
 
@@ -33,13 +32,11 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
-import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.keyboard_accessory.AccessorySuggestionType;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryTabType;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.AccessorySheetData;
-import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PlusAddressInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.UserInfoField;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -48,9 +45,7 @@ import org.chromium.ui.modelutil.ListObservable;
 
 /** Controller tests for the address accessory sheet. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {CustomShadowAsyncTask.class})
+@Config(manifest = Config.NONE)
 public class AddressAccessorySheetControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -118,7 +113,6 @@ public class AddressAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.ADDRESSES,
                         /* userInfoTitle= */ "Addresses",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ ""));
         verify(mMockItemListObserver).onItemRangeInserted(mSheetDataPieces, 0, 1);
         assertThat(mSheetDataPieces.size(), is(1));
@@ -128,7 +122,6 @@ public class AddressAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.ADDRESSES,
                         /* userInfoTitle= */ "Other Addresses",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ ""));
         verify(mMockItemListObserver).onItemRangeChanged(mSheetDataPieces, 0, 1, null);
         assertThat(mSheetDataPieces.size(), is(1));
@@ -142,7 +135,6 @@ public class AddressAccessorySheetControllerTest {
         testProvider.set(null);
         verifyNoMoreInteractions(mMockItemListObserver);
     }
-
     @Test
     public void testSplitsTabDataToList() {
         final SettableNullableObservableSupplier<AccessorySheetData> testProvider =
@@ -151,18 +143,7 @@ public class AddressAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.ADDRESSES,
                         /* userInfoTitle= */ "",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
-        testData.getPlusAddressInfoList()
-                .add(
-                        new PlusAddressInfo(
-                                "google.com",
-                                new UserInfoField.Builder()
-                                        .setSuggestionType(AccessorySuggestionType.PLUS_ADDRESS)
-                                        .setDisplayText("example@gmail.com")
-                                        .setA11yDescription("example@gmail.com")
-                                        .setCallback(field -> {})
-                                        .build()));
         testData.getUserInfoList().add(new UserInfo("", false));
         testData.getUserInfoList()
                 .get(0)
@@ -186,13 +167,9 @@ public class AddressAccessorySheetControllerTest {
         mCoordinator.registerDataProvider(testProvider);
         testProvider.set(testData);
 
-        assertThat(mSheetDataPieces.size(), is(2));
-        assertThat(getType(mSheetDataPieces.get(0)), is(PLUS_ADDRESS_SECTION));
-        assertThat(getType(mSheetDataPieces.get(1)), is(ADDRESS_INFO));
-        assertThat(
-                mSheetDataPieces.get(0).getDataPiece(),
-                is(testData.getPlusAddressInfoList().get(0)));
-        assertThat(mSheetDataPieces.get(1).getDataPiece(), is(testData.getUserInfoList().get(0)));
+        assertThat(mSheetDataPieces.size(), is(1));
+        assertThat(getType(mSheetDataPieces.get(0)), is(ADDRESS_INFO));
+        assertThat(mSheetDataPieces.get(0).getDataPiece(), is(testData.getUserInfoList().get(0)));
     }
 
     @Test
@@ -203,16 +180,13 @@ public class AddressAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.ADDRESSES,
                         /* userInfoTitle= */ "No addresses",
-                        /* plusAddressTitle= */ "No saved plus addresses",
                         /* warning= */ "");
         mCoordinator.registerDataProvider(testProvider);
 
         testProvider.set(testData);
 
-        assertThat(mSheetDataPieces.size(), is(2));
+        assertThat(mSheetDataPieces.size(), is(1));
         assertThat(getType(mSheetDataPieces.get(0)), is(TITLE));
         assertThat(mSheetDataPieces.get(0).getDataPiece(), is(equalTo("No addresses")));
-        assertThat(getType(mSheetDataPieces.get(1)), is(TITLE));
-        assertThat(mSheetDataPieces.get(1).getDataPiece(), is(equalTo("No saved plus addresses")));
     }
 }

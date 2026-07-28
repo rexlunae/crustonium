@@ -136,8 +136,9 @@ void LayoutSVGBlock::StyleDidChange(
   transform_uses_reference_box_ = TransformHelper::DependsOnReferenceBox(style);
 
   if (diff.NeedsFullLayout()) {
-    if (diff.TransformChanged())
+    if (diff.transform_changed) {
       SetNeedsTransformUpdate();
+    }
   }
 
   SVGResources::UpdateEffects(*this, diff, old_style);
@@ -145,7 +146,7 @@ void LayoutSVGBlock::StyleDidChange(
   if (!Parent())
     return;
 
-  if (diff.BlendModeChanged()) {
+  if (diff.blend_mode_changed) {
     DCHECK(IsBlendingAllowed());
     Parent()->DescendantIsolationRequirementsChanged(
         style.HasBlendMode() ? kDescendantIsolationRequired
@@ -154,9 +155,7 @@ void LayoutSVGBlock::StyleDidChange(
 
   if ((style.HasCurrentTransformRelatedAnimation() &&
        !old_style->HasCurrentTransformRelatedAnimation()) ||
-      (RuntimeEnabledFeatures::
-           SvgAvoidCullingElementsWithTransformOperationsEnabled() &&
-       style.HasNonIdentityTransformOperation() &&
+      (style.HasNonIdentityTransformOperation() &&
        !old_style->HasNonIdentityTransformOperation())) {
     Parent()->SetSVGDescendantMayHaveTransformRelatedOperations();
   }
@@ -194,7 +193,7 @@ void LayoutSVGBlock::MapAncestorToLocal(const LayoutBoxModelObject* ancestor,
 bool LayoutSVGBlock::MapToVisualRectInAncestorSpaceInternal(
     const LayoutBoxModelObject* ancestor,
     TransformState& transform_state,
-    VisualRectFlags) const {
+    VisualRectFlags visual_rect_flags) const {
   NOT_DESTROYED();
   transform_state.Flatten();
   PhysicalRect rect = PhysicalRect::FastAndLossyFromRectF(
@@ -203,7 +202,7 @@ bool LayoutSVGBlock::MapToVisualRectInAncestorSpaceInternal(
   rect.Move(PhysicalLocation());
   // Apply other mappings on local SVG coordinates.
   bool retval = SVGLayoutSupport::MapToVisualRectInAncestorSpace(
-      *this, ancestor, gfx::RectF(rect), rect);
+      *this, ancestor, gfx::RectF(rect), rect, visual_rect_flags);
   transform_state.SetQuad(gfx::QuadF(gfx::RectF(rect)));
   return retval;
 }

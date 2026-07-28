@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/crx_installer.h"
+#include "extensions/browser/crx_installer.h"
 
 #include <stddef.h>
 
@@ -32,6 +32,7 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_crx_util.h"
+#include "chrome/browser/extensions/extension_browser_test_util.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
@@ -47,7 +48,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/safe_browsing/buildflags.h"
@@ -87,6 +87,7 @@
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "extensions/test/test_extension_dir.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -147,7 +148,10 @@ class MockPromptProxy {
 class MockInstallPrompt : public ExtensionInstallPrompt {
  public:
   MockInstallPrompt(content::WebContents* web_contents, MockPromptProxy* proxy)
-      : ExtensionInstallPrompt(web_contents), proxy_(proxy) {}
+      : ExtensionInstallPrompt(web_contents,
+                               std::make_unique<InstallPromptData>(
+                                   InstallPromptData::UNSET_PROMPT_TYPE)),
+        proxy_(proxy) {}
 
   MockInstallPrompt(const MockInstallPrompt&) = delete;
   MockInstallPrompt& operator=(const MockInstallPrompt&) = delete;
@@ -690,6 +694,96 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest, Blocklist) {
 }
 #endif
 
+// Tests that extension disable reasons are properly updated after a delayed
+// extension update is finalized.
+// Regression test for crbug.com/474530434
+IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
+                       DelayedInstallUpdatesDisableReasons) {
+  const ExtensionId extension_id("ldnnhddmnhbkjipkidpdiheffobcpfmf");
+  base::FilePath base_path = test_data_dir_.AppendASCII("delayed_install");
+
+  ExtensionRegistry* registry = ExtensionRegistry::Get(profile());
+  ASSERT_TRUE(registry);
+
+  // Install version 1 of the test extension. This extension does not have
+  // a background page but does have a browser action.
+  base::FilePath v1_path = PackExtension(base_path.AppendASCII("v1"));
+  ASSERT_FALSE(v1_path.empty());
+  ASSERT_TRUE(InstallExtension(v1_path, 1));
+  const Extension* extension =
+      registry->enabled_extensions().GetByID(extension_id);
+  ASSERT_TRUE(extension);
+  ASSERT_EQ(extension_id, extension->id());
+  ASSERT_EQ("1.0", extension->version().GetString());
+
+  // Make test extension non-idle by opening the extension's options page.
+  ExtensionTabUtil::OpenOptionsPage(extension, browser());
+  WaitForExtensionNotIdle(extension_id);
+
+  // Install version 2 of the extension and check that it is delayed.
+  base::FilePath v2_path = PackExtension(base_path.AppendASCII("v2"));
+  ASSERT_FALSE(v2_path.empty());
+  ASSERT_TRUE(UpdateExtensionWaitForIdle(extension_id, v2_path, 0));
+
+  DelayedInstallManager* manager = DelayedInstallManager::Get(profile());
+  ASSERT_TRUE(manager);
+  ASSERT_EQ(1u, manager->delayed_installs().size());
+  extension = registry->enabled_extensions().GetByID(extension_id);
+  ASSERT_EQ("1.0", extension->version().GetString());
+
+  ExtensionPrefs* prefs = ExtensionPrefs::Get(profile());
+  ASSERT_TRUE(prefs);
+  // Expect these disable reasons to get cleared by the delayed install since
+  // they are tied to a particular version of the extension (version 1 in this
+  // case), and thus might be fixed by installing a new version.
+  prefs->AddDisableReasons(
+      extension_id,
+      {disable_reason::DisableReason::DISABLE_CORRUPTED,
+       disable_reason::DisableReason::DISABLE_UNSUPPORTED_REQUIREMENT});
+
+  manager->FinishDelayedInstallationIfReady(extension_id, true);
+  extension = registry->enabled_extensions().GetByID(extension_id);
+  ASSERT_EQ("2.0", extension->version().GetString());
+  auto disable_reasons = prefs->GetDisableReasons(extension_id);
+  EXPECT_TRUE(disable_reasons.empty());
+
+  // Verify delayed install state is fully cleaned up.
+  EXPECT_EQ(0u, manager->delayed_installs().size());
+  EXPECT_FALSE(prefs->GetDelayedInstallExtensionInfo(extension_id));
+
+  // Make test extension non-idle by opening the extension's options page.
+  ExtensionTabUtil::OpenOptionsPage(extension, browser());
+  WaitForExtensionNotIdle(extension_id);
+
+  // Install version 3 of the extension and check that it is delayed.
+  base::FilePath v3_path = PackExtension(base_path.AppendASCII("v3"));
+  ASSERT_FALSE(v3_path.empty());
+  ASSERT_TRUE(UpdateExtensionWaitForIdle(extension_id, v3_path, 0));
+
+  ASSERT_EQ(1u, manager->delayed_installs().size());
+  extension = registry->enabled_extensions().GetByID(extension_id);
+  ASSERT_EQ("2.0", extension->version().GetString());
+
+  // Expect DISABLE_USER_ACTION to remain.
+  prefs->AddDisableReasons(
+      extension_id,
+      {disable_reason::DisableReason::DISABLE_USER_ACTION,
+       disable_reason::DisableReason::DISABLE_CORRUPTED,
+       disable_reason::DisableReason::DISABLE_UNSUPPORTED_REQUIREMENT});
+
+  manager->FinishDelayedInstallationIfReady(extension_id, true);
+  extension = registry->enabled_extensions().GetByID(extension_id);
+  EXPECT_FALSE(extension);
+  disable_reasons = prefs->GetDisableReasons(extension_id);
+  EXPECT_EQ(disable_reasons.size(), 1u);
+  EXPECT_THAT(disable_reasons, testing::UnorderedElementsAre(
+                                   disable_reason::DISABLE_USER_ACTION));
+
+  // Verify delayed install state is fully cleaned up.
+  EXPECT_EQ(0u, manager->delayed_installs().size());
+  EXPECT_FALSE(prefs->GetDelayedInstallExtensionInfo(extension_id));
+}
+
 IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest, NonStrictManifestCheck) {
   std::unique_ptr<MockPromptProxy> mock_prompt =
       CreateMockPromptProxyForBrowser(browser());
@@ -730,6 +824,55 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
       test_data_dir_.AppendASCII("crx_installer/v1.crx"));
 
   EXPECT_TRUE(mock_prompt->did_succeed());
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
+                       NonStrictManifestCheck_MismatchingExtensionType) {
+  base::ScopedAllowBlockingForTesting allow_io;
+  std::unique_ptr<MockPromptProxy> mock_prompt =
+      CreateMockPromptProxyForBrowser(browser());
+
+  // Create and pack an extension that doesn't have any install time warnings,
+  // so it will pass the privilege increase check.
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(
+      R"({
+         "name": "Test extension",
+         "version": "1.0",
+         "manifest_version": 3
+       })");
+  base::FilePath crx_path = test_dir.Pack();
+  // The TestExtensionDir writes the pem file to "ext.pem" by default. We use it
+  // to derive the extension ID for the packed extension.
+  base::FilePath pem_path = crx_path.DirName().AppendASCII("ext.pem");
+  {
+    base::ScopedAllowBlockingForTesting allow_file_io_in_scope;
+    ASSERT_TRUE(base::PathExists(pem_path));
+  }
+  const ExtensionId id =
+      browser_test_util::GetExtensionIdFromPrivateKeyFile(pem_path);
+
+  // Create an approval for a theme with the same ID and version.
+  ExtensionBuilder theme_builder("Theme");
+  theme_builder.SetVersion("1.0").SetManifestKey("theme", base::DictValue());
+
+  std::unique_ptr<InstallApproval> approval =
+      InstallApproval::CreateWithNoInstallPrompt(
+          profile(), id, theme_builder.BuildManifest().TakeDict(), false);
+
+  // Install the extension CRX using theme approval.
+  // This should fail because the types (Extension vs Theme) don't match,
+  // even though there is no privilege increase.
+  RunCrxInstaller(
+      approval.get(), mock_prompt->CreatePrompt(),
+      base::BindOnce([](const std::optional<CrxInstallError>& error) {
+        ASSERT_NE(std::nullopt, error);
+        EXPECT_EQ(CrxInstallErrorType::OTHER, error->type());
+        EXPECT_EQ(CrxInstallErrorDetail::MANIFEST_INVALID, error->detail());
+      }),
+      crx_path);
+
+  EXPECT_FALSE(mock_prompt->did_succeed());
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
@@ -893,7 +1036,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
       "y0ury28n8jbN0PnInKKWcxpIXXmNQyC19HBuO3QIeUq9Dqc+7YFQIDAQAB";
 
   // Test updating an existing extension.
-  AddExtension(extension_id, "0.0");
+  AddExtension(extension_id, /*version=*/"0.0");
+
+  base::HistogramTester histogram_tester;
 
   auto temp_dir = UnpackedCrxTempDir();
   RunUpdateExtension(
@@ -907,6 +1052,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
 
   // The unpacked folder should be deleted.
   EXPECT_FALSE(base::PathExists(temp_dir->GetPath()));
+
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.SandboxUnpackSuccessForUpdates", true,
+      /*expected_bucket_count=*/1);
 
   const Extension* extension = GetInstalledExtension(extension_id);
   ASSERT_NE(nullptr, extension);
@@ -924,7 +1073,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
   const std::string public_key = "invalid public key";
 
   // Test updating an existing extension.
-  AddExtension(extension_id, "0.0");
+  AddExtension(extension_id, /*version=*/"0.0");
 
   auto temp_dir = UnpackedCrxTempDir();
   RunUpdateExtension(
@@ -956,6 +1105,49 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
   EXPECT_EQ(std::nullopt, installation_failure.install_error_detail);
 }
 
+// Tests that the `Extensions.Update.SandboxUnpackFailureReason` histogram is
+// correctly recorded when an extension update fails during the unpacking stage
+// due to an invalid manifest (which is a `SandboxedUnpackerFailureReason`).
+// We expect the histogram to be recorded with the `INVALID_MANIFEST` reason.
+IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
+                       UpdateExtension_SandboxUnpackFailureReason) {
+  base::ScopedAllowBlockingForTesting allow_io;
+  std::unique_ptr<MockPromptProxy> mock_prompt =
+      CreateMockPromptProxyForBrowser(browser());
+
+  const extensions::ExtensionId extension_id =
+      "ldnnhddmnhbkjipkidpdiheffobcpfmf";
+  const std::string public_key = "invalid public key";
+
+  // Test updating an existing extension.
+  AddExtension(extension_id, /*version=*/"0.0");
+
+  base::HistogramTester histogram_tester;
+
+  auto temp_dir = UnpackedCrxTempDir();
+  RunUpdateExtension(
+      mock_prompt->CreatePrompt(), extension_id, public_key,
+      temp_dir->GetPath(),
+      base::BindOnce([](const std::optional<CrxInstallError>& error) {
+        ASSERT_NE(std::nullopt, error);
+        ASSERT_EQ(CrxInstallErrorType::SANDBOXED_UNPACKER_FAILURE,
+                  error->type());
+        EXPECT_EQ(SandboxedUnpackerFailureReason::INVALID_MANIFEST,
+                  error->sandbox_failure_detail());
+      }));
+
+  EXPECT_FALSE(mock_prompt->did_succeed());
+
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.SandboxUnpackFailureReasonForUpdates",
+      SandboxedUnpackerFailureReason::INVALID_MANIFEST,
+      /*expected_bucket_count=*/1);
+
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.SandboxUnpackSuccessForUpdates", false,
+      /*expected_bucket_count=*/1);
+}
+
 IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
                        UpdateExtensionFromUnpackedCrx_WrongPublicKey) {
   base::ScopedAllowBlockingForTesting allow_io;
@@ -971,7 +1163,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionCrxInstallerTest,
       "y0ury28n8jbN0PnInKKWcxpIXXmNQyC19HBuO3QIeUq9Dqc+7YFQIDAQAB";
 
   // Test updating an existing extension.
-  AddExtension(extension_id, "0.0");
+  AddExtension(extension_id, /*version=*/"0.0");
 
   auto temp_dir = UnpackedCrxTempDir();
   RunUpdateExtension(

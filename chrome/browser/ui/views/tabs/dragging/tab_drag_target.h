@@ -10,6 +10,7 @@
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
+#include "base/time/time.h"
 #include "ui/gfx/geometry/point.h"
 
 struct DragSessionData;
@@ -59,7 +60,7 @@ class TabDragTarget {
       const gfx::Point& point_in_screen) = 0;
 
   // Invoked when this delegate is no longer targeted by the controller.
-  virtual void OnTabDragExited() = 0;
+  virtual void OnTabDragExited(const gfx::Point& point_in_screen) = 0;
 
   // Notification for the end of a drag, for any reason (e.g. drop, cancel,
   // etc.).

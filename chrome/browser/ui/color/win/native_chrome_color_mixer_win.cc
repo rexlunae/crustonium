@@ -208,6 +208,12 @@ void AddNativeHighContrastColors(ui::ColorMixer& mixer) {
   mixer[kColorToolbarTopSeparatorFrameActive] = {kColorToolbarSeparator};
   mixer[kColorToolbarTopSeparatorFrameInactive] = {
       kColorToolbarTopSeparatorFrameActive};
+  mixer[kColorFindBarButtonIcon] = {ui::kColorNativeWindowText};
+  mixer[kColorFindBarButtonIconHovered] = {ui::kColorNativeHighlightText};
+  mixer[kColorFindBarButtonIconDisabled] = {ui::kColorNativeGrayText};
+  mixer[kColorInfoBarButtonIconHovered] = {ui::kColorNativeHighlightText};
+  mixer[kColorTabDiscardRingFrameActive] = {ui::kColorNativeHighlight};
+  mixer[kColorTabDiscardRingFrameInactive] = {kColorTabDiscardRingFrameActive};
 }
 
 void AddNativeNonHighContrastColors(ui::ColorMixer& mixer,
@@ -276,6 +282,8 @@ void AddNativeChromeColorMixer(ui::ColorProvider* provider,
       GetCaptionForegroundColor(kColorWindowControlButtonBackgroundActive);
   mixer[kColorCaptionButtonForegroundInactive] =
       GetCaptionForegroundColor(kColorWindowControlButtonBackgroundInactive);
+  mixer[kColorCaptionButtonOnToolbar] =
+      GetCaptionForegroundColor(kColorToolbar);
   mixer[kColorCaptionCloseButtonBackgroundHovered] = {
       SkColorSetRGB(0xE8, 0x11, 0x23)};
   mixer[kColorCaptionCloseButtonForegroundHovered] = {SK_ColorWHITE};

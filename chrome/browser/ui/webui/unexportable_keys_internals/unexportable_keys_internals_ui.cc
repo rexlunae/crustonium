@@ -41,16 +41,15 @@ UnexportableKeysInternalsUI::UnexportableKeysInternalsUI(content::WebUI* web_ui)
 void UnexportableKeysInternalsUI::BindInterface(
     mojo::PendingReceiver<
         unexportable_keys_internals::mojom::PageHandlerFactory> receiver) {
+  page_factory_receiver_.reset();
   page_factory_receiver_.Bind(std::move(receiver));
 }
 
 void UnexportableKeysInternalsUI::CreateUnexportableKeysInternalsHandler(
-    mojo::PendingRemote<unexportable_keys_internals::mojom::Page> page,
     mojo::PendingReceiver<unexportable_keys_internals::mojom::PageHandler>
         receiver) {
-  CHECK(!page_handler_);
   page_handler_ = std::make_unique<UnexportableKeysInternalsHandler>(
-      std::move(receiver), std::move(page),
+      std::move(receiver),
       UnexportableKeyServiceFactory::CreateForGarbageCollection(
           unexportable_keys::GetDefaultConfig()));
 }

@@ -126,7 +126,7 @@ TEST_F(PageNodeImplTest, GetTimeSinceLastAudibleChange) {
 
   // Test a page that's audible at creation.
   auto audible_page = CreateNode<PageNodeImpl>(
-      nullptr, /*browser_context_id=*/std::string(), GURL(),
+      nullptr, /*browser_context_id=*/base::UnguessableToken(), GURL(),
       PagePropertyFlags{PagePropertyFlag::kIsAudible});
   AdvanceClock(base::Seconds(56));
   EXPECT_EQ(base::Seconds(56), audible_page->GetTimeSinceLastAudibleChange());
@@ -184,8 +184,7 @@ TEST_F(PageNodeImplTest, GetTimeSinceLastNavigation) {
 }
 
 TEST_F(PageNodeImplTest, BrowserContextID) {
-  const std::string kTestBrowserContextId =
-      base::UnguessableToken::Create().ToString();
+  const auto kTestBrowserContextId = base::UnguessableToken::Create();
   auto page_node = CreateNode<PageNodeImpl>(nullptr, kTestBrowserContextId);
 
   EXPECT_EQ(page_node->GetBrowserContextID(), kTestBrowserContextId);
@@ -395,9 +394,13 @@ TEST_F(PageNodeImplTest, ObserverWorks) {
   page_node->OnTitleUpdated();
   EXPECT_EQ(raw_page_node, obs.TakeNotifiedPageNode());
 
-  EXPECT_CALL(obs, OnFaviconUpdated(_))
-      .WillOnce(Invoke(&obs, &MockObserver::SetNotifiedPageNode));
-  page_node->OnFaviconUpdated();
+  EXPECT_CALL(obs, OnFaviconUpdated(_, _))
+      .WillOnce(
+          [&obs](const PageNode* node, blink::mojom::FaviconUpdateReason) {
+            obs.SetNotifiedPageNode(node);
+          });
+  page_node->OnFaviconUpdated(
+      blink::mojom::FaviconUpdateReason::kLinkElementChange);
   EXPECT_EQ(raw_page_node, obs.TakeNotifiedPageNode());
 
   // Re-entrant iteration should work.

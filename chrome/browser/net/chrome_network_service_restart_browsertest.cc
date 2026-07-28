@@ -33,7 +33,7 @@ class ChromeNetworkServiceRestartBrowserTest : public InProcessBrowserTest {
 
   GURL GetTestURL() const {
     // Use '/echoheader' instead of '/echo' to avoid a disk_cache bug.
-    // See https://crbug.com/792255.
+    // See https://crbug.com/40553335.
     return embedded_test_server()->GetURL("/echoheader");
   }
 };
@@ -47,7 +47,7 @@ IN_PROC_BROWSER_TEST_F(ChromeNetworkServiceRestartBrowserTest,
   // |NetworkServiceTestHelper| doesn't work on browser_tests on macOS.
 #if !BUILDFLAG(IS_MAC)
   StoragePartition* partition =
-      browser()->profile()->GetDefaultStoragePartition();
+      browser()->GetProfile()->GetDefaultStoragePartition();
 
   network::mojom::NetworkContext* old_network_context =
       partition->GetNetworkContext();

@@ -4,11 +4,19 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/unmask_iban_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -43,8 +51,7 @@ std::string UnmaskIbanRequest::GetRequestContentType() {
 std::string UnmaskIbanRequest::GetRequestContent() {
   base::DictValue request_dict;
   base::DictValue context;
-  context.Set("billable_service",
-              payments::kUnmaskPaymentMethodBillableServiceNumber);
+  context.Set("billable_service", kUnmaskPaymentMethodBillableServiceNumber);
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
                 BuildCustomerContextDictionary(
@@ -66,8 +73,7 @@ std::string UnmaskIbanRequest::GetRequestContent() {
 
   std::string json_request = base::WriteJson(request_dict).value();
   std::string request_content = base::StringPrintf(
-      kUnmaskIbanRequestFormat,
-      base::EscapeUrlEncodedData(json_request, true).c_str());
+      kUnmaskIbanRequestFormat, base::EscapeUrlEncodedData(json_request, true));
   return request_content;
 }
 

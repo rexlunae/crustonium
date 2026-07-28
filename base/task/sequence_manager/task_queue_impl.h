@@ -417,6 +417,7 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
     DelayedIncomingQueue delayed_incoming_queue;
     ObserverList<TaskObserver>::UncheckedAndDanglingUntriaged task_observers;
     HeapHandle heap_handle;
+    bool unregistered = false;
     bool is_enabled = true;
     std::optional<Fence> current_fence;
     std::optional<TimeTicks> delayed_fence;
@@ -508,8 +509,6 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
   // Updates state protected by any_thread_lock_.
   void UpdateCrossThreadQueueStateLocked()
       EXCLUSIVE_LOCKS_REQUIRED(any_thread_lock_);
-
-  TimeDelta GetTaskDelayAdjustment(CurrentThread current_thread);
 
   // Reports the task if it was due to IPC and was posted to a disabled queue.
   // This should be called after WillQueueTask has been called for the task.

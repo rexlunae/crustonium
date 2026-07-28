@@ -5,7 +5,11 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
+#include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -18,9 +22,14 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/permissions/chip/chip_controller.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_dashboard_interface.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/omnibox/browser/open_tab_provider.h"
 #include "components/permissions/features.h"
@@ -28,9 +37,15 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_devtools_protocol_client.h"
+#include "net/dns/mock_host_resolver.h"
+#include "services/device/public/cpp/device_features.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/views_test_utils.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 
@@ -60,7 +75,13 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestChipGestureSensitiveBrowserTest,
                        ChipFinalizedWhenInteractingWithOmnibox) {
   RequestPermission(browser());
   LocationBar* lb = GetLocationBar(browser());
-  auto* animation = lb->GetChipController()->chip()->animation_for_testing();
+  auto* animation =
+      views::AsViewClass<PermissionChipView>(
+          views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+              PermissionChipView::kPermissionRequestChipElementId,
+              views::ElementTrackerViews::GetContextForView(
+                  BrowserView::GetBrowserViewForBrowser(browser()))))
+          ->animation_for_testing();
 
   // Animate the chip expand.
   gfx::AnimationTestApi animation_api(animation);
@@ -118,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestChipGestureSensitiveBrowserTest,
 // This is an end-to-end test that verifies that a permission prompt bubble will
 // not be shown because of the empty address bar. Under the normal conditions
 // such a test should be placed in PermissionsSecurityModelInteractiveUITest but
-// due to dependency issues (see crbug.com/1112591) `//chrome/browser` is not
+// due to dependency issues (see crbug.com/40709781) `//chrome/browser` is not
 // allowed to have dependencies on `//chrome/browser/ui/views/*`.
 IN_PROC_BROWSER_TEST_F(PermissionRequestChipGestureSensitiveBrowserTest,
                        PermissionRequestIsAutoIgnored) {
@@ -292,7 +313,13 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestChipGestureInsensitiveBrowserTest,
                        CallbacksResetWhenInteractingWithOmnibox) {
   RequestPermission(browser());
   LocationBar* lb = GetLocationBar(browser());
-  auto* animation = lb->GetChipController()->chip()->animation_for_testing();
+  auto* animation =
+      views::AsViewClass<PermissionChipView>(
+          views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+              PermissionChipView::kPermissionRequestChipElementId,
+              views::ElementTrackerViews::GetContextForView(
+                  BrowserView::GetBrowserViewForBrowser(browser()))))
+          ->animation_for_testing();
 
   // Animate the chip expand.
   gfx::AnimationTestApi animation_api(animation);
@@ -334,8 +361,9 @@ class PermissionRequestChipBrowserUiTest : public UiBrowserTest {
   bool VerifyUi() override {
     LocationBarView* const location_bar =
         BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
-    PermissionChipView* const chip = location_bar->GetChipController()->chip();
-    if (!chip || !chip->GetVisible() || chip->is_fully_collapsed()) {
+    PermissionChipInterface* const chip =
+        location_bar->GetChipController()->chip();
+    if (!chip->GetVisible() || chip->IsFullyCollapsed()) {
       return false;
     }
 
@@ -347,7 +375,7 @@ class PermissionRequestChipBrowserUiTest : public UiBrowserTest {
 
   void WaitForUserDismissal() override {
     // Consider closing the browser to be dismissal.
-    ui_test_utils::WaitForBrowserToClose();
+    ui_test_utils::BrowserDestroyedObserver().Wait();
   }
 
  private:
@@ -397,4 +425,225 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestChipBrowserUiTest,
       lb->GetChipController()->is_collapse_timer_running_for_testing());
   EXPECT_FALSE(lb->GetChipController()
                    ->is_waiting_for_confirmation_collapse_for_testing());
+}
+
+class PermissionRequestChipSensorBrowserTest
+    : public InProcessBrowserTest,
+      public content::TestDevToolsProtocolClient {
+ public:
+  PermissionRequestChipSensorBrowserTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kSensorsAllowAskBlockPermissionModel,
+         content_settings::features::kLeftHandSideSensorActivityIndicators},
+        {});
+  }
+
+  ~PermissionRequestChipSensorBrowserTest() override = default;
+
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    ssl_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
+    ssl_server_.AddDefaultHandlers(GetChromeTestDataDir());
+    host_resolver()->AddRule("*", "127.0.0.1");
+    ASSERT_TRUE(ssl_server_.Start());
+  }
+
+ protected:
+  net::EmbeddedTestServer ssl_server_{net::EmbeddedTestServer::TYPE_HTTPS};
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(PermissionRequestChipSensorBrowserTest,
+                       SensorsIndicatorCDP) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  AttachToWebContents(web_contents);
+
+  // Navigate to secure page.
+  GURL url = ssl_server_.GetURL("a.test", "/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  EXPECT_EQ(url, web_contents->GetLastCommittedURL());
+  EXPECT_EQ(true, content::EvalJs(web_contents, "isSecureContext"));
+
+  // Grant permission first.
+  HostContentSettingsMap* settings_map =
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
+  settings_map->SetContentSettingDefaultScope(
+      url, url, ContentSettingsType::SENSORS, CONTENT_SETTING_ALLOW);
+
+  // Enable virtual sensor override via CDP.
+  base::DictValue params;
+  params.Set("type", "gyroscope");
+  params.Set("enabled", true);
+  SendCommandSync("Emulation.setSensorOverrideEnabled", std::move(params));
+
+  // Execute JS to start sensor. Store on window so we can stop it later.
+  constexpr char kStartSensor[] = R"(
+    new Promise(resolve => {
+      window.sensor = new Gyroscope({frequency: 10});
+      window.sensor.addEventListener('activate', () => resolve('active'));
+      window.sensor.addEventListener(
+          'error', (e) => resolve('error: ' + e.error.message));
+      window.sensor.start();
+    })
+  )";
+
+  EXPECT_EQ("active", content::EvalJs(web_contents, kStartSensor));
+
+  LocationBarView* lb_view =
+      static_cast<LocationBarView*>(GetLocationBar(browser()));
+  PermissionDashboardController* dashboard_controller =
+      lb_view->permission_dashboard_controller();
+  ASSERT_TRUE(dashboard_controller);
+
+  PermissionChipInterface* indicator_chip =
+      dashboard_controller->permission_dashboard()->GetIndicatorChip();
+
+  // The indicator chip should be visible.
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return indicator_chip->GetVisible(); }));
+
+  PermissionChipView* chip_view =
+      static_cast<PermissionChipView*>(indicator_chip);
+  EXPECT_EQ(chip_view->GetText(),
+            l10n_util::GetStringUTF16(IDS_SENSORS_IN_USE));
+  EXPECT_EQ(chip_view->theme(), PermissionChipTheme::kInUseActivityIndicator);
+
+  // Navigate away to destroy the document and close Mojo pipes.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  // Wait until the indicator chip is hidden.
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return !indicator_chip->GetVisible(); }));
+
+  DetachProtocolClient();
+}
+
+IN_PROC_BROWSER_TEST_F(PermissionRequestChipSensorBrowserTest,
+                       SensorsIndicatorSuppressedByMediaCDP) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  AttachToWebContents(web_contents);
+
+  // Navigate to secure page.
+  GURL url = ssl_server_.GetURL("a.test", "/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  // Grant sensor permission.
+  HostContentSettingsMap* settings_map =
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
+  settings_map->SetContentSettingDefaultScope(
+      url, url, ContentSettingsType::SENSORS, CONTENT_SETTING_ALLOW);
+
+  content_settings::PageSpecificContentSettings::GetForFrame(
+      web_contents->GetPrimaryMainFrame())
+      ->OnCapturingStateChanged(ContentSettingsType::MEDIASTREAM_CAMERA, true);
+
+  // Enable virtual sensor override via CDP and start Gyroscope.
+  base::DictValue params;
+  params.Set("type", "gyroscope");
+  params.Set("enabled", true);
+  SendCommandSync("Emulation.setSensorOverrideEnabled", std::move(params));
+
+  constexpr char kStartSensor[] = R"(
+    new Promise(resolve => {
+      window.sensor = new Gyroscope({frequency: 10});
+      window.sensor.addEventListener('activate', () => resolve('active'));
+      window.sensor.start();
+    })
+  )";
+  EXPECT_EQ("active", content::EvalJs(web_contents, kStartSensor));
+
+  LocationBarView* lb_view =
+      static_cast<LocationBarView*>(GetLocationBar(browser()));
+  PermissionDashboardController* dashboard_controller =
+      lb_view->permission_dashboard_controller();
+  ASSERT_TRUE(dashboard_controller);
+
+  PermissionChipInterface* indicator_chip =
+      dashboard_controller->permission_dashboard()->GetIndicatorChip();
+
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return indicator_chip->GetVisible(); }));
+
+  // Verify that the active chip text displays Camera usage.
+  PermissionChipView* chip_view =
+      static_cast<PermissionChipView*>(indicator_chip);
+  EXPECT_EQ(chip_view->GetText(), l10n_util::GetStringUTF16(IDS_CAMERA_IN_USE));
+
+  // Reset capturing state and navigate away to clean up.
+  content_settings::PageSpecificContentSettings::GetForFrame(
+      web_contents->GetPrimaryMainFrame())
+      ->OnCapturingStateChanged(ContentSettingsType::MEDIASTREAM_CAMERA, false);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  DetachProtocolClient();
+}
+
+IN_PROC_BROWSER_TEST_F(PermissionRequestChipSensorBrowserTest,
+                       SensorsBlockedIndicatorCDP) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  AttachToWebContents(web_contents);
+
+  // Navigate to secure page.
+  GURL url = ssl_server_.GetURL("a.test", "/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  EXPECT_EQ(url, web_contents->GetLastCommittedURL());
+  EXPECT_EQ(true, content::EvalJs(web_contents, "isSecureContext"));
+
+  // Block permission.
+  HostContentSettingsMap* settings_map =
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
+  settings_map->SetContentSettingDefaultScope(
+      url, url, ContentSettingsType::SENSORS, CONTENT_SETTING_BLOCK);
+
+  // Enable virtual sensor override via CDP.
+  base::DictValue params;
+  params.Set("type", "gyroscope");
+  params.Set("enabled", true);
+  SendCommandSync("Emulation.setSensorOverrideEnabled", std::move(params));
+
+  // Execute JS to start sensor. We expect it to fail.
+  constexpr char kStartSensor[] = R"(
+    new Promise(resolve => {
+      window.sensor = new Gyroscope({frequency: 10});
+      window.sensor.addEventListener('activate', () => resolve('active'));
+      window.sensor.addEventListener(
+          'error', (e) => resolve('error: ' + e.error.name));
+      window.sensor.start();
+    })
+  )";
+
+  // The error name should be NotAllowedError.
+  EXPECT_EQ("error: NotAllowedError",
+            content::EvalJs(web_contents, kStartSensor));
+
+  LocationBarView* lb_view =
+      static_cast<LocationBarView*>(GetLocationBar(browser()));
+  PermissionDashboardController* dashboard_controller =
+      lb_view->permission_dashboard_controller();
+  ASSERT_TRUE(dashboard_controller);
+
+  PermissionChipInterface* indicator_chip =
+      dashboard_controller->permission_dashboard()->GetIndicatorChip();
+
+  // The indicator chip should be visible.
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return indicator_chip->GetVisible(); }));
+
+  PermissionChipView* chip_view =
+      static_cast<PermissionChipView*>(indicator_chip);
+  EXPECT_EQ(chip_view->GetText(),
+            l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED));
+  EXPECT_EQ(chip_view->theme(), PermissionChipTheme::kBlockedActivityIndicator);
+
+  // Navigate away to destroy the document and close Mojo pipes.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  // Wait until the indicator chip is hidden.
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return !indicator_chip->GetVisible(); }));
+
+  DetachProtocolClient();
 }

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/actor/actor_metrics.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/metrics/histogram_functions.h"
@@ -11,11 +12,14 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/actor/actor_task.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 
 namespace actor {
 
 namespace {
+
 std::string_view ToString(ActorTask::StoppedReason stopped_reason) {
   switch (stopped_reason) {
     case ActorTask::StoppedReason::kStoppedByUser:
@@ -34,9 +38,37 @@ std::string_view ToString(ActorTask::StoppedReason stopped_reason) {
       return "NewChat";
     case ActorTask::StoppedReason::kUserLoadedPreviousChat:
       return "PreviousChat";
+    case ActorTask::StoppedReason::kUserNavigatedAway:
+      return "UserNavigatedAway";
+    case ActorTask::StoppedReason::kTimeout:
+      return "Timeout";
   }
   NOTREACHED();
 }
+
+std::string_view ToString(ApcSource source) {
+  switch (source) {
+    case ApcSource::kActor:
+      return "Actor";
+    case ApcSource::kGlic:
+      return "Glic";
+  }
+  NOTREACHED();
+}
+
+// LINT.IfChange(ToString)
+// Not using GetInvocationSourceString from metrics_types.h here because only a
+// subset of invocation sources are recorded.
+std::string_view ToString(glic::mojom::InvocationSource invocation_source) {
+  switch (invocation_source) {
+    case glic::mojom::InvocationSource::kUniversalCart:
+      return "UniversalCart";
+    default:
+      return "Other";
+  }
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/actor/histograms.xml:GlicInvocationSourceForActor)
+
 }  // namespace
 
 void RecordActorTaskStateTransitionActionCount(size_t action_count,
@@ -80,11 +112,13 @@ void RecordActorTaskVisibilityDurationHistograms(
       non_visible_duration);
 }
 
-void RecordActorTaskCompletion(ActorTask::StoppedReason stopped_reason,
-                               base::TimeDelta total_time,
-                               base::TimeDelta controlled_time,
-                               size_t interruptions_count,
-                               size_t actions_count) {
+void RecordActorTaskCompletion(
+    ActorTask::StoppedReason stopped_reason,
+    base::TimeDelta total_time,
+    base::TimeDelta controlled_time,
+    size_t interruptions_count,
+    size_t actions_count,
+    std::optional<glic::mojom::InvocationSource> invocation_source) {
   base::UmaHistogramLongTimes100(base::StrCat({"Actor.Task.Duration.WallClock.",
                                                ToString(stopped_reason)}),
                                  total_time);
@@ -98,6 +132,26 @@ void RecordActorTaskCompletion(ActorTask::StoppedReason stopped_reason,
       base::StrCat({"Actor.Task.Count.", ToString(stopped_reason)}),
       actions_count);
   base::UmaHistogramEnumeration("Actor.Task.StoppedReason", stopped_reason);
+
+  if (base::FeatureList::IsEnabled(
+          kActorRecordInvocationSourceCompletionMetrics) &&
+      invocation_source.has_value()) {
+    glic::mojom::InvocationSource invocation_source_value =
+        invocation_source.value();
+    base::UmaHistogramLongTimes100(
+        base::StrCat({"Actor.Task.Duration.WallClock.",
+                      ToString(stopped_reason), ".",
+                      ToString(invocation_source_value)}),
+        total_time);
+    base::UmaHistogramLongTimes100(
+        base::StrCat({"Actor.Task.Duration.", ToString(stopped_reason), ".",
+                      ToString(invocation_source_value)}),
+        controlled_time);
+    base::UmaHistogramCounts1000(
+        base::StrCat({"Actor.Task.Count.", ToString(stopped_reason), ".",
+                      ToString(invocation_source_value)}),
+        actions_count);
+  }
 }
 
 void RecordActorTaskCreated(bool success) {
@@ -133,16 +187,33 @@ void RecordDownloadSaveAsDialogTriggered(bool success) {
   base::UmaHistogramBoolean("Actor.Download.SaveAsDialogTriggered", success);
 }
 
-void RecordActorNavigationGatingListSize(size_t allow_list_size,
-                                         size_t confirmed_list_size) {
-  base::UmaHistogramCounts1000("Actor.NavigationGating.AllowListSize",
-                               allow_list_size);
-  base::UmaHistogramCounts1000("Actor.NavigationGating.ConfirmedListSize",
-                               confirmed_list_size);
+void RecordApcComparisonIdentical(ApcSource source, bool identical) {
+  base::UmaHistogramBoolean(
+      base::StrCat({"Actor.PageContext.APC.Comparison.", ToString(source),
+                    ".IsIdenticalToPreviousFetch"}),
+      identical);
+}
+
+void RecordScriptToolActionResultCode(
+    actor::mojom::ActionResultCode action_result_code) {
+  base::UmaHistogramSparse("Actor.Tools.ScriptTool.ActionResultCode",
+                           std::to_underlying(action_result_code));
+  base::UmaHistogramBoolean("Actor.Tools.ScriptTool.InvocationResult",
+                            action_result_code == mojom::ActionResultCode::kOk);
+}
+
+void RecordScriptToolInputSizeBytes(size_t size_bytes) {
+  base::UmaHistogramCounts10M("Actor.Tools.ScriptTool.InputSizeBytes",
+                              size_bytes);
+}
+
+void RecordScriptToolOutputSizeBytes(size_t size_bytes) {
+  base::UmaHistogramCounts10M("Actor.Tools.ScriptTool.OutputSizeBytes",
+                              size_bytes);
 }
 
 void RecordNavigationGatingDecision(ExecutionEngine::GatingDecision decision) {
-  base::UmaHistogramEnumeration("Actor.NavigationGating.GatingDecision",
+  base::UmaHistogramEnumeration("Actor.NavigationGating.GatingDecision2",
                                 decision);
 }
 
@@ -271,6 +342,16 @@ void RecordTabObservationResultHistogram(
     base::UmaHistogramEnumeration(kActorPageContextTabObservationResult,
                                   *tab_result);
   }
+}
+
+void RecordSplitModeTimeOfUseFrameStatus(SplitModeTimeOfUseFrameStatus status) {
+  base::UmaHistogramEnumeration("Actor.PageTool.SplitModeTimeOfUseFrameStatus",
+                                status);
+}
+
+void RecordTimeOfUseObservationSuccess(bool success) {
+  base::UmaHistogramBoolean("Actor.PageTool.TimeOfUseObservationSuccess",
+                            success);
 }
 
 }  // namespace actor

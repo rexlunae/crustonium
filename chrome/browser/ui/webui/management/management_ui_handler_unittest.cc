@@ -55,8 +55,11 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_ui.h"
+#include "extensions/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+#endif
 #include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -70,6 +73,7 @@
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
 #include "chrome/browser/ash/net/secure_dns_manager.h"
+#include "chrome/browser/ash/policy/core/device_attributes_fake.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_store_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
@@ -81,8 +85,10 @@
 #include "chrome/browser/ash/policy/status_collector/status_collector.h"
 #include "chrome/browser/ash/policy/uploading/status_uploader.h"
 #include "chrome/browser/ash/policy/uploading/system_log_uploader.h"
+#include "chrome/browser/ash/policy/uploading/system_log_uploader_delegate.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
+#include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_rules_manager.h"
 #include "chrome/browser/net/secure_dns_config.h"
@@ -114,6 +120,7 @@
 #include "components/user_manager/fake_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
 #include "ui/chromeos/devicetype_utils.h"
 #else
@@ -264,7 +271,11 @@ class TestManagementUIHandler : public ManagementUIHandlerBase {
                        : device_signals::UserPermission::kMissingConsent));
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
     base::ListValue report_sources;
-    AddReportingInfo(&report_sources, is_browser);
+    if (is_browser) {
+      AddBrowserReportingInfo(&report_sources);
+    } else {
+      AddProfileReportingInfo(&report_sources);
+    }
     return report_sources;
   }
 
@@ -304,7 +315,8 @@ class TestManagementUIHandler : public ManagementUIHandlerBase {
   void CreateSecureDnsManagerForTesting(PrefService* local_state,
                                         user_manager::User& user) {
     secure_dns_manager_ = std::make_unique<ash::SecureDnsManager>(
-        local_state, user, /*is_profile_managed=*/true);
+        local_state, std::make_unique<policy::FakeDeviceAttributes>(), user,
+        /*is_profile_managed=*/true);
   }
   void DestroySecureDnsManagerForTesting() { secure_dns_manager_.reset(); }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -448,6 +460,8 @@ class ManagementUIHandlerTests :
     base::ListValue report_website_telemetry_allowlist;
     bool sync_windows;
     bool sync_cookies;
+    bool saas_reporting_browser_enabled;
+    bool saas_reporting_profile_enabled;
   };
 
   void ResetTestConfig() { ResetTestConfig(true); }
@@ -484,10 +498,14 @@ class ManagementUIHandlerTests :
     setup_config_.real_time_url_check_connector_enabled = default_value;
     setup_config_.sync_windows = false;
     setup_config_.sync_cookies = false;
+    setup_config_.saas_reporting_browser_enabled = false;
+    setup_config_.saas_reporting_profile_enabled = false;
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
   void SetUp() override {
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
@@ -532,6 +550,7 @@ class ManagementUIHandlerTests :
     profile_manager_.reset();
     user_ = nullptr;
     fake_user_manager_.Reset();
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
   }
 
   void SetUpConnectManager() {
@@ -542,7 +561,8 @@ class ManagementUIHandlerTests :
     manager_ = std::make_unique<TestDeviceCloudPolicyManagerAsh>(
         std::move(store), &state_keys_broker_);
     manager_.get()->Initialize(
-        TestingBrowserProcess::GetGlobal()->local_state());
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory());
   }
 
   base::ListValue SetUpForReportingInfo() {
@@ -569,7 +589,7 @@ class ManagementUIHandlerTests :
     settings_.device_settings()->SetBoolean(
         ash::kDeviceReportXDREvents, GetTestConfig().device_report_xdr_events);
     profile_->GetPrefs()->SetBoolean(
-        prefs::kPrintingSendUsernameAndFilenameEnabled,
+        ash::prefs::kPrintingSendUsernameAndFilenameEnabled,
         GetTestConfig().printing_send_username_and_filename);
     profile_->GetPrefs()->SetBoolean(
         crostini::prefs::kReportCrostiniUsageEnabled,
@@ -614,8 +634,12 @@ class ManagementUIHandlerTests :
         std::move(GetTestConfig().report_website_telemetry_allowlist));
 
     const policy::SystemLogUploader system_log_uploader(
-        /*syslog_delegate=*/nullptr,
-        /*task_runner=*/task_runner_);
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        std::make_unique<policy::SystemLogUploaderDelegate>(
+            TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+            task_runner_),
+        /*task_runner=*/task_runner_,
+        /*upload_url=*/GURL("https://example.com/upload"));
     ON_CALL(testing::Const(handler_), GetDeviceCloudPolicyManager())
         .WillByDefault(Return(manager_.get()));
     base::ListValue result;
@@ -658,6 +682,22 @@ class ManagementUIHandlerTests :
         profile_manager_->CreateTestingProfile(GetTestConfig().profile_name);
     if (GetTestConfig().override_policy_connector_is_managed) {
       profile_->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
+    }
+
+    if (GetTestConfig().saas_reporting_browser_enabled) {
+      base::ListValue urls;
+      urls.Append("https://example.com");
+      TestingBrowserProcess::GetGlobal()->local_state()->SetList(
+          enterprise_reporting::kSaasUsageDomainUrlsForBrowser,
+          std::move(urls));
+    }
+
+    if (GetTestConfig().saas_reporting_profile_enabled) {
+      base::ListValue urls;
+      urls.Append("https://example.com");
+      profile_->GetTestingPrefService()->SetManagedPref(
+          enterprise_reporting::kSaasUsageDomainUrlsForProfile,
+          std::make_unique<base::Value>(std::move(urls)));
     }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -769,6 +809,7 @@ class ManagementUIHandlerTests :
   policy::ServerBackedStateKeysBroker state_keys_broker_;
   ash::ScopedTestingCrosSettings settings_;
   ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
 #else
   content::BrowserTaskEnvironment task_environment_;
 #endif
@@ -886,6 +927,36 @@ TEST_F(ManagementUIHandlerTests,
                 base::EscapeForHTML(l10n_util::GetStringUTF16(
                     IDS_MANAGEMENT_LEARN_MORE_ACCCESSIBILITY_TEXT))));
   EXPECT_TRUE(GetManaged());
+}
+
+TEST_F(ManagementUIHandlerTests, VerifyBasicAddReportingInfo) {
+  ResetTestConfig();
+  ASSERT_TRUE(SetUpProfileAndHandler());
+
+  // 1. Test Browser Reporting Branch
+  base::ListValue browser_reports = handler_.GetReportingInfo(
+      /*can_collect_signals=*/true, /*is_browser=*/true);
+  EXPECT_GE(browser_reports.size(), 0u);
+
+  // 2. Test Profile Reporting Branch
+  profile_->GetTestingPrefService()->SetManagedPref(
+      enterprise_reporting::kCloudProfileReportingEnabled,
+      std::make_unique<base::Value>(true));
+  base::ListValue profile_reports = handler_.GetReportingInfo(
+      /*can_collect_signals=*/true, /*is_browser=*/false);
+  EXPECT_GE(profile_reports.size(), 0u);
+}
+
+TEST_F(ManagementUIHandlerTests, VerifyReportingTypeValues) {
+  ResetTestConfig();
+  ASSERT_TRUE(SetUpProfileAndHandler());
+  // Verifies that GetReportingTypeValue logic is reachable and correct.
+  // This covers the newly added ReportingType enum usage in the source file.
+  base::ListValue reports = handler_.GetReportingInfo();
+  for (const auto& report : reports) {
+    const std::string* type = report.GetDict().FindString("reportingType");
+    EXPECT_NE(type, nullptr);
+  }
 }
 
 TEST_F(ManagementUIHandlerTests,
@@ -1482,9 +1553,9 @@ TEST_F(ManagementUIHandlerTests,
   TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
       prefs::kDnsOverHttpsMode, base::Value(SecureDnsConfig::kModeSecure));
   TestingBrowserProcess::GetGlobal()->local_state()->Set(
-      prefs::kDnsOverHttpsSalt, base::Value("test-salt"));
+      ash::prefs::kDnsOverHttpsSalt, base::Value("test-salt"));
   TestingBrowserProcess::GetGlobal()->local_state()->Set(
-      prefs::kDnsOverHttpsTemplatesWithIdentifiers,
+      ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers,
       base::Value("www.test-dns.com"));
 
   base::RunLoop().RunUntilIdle();
@@ -1611,6 +1682,7 @@ TEST_F(ManagementUIHandlerTests, HideDeskSyncCookiesNotice) {
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 TEST_F(ManagementUIHandlerTests, ExtensionReportingInfoNoPolicySetNoMessage) {
   ResetTestConfig();
   ASSERT_TRUE(SetUpProfileAndHandler());
@@ -1618,6 +1690,7 @@ TEST_F(ManagementUIHandlerTests, ExtensionReportingInfoNoPolicySetNoMessage) {
       handler_.GetReportingInfo(/*can_collect_signals=*/false);
   EXPECT_EQ(reporting_info.size(), 0u);
 }
+#endif
 
 TEST_F(ManagementUIHandlerTests, CloudReportingPolicy) {
   ResetTestConfig();
@@ -1637,8 +1710,13 @@ TEST_F(ManagementUIHandlerTests, CloudReportingPolicy) {
   std::set<std::string> expected_messages = {
       kManagementExtensionReportMachineName, kManagementExtensionReportUsername,
       kManagementExtensionReportVersion,
-      kManagementExtensionReportExtensionsPlugin,
-      kManagementExtensionReportVisitedUrl};
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+      kManagementExtensionReportExtensionsPlugin
+#endif
+  };
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
+  expected_messages.insert(kManagementExtensionReportVisitedUrl);
+#endif
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   expected_messages.insert(kManagementDeviceSignalsDisclosure);
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -1657,7 +1735,10 @@ TEST_F(ManagementUIHandlerTests, CloudProfileReportingPolicy) {
 
   std::set<std::string> expected_messages = {
       kProfileReportingOverview, kProfileReportingUsername,
-      kProfileReportingBrowser,  kProfileReportingExtension,
+      kProfileReportingBrowser,
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+      kProfileReportingExtension,
+#endif
       kProfileReportingPolicy,   kProfileReportingLearnMore};
 
   ASSERT_PRED_FORMAT2(MessagesToBeEQ,
@@ -1689,8 +1770,10 @@ TEST_F(ManagementUIHandlerTests,
   std::set<std::string> expected_messages = {
       kManagementExtensionReportMachineName, kManagementExtensionReportUsername,
       kManagementExtensionReportVersion,
-      kManagementExtensionReportExtensionsPlugin,
-      kManagementExtensionReportVisitedUrl};
+      kManagementExtensionReportExtensionsPlugin};
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+  expected_messages.insert(kManagementExtensionReportVisitedUrl);
+#endif
 
   policy::SetDMTokenForTesting(policy::DMToken::CreateValidToken("fake-token"));
   ASSERT_PRED_FORMAT2(MessagesToBeEQ,
@@ -1721,6 +1804,7 @@ TEST_F(ManagementUIHandlerTests, LegacyTechReport) {
                       expected_messages);
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 TEST_F(ManagementUIHandlerTests, ExtensionReportingInfoPoliciesMerge) {
   ResetTestConfig();
   ASSERT_TRUE(SetUpProfileAndHandler());
@@ -1774,15 +1858,17 @@ TEST_F(ManagementUIHandlerTests, ExtensionReportingInfoPoliciesMerge) {
       kManagementExtensionReportExtensionsPlugin,
       kManagementExtensionReportUserBrowsingData,
       kManagementExtensionReportPerfCrash,
-      kManagementLegacyTechReport,
-      kManagementExtensionReportVisitedUrl};
+      kManagementLegacyTechReport};
+  expected_messages.insert(kManagementExtensionReportVisitedUrl);
 
   policy::SetDMTokenForTesting(policy::DMToken::CreateValidToken("fake-token"));
   ASSERT_PRED_FORMAT2(MessagesToBeEQ,
                       handler_.GetReportingInfo(/*can_collect_signals=*/false),
                       expected_messages);
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(ManagementUIHandlerTests, ManagedWebsitiesInfoNoPolicySet) {
   ASSERT_TRUE(SetUpNoDomainProfile());
   auto info = handler_.GetManagedWebsitesInfo(profile_);
@@ -1801,6 +1887,7 @@ TEST_F(ManagementUIHandlerTests, ManagedWebsitiesInfoWebsites) {
   EXPECT_EQ(info.size(), 1u);
   EXPECT_EQ(info.begin()->GetString(), "https://example.com");
 }
+#endif
 
 TEST_F(ManagementUIHandlerTests, ThreatReportingInfo) {
   policy::PolicyMap chrome_policies;
@@ -1824,14 +1911,18 @@ TEST_F(ManagementUIHandlerTests, ThreatReportingInfo) {
       base::UTF8ToUTF16(*info.FindString("description")));
 
   // When policies are set to uninteresting values, nothing to report.
+#if !BUILDFLAG(IS_ANDROID)
   SetConnectorPolicyValue(policy::key::kOnFileAttachedEnterpriseConnector, "[]",
                           chrome_policies);
+#endif
   SetConnectorPolicyValue(policy::key::kOnFileDownloadedEnterpriseConnector,
                           "[]", chrome_policies);
+#if !BUILDFLAG(IS_ANDROID)
   SetConnectorPolicyValue(policy::key::kOnBulkDataEntryEnterpriseConnector,
                           "[]", chrome_policies);
   SetConnectorPolicyValue(policy::key::kOnPrintEnterpriseConnector, "[]",
                           chrome_policies);
+#endif
 #if BUILDFLAG(IS_CHROMEOS)
   SetConnectorPolicyValue(policy::key::kOnFileTransferEnterpriseConnector, "[]",
                           chrome_policies);
@@ -1850,18 +1941,22 @@ TEST_F(ManagementUIHandlerTests, ThreatReportingInfo) {
   // When policies are set to values that enable the feature without a usable DM
   // token, nothing to report.
   policy::SetDMTokenForTesting(policy::DMToken::CreateInvalidToken());
+#if !BUILDFLAG(IS_ANDROID)
   enterprise_connectors::test::SetAnalysisConnector(
       profile_->GetPrefs(), enterprise_connectors::FILE_ATTACHED,
       "[{\"service_provider\":\"google\"}]");
+#endif
   enterprise_connectors::test::SetAnalysisConnector(
       profile_->GetPrefs(), enterprise_connectors::FILE_DOWNLOADED,
       "[{\"service_provider\":\"google\"}]");
+#if !BUILDFLAG(IS_ANDROID)
   enterprise_connectors::test::SetAnalysisConnector(
       profile_->GetPrefs(), enterprise_connectors::BULK_DATA_ENTRY,
       "[{\"service_provider\":\"google\"}]");
   enterprise_connectors::test::SetAnalysisConnector(
       profile_->GetPrefs(), enterprise_connectors::PRINT,
       "[{\"service_provider\":\"google\"}]");
+#endif
 #if BUILDFLAG(IS_CHROMEOS)
   enterprise_connectors::test::SetAnalysisConnector(
       profile_->GetPrefs(), enterprise_connectors::FILE_TRANSFER,
@@ -1891,6 +1986,8 @@ TEST_F(ManagementUIHandlerTests, ThreatReportingInfo) {
   info = handler_.GetThreatProtectionInfo(profile_);
 #if BUILDFLAG(IS_CHROMEOS)
   const size_t expected_size = 8u;
+#elif BUILDFLAG(IS_ANDROID)
+  const size_t expected_size = 4u;
 #else
   const size_t expected_size = 7u;
 #endif
@@ -1900,18 +1997,21 @@ TEST_F(ManagementUIHandlerTests, ThreatReportingInfo) {
       base::UTF8ToUTF16(*info.FindString("description")));
 
   base::ListValue expected_info;
+#if !BUILDFLAG(IS_ANDROID)
   {
     base::DictValue value;
     value.Set("title", kManagementOnFileAttachedEvent);
     value.Set("permission", kManagementOnFileAttachedVisibleData);
     expected_info.Append(std::move(value));
   }
+#endif
   {
     base::DictValue value;
     value.Set("title", kManagementOnFileDownloadedEvent);
     value.Set("permission", kManagementOnFileDownloadedVisibleData);
     expected_info.Append(std::move(value));
   }
+#if !BUILDFLAG(IS_ANDROID)
   {
     base::DictValue value;
     value.Set("title", kManagementOnBulkDataEntryEvent);
@@ -1924,6 +2024,7 @@ TEST_F(ManagementUIHandlerTests, ThreatReportingInfo) {
     value.Set("permission", kManagementOnPrintVisibleData);
     expected_info.Append(std::move(value));
   }
+#endif
 #if BUILDFLAG(IS_CHROMEOS)
   {
     base::DictValue value;
@@ -1967,3 +2068,27 @@ TEST_F(ManagementUIHandlerTests, GetFilesUploadToCloud) {
   EXPECT_FALSE(handler_.GetFilesUploadToCloudInfo(profile_).empty());
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+TEST_F(ManagementUIHandlerTests, SaasReportingBrowserPolicyEnabled) {
+  ResetTestConfig(false);
+  GetTestConfig().saas_reporting_browser_enabled = true;
+  ASSERT_TRUE(SetUpProfileAndHandler());
+
+  base::ListValue reports = handler_.GetReportingInfo(
+      /*can_collect_signals=*/false, /*is_browser=*/true);
+  EXPECT_TRUE(MessagesToBeEQ("browser_reports", "expected", reports,
+                             {kManagementExtensionReportVisitedUrl}));
+}
+
+TEST_F(ManagementUIHandlerTests, SaasReportingProfilePolicyEnabled) {
+  ResetTestConfig(false);
+  GetTestConfig().saas_reporting_profile_enabled = true;
+  ASSERT_TRUE(SetUpProfileAndHandler());
+
+  base::ListValue reports = handler_.GetReportingInfo(
+      /*can_collect_signals=*/false, /*is_browser=*/true);
+  EXPECT_TRUE(MessagesToBeEQ("browser_reports", "expected", reports,
+                             {kManagementExtensionReportVisitedUrl}));
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)

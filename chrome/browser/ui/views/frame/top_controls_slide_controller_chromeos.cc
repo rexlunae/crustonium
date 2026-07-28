@@ -19,6 +19,7 @@
 #include "chrome/common/url_constants.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/security_state/content/security_state_tab_helper.h"
+#include "content/public/browser/editable_level.h"
 #include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -237,7 +238,8 @@ class TopControlsSlideTabObserver
     // Even if a non-editable node gets focused, if top-chrome is fully shown,
     // we should also update the browser controls state constraints so that
     // top-chrome is able to be hidden again.
-    if (details.is_editable_node || shown_ratio_ == 1.f) {
+    if (details.editable_level != content::EditableLevel::kNotEditable ||
+        shown_ratio_ == 1.f) {
       UpdateBrowserControlsStateShown(/*animate=*/true);
     }
   }
@@ -285,7 +287,7 @@ class TopControlsSlideTabObserver
   // sliding is in progress. It is updated only once right before sliding begins
   // and remains unchanged until sliding ends, at which point it is updated
   // right before the final layout of the BrowserView.
-  // https://crbug.com/885223.
+  // https://crbug.com/41414489.
   bool shrink_renderer_size_ = true;
 };
 
@@ -300,11 +302,15 @@ TopControlsSlideControllerChromeOS::TopControlsSlideControllerChromeOS(
   DCHECK(browser_view->browser());
   DCHECK(browser_view->GetIsNormalType());
   DCHECK(browser_view->browser()->tab_strip_model());
-  DCHECK(browser_view->GetLocationBarView());
-  DCHECK(browser_view->GetLocationBarView()->omnibox_view());
 
-  observed_omni_box_ = browser_view->GetLocationBarView()->omnibox_view();
-  observed_omni_box_->AddObserver(this);
+  // TODO(crbug.com/474059135): If WebUILocationBar ship on ChromeOS,
+  // this will need adjustment.
+  if (browser_view->GetLocationBarView()) {
+    DCHECK(browser_view->GetLocationBarView()->omnibox_view());
+
+    observed_omni_box_ = browser_view->GetLocationBarView()->omnibox_view();
+    observed_omni_box_->AddObserver(this);
+  }
 
   browser_view_->browser()->tab_strip_model()->AddObserver(this);
 
@@ -661,7 +667,7 @@ void TopControlsSlideControllerChromeOS::OnEnabledStateChanged(bool new_state) {
     // we get called by the renderer to set the shown ratio to 1.f. Otherwise
     // we will layout the page to a smaller height before the renderer gets
     // to know that it needs to update the shown ratio to 1.f.
-    // https://crbug.com/884453.
+    // https://crbug.com/40593842.
     is_enabled_ = true;
     defer_disabling_ = true;
   } else {

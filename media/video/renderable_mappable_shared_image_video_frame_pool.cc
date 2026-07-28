@@ -117,7 +117,8 @@ class InternalRefCountedPool
   // Callback made when the VideoFrame is destroyed. This callback then either
   // returns |frame_resources| to |available_frame_resources_| or destroys it.
   void OnVideoFrameDestroyed(std::unique_ptr<FrameResources> frame_resources,
-                             const gpu::SyncToken& sync_token);
+                             const gpu::SyncToken& sync_token,
+                             bool lost_shared_image_resource);
 
   const VideoPixelFormat format_;
   const std::unique_ptr<RenderableMappableSharedImageVideoFramePool::Context>
@@ -224,7 +225,8 @@ bool FrameResources::Initialize(VideoPixelFormat format,
       // VideoFrames (this is what "renderable" means in this context).
       gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_RASTER_READ |
       gpu::SHARED_IMAGE_USAGE_RASTER_WRITE |
-      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE;
 
   auto si_caps = context->GetCapabilities();
 #if BUILDFLAG(IS_WIN)
@@ -306,6 +308,9 @@ InternalRefCountedPool::InternalRefCountedPool(
 scoped_refptr<VideoFrame> InternalRefCountedPool::MaybeCreateVideoFrame(
     const gfx::Size& visible_size,
     const gfx::ColorSpace& color_space) {
+  // The gfx::ColorSpace that reaches here is always valid so do not need a
+  // default ColorSpace.
+  CHECK(color_space.IsValid());
   // Find or create a suitable FrameResources.
   std::unique_ptr<FrameResources> frame_resources;
   while (!available_frame_resources_.empty()) {
@@ -345,8 +350,14 @@ scoped_refptr<VideoFrame> InternalRefCountedPool::MaybeCreateVideoFrame(
 
 void InternalRefCountedPool::OnVideoFrameDestroyed(
     std::unique_ptr<FrameResources> frame_resources,
-    const gpu::SyncToken& sync_token) {
+    const gpu::SyncToken& sync_token,
+    bool lost_shared_image_resource) {
   frame_resources->SetSharedImageReleaseSyncToken(sync_token);
+
+  // If the SharedImage within FrameResource is lost, we should not reuse it.
+  if (lost_shared_image_resource) {
+    return;
+  }
 
   if (shutting_down_) {
     return;

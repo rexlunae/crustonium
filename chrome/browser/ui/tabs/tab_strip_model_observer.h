@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "components/sessions/core/session_id.h"
 #include "components/split_tabs/split_tab_id.h"
@@ -55,22 +56,10 @@ class TabStripModelChange {
  public:
   enum Type { kSelectionOnly, kInserted, kRemoved, kMoved, kReplaced };
 
-  // Used to specify what will happen with the tab after it is removed.
-  enum class RemoveReason {
-    // Tab will be deleted.
-    kDeleted,
-
-    // Tab got detached from a TabStrip and inserted into another TabStrip.
-    kInsertedIntoOtherTabStrip,
-
-    // Insert the WebContents into side panel.
-    kInsertedIntoSidePanel
-  };
-
   struct RemovedTab {
     RemovedTab(tabs::TabInterface* tab,
                int index,
-               RemoveReason remove_reason,
+               TabRemovedReason remove_reason,
                tabs::TabInterface::DetachReason tab_detach_reason,
                std::optional<SessionID> session_id);
     virtual ~RemovedTab();
@@ -81,7 +70,7 @@ class TabStripModelChange {
     raw_ptr<tabs::TabInterface> tab = nullptr;
     raw_ptr<content::WebContents> contents = nullptr;
     int index;
-    RemoveReason remove_reason;
+    TabRemovedReason remove_reason;
     tabs::TabInterface::DetachReason tab_detach_reason;
     std::optional<SessionID> session_id;
   };
@@ -395,7 +384,8 @@ struct SplitTabChange {
   struct VisualsChange : public Delta {
     VisualsChange(const split_tabs::SplitTabVisualData& old_visual_data,
                   const split_tabs::SplitTabVisualData& new_visual_data,
-                  SplitVisualChangeReason reason);
+                  SplitVisualChangeReason reason,
+                  bool is_intermediate = false);
     ~VisualsChange() override;
 
     const split_tabs::SplitTabVisualData& old_visual_data() const {
@@ -406,11 +396,16 @@ struct SplitTabChange {
     }
 
     SplitVisualChangeReason reason() const { return reason_; }
+    bool is_intermediate() const { return is_intermediate_; }
 
    private:
     split_tabs::SplitTabVisualData old_visual_data_;
     split_tabs::SplitTabVisualData new_visual_data_;
     SplitVisualChangeReason reason_;
+
+    // True if the visual change is the result of a user drag-resizing the split
+    // group. False once the drag-resizing operation has finished.
+    bool is_intermediate_;
   };
 
   struct ContentsChange : public Delta {
@@ -556,11 +551,6 @@ class TabStripModelObserver {
 
   // Invoked when the pinned state of a tab changes.
   virtual void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index);
-
-  // Invoked when the blocked state of a tab changes.
-  // NOTE: This is invoked when a tab becomes blocked/unblocked by a tab modal
-  // window.
-  virtual void OnTabBlockedStateChanged(tabs::TabInterface* tab, int index);
 
   // Called when the tab at `index` is added to the group with id `new_group` or
   // removed from a group with id `old_group`.

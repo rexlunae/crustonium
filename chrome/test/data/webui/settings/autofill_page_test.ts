@@ -29,7 +29,7 @@ import {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 function createAutofillElement(prefsElement: SettingsPrefsElement):
     SettingsAutofillPageElement {
   const element = document.createElement('settings-autofill-page');
-  element.prefs = prefsElement.prefs;
+  element.prefs = prefsElement.prefs!;
   document.body.appendChild(element);
   flush();
   return element;
@@ -56,55 +56,56 @@ suite('PasswordsAndForms', function() {
    * @param autofill Whether autofill is enabled or not.
    * @param passwords Whether passwords are enabled or not.
    */
-  function createPrefs(
+  async function createPrefs(
       autofill: boolean, passwords: boolean): Promise<SettingsPrefsElement> {
-    return new Promise(function(resolve) {
-      CrSettingsPrefs.deferInitialization = true;
-      const prefs = document.createElement('settings-prefs');
-      prefs.initialize(new FakeSettingsPrivate([
-        {
-          key: 'autofill.enabled',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: autofill,
-        },
-        {
-          key: 'autofill.profile_enabled',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: true,
-        },
-        {
-          key: 'autofill.credit_card_enabled',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: true,
-        },
-        {
-          key: 'credentials_enable_service',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: passwords,
-        },
-        {
-          key: 'credentials_enable_autosignin',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: true,
-        },
-        {
-          key: 'payments.can_make_payment_enabled',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: true,
-        },
-        {
-          key: 'autofill.payment_methods_mandatory_reauth',
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: true,
+    CrSettingsPrefs.deferInitialization = true;
+    const prefs = document.createElement('settings-prefs');
+    prefs.initialize(new FakeSettingsPrivate([
+      {
+        key: 'autofill.enabled',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: autofill,
+      },
+      {
+        key: 'autofill.profile_enabled',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      {
+        key: 'autofill.credit_card_enabled',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      {
+        key: 'credentials_enable_service',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: passwords,
+      },
+      {
+        key: 'credentials_enable_autosignin',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      {
+        key: 'payments.can_make_payment_enabled',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      {
+        key: 'autofill.payment_methods_mandatory_reauth',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      },
+      {
+        key: 'autofill.email_verification_state',
+        type: chrome.settingsPrivate.PrefType.DICTIONARY,
+        value: {},
+      },
+    ]));
+    document.body.appendChild(prefs);
 
-        },
-      ]));
-      document.body.appendChild(prefs);
-
-      CrSettingsPrefs.initialized.then(function() {
-        resolve(prefs);
-      });
-    });
+    await CrSettingsPrefs.initialized;
+    return prefs;
   }
 
   /**
@@ -288,6 +289,9 @@ function createAutofillPageSection() {
     credentials_enable_service: {
       enforcement: chrome.settingsPrivate.Enforcement.ENFORCED,
       value: false,
+    },
+    autofill: {
+      email_verification_state: {value: {}},
     },
   };
   document.body.innerHTML = window.trustedTypes!.emptyHTML;

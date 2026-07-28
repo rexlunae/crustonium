@@ -123,7 +123,7 @@ class MappableBufferTest : public testing::Test {
     // TODO(329211602): Currently only wayland has a valid
     // IsNativePixmapConfigSupported(). We should implement that in X11 and
     // other platforms.
-    if (ui::OzonePlatform::GetPlatformNameForTest() == "wayland") {
+    if (ui::OzonePlatform::RunningOnWaylandForTest()) {
       run_gpu_test_ = true;
     }
 #endif
@@ -372,13 +372,13 @@ TYPED_TEST_P(MappableBufferTest, Map) {
 
       size_t height = format.GetPlaneSize(plane, kBufferSize).height();
       for (size_t y = 0; y < height; ++y) {
-        UNSAFE_TODO(memcpy(static_cast<char*>(buffer->memory(plane)) +
+        UNSAFE_TODO(memcpy(static_cast<uint8_t*>(buffer->memory(plane).data()) +
                                y * buffer->stride(plane),
                            data.data(), row_size_in_bytes));
-        UNSAFE_TODO(
-            EXPECT_EQ(0, memcmp(static_cast<char*>(buffer->memory(plane)) +
-                                    y * buffer->stride(plane),
-                                data.data(), row_size_in_bytes)));
+        UNSAFE_TODO(EXPECT_EQ(
+            0, memcmp(static_cast<uint8_t*>(buffer->memory(plane).data()) +
+                          y * buffer->stride(plane),
+                      data.data(), row_size_in_bytes)));
       }
     }
 
@@ -435,13 +435,13 @@ TYPED_TEST_P(MappableBufferTest, PersistentMap) {
 
       size_t height = format.GetPlaneSize(plane, kBufferSize).height();
       for (size_t y = 0; y < height; ++y) {
-        UNSAFE_TODO(memcpy(static_cast<char*>(buffer->memory(plane)) +
+        UNSAFE_TODO(memcpy(static_cast<uint8_t*>(buffer->memory(plane).data()) +
                                y * buffer->stride(plane),
                            data.data(), row_size_in_bytes));
-        UNSAFE_TODO(
-            EXPECT_EQ(0, memcmp(static_cast<char*>(buffer->memory(plane)) +
-                                    y * buffer->stride(plane),
-                                data.data(), row_size_in_bytes)));
+        UNSAFE_TODO(EXPECT_EQ(
+            0, memcmp(static_cast<uint8_t*>(buffer->memory(plane).data()) +
+                          y * buffer->stride(plane),
+                      data.data(), row_size_in_bytes)));
       }
     }
 
@@ -462,10 +462,10 @@ TYPED_TEST_P(MappableBufferTest, PersistentMap) {
 
       size_t height = format.GetPlaneSize(plane, kBufferSize).height();
       for (size_t y = 0; y < height; ++y) {
-        UNSAFE_TODO(
-            EXPECT_EQ(0, memcmp(static_cast<char*>(buffer->memory(plane)) +
-                                    y * buffer->stride(plane),
-                                data.data(), row_size_in_bytes)));
+        UNSAFE_TODO(EXPECT_EQ(
+            0, memcmp(static_cast<uint8_t*>(buffer->memory(plane).data()) +
+                          y * buffer->stride(plane),
+                      data.data(), row_size_in_bytes)));
       }
     }
 

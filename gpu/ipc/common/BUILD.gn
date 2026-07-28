@@ -96,10 +96,8 @@ source_set("ipc_common_sources") {
     "//gpu/config",
     "//third_party/libyuv",
     "//ui/base",
-    "//ui/gfx:color_space",
     "//ui/gfx/geometry",
     "//ui/gfx/ipc",
-    "//ui/gfx/ipc/color",
     "//ui/gfx/ipc/geometry",
     "//ui/gl",
   ]
@@ -414,10 +412,6 @@ mojom("interfaces") {
         {
           mojom = "gpu.mojom.VideoEncodeAcceleratorSupportedProfile"
           cpp = "::gpu::VideoEncodeAcceleratorSupportedProfile"
-        },
-        {
-          mojom = "gpu.mojom.ImageDecodeAcceleratorSupportedProfile"
-          cpp = "::gpu::ImageDecodeAcceleratorSupportedProfile"
         },
       ]
       traits_sources = [ "gpu_info_mojom_traits.cc" ]

@@ -4,12 +4,10 @@
 
 #include "chrome/browser/ui/layout_constants.h"
 
-#include "base/feature_list.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/common/chrome_features.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/base/ui_base_features.h"
@@ -26,6 +24,8 @@ int GetLayoutConstant(LayoutConstant constant) {
       return 24;
     case LayoutConstant::kAppMenuMaximumCharacterLength:
       return 30;
+    case LayoutConstant::kAppMenuButtonImageLabelPadding:
+      return features::IsToolbarGlowUpEnabled() ? 4 : 2;
     case LayoutConstant::kBookmarkBarHeight: {
       // The fixed margin ensures the bookmark buttons appear centered relative
       // to the white space above and below.
@@ -51,6 +51,8 @@ int GetLayoutConstant(LayoutConstant constant) {
       return 1;
     case LayoutConstant::kLocationBarChildInteriorPadding:
       return 3;
+    case LayoutConstant::kLocationBarChildInternalSpacing:
+      return touch_ui ? 10 : 4;
     case LayoutConstant::kLocationBarChildCornerRadius:
       return 12;
     case LayoutConstant::kLocationBarChipIconSize:
@@ -61,21 +63,26 @@ int GetLayoutConstant(LayoutConstant constant) {
       return touch_ui ? 3 : 2;
     case LayoutConstant::kLocationBarPageInfoIconVerticalPadding:
       return touch_ui ? 3 : 5;
-    case LayoutConstant::kLocationBarLeadingDecorationEdgePadding:
-      // TODO(manukh): See comment in `LocationBarView::Layout()`. We have too
-      //   many feature permutations that would affect this and other layout
-      //   constants, so instead of spreading the permutation logic here and
-      //   elsewhere, it's consolidated in `Layout()` and will be moved back
-      //   here once we decide on a permutation.
-      NOTREACHED();
+    case LayoutConstant::kLocationBarPageInfoIconLabelExtraTrailingPadding:
+      return 4;
+    case LayoutConstant::kLocationBarPageInfoIconDangerousLeadingPadding:
+      return 6;
+    case LayoutConstant::kLocationBarPageInfoIconDangerousTrailingPadding:
+      return 10;
     case LayoutConstant::kLocationBarTrailingDecorationEdgePadding:
       return touch_ui ? 3 : 12;
     case LayoutConstant::kLocationBarTrailingDecorationInnerPadding:
       return touch_ui ? 3 : 8;
     case LayoutConstant::kLocationBarHeight:
       return touch_ui ? 36 : 34;
+    // LINT.IfChange(LocationBarIconSize)
     case LayoutConstant::kLocationBarIconSize:
       return touch_ui ? 20 : 16;
+    // LINT.ThenChange(//chrome/browser/ui/omnibox/omnibox_edit_model.cc:SuperGIconSize)
+    case LayoutConstant::kLocationBarIconLabelBubbleSpaceBesideSeparator:
+      return 8;
+    case LayoutConstant::kLocationBarIconLabelBubbleSeparatorWidth:
+      return 1;
     case LayoutConstant::kLocationBarLeadingIconSize:
       return GetLayoutConstant(LayoutConstant::kLocationBarIconSize);
     case LayoutConstant::kLocationBarTrailingIconSize:
@@ -91,7 +98,7 @@ int GetLayoutConstant(LayoutConstant constant) {
     case LayoutConstant::kTabAlertIndicatorIconWidth:
       return touch_ui ? 12 : 16;
     case LayoutConstant::kTabCloseButtonSize:
-      return touch_ui ? 24 : 16;
+      return touch_ui ? 24 : (features::IsRoundedIconsEnabled() ? 14 : 16);
     case LayoutConstant::kTabHeight:
       return 34 + GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap);
     case LayoutConstant::kTabStripHeight:
@@ -109,6 +116,9 @@ int GetLayoutConstant(LayoutConstant constant) {
       return 1;
     case LayoutConstant::kToolbarButtonHeight:
       return touch_ui ? 48 : 34;
+    case LayoutConstant::kToolbarButtonIconSize:
+      return touch_ui ? kDefaultTouchableIconSize
+                      : kDefaultIconSizeChromeRefresh;
     case LayoutConstant::kToolbarDividerCornerRadius:
       return 1;
     case LayoutConstant::kToolbarDividerHeight:
@@ -121,9 +131,9 @@ int GetLayoutConstant(LayoutConstant constant) {
       return touch_ui ? 0 : 4;
     case LayoutConstant::kToolbarIconDefaultMargin:
       return touch_ui ? 0 : 2;
-    case LayoutConstant::kToolbarStandardSpacing:
+    case LayoutConstant::kLocationBarMargin:
       return touch_ui ? 12 : 9;
-    case LayoutConstant::kToolbarHeightSidePanelInset:
+    case LayoutConstant::kSidePanelInset:
       return 8;
     case LayoutConstant::kPageInfoIconSize:
       return 20;
@@ -139,21 +149,27 @@ int GetLayoutConstant(LayoutConstant constant) {
       return 32;
     case LayoutConstant::kVerticalTabMinWidth:
       return 32;
-    case LayoutConstant::kVerticalTabStripUncollapsedPadding:
+    case LayoutConstant::kVerticalTabStripHorizontalPadding:
       return 12;
-    case LayoutConstant::kVerticalTabStripCollapsedPadding:
+    case LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding:
+      return 12;
+    case LayoutConstant::kVerticalTabStripCollapsedVerticalPadding:
       return 8;
-    case LayoutConstant::kVerticalTabStripTopButtonIconSize:
-      return 20;
-    case LayoutConstant::kVerticalTabStripBottomButtonIconSize:
+    case LayoutConstant::kVerticalTabStripComboButtonIconSize:
+      return 18;
+    case LayoutConstant::kVerticalTabStripButtonIconSize:
       return 20;
     case LayoutConstant::kVerticalTabStripTopButtonPadding:
       return 4;
-    case LayoutConstant::kVerticalTabStripBottomButtonPadding:
-      return 4;
-    case LayoutConstant::kVerticalTabStripCollapsedBottomButtonPadding:
+    case LayoutConstant::kVerticalTabStripFlatEdgeButtonPadding:
       return 2;
     case LayoutConstant::kVerticalTabStripTopButtonContainerHeight:
+      return 28;
+    case LayoutConstant::kVerticalTabStripNewTabButtonSize:
+      return 32;
+    case LayoutConstant::kVerticalTabStripCollapseButtonSize:
+      return 32;
+    case LayoutConstant::kVerticalTabStripTopContainerButtonSize:
       return 28;
     case LayoutConstant::kVerticalTabPinnedBorderThickness:
       return 1;
@@ -183,7 +199,7 @@ gfx::Insets GetLayoutInsets(LayoutInset inset) {
 
     case TOOLBAR_ACTION_VIEW: {
       // TODO(afakhry): Unify all toolbar button sizes on all platforms.
-      // https://crbug.com/822967.
+      // https://crbug.com/40567493.
       return gfx::Insets(touch_ui ? 10 : 0);
     }
 
@@ -200,6 +216,9 @@ gfx::Insets GetLayoutInsets(LayoutInset inset) {
     case WEB_APP_APP_MENU_CHIP_PADDING:
       return gfx::Insets::TLBR(0, 4, 0, 6);
 
+    case WEB_APP_UNINSTALL_BUTTON_PADDING:
+      return gfx::Insets::TLBR(0, 8, 0, 8);
+
     case AVATAR_CHIP_PADDING:
       if (touch_ui) {
         return GetLayoutInsets(TOOLBAR_BUTTON);
@@ -208,7 +227,7 @@ gfx::Insets GetLayoutInsets(LayoutInset inset) {
       }
 
     case TOOLBAR_INTERIOR_MARGIN:
-      return touch_ui ? gfx::Insets::VH(4, 0) : gfx::Insets::VH(6, 5);
+      return touch_ui ? gfx::Insets::VH(4, 0) : gfx::Insets::VH(6, 6);
 
     case WEBUI_TAB_STRIP_TOOLBAR_INTERIOR_MARGIN:
       return gfx::Insets::VH(4, 0);

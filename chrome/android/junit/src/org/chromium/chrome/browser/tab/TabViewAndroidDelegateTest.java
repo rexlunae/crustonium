@@ -8,7 +8,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -23,10 +26,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
@@ -43,7 +44,6 @@ import org.chromium.ui.mojom.VirtualKeyboardMode;
 
 /** Unit tests for the TabViewAndroidDelegate. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.LEGACY)
 @EnableFeatures(ContentFeatures.TOUCH_DRAG_AND_CONTEXT_MENU)
 @DisableFeatures(ChromeFeatureList.ANIMATED_IMAGE_DRAG_SHADOW)
 public class TabViewAndroidDelegateTest {
@@ -120,7 +120,7 @@ public class TabViewAndroidDelegateTest {
                 0,
                 mViewAndroidDelegate.getViewportInsetBottom());
 
-        WindowAndroid window = Mockito.mock(WindowAndroid.class);
+        WindowAndroid window = mock(WindowAndroid.class);
         mTabObserverCaptor.getValue().onActivityAttachmentChanged(mTab, window);
         assertEquals(
                 "The bottom inset for the tab should be non-zero.",
@@ -151,8 +151,19 @@ public class TabViewAndroidDelegateTest {
                 .onProvideAutofillVirtualStructure(
                         structure, View.AUTOFILL_FLAG_INCLUDE_NOT_IMPORTANT_VIEWS);
 
-        SparseArray<AutofillValue> values = new SparseArray();
+        SparseArray<AutofillValue> values = new SparseArray<>();
         mViewAndroidDelegate.autofill(values);
         verify(mTab).autofill(values);
+    }
+
+    @Test
+    public void testDestroy_unregistersObserverAndClearsTab() {
+        mViewAndroidDelegate.destroy();
+        verify(mTab).removeObserver(mTabObserverCaptor.getValue());
+
+        mViewAndroidDelegate.onBackgroundColorChanged(0);
+        mViewAndroidDelegate.autofill(new SparseArray<>());
+        verify(mTab, never()).changeWebContentBackgroundColor(anyInt());
+        verify(mTab, never()).autofill(any());
     }
 }

@@ -11,6 +11,7 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.provider.Browser;
 
+import androidx.annotation.StringRes;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.preference.Preference;
 
@@ -33,6 +34,7 @@ import org.chromium.chrome.browser.browserservices.permissiondelegation.Installe
 import org.chromium.chrome.browser.browsing_data.BrowsingDataBridge;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
@@ -170,19 +172,9 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
             case SiteSettingsCategory.Type.REQUEST_DESKTOP_SITE:
                 // Desktop Android always requests desktop sites, so hide the category.
                 return !DeviceInfo.isDesktop();
-            case SiteSettingsCategory.Type.LOCAL_NETWORK_ACCESS:
-                // Use LOCAL_NETWORK_ACCESS if LNA is enabled, but LNA Split permissions is not
-                // enabled.
-                return ChromeFeatureList.isEnabled(ChromeFeatureList.LOCAL_NETWORK_ACCESS)
-                        && !ChromeFeatureList.isEnabled(
-                                ChromeFeatureList.LOCAL_NETWORK_ACCESS_SPLIT_PERMISSIONS);
             case SiteSettingsCategory.Type.LOCAL_NETWORK:
             case SiteSettingsCategory.Type.LOOPBACK_NETWORK:
-                // Use LOCAL_NETWORK and LOOPBACK_NETWORK if LNA is enabled and LNA Split
-                // permissions are enabled.
-                return ChromeFeatureList.isEnabled(ChromeFeatureList.LOCAL_NETWORK_ACCESS)
-                        && ChromeFeatureList.isEnabled(
-                                ChromeFeatureList.LOCAL_NETWORK_ACCESS_SPLIT_PERMISSIONS);
+                return ChromeFeatureList.isEnabled(ChromeFeatureList.LOCAL_NETWORK_ACCESS);
             case SiteSettingsCategory.Type.WINDOW_MANAGEMENT:
                 return ChromeFeatureList.sAndroidWindowManagementWebApi.isEnabled()
                         && DisplayAndroidManager.isDisplayTopologyAvailable();
@@ -210,11 +202,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     public boolean isPermissionDedicatedCpssSettingAndroidFeatureEnabled() {
         return ChromeFeatureList.isEnabled(
                 ChromeFeatureList.PERMISSION_DEDICATED_CPSS_SETTING_ANDROID);
-    }
-
-    @Override
-    public boolean isPermissionSiteSettingsRadioButtonFeatureEnabled() {
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.PERMISSION_SITE_SETTING_RADIO_BUTTON);
     }
 
     @Override
@@ -250,6 +237,11 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     @Override
     public boolean isHelpAndFeedbackEnabled() {
         return true;
+    }
+
+    @Override
+    public @StringRes int getHelpMenuStringRes() {
+        return HelpAndFeedbackLauncher.getHelpMenuStringRes();
     }
 
     @Override

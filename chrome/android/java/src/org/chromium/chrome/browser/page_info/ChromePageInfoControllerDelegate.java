@@ -23,12 +23,15 @@ import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 
 import org.chromium.base.Callback;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinator;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.merchant_viewer.PageInfoStoreInfoController;
 import org.chromium.chrome.browser.merchant_viewer.PageInfoStoreInfoController.StoreInfoActionHandler;
 import org.chromium.chrome.browser.offlinepages.OfflinePageItem;
@@ -86,10 +89,12 @@ import java.util.function.Supplier;
 public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate {
     private final WebContents mWebContents;
     private final Supplier<@Nullable ModalDialogManager> mModalDialogManagerSupplier;
-    private final @Nullable Supplier<EphemeralTabCoordinator> mEphemeralTabCoordinatorSupplier;
+    private final @Nullable Supplier<@Nullable EphemeralTabCoordinator>
+            mEphemeralTabCoordinatorSupplier;
     private final Context mContext;
     private final Profile mProfile;
-    private final @Nullable Supplier<StoreInfoActionHandler> mStoreInfoActionHandlerSupplier;
+    private final @Nullable MonotonicObservableSupplier<StoreInfoActionHandler>
+            mStoreInfoActionHandlerSupplier;
     private final ChromePageInfoHighlight mPageInfoHighlight;
     private final OfflinePageLoadUrlDelegate mOfflinePageLoadUrlDelegate;
     private @Nullable String mOfflinePageCreationDate;
@@ -104,8 +109,9 @@ public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate
             WebContents webContents,
             Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
             OfflinePageLoadUrlDelegate offlinePageLoadUrlDelegate,
-            @Nullable Supplier<StoreInfoActionHandler> storeInfoActionHandlerSupplier,
-            @Nullable Supplier<EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
+            @Nullable MonotonicObservableSupplier<StoreInfoActionHandler>
+                    storeInfoActionHandlerSupplier,
+            @Nullable Supplier<@Nullable EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
             ChromePageInfoHighlight pageInfoHighlight,
             @Nullable TabCreator tabCreator,
             @Nullable String packageName) {
@@ -262,6 +268,9 @@ public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate
 
     @Override
     public void showCookieFeedback(Activity activity) {
+        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+            return;
+        }
         Tab tab = TabUtils.fromWebContents(mWebContents);
 
         // FEEDBACK_REPORT_TYPE: Reports for Chrome mobile must have a contextTag of the form
@@ -281,12 +290,15 @@ public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate
     public Collection<PageInfoSubpageController> createAdditionalRowViews(
             PageInfoMainController mainController, ViewGroup rowWrapper) {
         Collection<PageInfoSubpageController> controllers = new ArrayList<>();
-        var adPersonalizationRow = new PageInfoRowView(rowWrapper.getContext(), null);
-        adPersonalizationRow.setId(PageInfoAdPersonalizationController.ROW_ID);
-        rowWrapper.addView(adPersonalizationRow);
-        controllers.add(
-                new PageInfoAdPersonalizationController(
-                        mainController, adPersonalizationRow, this));
+        if (!ChromeFeatureList.isEnabled(
+                ChromeFeatureList.PRIVACY_SANDBOX_AD_PRIVACY_UX_DEPRECATION)) {
+            var adPersonalizationRow = new PageInfoRowView(rowWrapper.getContext(), null);
+            adPersonalizationRow.setId(PageInfoAdPersonalizationController.ROW_ID);
+            rowWrapper.addView(adPersonalizationRow);
+            controllers.add(
+                    new PageInfoAdPersonalizationController(
+                            mainController, adPersonalizationRow, this));
+        }
 
         // Add history row.
         final Tab tab = TabUtils.fromWebContents(mWebContents);
@@ -302,7 +314,8 @@ public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate
                             return tab;
                         }));
 
-        if (PageInfoAboutThisSiteController.isFeatureEnabled()) {
+        if (PageInfoAboutThisSiteController.isFeatureEnabled()
+                && (mEphemeralTabCoordinatorSupplier != null || mTabCreator != null)) {
             var aboutThisSiteRow = new PageInfoRowView(rowWrapper.getContext(), null);
             aboutThisSiteRow.setId(PageInfoAboutThisSiteController.ROW_ID);
             rowWrapper.addView(aboutThisSiteRow);
@@ -370,6 +383,7 @@ public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate
                 mProfile,
                 url,
                 size,
+                /* fallbackToHost= */ true,
                 (image, iconUrl) -> {
                     if (image != null) {
                         callback.onResult(new BitmapDrawable(resources, image));
@@ -400,6 +414,12 @@ public class ChromePageInfoControllerDelegate extends PageInfoControllerDelegate
     @Override
     public boolean isIncognito() {
         return mProfile.isOffTheRecord();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean isHttpsFirstDialogUiEnabled() {
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.HTTPS_FIRST_DIALOG_UI);
     }
 
     private PageInfoRowView.ViewParams getAppInfoRowParams(

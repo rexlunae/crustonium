@@ -51,17 +51,6 @@ _LSPCI_PCI_ID_REGEX = re.compile(r'^(.+?) \[([0-9a-f]{4})\]$')
 _MAC_PCI_ID_REGEX = re.compile(r'\(0x([0-9a-f]{4})\)')
 _MAC_VENDOR_NAME_REGEX = re.compile(r'sppci_vendor_([a-z]+)$')
 
-# The format of Qualcomm device IDs retrieved via WMI is different from what
-# Chrome extracts. This table translates to what Chrome produces.
-_QUALCOMM_DEVICE_MAP = {
-    # Older Adreno 680/685/690 GPUs (such as Surface Pro X, Dell trybots).
-    '043a': '41333430',
-    # Adreno 690 GPU (such as Surface Pro 9 5G).
-    '0636': '36333630',
-    # Adreno 741 GPU (such as Surface Pro 11th Edition).
-    '0c36': '36334330',
-}
-
 _Gpu = collections.namedtuple('Gpu', ['vendor_id', 'device_id'])
 
 
@@ -69,17 +58,6 @@ _Gpu = collections.namedtuple('Gpu', ['vendor_id', 'device_id'])
 def IsWindows() -> bool:
   return sys.platform == 'win32'
 
-
-@functools.lru_cache(maxsize=1)
-def IsWindows11() -> bool:
-  # sys.getwindowsversion() returns 10 for the major release even on Windows 11,
-  # so instead we need to check against the build number as suggested in
-  # https://stackoverflow.com/a/69325836.
-  # pytype: disable=module-attr
-  # pylint: disable=no-member
-  return IsWindows() and sys.getwindowsversion().build >= 22000
-  # pylint: enable=no-member
-  # pytype: enable=module-attr
 
 @functools.lru_cache(maxsize=1)
 def IsLinux() -> bool:
@@ -185,8 +163,11 @@ def _GetAvailableGpusWindows() -> list[_Gpu]:
     match = _PNP_DEVICE_REGEX.search(pnp_string)
     if match:
       device_id = match.group(1).lower()
+      # The Qualcomm device id from WMI (e.g. '0c36') differs from what
+      # Chrome extracts (e.g. '36334330'). The Chrome id is the hex-encoded
+      # ASCII of the reversed device id string.
       if vendor_id == constants.GpuVendor.QUALCOMM:
-        device_id = _QUALCOMM_DEVICE_MAP[device_id]
+        device_id = device_id[::-1].upper().encode().hex()
       device_id = int(device_id, 16)
     else:
       continue

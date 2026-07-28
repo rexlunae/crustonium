@@ -46,7 +46,6 @@ import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -64,7 +63,10 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -137,7 +139,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         // User already signed-in with an account.
         int ALREADY_SIGNED_IN = 10;
 
-        int NUM_ENTRIES = ALREADY_SIGNED_IN;
+        int NUM_ENTRIES = ALREADY_SIGNED_IN + 1;
     }
 
     // LINT.ThenChange(/tools/metrics/histograms/metadata/android/enums.xml:AndroidRestoreResult)
@@ -150,12 +152,18 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
     @VisibleForTesting static final int MAX_BACKUP_FAILURES = 5;
 
     // Bool entries from SharedPreferences that should be backed up / restored.
-    static final String[] BACKUP_ANDROID_BOOL_PREFS = {
-        ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE,
-        ChromePreferenceKeys.FIRST_RUN_LIGHTWEIGHT_FLOW_COMPLETE,
-        ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY,
-        ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
-    };
+    static final Set<String> BACKUP_ANDROID_BOOL_PREFS =
+            Collections.unmodifiableSet(
+                    new LinkedHashSet<>(
+                            List.of(
+                                    ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE,
+                                    ChromePreferenceKeys.FIRST_RUN_LIGHTWEIGHT_FLOW_COMPLETE,
+                                    ChromePreferenceKeys
+                                            .PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY,
+                                    ChromePreferenceKeys
+                                            .PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
+                                    ChromePreferenceKeys
+                                            .PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE)));
 
     // The supported PrefBackupSerializers, each responsible for allowlisting certain prefs for
     // backup & restore.
@@ -205,9 +213,9 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                 mValues = new ArrayList<>();
                 return;
             }
-            try {
-                FileInputStream instream = new FileInputStream(parceledState.getFileDescriptor());
-                ObjectInputStream in = new ObjectInputStream(instream);
+            try (FileInputStream instream =
+                            new FileInputStream(parceledState.getFileDescriptor());
+                    ObjectInputStream in = new ObjectInputStream(instream)) {
                 mNames = (ArrayList<String>) in.readObject();
                 mValues = (ArrayList<byte[]>) in.readObject();
             } catch (ClassNotFoundException e) {
@@ -229,10 +237,12 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         }
 
         public void save(ParcelFileDescriptor parceledState) throws IOException {
-            FileOutputStream outstream = new FileOutputStream(parceledState.getFileDescriptor());
-            ObjectOutputStream out = new ObjectOutputStream(outstream);
-            out.writeObject(mNames);
-            out.writeObject(mValues);
+            try (FileOutputStream outstream =
+                            new FileOutputStream(parceledState.getFileDescriptor());
+                    ObjectOutputStream out = new ObjectOutputStream(outstream)) {
+                out.writeObject(mNames);
+                out.writeObject(mValues);
+            }
         }
     }
 
@@ -240,8 +250,8 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
     // private again.
     @VisibleForTesting
     boolean initializeBrowser() {
-        // Workaround for https://crbug.com/718166. The backup agent is sometimes being started in a
-        // child process, before the child process loads its native library. If backup then loads
+        // Workaround for https://crbug.com/40518724. The backup agent is sometimes being started in
+        // a child process, before the child process loads its native library. If backup then loads
         // the native library the child process is left in a very confused state and crashes.
         if (ContentProcessInfo.inChildProcess()) {
             Log.e(TAG, "Backup agent started from child process");
@@ -284,8 +294,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                             IdentityManager identityManager =
                                     IdentityServicesProvider.get().getIdentityManager(profile);
                             assumeNonNull(identityManager);
-                            signedInAccount.set(
-                                    identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN));
+                            signedInAccount.set(identityManager.getPrimaryAccountInfo());
 
                             PrefService prefService = UserPrefs.get(profile);
                             for (PrefBackupSerializer serializer : NATIVE_PREFS_SERIALIZERS) {
@@ -562,11 +571,11 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
         int prefixLength = ANDROID_DEFAULT_PREFIX.length();
         for (int i = 0; i < backupNames.size(); i++) {
             String name = backupNames.get(i);
-            if (name.startsWith(ANDROID_DEFAULT_PREFIX)
-                    && Arrays.asList(BACKUP_ANDROID_BOOL_PREFS)
-                            .contains(name.substring(prefixLength))) {
-                editor.putBoolean(
-                        name.substring(prefixLength), bytesToBoolean(backupValues.get(i)));
+            if (name.startsWith(ANDROID_DEFAULT_PREFIX)) {
+                String prefName = name.substring(prefixLength);
+                if (BACKUP_ANDROID_BOOL_PREFS.contains(prefName)) {
+                    editor.putBoolean(prefName, bytesToBoolean(backupValues.get(i)));
+                }
             }
         }
 
@@ -578,7 +587,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                             return assertNonNull(
                                             IdentityServicesProvider.get()
                                                     .getIdentityManager(profile))
-                                    .hasPrimaryAccount(ConsentLevel.SIGNIN);
+                                    .hasPrimaryAccount();
                         });
         if (!hasPrimaryAccount) {
             if (signedInAccountInfo != null) {
@@ -747,7 +756,7 @@ public class ChromeBackupAgentImpl extends SplitCompatBackupAgent.Impl {
                     IdentityManager identityManager =
                             assertNonNull(
                                     IdentityServicesProvider.get().getIdentityManager(profile));
-                    if (identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+                    if (identityManager.hasPrimaryAccount()) {
                         // This may happen if the user is supervised as they will be signed in via
                         // {@link SigninChecker}.
                         callback.onSignInAborted();

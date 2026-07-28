@@ -49,15 +49,16 @@ V8ColorSpaceConversion::Enum ToColorSpaceConversion(
 void RunFuzzingLoop(ImageDecoderExternal* image_decoder,
                     const google::protobuf::RepeatedPtrField<
                         wc_fuzzer::ImageDecoderApiInvocation>& invocations) {
-  Persistent<ImageDecodeOptions> options = ImageDecodeOptions::Create();
-  for (auto& invocation : invocations) {
+  for (const auto& invocation : invocations) {
     switch (invocation.Api_case()) {
-      case wc_fuzzer::ImageDecoderApiInvocation::kDecodeImage:
+      case wc_fuzzer::ImageDecoderApiInvocation::kDecodeImage: {
+        Persistent<ImageDecodeOptions> options = ImageDecodeOptions::Create();
         options->setFrameIndex(invocation.decode_image().frame_index());
         options->setCompleteFramesOnly(
             invocation.decode_image().complete_frames_only());
         image_decoder->decode(options);
         break;
+      }
       case wc_fuzzer::ImageDecoderApiInvocation::kDecodeMetadata:
         // Deprecated.
         break;
@@ -81,6 +82,10 @@ void RunFuzzingLoop(ImageDecoderExternal* image_decoder,
 
 DEFINE_BINARY_PROTO_FUZZER(
     const wc_fuzzer::ImageDecoderApiInvocationSequence& proto) {
+  if (proto.invocations().size() > kMaxFuzzerProtoLength) {
+    return;
+  }
+
   static BlinkFuzzerTestSupport test_support = BlinkFuzzerTestSupport();
   test::TaskEnvironment task_environment;
 

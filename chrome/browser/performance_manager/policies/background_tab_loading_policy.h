@@ -11,8 +11,8 @@
 
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/graph_registered.h"
 #include "components/performance_manager/public/graph/node_data_describer.h"
@@ -40,7 +40,7 @@ class BackgroundTabLoadingPolicy
     : public GraphOwnedAndRegistered<BackgroundTabLoadingPolicy>,
       public NodeDataDescriberDefaultImpl,
       public PageNodeObserver,
-      public base::MemoryPressureListener {
+      public base::PassiveMemoryConsumer {
  public:
   // `all_restored_tabs_loaded_callback` is invoked when all tabs passed to
   // ScheduleLoadForRestoredTabs() are loaded.
@@ -127,7 +127,8 @@ class BackgroundTabLoadingPolicy
   base::DictValue DescribePageNodeData(const PageNode* node) const override;
   base::DictValue DescribeSystemNodeData(const SystemNode* node) const override;
 
-  void OnMemoryPressure(base::MemoryPressureLevel new_level) override;
+  // base::PassiveMemoryConsumer implementation:
+  void OnUpdateMemoryLimit() override;
 
   // Returns the SiteDataReader instance for |page_node|, if any. Virtual for
   // testing.
@@ -216,8 +217,7 @@ class BackgroundTabLoadingPolicy
   // The mechanism used to load the pages.
   std::unique_ptr<performance_manager::mechanism::PageLoader> page_loader_;
 
-  base::MemoryPressureListenerRegistration
-      memory_pressure_listener_registration_;
+  base::MemoryConsumerRegistration memory_consumer_registration_;
 
   // The set of PageNodes that have been restored for which we need to schedule
   // loads.
@@ -280,6 +280,7 @@ class BackgroundTabLoadingPolicy
   // after the policy object is destroyed.
   base::WeakPtrFactory<BackgroundTabLoadingPolicy> weak_factory_{this};
 
+  FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest, MaxTabsToRestore);
   FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,
                            ShouldLoad_MaxTabsToRestore);
   FRIEND_TEST_ALL_PREFIXES(BackgroundTabLoadingPolicyTest,

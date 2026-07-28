@@ -190,7 +190,8 @@ class WebTestControlHost : public WebContentsObserver,
   void WebContentsDestroyed() override;
   void DidUpdateFaviconURL(
       RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
   void RenderFrameHostChanged(RenderFrameHost* old_host,
                               RenderFrameHost* new_host) override;
   void RenderViewDeleted(RenderViewHost* render_view_host) override;
@@ -230,6 +231,10 @@ class WebTestControlHost : public WebContentsObserver,
   void SetPopupBlockingEnabled(bool block_popups) override;
   void LoadURLForFrame(const GURL& url, const std::string& frame_name) override;
   void SimulateScreenOrientationChanged() override;
+  void SimulateScreenOrientationLockChanged(
+      const blink::LocalFrameToken& frame_token,
+      bool locked,
+      device::mojom::ScreenOrientationLockType orientation) override;
   void SetPermission(const std::string& name,
                      blink::mojom::PermissionStatus status,
                      const GURL& origin,
@@ -268,6 +273,8 @@ class WebTestControlHost : public WebContentsObserver,
   void EnableAutoResize(const gfx::Size& min_size,
                         const gfx::Size& max_size) override;
   void DisableAutoResize(const gfx::Size& new_size) override;
+  void GetClipboardReadState(GetClipboardReadStateCallback callback) override;
+  void ResetClipboardReadTracking() override;
   void SetLCPPNavigationHint(
       blink::mojom::LCPCriticalPathPredictorNavigationTimeHintPtr hint)
       override;

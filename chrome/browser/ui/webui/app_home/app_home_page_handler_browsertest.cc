@@ -9,12 +9,15 @@
 #include <vector>
 
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/create_application_shortcut_view_test_support.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_menu_model.h"
@@ -47,6 +50,8 @@
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/blink/public/common/features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/test/dialog_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -220,7 +225,7 @@ class AppHomePageHandlerTest : public InProcessBrowserTest {
     return installed_app_id;
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   void UninstallTestWebApp(const webapps::AppId& app_id) {
     web_app::test::UninstallWebApp(profile(), app_id);
@@ -577,34 +582,31 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerTest, HandleLaunchDeprecatedApp) {
 
 class AppHomePageHandlerUpdateTest : public AppHomePageHandlerTest {
  public:
-  AppHomePageHandlerUpdateTest() {
-    feature_list_.InitAndEnableFeature(features::kWebAppPredictableAppUpdating);
-  }
-
   void SetUpOnMainThread() override {
     AppHomePageHandlerTest::SetUpOnMainThread();
     EXPECT_TRUE(embedded_https_test_server().Start());
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
+  base::test::ScopedFeatureList feature_list_{
+      blink::features::kWebAppMigrationApi};
 };
 
 IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, HandlePageCalls) {
   std::unique_ptr<TestAppHomePageHandler> page_handler =
       GetAppHomePageHandler();
   web_app::WebAppProvider* provider =
-      web_app::WebAppProvider::GetForTest(browser()->profile());
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile());
 
   EXPECT_CALL(page_, AddApp(MatchAppName("Web app for updating")))
       .Times(testing::AtLeast(1));
 
   const GURL app_url =
       embedded_https_test_server().GetURL("/web_apps/updating/index.html");
-  ui_test_utils::BrowserCreatedObserver browser_created_observer;
+  Browser* app_browser =
+      web_app::InstallWebAppFromPageGetBrowser(browser(), app_url);
   const webapps::AppId app_id =
-      web_app::InstallWebAppFromPage(browser(), app_url);
-  Browser* app_browser = browser_created_observer.Wait();
+      web_app::AppBrowserController::From(app_browser)->app_id();
   page_handler->Wait();
 
   // Ensure that the `UpdateApp()` call happens twice, once after the start url
@@ -634,6 +636,57 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, HandlePageCalls) {
     views::test::AcceptDialog(dialog_widget);
     provider->command_manager().AwaitAllCommandsCompleteForTesting();
   }
+}
+
+IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, MigrationCalls) {
+  std::unique_ptr<TestAppHomePageHandler> page_handler =
+      GetAppHomePageHandler();
+  web_app::WebAppProvider* provider =
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile());
+
+  EXPECT_CALL(page_, AddApp(MatchAppName("Migrate From")))
+      .Times(testing::AtLeast(1));
+
+  const GURL from_url = embedded_https_test_server().GetURL(
+      "/web_apps/migration/migrate_from/no_migration_info.html");
+  Browser* app_browser =
+      web_app::InstallWebAppFromPageGetBrowser(browser(), from_url);
+  const webapps::AppId source_app_id =
+      web_app::AppBrowserController::From(app_browser)->app_id();
+  page_handler->Wait();
+
+  // The old app should be removed, and the new "Migrate To" app should be
+  // installed.
+  EXPECT_CALL(page_, RemoveApp(MatchAppId(source_app_id)))
+      .Times(testing::AtLeast(1));
+  EXPECT_CALL(page_,
+              AddApp(MatchAppName("Migrate To - With migrate_from suggested")))
+      .Times(testing::AtLeast(1));
+  GURL to_url = embedded_https_test_server().GetURL(
+      "/web_apps/migration/migrate_to/suggest.html");
+
+  // Navigating to the `migration_to` app stores the metadata for a pending
+  // migration.
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), to_url));
+  web_app::test::WaitForLoadCompleteAndMaybeManifestSeen(
+      *browser()->tab_strip_model()->GetActiveWebContents());
+  provider->command_manager().AwaitAllCommandsCompleteForTesting();
+
+  // Trigger the dialog and accept the pending migration. The `model` is scoped
+  // so that it goes out of scope as soon as the dialog shows up, as accepting
+  // the update dialog causes `app_browser` to die.
+  views::NamedWidgetShownWaiter update_dialog_waiter(
+      views::test::AnyWidgetTestPasskey{}, "WebAppUpdateReviewDialog");
+  {
+    chrome::Reload(app_browser, WindowOpenDisposition::CURRENT_TAB);
+    WebAppMenuModel model(/*provider=*/nullptr, app_browser);
+    model.Init();
+    model.ExecuteCommand(IDC_WEB_APP_UPGRADE_DIALOG, /*event_flags=*/0);
+  }
+  views::Widget* dialog_widget = update_dialog_waiter.WaitIfNeededAndGet();
+  ASSERT_NE(nullptr, dialog_widget);
+  views::test::AcceptDialog(dialog_widget);
+  provider->command_manager().AwaitAllCommandsCompleteForTesting();
 }
 
 }  // namespace webapps

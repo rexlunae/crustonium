@@ -41,15 +41,13 @@ import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.ImprovedBookmarkRowProperties.ImageVisibility;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.listmenu.BasicListMenu;
@@ -325,7 +323,7 @@ public class ImprovedBookmarkRowTest {
         mModel.set(ImprovedBookmarkRowProperties.END_IMAGE_VISIBILITY, ImageVisibility.DRAWABLE);
         mModel.set(ImprovedBookmarkRowProperties.START_ICON_DRAWABLE, mDrawableSupplier);
 
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mStartImageView).setImageDrawable(null);
         verify(mStartImageView).setImageDrawable(mDrawable);
@@ -343,7 +341,7 @@ public class ImprovedBookmarkRowTest {
         mModel.set(ImprovedBookmarkRowProperties.END_IMAGE_VISIBILITY, ImageVisibility.DRAWABLE);
         mModel.set(ImprovedBookmarkRowProperties.START_ICON_DRAWABLE, mNullDrawableSupplier);
 
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mStartImageView, times(2)).setImageDrawable(null);
         verify(mStartImageView, never()).setAlpha(0f);
@@ -385,8 +383,7 @@ public class ImprovedBookmarkRowTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR_FAST_FOLLOW)
-    public void testDragShadowVisuals_FeatureEnabled_Visual() {
+    public void testDragShadowVisuals_Visual() {
         ImprovedBookmarkRow row = ImprovedBookmarkRow.buildView(mActivity, /* isVisual= */ true);
 
         assertFalse(
@@ -396,8 +393,7 @@ public class ImprovedBookmarkRowTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR_FAST_FOLLOW)
-    public void testDragShadowVisuals_FeatureEnabled_Compact() {
+    public void testDragShadowVisuals_Compact() {
         ImprovedBookmarkRow row = ImprovedBookmarkRow.buildView(mActivity, /* isVisual= */ false);
 
         assertFalse("Compact rows should also allow shadow drawing.", row.getClipToOutline());
@@ -405,7 +401,6 @@ public class ImprovedBookmarkRowTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR_FAST_FOLLOW)
     public void testDragHandleVisibility() {
         // Create a new View object to re-run onFinishInflate when the flag is enabled.
         mImprovedBookmarkRow = ImprovedBookmarkRow.buildView(mActivity, /* isVisual= */ true);

@@ -26,23 +26,27 @@ constexpr base::TimeDelta kPendingRequestTimeout = base::Seconds(3600);
 // indicates higher priority.
 int GetPriorityForBubbleType(BubbleType type) {
   switch (type) {
+    case BubbleType::kOmniboxAutofill:
+      return 12;
     case BubbleType::kFilledCardInformation:
-      return 10;
+      return 11;
     case BubbleType::kPassword:
-      return 9;
+      return 10;
     case BubbleType::kSaveUpdateAutofillAi:
-      return 8;
+      return 9;
     case BubbleType::kSaveUpdateCard:
-      return 7;
+      return 8;
     case BubbleType::kVirtualCardEnrollConfirmation:
-      return 6;
+      return 7;
     case BubbleType::kSaveIban:
-      return 5;
+      return 6;
     case BubbleType::kMandatoryReauth:
-      return 4;
+      return 5;
     case BubbleType::kSaveUpdateAddress:
-      return 3;
+      return 4;
     case BubbleType::kOfferNotification:
+      return 3;
+    case BubbleType::kPaymentsChurnedUsers:
       return 2;
     case BubbleType::kWalletablePassConsent:
       return 1;
@@ -59,6 +63,8 @@ bool ShouldAlwaysPreemptSameType(BubbleType bubble_type) {
     case BubbleType::kFilledCardInformation:
     case BubbleType::kPassword:
       return true;
+    case BubbleType::kOmniboxAutofill:
+    case BubbleType::kPaymentsChurnedUsers:
     case BubbleType::kSaveUpdateAutofillAi:
     case BubbleType::kSaveUpdateCard:
     case BubbleType::kVirtualCardEnrollConfirmation:
@@ -76,6 +82,10 @@ bool ShouldAlwaysPreemptSameType(BubbleType bubble_type) {
 // LINT.IfChange(BubbleTypeToMetricSuffix)
 std::string_view BubbleTypeToMetricSuffix(BubbleType bubble_type) {
   switch (bubble_type) {
+    case BubbleType::kPaymentsChurnedUsers:
+      return "PaymentsChurnedUsers";
+    case BubbleType::kOmniboxAutofill:
+      return "OmniboxAutofill";
     case BubbleType::kSaveUpdateAddress:
       return "SaveUpdateAddress";
     case BubbleType::kSaveIban:
@@ -288,9 +298,14 @@ void BubbleManagerImpl::ProcessPendingBubbles(bool tab_entered_foreground) {
   // Clean up any stale pointers and timed out bubbles.
   const base::TimeTicks now = base::TimeTicks::Now();
   std::ranges::for_each(pending_bubbles_queue_, [&now](const auto& request) {
-    if (request.controller &&
-        (now - request.time_added) > kPendingRequestTimeout) {
+    if (!request.controller) {
+      return;
+    }
+    const bool timed_out = (now - request.time_added) > kPendingRequestTimeout;
+    if (timed_out || !request.controller->CanBeReshown()) {
       request.controller->OnBubbleDiscarded();
+    }
+    if (timed_out) {
       // Log timed-out bubbles.
       base::UmaHistogramEnumeration("Autofill.Bubble.Queue.TimedOut",
                                     request.controller->GetBubbleType());
@@ -298,7 +313,8 @@ void BubbleManagerImpl::ProcessPendingBubbles(bool tab_entered_foreground) {
   });
   std::erase_if(pending_bubbles_queue_, [&now](const auto& request) {
     return !request.controller ||
-           (now - request.time_added) > kPendingRequestTimeout;
+           (now - request.time_added) > kPendingRequestTimeout ||
+           !request.controller->CanBeReshown();
   });
 
   if (pending_bubbles_queue_.empty()) {
@@ -399,7 +415,9 @@ void BubbleManagerImpl::TabWillEnterBackground(
   if (active_bubble_controller_) {
     base::UmaHistogramEnumeration("Autofill.Bubble.HideDueToTabHide",
                                   active_bubble_controller_->GetBubbleType());
-    AddToPendingQueue(active_bubble_controller_);
+    if (active_bubble_controller_->ShouldReshowOnTabVisible()) {
+      AddToPendingQueue(active_bubble_controller_);
+    }
     active_bubble_controller_->HideBubble(/*initiated_by_bubble_manager=*/true);
     active_bubble_controller_ = nullptr;
   }

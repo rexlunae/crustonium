@@ -17,8 +17,7 @@ class ResourceInitiatorHelper final {
   STATIC_ONLY(ResourceInitiatorHelper);
 
  public:
-  static v8::Isolate* GetIsolateIfRunningScriptOnMainThread() {
-    CHECK(IsMainThread());
+  static v8::Isolate* GetIsolateIfRunningScript() {
     v8::Isolate* isolate = v8::Isolate::TryGetCurrent();
     // We are assuming that |isolate->InContext()| indicates that JavaScript
     // is running, though this isn't guaranteed. There is no v8 API that is
@@ -30,14 +29,20 @@ class ResourceInitiatorHelper final {
     return isolate;
   }
 
-  // When the running JavaScript code is not task-attributable, an empty URL
+  // When the running JavaScript code is not task-attributable, a nullptr
   // is returned.
-  static KURL GetScriptInitiatorUrl(v8::Isolate& isolate) {
+  static ResourceTimingContext* GetResourceTimingContext(v8::Isolate& isolate) {
     auto* tracker = scheduler::TaskAttributionTracker::From(&isolate);
     scheduler::TaskAttributionInfo* task_state =
         tracker ? tracker->CurrentTaskState() : nullptr;
+    return task_state ? task_state->GetResourceTimingContext() : nullptr;
+  }
+
+  // When the running JavaScript code is not task-attributable, an empty URL
+  // is returned.
+  static KURL GetScriptInitiatorUrl(v8::Isolate& isolate) {
     ResourceTimingContext* resource_timing_context =
-        task_state ? task_state->GetResourceTimingContext() : nullptr;
+        GetResourceTimingContext(isolate);
     return resource_timing_context ? resource_timing_context->InitiatorUrl()
                                    : KURL();
   }

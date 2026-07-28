@@ -11,14 +11,16 @@
 #include <optional>
 #include <utility>
 
+#include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/pref_mapping.h"
-#include "chrome/browser/extensions/pref_transformer_interface.h"
 #include "chrome/browser/extensions/preference/preference_helpers.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/content_settings/core/common/pref_names.h"
@@ -35,6 +37,7 @@
 #include "extensions/browser/extension_system_provider.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/browser/pref_transformer_interface.h"
 #include "extensions/common/api/types.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
@@ -82,11 +85,12 @@ PreferenceEventRouter::PreferenceEventRouter(Profile* profile)
   }
   DCHECK(!profile_->IsOffTheRecord());
   observed_profiles_.AddObservation(profile_.get());
-  if (profile->HasPrimaryOTRProfile())
+  if (profile->HasPrimaryOTRProfile()) {
     OnOffTheRecordProfileCreated(
         profile->GetPrimaryOTRProfile(/*create_if_needed=*/true));
-  else
+  } else {
     ObserveOffTheRecordPrefs(profile->GetReadOnlyOffTheRecordPrefs());
+  }
 }
 
 PreferenceEventRouter::~PreferenceEventRouter() = default;
@@ -192,8 +196,9 @@ PreferenceAPI::~PreferenceAPI() = default;
 
 void PreferenceAPI::Shutdown() {
   EventRouter::Get(profile_)->UnregisterObserver(this);
-  if (!ExtensionPrefs::Get(profile_)->extensions_disabled())
+  if (!ExtensionPrefs::Get(profile_)->extensions_disabled()) {
     ClearIncognitoSessionOnlyContentSettings();
+  }
   content_settings_store()->RemoveObserver(this);
 }
 
@@ -295,8 +300,9 @@ ExtensionFunction::ResponseAction GetPreferenceFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(
       PrefMapping::GetInstance()->FindBrowserPrefForExtensionPref(
       pref_key, &browser_pref, &read_permission, &write_permission));
-  if (!extension()->permissions_data()->HasAPIPermission(read_permission))
+  if (!extension()->permissions_data()->HasAPIPermission(read_permission)) {
     return RespondNow(Error(kPermissionErrorMessage, pref_key));
+  }
 
   Profile* profile = Profile::FromBrowserContext(browser_context());
 
@@ -396,8 +402,9 @@ ExtensionFunction::ResponseAction SetPreferenceFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(
       PrefMapping::GetInstance()->FindBrowserPrefForExtensionPref(
       pref_key, &browser_pref, &read_permission, &write_permission));
-  if (!extension()->permissions_data()->HasAPIPermission(write_permission))
+  if (!extension()->permissions_data()->HasAPIPermission(write_permission)) {
     return RespondNow(Error(kPermissionErrorMessage, pref_key));
+  }
 
   // As 3PCs are globally blocked in incognito re-allowing them is not
   // supported, so error out.
@@ -448,7 +455,7 @@ ExtensionFunction::ResponseAction SetPreferenceFunction::Run() {
 
   // Whenever an extension takes control of the |kSafeBrowsingEnabled|
   // preference, it must also set |kSafeBrowsingEnhanced| to false.
-  // See crbug.com/1064722 for more background.
+  // See crbug.com/40681445 for more background.
   //
   // TODO(crbug.com/40681445): Consider extending
   // chrome.privacy.services.safeBrowsingEnabled to a three-state enum.
@@ -498,8 +505,9 @@ ExtensionFunction::ResponseAction ClearPreferenceFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(
       PrefMapping::GetInstance()->FindBrowserPrefForExtensionPref(
       pref_key, &browser_pref, &read_permission, &write_permission));
-  if (!extension()->permissions_data()->HasAPIPermission(write_permission))
+  if (!extension()->permissions_data()->HasAPIPermission(write_permission)) {
     return RespondNow(Error(kPermissionErrorMessage, pref_key));
+  }
 
   auto* prefs_helper = ExtensionPrefsHelper::Get(browser_context());
 
@@ -507,7 +515,7 @@ ExtensionFunction::ResponseAction ClearPreferenceFunction::Run() {
                                               scope);
 
   // Whenever an extension clears the |kSafeBrowsingEnabled| preference,
-  // it must also clear |kSafeBrowsingEnhanced|. See crbug.com/1064722 for
+  // it must also clear |kSafeBrowsingEnhanced|. See crbug.com/40681445 for
   // more background.
   //
   // TODO(crbug.com/40681445): Consider extending

@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -41,6 +42,7 @@ enum class WebClientHintsType;
 
 namespace content {
 
+class BackForwardCacheImpl;
 class DevToolsPrerenderAttempt;
 class FrameTreeNode;
 class NavigationHandle;
@@ -77,7 +79,7 @@ class CONTENT_EXPORT PrerenderHost {
     kTrustTokenParams = 10,
     kWebBundleToken = 11,
     kRequestContextType = 12,
-    kImpressionHasValue = 13,
+    // kImpressionHasValue = 13, Obsolete
     kInitiatorOrigin = 14,
     kTransition = 15,
     kNavigationType = 16,
@@ -174,15 +176,6 @@ class CONTENT_EXPORT PrerenderHost {
   // Returns the root FrameTreeNodeId of the prerendered page corresponding to
   // `id`. Returns an invalid FrameTreeNodeId if it is not found.
   static FrameTreeNodeId GetFrameTreeNodeIdForId(PrerenderHostId id);
-
-  // Checks whether two headers are the same in a case-insensitive and
-  // order-insensitive way.
-  // TODO(crbug.com/40267487): Migrate this method into
-  // `HttpRequestHeaders`.
-  static bool IsActivationHeaderMatch(
-      const net::HttpRequestHeaders& potential_activation_headers,
-      const net::HttpRequestHeaders& prerender_headers,
-      PrerenderCancellationReason& reaosn);
 
   static bool AreHttpRequestHeadersCompatible(
       const std::string& potential_activation_headers_str,
@@ -321,6 +314,9 @@ class CONTENT_EXPORT PrerenderHost {
   // Returns true if the given `url` is the same site as the initial_url.
   bool IsUrlSameSite(const GURL& url) const;
 
+  // Returns true if the prerender is allowed to reuse the initiator's process.
+  bool ShouldAllowProcessReuse() const;
+
   bool IsReusable() const { return attributes_.allow_reuse; }
 
   // Called when the prerender pages asks the client to change the Accept Client
@@ -368,8 +364,8 @@ class CONTENT_EXPORT PrerenderHost {
   PreloadingTriggerType trigger_type() const {
     return attributes_.trigger_type;
   }
-  const std::string& embedder_histogram_suffix() const {
-    return attributes_.embedder_histogram_suffix;
+  const std::string& histogram_suffix() const {
+    return attributes_.histogram_suffix;
   }
 
   std::optional<blink::mojom::SpeculationEagerness> eagerness() const {
@@ -399,11 +395,21 @@ class CONTENT_EXPORT PrerenderHost {
 
   bool should_pause_javascript_execution() const {
     return attributes_.prerender_action_type ==
-           blink::mojom::SpeculationAction::kPrerenderUntilScript;
+               blink::mojom::SpeculationAction::kPrerenderUntilScript &&
+           !upgraded_to_full_prerender_;
   }
   blink::mojom::SpeculationAction speculation_action() const {
+    if (upgraded_to_full_prerender_) {
+      return blink::mojom::SpeculationAction::kPrerender;
+    }
     return attributes_.prerender_action_type;
   }
+
+  bool form_submission() const { return attributes_.form_submission; }
+
+  // Upgrades a prerender-until-script host to a full prerender, resuming
+  // JavaScript execution while keeping the page in prerendering state.
+  void UpgradeToFullPrerender();
 
   bool IsInitialNavigation(const NavigationRequest& navigation_request) const;
 
@@ -445,6 +451,9 @@ class CONTENT_EXPORT PrerenderHost {
   const PreloadPipelineInfo& preload_pipeline_info() const {
     return *attributes_.preload_pipeline_info.get();
   }
+  scoped_refptr<PreloadPipelineInfoImpl> preload_pipeline_info_scoped_refptr() {
+    return attributes_.preload_pipeline_info;
+  }
 
   // Returns whether the initiator page is overriding user agents. The initiator
   // page may be retrieved differently between renderer-initiated and
@@ -485,6 +494,7 @@ class CONTENT_EXPORT PrerenderHost {
     PrerenderHostId GetPrerenderHostId() override;
 
     // NavigationControllerDelegate
+    BackForwardCacheImpl& GetBackForwardCache() override;
     void NotifyNavigationStateChangedFromController(
         InvalidateTypes changed_flags) override {}
     void NotifyBeforeFormRepostWarningShow() override {}
@@ -558,6 +568,12 @@ class CONTENT_EXPORT PrerenderHost {
 
   const PrerenderAttributes attributes_;
 
+  // Set to true when this prerender-until-script host has been upgraded to a
+  // full prerender. This changes the behavior of
+  // `should_pause_javascript_execution()` and `speculation_action()` without
+  // modifying the const `attributes_`.
+  bool upgraded_to_full_prerender_ = false;
+
   // The unique id of this PrerenderHost.
   const PrerenderHostId prerender_host_id_;
 
@@ -576,7 +592,13 @@ class CONTENT_EXPORT PrerenderHost {
   // `Report*(base_name, trigger_type(), embedder_suffix())`
   const std::string metric_suffix_;
 
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   // Stores the attempt corresponding to this prerender to log various metrics.
   // We use a WeakPtr here to avoid inadvertent UAF. `attempt_` can get deleted
@@ -625,12 +647,17 @@ class CONTENT_EXPORT PrerenderHost {
   // True if headers were received.
   bool were_headers_received_ = false;
 
+  // The beacon URL to report when the prerendered page is activated.
+  GURL activation_beacon_url_;
+
   const bool host_reused_ = false;
 
   std::unique_ptr<PreloadServingMetrics>
       prerender_initial_preload_serving_metrics_;
   // True if cross-origin subframe navigations are allowed.
   bool allow_cross_origin_subframe_navigation_ = false;
+
+  base::ScopedClosureRunner process_reuse_closure_runner_;
 
   base::WeakPtrFactory<PrerenderHost> weak_factory_{this};
 };

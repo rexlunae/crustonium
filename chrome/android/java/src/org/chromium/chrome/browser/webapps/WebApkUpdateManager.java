@@ -128,7 +128,7 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer, De
 
     /** Called with update result. */
     public interface WebApkUpdateCallback {
-        @CalledByNative("WebApkUpdateCallback")
+        @CalledByNative
         void onResultFromNative(@WebApkInstallResult int result, boolean relaxUpdates);
     }
 
@@ -372,7 +372,7 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer, De
         if (shortNameChanging) histogramAction |= CHANGING_SHORTNAME;
 
         // Use the original `primaryIconUrl` (as opposed to `mFetchedPrimaryIconUrl`) to construct
-        // the hash, which ensures that we don't regress on issue crbug.com/1287447.
+        // the hash, which ensures that we don't regress on issue crbug.com/40816239.
         String hash = getAppIdentityHash(mFetchedInfo, primaryIconUrl);
         boolean alreadyUserApproved =
                 !hash.isEmpty()

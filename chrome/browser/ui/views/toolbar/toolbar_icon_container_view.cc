@@ -29,12 +29,13 @@
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_observer.h"
+#include "ui/views/widget/widget.h"
 
 ToolbarIconContainerView::RoundRectBorder::RoundRectBorder(views::View* parent)
     : parent_(parent) {
   layer_.set_delegate(this);
   layer_.SetFillsBoundsOpaquely(false);
-  layer_.SetFillsBoundsCompletely(false);
+  layer_.AsTextured()->SetFillsBoundsCompletely(false);
   layer_.SetOpacity(0);
   layer_.SetVisible(true);
 }
@@ -63,7 +64,7 @@ void ToolbarIconContainerView::RoundRectBorder::OnDeviceScaleFactorChanged(
 
 // Watches for widget restore (or first show) and resets the animation so icons
 // don't spuriously "animate in" when a window is shown or restored. See
-// crbug.com/1106506 for more details.
+// crbug.com/40706372 for more details.
 //
 // There is currently no signal that is consistent across platforms and
 // accessible from the View hierarchy that can tell us if, e.g., a window has
@@ -114,7 +115,7 @@ ToolbarIconContainerView::ToolbarIconContainerView(
     : uses_highlight_(uses_highlight) {
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
-  layer()->SetFillsBoundsCompletely(false);
+  layer()->AsTextured()->SetFillsBoundsCompletely(false);
   AddLayerToRegion(border_.layer(), views::LayerRegion::kBelow);
 
   views::AnimatingLayoutManager* animating_layout =
@@ -253,7 +254,7 @@ void ToolbarIconContainerView::OnMouseExited(const ui::MouseEvent& event) {
 
 void ToolbarIconContainerView::AddedToWidget() {
   // Add an observer to reset the animation if the browser window is restored,
-  // preventing spurious animation. (See crbug.com/1106506)
+  // preventing spurious animation. (See crbug.com/40706372)
   restore_observer_ = std::make_unique<WidgetRestoreObserver>(this);
 }
 

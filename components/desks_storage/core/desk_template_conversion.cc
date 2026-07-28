@@ -814,6 +814,8 @@ std::string WindowOpenDispositionToString(WindowOpenDisposition disposition) {
       return kWindowOpenDispositionIgnoreAction;
     case WindowOpenDisposition::NEW_PICTURE_IN_PICTURE:
       return kWindowOpenDispositionNewPictureInPicture;
+    case WindowOpenDisposition::NEW_SPLIT_VIEW:
+      return kWindowOpenDispositionUnknown;
   }
 }
 
@@ -1356,6 +1358,8 @@ SyncWindowOpenDisposition FromBaseWindowOpenDisposition(
     case WindowOpenDisposition::NEW_PICTURE_IN_PICTURE:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_PICTURE_IN_PICTURE;
+    case WindowOpenDisposition::NEW_SPLIT_VIEW:
+      return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_UNKNOWN;
   }
 }
 
@@ -1505,13 +1509,8 @@ void FillBrowserAppTabGroupInfos(
 void FillBrowserAppTabs(const std::vector<GURL>& gurls,
                         BrowserAppWindow* out_browser_app_window) {
   for (const auto& gurl : gurls) {
-    const std::string& url = gurl.spec();
-    if (url.empty()) {
-      // Skip invalid URLs.
-      continue;
-    }
     BrowserAppTab* browser_app_tab = out_browser_app_window->add_tabs();
-    browser_app_tab->set_url(url);
+    browser_app_tab->set_url(gurl.spec());
   }
 }
 

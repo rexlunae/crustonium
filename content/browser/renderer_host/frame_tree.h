@@ -94,7 +94,7 @@ class CONTENT_EXPORT FrameTree {
     friend class FrameTreeTest;
     friend class NodeRange;
 
-    NodeIterator(const std::vector<raw_ptr<FrameTreeNode, VectorExperimental>>&
+    NodeIterator(const std::vector<raw_ptr<FrameTreeNode, DanglingUntriaged>>&
                      starting_nodes,
                  const FrameTreeNode* root_of_subtree_to_skip,
                  bool should_descend_into_inner_trees,
@@ -110,7 +110,7 @@ class CONTENT_EXPORT FrameTree {
 
     const bool should_descend_into_inner_trees_;
     const bool include_delegate_nodes_for_inner_frame_trees_;
-    base::circular_deque<FrameTreeNode*> queue_;
+    base::circular_deque<raw_ptr<FrameTreeNode, DanglingUntriaged>> queue_;
   };
 
   class CONTENT_EXPORT NodeRange {
@@ -124,13 +124,13 @@ class CONTENT_EXPORT FrameTree {
    private:
     friend class FrameTree;
 
-    NodeRange(const std::vector<raw_ptr<FrameTreeNode, VectorExperimental>>&
+    NodeRange(const std::vector<raw_ptr<FrameTreeNode, DanglingUntriaged>>&
                   starting_nodes,
               const FrameTreeNode* root_of_subtree_to_skip,
               bool should_descend_into_inner_trees,
               bool include_delegate_nodes_for_inner_frame_trees);
 
-    const std::vector<raw_ptr<FrameTreeNode, VectorExperimental>>
+    const std::vector<raw_ptr<FrameTreeNode, DanglingUntriaged>>
         starting_nodes_;
     const raw_ptr<const FrameTreeNode> root_of_subtree_to_skip_;
     const bool should_descend_into_inner_trees_;
@@ -399,7 +399,8 @@ class CONTENT_EXPORT FrameTree {
       const blink::mojom::FrameOwnerProperties& frame_owner_properties,
       bool was_discarded,
       blink::FrameOwnerElementType owner_type,
-      bool is_dummy_frame_for_inner_tree);
+      bool is_dummy_frame_for_inner_tree,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token = nullptr);
 
   // Removes a frame from the frame tree. |child|, its children, and objects
   // owned by their RenderFrameHostManagers are immediately deleted. The root
@@ -676,9 +677,9 @@ class CONTENT_EXPORT FrameTree {
   // RenderFrameHost has an associated RenderViewHost, but it cannot be put in
   // `render_view_host_map_` when it is created, as the existing RenderViewHost
   // will be incorrectly overwritten.
-  // TODO(yangsharon, crbug.com/1336305): Expand support to include
-  // cross-SiteInstanceGroup main-frame navigations, so all main-frame
-  // navigations use speculative RenderViewHost.
+  // TODO(crbug.com/40228869): Expand support to include cross-SiteInstanceGroup
+  // main-frame navigations, so all main-frame navigations use speculative
+  // RenderViewHost.
   base::WeakPtr<RenderViewHostImpl> speculative_render_view_host_;
 
   // Indicates type of frame tree.
@@ -693,10 +694,8 @@ class CONTENT_EXPORT FrameTree {
 
   bool is_being_destroyed_ = false;
 
-#if DCHECK_IS_ON()
   // Whether Shutdown() was called.
   bool was_shut_down_ = false;
-#endif
 
   // The root FrameTreeNode.
   //

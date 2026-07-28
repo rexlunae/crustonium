@@ -15,6 +15,7 @@
 #include "cc/input/browser_controls_state.h"
 #include "cc/input/input_handler.h"
 #include "cc/input/snap_fling_controller.h"
+#include "cc/metrics/scroll_sequence_tracker.h"
 #include "cc/paint/element_id.h"
 #include "components/viz/common/features.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
@@ -224,6 +225,8 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   void SetHandwritingRadiusOnInputThread(int handwriting_radius);
   int HandwritingRadiusOnInputThread() const { return handwriting_radius_; }
 
+  void SetPointerLockedOnInputThread(bool is_locked);
+
   void RequestCallbackAfterEventQueueFlushed(base::OnceClosure callback);
 
   // cc::InputHandlerClient implementation.
@@ -295,13 +298,14 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
 
   // Helper functions for handling more complicated input events.
   EventDisposition HandleMouseWheel(const blink::WebMouseWheelEvent& event);
-  EventDisposition HandleGestureScrollBegin(
-      const blink::WebGestureEvent& event);
+  EventDisposition HandleGestureScrollBegin(const blink::WebGestureEvent& event,
+                                            cc::EventMetrics* metrics);
   EventDisposition HandleGestureScrollUpdate(
       const blink::WebGestureEvent& event,
       cc::EventMetrics* metrics,
       int64_t trace_id);
-  EventDisposition HandleGestureScrollEnd(const blink::WebGestureEvent& event);
+  EventDisposition HandleGestureScrollEnd(const blink::WebGestureEvent& event,
+                                          cc::EventMetrics* metrics);
   EventDisposition HandleTouchStart(EventWithCallback* event_with_callback);
   EventDisposition HandleTouchMove(EventWithCallback* event_with_callback);
   EventDisposition HandleTouchEnd(EventWithCallback* event_with_callback);
@@ -317,7 +321,8 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
       EventWithCallback* event_with_callback,
       const gfx::PointF& position);
 
-  void InputHandlerScrollEnd();
+  cc::InputHandlerScrollEndResult InputHandlerScrollEnd(
+      std::optional<cc::InputHandler::ScrollVector> scroll_state);
 
   // Request a frame of animation from the InputHandler or
   // SynchronousInputHandler. They can provide that by calling Animate().
@@ -382,6 +387,14 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   void GenerateSyntheticScrollPredictionFromFutureEvent(
       const viz::BeginFrameArgs& args);
 
+  // Returns the dispatch mode, overriding `kUseScrollPredictorForEmptyQueue` to
+  // `kDispatchScrollEventsImmediately` for non-touchscreen inputs
+  // (touchpads/wheels etc.) when `kUpdateScrollPredictorInputMapping` is
+  // enabled.
+  cc::InputHandlerClient::ScrollEventDispatchMode
+  GetEffectiveScrollEventDispatchMode(
+      std::optional<blink::WebGestureDevice> device) const;
+
   raw_ptr<InputHandlerProxyClient> client_;
 
   // The input handler object is owned by the compositor delegate. The input
@@ -435,18 +448,23 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   // for "near-miss" pointer scenarios.
   int handwriting_radius_ = blink::kStylusWritingHitTestRadius;
 
+  // Set by the main thread. This is set when the pointer lock is acquired,
+  // and unset when exit from the pointer lock.
+  bool is_pointer_locked_ = false;
+
   // Tracks whether the first scroll update gesture event has been seen after a
   // scroll begin. This is set/reset when scroll gestures are processed in
   // HandleInputEventWithLatencyInfo and shouldn't be used outside the scope
   // of that method.
   bool has_seen_first_gesture_scroll_update_after_begin_;
 
-  // Whether the last injected scroll gesture was a GestureScrollBegin. Used to
-  // determine which GestureScrollUpdate is the first in a gesture sequence for
-  // latency classification. This is separate from
-  // |is_first_gesture_scroll_update_| and is used to determine which type of
-  // latency component should be added for injected GestureScrollUpdates.
-  bool last_injected_gesture_was_begin_;
+  // Tracks the current injected scroll sequence for metrics purposes. Among
+  // other things, it determines whether a scroll-update is the first one in an
+  // injected scroll sequence or not. This is separate from
+  // `has_seen_first_gesture_scroll_update_after_begin_` and is used to
+  // determine which type of latency component should be added for injected
+  // GestureScrollUpdates.
+  cc::ScrollSequenceTracker injected_scroll_tracker_;
 
   raw_ptr<const base::TickClock> tick_clock_;
 

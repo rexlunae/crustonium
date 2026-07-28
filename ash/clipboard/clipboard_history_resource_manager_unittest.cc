@@ -48,6 +48,7 @@ class MockClipboardImageModelFactory : public ClipboardImageModelFactory {
                ImageModelCallback),
               (override));
   MOCK_METHOD(void, CancelRequest, (const base::UnguessableToken&), (override));
+  MOCK_METHOD(void, CancelAllRequests, (), (override));
   MOCK_METHOD(void, Activate, (), (override));
   MOCK_METHOD(void, Deactivate, (), (override));
   MOCK_METHOD(void, RenderCurrentPendingRequests, (), (override));
@@ -295,7 +296,8 @@ TEST_F(ClipboardHistoryResourceManagerTest, IneligibleDisplayTypes) {
     ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);
     scw.WriteText(u"test");
     scw.WriteRTF("rtf");
-    scw.WriteBookmark(u"bookmark_title", "test_url");
+    scw.WriteURL(ui::ClipboardUrlInfo{.url = GURL("test_url"),
+                                      .title = u"bookmark_title"});
   }
   FlushMessageLoop();
 

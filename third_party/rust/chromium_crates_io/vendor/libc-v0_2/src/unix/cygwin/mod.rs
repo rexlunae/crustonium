@@ -268,7 +268,7 @@ s! {
     pub struct _uc_fpxreg {
         pub significand: [u16; 4],
         pub exponent: u16,
-        pub padding: [u16; 3],
+        padding: Padding<[u16; 3]>,
     }
 
     pub struct _uc_xmmreg {
@@ -286,7 +286,7 @@ s! {
         pub mxcr_mask: u32,
         pub st: [_uc_fpxreg; 8],
         pub xmm: [_uc_xmmreg; 16],
-        pub padding: [u32; 24],
+        padding: Padding<[u32; 24]>,
     }
 
     #[repr(align(16))]
@@ -1038,6 +1038,7 @@ pub const TIOCM_RTS: c_int = 0x004;
 pub const TIOCM_CTS: c_int = 0x020;
 pub const TIOCM_CAR: c_int = 0x040;
 pub const TIOCM_RNG: c_int = 0x080;
+pub const TIOCM_DSR: c_int = 0x100;
 pub const TIOCM_CD: c_int = TIOCM_CAR;
 pub const TIOCM_RI: c_int = TIOCM_RNG;
 pub const TCOOFF: c_int = 0;

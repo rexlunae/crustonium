@@ -10,6 +10,7 @@
 #include "base/containers/to_value_list.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/thread_pool.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
@@ -58,12 +59,11 @@ RealtimeReportingClientBase::~RealtimeReportingClientBase() {
 }
 
 void RealtimeReportingClientBase::InitRealtimeReportingClient(
-    const ReportingSettings& settings) {
+    bool per_profile,
+    const std::string& dm_token) {
   // If the corresponding client is already initialized, do nothing.
-  if ((settings.per_profile &&
-       IsClientValid(settings.dm_token, profile_client_)) ||
-      (!settings.per_profile &&
-       IsClientValid(settings.dm_token, browser_client_))) {
+  if ((per_profile && IsClientValid(dm_token, profile_client_)) ||
+      (!per_profile && IsClientValid(dm_token, browser_client_))) {
     DVLOG(2) << "Safe browsing real-time event reporting already initialized.";
     return;
   }
@@ -79,11 +79,11 @@ void RealtimeReportingClientBase::InitRealtimeReportingClient(
   std::string policy_client_desc;
 #if BUILDFLAG(IS_CHROMEOS)
   std::pair<std::string, policy::CloudPolicyClient*> desc_and_client =
-      InitBrowserReportingClient(settings.dm_token);
+      InitBrowserReportingClient(dm_token);
 #else
   std::pair<std::string, policy::CloudPolicyClient*> desc_and_client =
-      settings.per_profile ? InitProfileReportingClient(settings.dm_token)
-                           : InitBrowserReportingClient(settings.dm_token);
+      per_profile ? InitProfileReportingClient(dm_token)
+                  : InitBrowserReportingClient(dm_token);
 #endif
   if (!desc_and_client.second) {
     return;
@@ -129,6 +129,21 @@ RealtimeReportingClientBase::InitBrowserReportingClient(
   return {policy_client_desc, client};
 }
 
+policy::CloudPolicyClient* RealtimeReportingClientBase::GetReportingClient(
+    const std::string& dm_token,
+    bool per_profile) {
+  if (rejected_dm_token_timers_.contains(dm_token)) {
+    return nullptr;
+  }
+
+  InitRealtimeReportingClient(per_profile, dm_token);
+  if ((per_profile && !profile_client_) || (!per_profile && !browser_client_)) {
+    return nullptr;
+  }
+
+  return per_profile ? profile_client_.get() : browser_client_.get();
+}
+
 void RealtimeReportingClientBase::OnCloudPolicyClientAvailable(
     const std::string& policy_client_desc,
     policy::CloudPolicyClient* client) {
@@ -172,19 +187,11 @@ void RealtimeReportingClientBase::ReportEvent(
     const ReportingSettings& settings) {
   DCHECK(base::FeatureList::IsEnabled(
       policy::kUploadRealtimeReportingEventsUsingProto));
-  if (rejected_dm_token_timers_.contains(settings.dm_token)) {
-    return;
-  }
-
-  // Make sure real-time reporting is initialized.
-  InitRealtimeReportingClient(settings);
-  if ((settings.per_profile && !profile_client_) ||
-      (!settings.per_profile && !browser_client_)) {
-    return;
-  }
-
   policy::CloudPolicyClient* client =
-      settings.per_profile ? profile_client_.get() : browser_client_.get();
+      GetReportingClient(settings.dm_token, settings.per_profile);
+  if (!client) {
+    return;
+  }
 
   // If the timestamp is not set, it's a realtime event so use current time.
   if (!event.has_time()) {
@@ -198,6 +205,79 @@ void RealtimeReportingClientBase::ReportEvent(
   // report.
   UploadSecurityEvent(std::move(event), client, settings);
 #endif
+}
+
+void RealtimeReportingClientBase::ReportSaasUsageEvent(
+    ::chrome::cros::reporting::proto::Event event,
+    bool per_profile,
+    const std::string& dm_token,
+    base::OnceCallback<void(policy::CloudPolicyClient::Result)> callback) {
+  CHECK(event.has_saas_usage_report_event());
+  ReportStandaloneEvent(std::move(event),
+                        EnterpriseReportingEventType::kSaasUsageReportEvent,
+                        per_profile, dm_token, std::move(callback));
+}
+
+void RealtimeReportingClientBase::ReportBrowserLaunchEvent(
+    ::chrome::cros::reporting::proto::Event event,
+    bool per_profile,
+    const std::string& dm_token,
+    base::OnceCallback<void(policy::CloudPolicyClient::Result)> callback) {
+  CHECK(event.has_browser_launch_event());
+  ReportStandaloneEvent(std::move(event),
+                        EnterpriseReportingEventType::kBrowserLaunchEvent,
+                        per_profile, dm_token, std::move(callback));
+}
+
+void RealtimeReportingClientBase::ReportStandaloneEvent(
+    ::chrome::cros::reporting::proto::Event event,
+    EnterpriseReportingEventType event_type,
+    bool per_profile,
+    const std::string& dm_token,
+    base::OnceCallback<void(policy::CloudPolicyClient::Result)> callback) {
+  policy::CloudPolicyClient* client = GetReportingClient(dm_token, per_profile);
+  if (!client) {
+    LOG(ERROR) << "Could not find a reporting client for standalone event: "
+               << GetEventName(event.event_case());
+    std::move(callback).Run(
+        policy::CloudPolicyClient::Result(policy::DM_STATUS_REQUEST_FAILED));
+    return;
+  }
+
+  if (!event.has_time()) {
+    *event.mutable_time() = ToProtoTimestamp(base::Time::Now());
+  }
+
+  ::chrome::cros::reporting::proto::UploadEventsRequest request =
+      CreateUploadEventsRequest();
+  request.add_events()->Swap(&event);
+
+  auto on_upload_completed = base::BindOnce(
+      &RealtimeReportingClientBase::OnStandaloneEventUploadCompleted,
+      AsWeakPtr(), std::move(callback), event_type, base::TimeTicks::Now());
+
+  client->UploadSecurityEvent(ShouldIncludeDeviceInfo(per_profile),
+                              std::move(request),
+                              std::move(on_upload_completed));
+}
+
+void RealtimeReportingClientBase::OnStandaloneEventUploadCompleted(
+    base::OnceCallback<void(policy::CloudPolicyClient::Result)> callback,
+    EnterpriseReportingEventType event_type,
+    base::TimeTicks upload_started_at,
+    policy::CloudPolicyClient::Result upload_result) {
+  base::UmaHistogramEnumeration(upload_result.IsSuccess()
+                                    ? "Enterprise.ReportingEventUploadSuccess"
+                                    : "Enterprise.ReportingEventUploadFailure",
+                                event_type);
+  base::UmaHistogramCustomTimes(
+      upload_result.IsSuccess()
+          ? GetSuccessfulUploadDurationUmaMetricName(event_type)
+          : GetFailedUploadDurationUmaMetricName(event_type),
+      base::TimeTicks::Now() - upload_started_at, base::Milliseconds(1),
+      base::Minutes(5), 50);
+
+  std::move(callback).Run(std::move(upload_result));
 }
 
 void RealtimeReportingClientBase::ReportEventWithTimestampDeprecated(
@@ -228,7 +308,7 @@ void RealtimeReportingClientBase::ReportEventWithTimestampDeprecated(
 #endif
 
   // Make sure real-time reporting is initialized.
-  InitRealtimeReportingClient(settings);
+  InitRealtimeReportingClient(settings.per_profile, settings.dm_token);
   if ((settings.per_profile && !profile_client_) ||
       (!settings.per_profile && !browser_client_)) {
     return;

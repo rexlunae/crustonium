@@ -5,8 +5,9 @@
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button.h"
 
 #import "base/check.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
@@ -147,8 +148,10 @@ const CGFloat kButtonImageInset = 3;
 
   if (hasBlueDot) {
     [self addBlueDotViewIfNeeded];
+    self.accessibilityValue = self.blueDotAccessibilityLabel;
   } else {
     [self removeBlueDotViewIfNeeded];
+    self.accessibilityValue = nil;
   }
 }
 
@@ -156,32 +159,15 @@ const CGFloat kButtonImageInset = 3;
     willDisplayMenuForConfiguration:(UIContextMenuConfiguration*)configuration
                            animator:
                                (id<UIContextMenuInteractionAnimating>)animator {
-  if (IsGeminiCopresenceEnabled()) {
-    [self.geminiHandler hideFloatyIfInvokedAnimated:NO];
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        hideFloatyIfInvokedAnimated:NO
+                         fromSource:gemini::FloatyUpdateSource::ContextMenu];
   }
 
   [super contextMenuInteraction:interaction
       willDisplayMenuForConfiguration:configuration
                              animator:animator];
-}
-
-- (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
-       willEndForConfiguration:(UIContextMenuConfiguration*)configuration
-                      animator:(id<UIContextMenuInteractionAnimating>)animator {
-  if (IsGeminiCopresenceEnabled()) {
-    // Ensure floaty is shown after the context menu is dismissed from a
-    // non-UIAction. A UIAction represents a user choosing an action on the
-    // UIMenu. In the event a menu option is chosen, this function isn't called
-    // and the floaty shouldn't show.
-    __weak __typeof(self) weakSelf = self;
-    [animator addCompletion:^() {
-      [weakSelf.geminiHandler showFloatyIfInvokedAnimated:NO];
-    }];
-  }
-
-  [super contextMenuInteraction:interaction
-        willEndForConfiguration:configuration
-                       animator:animator];
 }
 
 #pragma mark - Accessors
@@ -301,6 +287,7 @@ const CGFloat kButtonImageInset = 3;
   self.blueDotView = [[UIView alloc] init];
   self.blueDotView.translatesAutoresizingMaskIntoConstraints = NO;
   self.blueDotView.accessibilityIdentifier = kToolbarButtonBlueDotViewID;
+  self.blueDotView.isAccessibilityElement = NO;
   self.blueDotView.layer.cornerRadius = kBlueDotSize / 2;
   self.blueDotView.backgroundColor = [UIColor colorNamed:kBlue600Color];
   [self addSubview:self.blueDotView];

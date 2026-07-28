@@ -7,11 +7,12 @@
 #include "base/callback_list.h"
 #include "base/feature_list.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_features.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_thread.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace {
 constexpr int kMinContentsBorderWidth = 20;
@@ -104,14 +105,16 @@ void TabCaptureContentsBorderHelper::Update() {
 
   content::WebContents* const web_contents = &GetWebContents();
 
-  Browser* const browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* const browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (!browser) {
     return;
   }
 
-  const bool tab_visible =
-      (web_contents == browser->tab_strip_model()->GetActiveWebContents());
-  const bool contents_border_needed = tab_visible && IsTabCapturing();
+  tabs::TabInterface* const tab_interface =
+      tabs::TabInterface::GetFromContents(web_contents);
+  const bool contents_border_needed =
+      tab_interface->IsVisible() && IsTabCapturing();
 
   if (contents_border_needed) {
     capture_location_change_callbacks_.Notify(GetBlueBorderLocation());

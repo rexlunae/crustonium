@@ -7,12 +7,18 @@
 
 #import <UIKit/UIKit.h>
 
-#include "ios/chrome/browser/toolbar/ui/buttons/toolbar_button_visibility.h"
+#import "ios/chrome/browser/toolbar/ui/buttons/toolbar_button_visibility.h"
+#import "ios/chrome/common/ui/elements/highlight_button.h"
+
+@protocol GeminiCommands;
 
 using ToolbarButtonImageLoader = UIImage* (^)(void);
 
 // Button displayed in the toolbar.
-@interface ToolbarButton : UIButton
+@interface ToolbarButton : HighlightButton
+
+// Handler for Gemini commands.
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
 
 // The visibility mask for this button.
 @property(nonatomic, assign) ToolbarButtonVisibility visibilityMask;
@@ -20,12 +26,19 @@ using ToolbarButtonImageLoader = UIImage* (^)(void);
 // When true the button is hidden, no matter the visibility mask. Default NO.
 @property(nonatomic, assign) BOOL forceHidden;
 
-// The `imageLoader` for this button.
-- (instancetype)initWithImageLoader:(ToolbarButtonImageLoader)imageLoader;
+// When true, the button has a blue gradient background.
+@property(nonatomic, assign) BOOL iphHighlighted;
 
-// Updates the visibility of this button based on the current state and the
-// visibility mask.
-- (void)updateVisibility;
+// When true, the button has a blue dot in the top right corner.
+@property(nonatomic, assign) BOOL hasBlueDot;
+
+// The string to be used for the accessibility label when the blue dot is
+// visible.
+@property(nonatomic, copy) NSString* blueDotAccessibilityLabel;
+
+// Initializer for this button in `incognito` with an `imageLoader`.
+- (instancetype)initWithImageLoader:(ToolbarButtonImageLoader)imageLoader
+                          incognito:(BOOL)incognito;
 
 @end
 

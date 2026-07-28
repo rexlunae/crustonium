@@ -20,7 +20,10 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -85,14 +88,12 @@ base::DictValue GetBatchUploadPromoData(bool can_show,
                                         bool has_non_bookmark_local_data) {
   base::DictValue promo_data;
   promo_data.Set("canShow", can_show);
-#if !BUILDFLAG(IS_CHROMEOS)
   promo_data.Set("promoSubtitle",
                  l10n_util::GetPluralStringFUTF16(
                      has_non_bookmark_local_data
                          ? IDS_BATCH_UPLOAD_PROMO_SUBTITLE_BOOKMARKS_COMBO
                          : IDS_BATCH_UPLOAD_PROMO_SUBTITLE_BOOKMARKS,
                      local_bookmark_count));
-#endif
   return promo_data;
 }
 
@@ -336,8 +337,10 @@ void BookmarksMessageHandler::HandleSingleUploadClicked(
 
   // Show the dialog asking the user to confirm their choice to move the
   // bookmark.
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
   ShowBookmarkAccountStorageUploadDialog(
-      chrome::FindLastActiveWithProfile(profile),
+      browser ? browser->GetBrowserForMigrationOnly() : nullptr,
       bookmarks::GetBookmarkNodeByID(model, id));
 }
 
@@ -359,14 +362,12 @@ void BookmarksMessageHandler::HandleGetBatchUploadPromoData(
     return;
   }
 
-#if !BUILDFLAG(IS_CHROMEOS)
   BatchUploadService* batch_upload =
       BatchUploadServiceFactory::GetForProfile(profile);
   CHECK(batch_upload);
   batch_upload->GetLocalDataDescriptionsForAvailableTypes(base::BindOnce(
       &BookmarksMessageHandler::OnGetLocalDataDescriptionReceived,
       weak_ptr_factory_.GetWeakPtr(), callback_id.Clone()));
-#endif
 }
 
 void BookmarksMessageHandler::OnGetLocalDataDescriptionReceived(
@@ -392,19 +393,16 @@ void BookmarksMessageHandler::RequestLocalDataDescriptionsUpdate() {
     return;
   }
 
-#if !BUILDFLAG(IS_CHROMEOS)
   BatchUploadService* batch_upload =
       BatchUploadServiceFactory::GetForProfile(profile);
   CHECK(batch_upload);
   batch_upload->GetLocalDataDescriptionsForAvailableTypes(base::BindOnce(
       &BookmarksMessageHandler::FireOnGetLocalDataDescriptionReceived,
       weak_ptr_factory_.GetWeakPtr()));
-#endif
 }
 
 void BookmarksMessageHandler::HandleOnBatchUploadPromoClicked(
     const base::ListValue& args) {
-#if !BUILDFLAG(IS_CHROMEOS)
   Profile* profile = Profile::FromWebUI(web_ui());
   CHECK(CanEditBookmarks());
   CHECK(SyncServiceFactory::IsSyncAllowed(profile));
@@ -413,10 +411,12 @@ void BookmarksMessageHandler::HandleOnBatchUploadPromoClicked(
   BatchUploadService* service =
       BatchUploadServiceFactory::GetForProfile(profile);
   CHECK(service);
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_ui()->GetWebContents());
   service->OpenBatchUpload(
-      browser, BatchUploadService::EntryPoint::kBookmarksManagerPromoCard);
-#endif
+      browser->GetBrowserForMigrationOnly(),
+      BatchUploadService::EntryPoint::kBookmarksManagerPromoCard);
 }
 
 void BookmarksMessageHandler::HandleOnBatchUploadPromoDismissed(

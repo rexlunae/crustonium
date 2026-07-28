@@ -133,7 +133,7 @@ void ChromeLabsViewController::ParseModelDataAndAddLabs() {
   for (const auto& lab : all_labs) {
     const flags_ui::FeatureEntry* entry =
         flags_state_->FindFeatureEntryByName(lab.internal_name);
-    if (IsChromeLabsFeatureValid(lab, browser_->profile())) {
+    if (IsChromeLabsFeatureValid(lab, browser_->GetProfile())) {
       bool valid_entry_type =
           entry->type == flags_ui::FeatureEntry::FEATURE_VALUE ||
           entry->type == flags_ui::FeatureEntry::FEATURE_WITH_PARAMS_VALUE;
@@ -162,7 +162,7 @@ void ChromeLabsViewController::ParseModelDataAndAddLabs() {
               chrome_labs_bubble_view_.get(), lab.internal_name,
               flags_storage_));
       lab_item->SetShowNewBadge(
-          ShouldLabShowNewBadge(browser_->profile(), lab));
+          ShouldLabShowNewBadge(browser_->GetProfile(), lab));
     }
   }
 }
@@ -173,12 +173,12 @@ void ChromeLabsViewController::RestartToApplyFlags() {
   // we apply the newly selected flags.
   VLOG(1) << "Restarting to apply per-session flags...";
   ash::about_flags::FeatureFlagsUpdate(
-      *flags_storage_, browser_->profile()->GetOriginalProfile()->GetPrefs())
+      *flags_storage_, browser_->GetProfile()->GetOriginalProfile()->GetPrefs())
       .UpdateSessionManager();
 #endif
   // During the restart process some situations may cause previously active
   // bubbles to deactivate. Since the restart action itself is not binded to any
-  // state, run the restart asynchronously. See crbug.com/1310212 where
+  // state, run the restart asynchronously. See crbug.com/40830238 where
   // deactivation of bubbles is caused by the modal for downloads in progress
   // being shown.
   content::GetUIThreadTaskRunner({})->PostTask(

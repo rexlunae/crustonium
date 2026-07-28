@@ -18,9 +18,9 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/api/api_resource_manager.h"
 #include "extensions/browser/api/device_permissions_manager.h"
-#include "extensions/browser/api/device_permissions_prompt.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/usb/usb_device_resource.h"
+#include "extensions/browser/api/usb_device_permissions_prompt.h"
 #include "extensions/browser/extension_function_constants.h"
 #include "extensions/common/api/usb.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -342,26 +342,13 @@ ConfigDescriptor ConvertConfigDescriptor(
 device::mojom::UsbDeviceFilterPtr ConvertDeviceFilter(
     const usb::DeviceFilter& input) {
   auto output = device::mojom::UsbDeviceFilter::New();
-  if (input.vendor_id) {
-    output->has_vendor_id = true;
-    output->vendor_id = *input.vendor_id;
-  }
-  if (input.product_id) {
-    output->has_product_id = true;
-    output->product_id = *input.product_id;
-  }
-  if (input.interface_class) {
-    output->has_class_code = true;
-    output->class_code = *input.interface_class;
-  }
-  if (input.interface_subclass) {
-    output->has_subclass_code = true;
-    output->subclass_code = *input.interface_subclass;
-  }
-  if (input.interface_protocol) {
-    output->has_protocol_code = true;
-    output->protocol_code = *input.interface_protocol;
-  }
+
+  output->vendor_id = input.vendor_id;
+  output->product_id = input.product_id;
+  output->class_code = input.interface_class;
+  output->subclass_code = input.interface_subclass;
+  output->protocol_code = input.interface_protocol;
+
   return output;
 }
 
@@ -684,12 +671,8 @@ ExtensionFunction::ResponseAction UsbGetDevicesFunction::Run() {
   }
   if (parameters->options.vendor_id) {
     auto filter = device::mojom::UsbDeviceFilter::New();
-    filter->has_vendor_id = true;
-    filter->vendor_id = *parameters->options.vendor_id;
-    if (parameters->options.product_id) {
-      filter->has_product_id = true;
-      filter->product_id = *parameters->options.product_id;
-    }
+    filter->vendor_id = parameters->options.vendor_id;
+    filter->product_id = parameters->options.product_id;
     filters_.push_back(std::move(filter));
   }
 
@@ -750,13 +733,13 @@ ExtensionFunction::ResponseAction UsbGetUserSelectedDevicesFunction::Run() {
         Error(function_constants::kCouldNotFindSenderWebContents));
   }
 
-  prompt_ =
-      ExtensionsAPIClient::Get()->CreateDevicePermissionsPrompt(web_contents);
+  prompt_ = ExtensionsAPIClient::Get()->CreateUsbDevicePermissionsPrompt(
+      web_contents);
   if (!prompt_) {
     return RespondNow(Error(kErrorNotSupported));
   }
 
-  prompt_->AskForUsbDevices(
+  prompt_->AskForDevices(
       extension(), browser_context(), multiple, std::move(filters),
       base::BindOnce(&UsbGetUserSelectedDevicesFunction::OnDevicesChosen,
                      this));

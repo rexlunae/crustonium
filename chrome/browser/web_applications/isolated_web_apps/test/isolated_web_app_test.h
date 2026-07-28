@@ -25,10 +25,9 @@ namespace web_app {
 class IsolatedWebAppTest : public ::testing::Test {
  public:
   struct WithDevMode {};
-  struct ValidTraits {
-    ValidTraits(base::test::TaskEnvironment::ValidTraits);
-    ValidTraits(WithDevMode);
-  };
+  using ValidTraits =
+      base::ConcatParameterPacks<base::test::TaskEnvironment::ValidTraits,
+                                 base::ParameterPack<WithDevMode>>;
 
   template <typename... IsolatedWebAppTestTraits>
     requires base::trait_helpers::AreValidTraits<ValidTraits,
@@ -44,6 +43,7 @@ class IsolatedWebAppTest : public ::testing::Test {
   ~IsolatedWebAppTest() override;
 
   TestingProfile* profile();
+  TestingProfileManager& profile_manager() { return profile_manager_; }
   FakeWebAppProvider& provider();
   network::TestURLLoaderFactory& url_loader_factory();
   IwaTestServerConfigurator& test_update_server();

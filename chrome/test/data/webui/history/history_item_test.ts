@@ -5,12 +5,12 @@
 import 'chrome://history/history.js';
 
 import type {HistoryEntry, HistoryItemElement, HistoryListElement} from 'chrome://history/history.js';
-import {BrowserServiceImpl} from 'chrome://history/history.js';
+import {BrowserProxyImpl} from 'chrome://history/history.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {TestBrowserService} from './test_browser_service.js';
+import {TestHistoryBrowserProxy} from './test_browser_proxy.js';
 import {createHistoryEntry, createSearchEntry} from './test_util.js';
 
 const TEST_HISTORY_RESULTS = [
@@ -33,7 +33,7 @@ suite('<history-item> unit test', function() {
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    BrowserServiceImpl.setInstance(new TestBrowserService());
+    BrowserProxyImpl.setInstance(new TestHistoryBrowserProxy());
 
     item = document.createElement('history-item');
     item.item = TEST_HISTORY_RESULTS[0]!;
@@ -52,16 +52,16 @@ suite('<history-item> unit test', function() {
     assertEquals(1, selectionCount);
 
     // Non-interactive text should trigger selection.
-    item.$['time-accessed'].click();
+    item.$.timeAccessed.click();
     assertEquals(2, selectionCount);
 
     // Menu button should not trigger selection.
-    item.$['menu-button'].click();
+    item.$.menuButton.click();
     assertEquals(2, selectionCount);
   });
 
   test('title changes with item', async function() {
-    const time = item.$['time-accessed'];
+    const time = item.$.timeAccessed;
     assertEquals('', time.title);
 
     time.dispatchEvent(new CustomEvent('mouseover'));
@@ -78,21 +78,21 @@ suite('<history-item> integration test', function() {
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    const testService = new TestBrowserService();
-    BrowserServiceImpl.setInstance(testService);
+    const testProxy = new TestHistoryBrowserProxy();
+    BrowserProxyImpl.setInstance(testProxy);
     // Force a super tall body so that cr-lazy-list renders all items.
     document.body.style.height = '1000px';
     const app = document.createElement('history-app');
     document.body.appendChild(app);
     element = app.$.history;
     return Promise.all([
-      testService.handler.whenCalled('queryHistory'),
+      testProxy.handler.whenCalled('queryHistory'),
       microtasksFinished(),
     ]);
   });
 
   function getHistoryData(): HistoryEntry[] {
-    return (element.$.infiniteList.items || []) as HistoryEntry[];
+    return (element.$.infiniteList.items || []);
   }
 
   test('basic separator insertion', async function() {
@@ -110,17 +110,16 @@ suite('<history-item> integration test', function() {
     assertFalse(items[5]!.hasTimeGap);
   });
 
-  test('separator insertion for search', function() {
+  test('separator insertion for search', async function() {
     element.addNewResults(SEARCH_HISTORY_RESULTS, false, true);
     element.searchedTerm = 'search';
 
-    return microtasksFinished().then(function() {
-      const items = element.shadowRoot.querySelectorAll('history-item');
+    await microtasksFinished();
+    const items = element.shadowRoot.querySelectorAll('history-item');
 
-      assertTrue(items[0]!.hasTimeGap, '0');
-      assertFalse(items[1]!.hasTimeGap, '1');
-      assertFalse(items[2]!.hasTimeGap, '2');
-    });
+    assertTrue(items[0]!.hasTimeGap, '0');
+    assertFalse(items[1]!.hasTimeGap, '1');
+    assertFalse(items[2]!.hasTimeGap, '2');
   });
 
   test('separator insertion after deletion', async function() {
@@ -160,8 +159,8 @@ suite('<history-item> integration test', function() {
     await microtasksFinished();
 
     // Check that all items matching this url are unstarred.
-    assertEquals(getHistoryData()[1]!.starred, false);
-    assertEquals(getHistoryData()[5]!.starred, false);
+    assertFalse(getHistoryData()[1]!.starred);
+    assertFalse(getHistoryData()[5]!.starred);
   });
 
   test('actor-initiated visit annotation enabled', async function() {
@@ -195,21 +194,23 @@ suite('<history-item> integration test', function() {
         items[5]!.shadowRoot.querySelector<HTMLElement>('#bookmark-star')));
   });
 
-  // TODO(b/441040053): Clean up once kBrowsingHistoryActorIntegrationM1 is
-  // launched.
-  test('actor-initiated visit annotation disabled', async function() {
-    loadTimeData.overrideValues(
-        {enableBrowsingHistoryActorIntegrationM1: false});
+  test('actor-initiated visit with critical actions enabled', async function() {
+    loadTimeData.overrideValues({
+      enableBrowsingHistoryActorIntegrationM1: true,
+      isCriticalActionsEnabled: true,
+    });
 
     const newResults = [...TEST_HISTORY_RESULTS];
-    // Actor initiated history visit.
-    newResults[0]!.isActorVisit = true;
+    newResults[1]!.isActorVisit = true;
     element.addNewResults(newResults, false, true);
     await microtasksFinished();
 
     const items = element.shadowRoot.querySelectorAll('history-item');
-    assertEquals(TEST_HISTORY_RESULTS.length, items.length);
-    assertFalse(isVisible(
-        items[0]!.shadowRoot.querySelector<HTMLElement>('#actor-icon')));
+    const startActorIcon = items[1]!.shadowRoot.querySelector<HTMLElement>(
+        '#title-and-domain #actor-icon');
+    const endActorIcon =
+        items[1]!.shadowRoot.querySelector<HTMLElement>('#icons #actor-icon');
+    assertTrue(isVisible(startActorIcon));
+    assertFalse(isVisible(endActorIcon));
   });
 });

@@ -9,21 +9,13 @@
 
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_style.h"
 
-@protocol BWGCommands;
+@protocol GeminiCommands;
 @class LegacyToolbarButton;
 @class ToolbarButtonActionsHandler;
 @class ToolbarButtonVisibilityConfiguration;
 @class ToolbarConfiguration;
 @class ToolbarTabGridButton;
 @class ToolbarToolsMenuButton;
-
-// The possible styles for the cancel buttons.
-enum class ToolbarCancelButtonStyle {
-  // Present the cancel button as a label.
-  kCancelLabel = 0,
-  // Present the cancel button as X circle.
-  kXCircle = 2,
-};
 
 // LegacyToolbarButton Factory protocol to create LegacyToolbarButton objects
 // with certain style and configuration, depending of the implementation. A
@@ -41,7 +33,7 @@ enum class ToolbarCancelButtonStyle {
 // Handler for the actions.
 @property(nonatomic, weak) ToolbarButtonActionsHandler* actionHandler;
 // Handler for gemini commands.
-@property(nonatomic, weak) id<BWGCommands> geminiHandler;
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
 // Configuration object for the visibility of the buttons.
 @property(nonatomic, strong)
     ToolbarButtonVisibilityConfiguration* visibilityConfiguration;
@@ -64,7 +56,6 @@ enum class ToolbarCancelButtonStyle {
 - (LegacyToolbarButton*)openNewTabButton;
 // Button to cancel the edit of the location bar.
 - (UIButton*)cancelButton;
-- (UIButton*)cancelButtonWithStyle:(ToolbarCancelButtonStyle)style;
 
 @end
 

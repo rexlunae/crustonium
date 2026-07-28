@@ -26,7 +26,6 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.annotation.IntDef;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.test.espresso.NoMatchingViewException;
 import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
@@ -135,11 +134,12 @@ public class ViewUtils {
      * Waits until a visible view matches the given matcher. Fails if the matcher applies to
      * multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
      *
+     * <p>By default, also waits for the view to be displayed >= 51% and enabled.
+     *
      * @param viewMatcher The matcher matching the view that should be waited for.
      */
     public static void waitForVisibleView(Matcher<View> viewMatcher) {
-        ViewFinder.waitForView(
-                viewMatcher, ViewElement.newOptions().allowDisabled().displayingAtLeast(1).build());
+        ViewFinder.waitForView(viewMatcher);
     }
 
     /**
@@ -174,17 +174,14 @@ public class ViewUtils {
     }
 
     /**
-     * Waits until a visible view matching the given matcher appears. Fails if the matcher applies
-     * to multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL}
-     * milliseconds.
+     * Waits until a visible view matches the given matcher. Fails if the matcher applies to
+     * multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
      *
      * @param root The view group to search in.
      * @param viewMatcher The matcher matching the view that should be waited for.
      */
     public static void waitForView(ViewGroup root, Matcher<View> viewMatcher) {
-        ViewFinder.waitForView(
-                allOf(viewMatcher, isDescendantOfA(is(root))),
-                ViewElement.newOptions().allowDisabled().displayingAtLeast(1).build());
+        ViewFinder.waitForView(allOf(viewMatcher, isDescendantOfA(is(root))));
     }
 
     /**
@@ -200,8 +197,10 @@ public class ViewUtils {
     }
 
     /**
-     * Waits until a visible view matching the given matcher Fails if the matcher applies to
+     * Waits until a visible view matches the given matcher. Fails if the matcher applies to
      * multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
+     *
+     * <p>By default, also waits for the view to be displayed >= 51% and enabled.
      *
      * @param viewMatcher The matcher matching the view that should be waited for.
      * @param options The options to override expectations for the View (e.g. displayed %).
@@ -214,36 +213,16 @@ public class ViewUtils {
     }
 
     /**
-     * Waits until a visible view matching the given matcher Fails if the matcher applies to
+     * Waits until a visible view matches the given matcher. Fails if the matcher applies to
      * multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
      *
-     * <p>Android API 30+ tests are flakey with espresso 3.2 without the inRoot(isDialog()) check.
-     *
-     * @param viewMatcher The matcher matching the view that should be waited for.
-     * @return An interaction on the matching view.
-     */
-    public static ViewInteraction onViewWaiting(
-            Matcher<View> viewMatcher, boolean checkRootDialog) {
-        ViewElement.Options.Builder optionsBuilder = ViewElement.newOptions().allowDisabled();
-        if (checkRootDialog) {
-            optionsBuilder = optionsBuilder.inDialog();
-        }
-        ViewPresence<View> viewPresence =
-                ViewFinder.waitForView(viewMatcher, optionsBuilder.build());
-        return viewPresence.onView();
-    }
-
-    /**
-     * Waits until a visible view matching the given matcher appears. Fails if the matcher applies
-     * to multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL}
-     * milliseconds.
+     * <p>By default, also waits for the view to be displayed >= 51% and enabled.
      *
      * @param viewMatcher The matcher matching the view that should be waited for.
      * @return An interaction on the matching view.
      */
     public static ViewInteraction onViewWaiting(Matcher<View> viewMatcher) {
-        ViewPresence<View> viewPresence =
-                ViewFinder.waitForView(viewMatcher, ViewElement.allowDisabledOption());
+        ViewPresence<View> viewPresence = ViewFinder.waitForView(viewMatcher);
         return viewPresence.onView();
     }
 
@@ -281,9 +260,7 @@ public class ViewUtils {
                 this.mContext = imageView.getContext();
                 Drawable background = imageView.getBackground();
                 if (!(background instanceof ColorDrawable)) return false;
-                int expectedColor =
-                        AppCompatResources.getColorStateList(mContext, colorResId)
-                                .getDefaultColor();
+                int expectedColor = mContext.getColorStateList(colorResId).getDefaultColor();
                 return ((ColorDrawable) background).getColor() == expectedColor;
             }
 

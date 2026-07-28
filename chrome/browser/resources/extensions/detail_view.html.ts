@@ -5,6 +5,7 @@
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {ExtensionsDetailViewElement} from './detail_view.js';
+import type {ServiceInterface} from './service.js';
 
 export function getHtml(this: ExtensionsDetailViewElement) {
   // clang-format off
@@ -30,7 +31,9 @@ this text can be found by Ctrl + F because it isn't hidden. -->
       ${this.showAccountUploadButton_() ? html`
         <cr-icon-button id="account-upload-button" class="no-overlap"
             title="$i18n{itemUpload}" aria-label="$i18n{itemUpload}"
-            iron-icon="extensions-icons:extension_cloud_upload"
+            iron-icon="${this.webuiRoundedIconsEnabled_
+                ? 'extensions-icons:cloud-upload'
+                : 'extensions-icons:extension_cloud_upload-old'}"
             aria-describedby="a11yAssociation" @click="${this.onUploadClick_}">
         </cr-icon-button>` : ''}
       ${this.showDevReloadButton_() ? html`
@@ -42,7 +45,10 @@ this text can be found by Ctrl + F because it isn't hidden. -->
 
     ${this.showSafetyCheck_ ? html`
       <div id="safetyCheckWarningContainer" class="message-container">
-        <cr-icon aria-hidden="true" icon="extensions-icons:my_extensions"
+        <cr-icon aria-hidden="true"
+            icon="${this.webuiRoundedIconsEnabled_
+                ? 'extensions-icons:chrome-extension'
+                : 'extensions-icons:my_extensions-old'}"
             class="message-icon">
         </cr-icon>
         <div class="message-text">
@@ -74,11 +80,6 @@ this text can be found by Ctrl + F because it isn't hidden. -->
               .innerHTML="${this.getMv2DeprecationMessageSubtitle_()}">
           </div>
         </div>
-        <cr-button class="find-alternative-button"
-            @click="${this.onFindAlternativeButtonClick_}"
-            ?hidden="${!this.shouldShowMv2DeprecationFindAlternativeButton_()}">
-          $i18n{mv2DeprecationPanelFindAlternativeButton}
-        </cr-button>
         <cr-button class="remove-button" @click="${this.onRemoveButtonClick_}"
             ?hidden="${!this.shouldShowMv2DeprecationRemoveButton_()}">
           $i18n{mv2DeprecationMessageRemoveButton}
@@ -96,14 +97,8 @@ this text can be found by Ctrl + F because it isn't hidden. -->
               @click="${this.onFindAlternativeActionClick_}">
             $i18n{mv2DeprecationPanelFindAlternativeButton}
           </button>
-          <button class="dropdown-item" id="keepAction"
-              ?hidden="${!this.shouldShowMv2DeprecationKeepAction_()}"
-              @click="${this.onKeepActionClick_}">
-            $i18n{mv2DeprecationPanelKeepForNowButton}
-          </button>
         </cr-action-menu>
       </div>` : ''}
-
     <div class="cr-row first control-line" id="enable-section">
       <span class="${this.computeEnabledStyle_()}">
         ${this.computeEnabledText_()}
@@ -196,7 +191,9 @@ this text can be found by Ctrl + F because it isn't hidden. -->
     ${this.showAllowlistWarning_() ? html`
       <div id="allowlist-warning" class="cr-row continuation">
         <cr-icon class="warning-icon"
-            icon="extensions-icons:safebrowsing_warning">
+            icon="${this.webuiRoundedIconsEnabled_
+                ? 'extensions-icons:android-security-privacy-alert'
+                : 'extensions-icons:safebrowsing_warning-old'}">
         </cr-icon>
         <span class="cr-secondary-text">
           $i18n{itemAllowlistWarning}
@@ -242,7 +239,7 @@ this text can be found by Ctrl + F because it isn't hidden. -->
         </div>
         <div class="section-content">
           <ul id="inspect-views">
-            <li ?hidden="${this.data.views.length}">
+            <li ?hidden="${this.data.views.length > 0}">
               $i18n{noActiveViews}
             </li>
             ${this.sortedViews_.map((item, index) => html`
@@ -291,17 +288,19 @@ this text can be found by Ctrl + F because it isn't hidden. -->
           </span>
           ${this.showFreeformRuntimeHostPermissions_() ? html`
             <extensions-runtime-host-permissions
-                .permissions="${this.data.permissions.runtimeHostPermissions}"
+                .permissions="${this.data.permissions.runtimeHostPermissions!}"
                 ?enable-enhanced-site-controls="${this
                     .enableEnhancedSiteControls}"
-                .delegate="${this.delegate}" item-id="${this.data.id}">
+                .delegate="${this.delegate as ServiceInterface}"
+                item-id="${this.data.id}">
             </extensions-runtime-host-permissions>` : ''}
           ${this.showHostPermissionsToggleList_() ? html`
             <extensions-host-permissions-toggle-list
-                .permissions="${this.data.permissions.runtimeHostPermissions}"
+                .permissions="${this.data.permissions.runtimeHostPermissions!}"
                 ?enable-enhanced-site-controls="${this.
                     enableEnhancedSiteControls}"
-                .delegate="${this.delegate}" item-id="${this.data.id}">
+                .delegate="${this.delegate as ServiceInterface}"
+                item-id="${this.data.id}">
             </extensions-host-permissions-toggle-list>` : ''}
           ${this.showEnableAccessRequestsToggle_() ? html`
             <extensions-toggle-row id="show-access-requests-toggle"
@@ -346,7 +345,7 @@ this text can be found by Ctrl + F because it isn't hidden. -->
       <div id="options-section">
         ${this.canPinToToolbar_() ? html`
           <extensions-toggle-row id="pin-to-toolbar"
-              ?checked="${this.data.pinnedToToolbar}" class="hr"
+              ?checked="${this.data.pinnedToToolbar!}" class="hr"
               @change="${this.onPinnedToToolbarChange_}">
             <span>$i18n{itemPinToToolbar}</span>
           </extensions-toggle-row>` : ''}

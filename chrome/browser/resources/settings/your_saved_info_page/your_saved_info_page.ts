@@ -7,12 +7,18 @@
  * 'settings-your-saved-info-page' is the entry point for users to see
  * and manage their saved info.
  */
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import './account_card.js';
 import './category_reference_card.js';
 import './collapsible_autofill_settings_card.js';
 import '/shared/settings/prefs/prefs.js';
 import '../settings_page/settings_section.js';
-import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
+import '../icons.html.js';
+// <if expr="_google_chrome">
+import '../internal/icons.html.js';
+
+// </if>
 
 import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
@@ -31,7 +37,7 @@ import {PaymentsManagerImpl} from '../autofill_page/payments_manager_proxy.js';
 import type {PaymentsManagerProxy} from '../autofill_page/payments_manager_proxy.js';
 import {loadTimeData} from '../i18n_setup.js';
 import type {MetricsBrowserProxy} from '../metrics_browser_proxy.js';
-import {MetricsBrowserProxyImpl, YourSavedInfoDataCategory, YourSavedInfoDataChip, YourSavedInfoRelatedService} from '../metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl, SuggestionsFromGeminiEntryPoint, YourSavedInfoDataCategory, YourSavedInfoDataChip, YourSavedInfoRelatedService} from '../metrics_browser_proxy.js';
 import {routes} from '../route.js';
 import {Router} from '../router.js';
 import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
@@ -58,6 +64,7 @@ interface DataTypeHierarchy {
   contactInfo: DataCategory;
   identityDocs: DataCategory;
   travel: DataCategory;
+  shopping: DataCategory;
 }
 
 interface DataCategory {
@@ -77,7 +84,7 @@ export interface DataChip {
   // while `undefined` indicates a "not yet loaded" state.
   count?: number;
   // A function determining whether the chip is available or not
-  computeAvailability: () => boolean;
+  isVisibleWhenNoEntitiesOfTypeExists: () => boolean;
 }
 
 const SettingsYourSavedInfoPageElementBase = WebUiListenerMixin(
@@ -100,11 +107,40 @@ export class SettingsYourSavedInfoPageElement extends
       hierarchy_: {
         type: Object,
       },
+
+      isShoppingEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('shoppingIntegrationEnabled');
+        },
+      },
+
+      showSuggestionsFromGeminiSettings_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('showSuggestionsFromGeminiSettings');
+        },
+      },
+      spark_: {
+        type: String,
+        value: () => {
+          // <if expr="_google_chrome">
+          return loadTimeData.getBoolean('glicAssetsV2Enabled') ?
+              'settings-internal:sparkv2' :
+              'settings-internal:spark';
+          // </if>
+          // <if expr="not _google_chrome">
+          return 'settings20:lightbulb';
+          // </if>
+        },
+      },
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare private hierarchy_: DataTypeHierarchy;
+  declare private isShoppingEnabled_: boolean;
+  declare private showSuggestionsFromGeminiSettings_: boolean;
 
   private dataChipIdToChip_: Map<YourSavedInfoDataChip, DataChip> = new Map();
   private dataChipIdToCategory_: Map<YourSavedInfoDataChip, DataCategory> =
@@ -124,6 +160,7 @@ export class SettingsYourSavedInfoPageElement extends
   private setPersonalDataListener_: PersonalDataChangedListener|null = null;
   private onAutofillAiEntitiesChangedListener_: EntityInstancesChangedListener|
       null = null;
+  declare private spark_: string;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -140,13 +177,13 @@ export class SettingsYourSavedInfoPageElement extends
             id: YourSavedInfoDataChip.PASSWORDS,
             label: this.i18n('passwordsLabel'),
             icon: 'cr20:password',
-            computeAvailability: () => true,
+            isVisibleWhenNoEntitiesOfTypeExists: () => true,
           },
           {
             id: YourSavedInfoDataChip.PASSKEYS,
             label: this.i18n('passkeysLabel'),
             icon: 'settings20:passkey',
-            computeAvailability: () => true,
+            isVisibleWhenNoEntitiesOfTypeExists: () => true,
           },
         ],
       },
@@ -157,28 +194,27 @@ export class SettingsYourSavedInfoPageElement extends
             id: YourSavedInfoDataChip.CREDIT_CARDS,
             label: this.i18n('creditAndDebitCardTitle'),
             icon: 'settings20:credit-card',
-            computeAvailability: () => true,
+            isVisibleWhenNoEntitiesOfTypeExists: () => true,
           },
           {
             id: YourSavedInfoDataChip.IBANS,
             label: this.i18n('ibanTitle'),
-            icon: 'settings20:iban',
-            computeAvailability: () =>
+            icon: 'settings20:iban-custom',
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
                 loadTimeData.getBoolean('showIbansSettings'),
           },
           {
             id: YourSavedInfoDataChip.PAY_OVER_TIME,
             label: this.i18n('autofillPayOverTimeSettingsLabel'),
             icon: 'settings20:hourglass',
-            computeAvailability: () =>
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
                 loadTimeData.getBoolean('shouldShowPayOverTimeSettings'),
           },
           {
             id: YourSavedInfoDataChip.LOYALTY_CARDS,
             label: this.i18n('loyaltyCardsTitle'),
             icon: 'settings20:loyalty-programs',
-            computeAvailability: () =>
-                loadTimeData.getBoolean('enableLoyaltyCardsFilling'),
+            isVisibleWhenNoEntitiesOfTypeExists: () => true,
           },
         ],
       },
@@ -188,8 +224,8 @@ export class SettingsYourSavedInfoPageElement extends
           {
             id: YourSavedInfoDataChip.ADDRESSES,
             label: this.i18n('addresses'),
-            icon: 'settings:email',
-            computeAvailability: () => true,
+            icon: 'settings:mail-filled',
+            isVisibleWhenNoEntitiesOfTypeExists: () => true,
           },
         ],
       },
@@ -200,21 +236,23 @@ export class SettingsYourSavedInfoPageElement extends
             id: YourSavedInfoDataChip.DRIVERS_LICENSES,
             label: this.i18n('yourSavedInfoDriverLicenseChip'),
             icon: 'settings20:id-card',
-            computeAvailability: () => this.availableAutofillAiTypes_.has(
-                EntityTypeName.kDriversLicense),
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
+                this.availableAutofillAiTypes_.has(
+                    EntityTypeName.kDriversLicense),
           },
           {
             id: YourSavedInfoDataChip.NATIONAL_ID_CARDS,
             label: this.i18n('yourSavedInfoNationalIdsChip'),
             icon: 'settings20:id-card',
-            computeAvailability: () => this.availableAutofillAiTypes_.has(
-                EntityTypeName.kNationalIdCard),
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
+                this.availableAutofillAiTypes_.has(
+                    EntityTypeName.kNationalIdCard),
           },
           {
             id: YourSavedInfoDataChip.PASSPORTS,
             label: this.i18n('yourSavedInfoPassportChip'),
             icon: 'settings20:passport',
-            computeAvailability: () =>
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
                 this.availableAutofillAiTypes_.has(EntityTypeName.kPassport),
           },
         ],
@@ -226,14 +264,15 @@ export class SettingsYourSavedInfoPageElement extends
             id: YourSavedInfoDataChip.FLIGHT_RESERVATIONS,
             label: this.i18n('yourSavedInfoFlightReservationsChip'),
             icon: 'settings20:travel',
-            computeAvailability: () => this.availableAutofillAiTypes_.has(
-                EntityTypeName.kFlightReservation),
+            isVisibleWhenNoEntitiesOfTypeExists: () => false,
           },
           {
             id: YourSavedInfoDataChip.TRAVEL_INFO,
             label: this.i18n('yourSavedInfoTravelInfoChip'),
-            icon: 'privacy20:person-check',
-            computeAvailability: () =>
+            icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'privacy20:person-check' :
+                'privacy20:person-check-old',
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
                 this.availableAutofillAiTypes_.has(
                     EntityTypeName.kKnownTravelerNumber) ||
                 this.availableAutofillAiTypes_.has(
@@ -243,8 +282,27 @@ export class SettingsYourSavedInfoPageElement extends
             id: YourSavedInfoDataChip.VEHICLES,
             label: this.i18n('yourSavedInfoVehiclesChip'),
             icon: 'settings20:directions-car',
-            computeAvailability: () =>
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
                 this.availableAutofillAiTypes_.has(EntityTypeName.kVehicle),
+          },
+        ],
+      },
+      shopping: {
+        id: YourSavedInfoDataCategory.SHOPPING,
+        chips: [
+          {
+            id: YourSavedInfoDataChip.ORDERS,
+            label: this.i18n('yourSavedInfoOrdersChip'),
+            icon: 'settings20:orders',
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
+                this.availableAutofillAiTypes_.has(EntityTypeName.kOrder),
+          },
+          {
+            id: YourSavedInfoDataChip.SHIPMENTS,
+            label: this.i18n('yourSavedInfoShipmentsChip'),
+            icon: 'settings20:local-shipping',
+            isVisibleWhenNoEntitiesOfTypeExists: () =>
+                this.availableAutofillAiTypes_.has(EntityTypeName.kShipment),
           },
         ],
       },
@@ -327,7 +385,13 @@ export class SettingsYourSavedInfoPageElement extends
           }
           this.notifyPath('hierarchy_.identityDocs.chips');
           this.notifyPath('hierarchy_.travel.chips');
+          this.notifyPath('hierarchy_.shopping.chips');
         });
+
+    if (this.isShoppingEnabled_) {
+      this.availableAutofillAiTypes_.add(EntityTypeName.kOrder);
+      this.availableAutofillAiTypes_.add(EntityTypeName.kShipment);
+    }
 
     // Wallet: Loyalty cards count.
     const setLoyaltyCardsCount = (loyaltyCardsCount?: number) => {
@@ -364,6 +428,12 @@ export class SettingsYourSavedInfoPageElement extends
     this.setChipCount_(
         YourSavedInfoDataChip.FLIGHT_RESERVATIONS,
         entityCounts.get(EntityTypeName.kFlightReservation) ?? 0);
+    this.setChipCount_(
+        YourSavedInfoDataChip.ORDERS,
+        entityCounts.get(EntityTypeName.kOrder) ?? 0);
+    this.setChipCount_(
+        YourSavedInfoDataChip.SHIPMENTS,
+        entityCounts.get(EntityTypeName.kShipment) ?? 0);
   }
 
   override disconnectedCallback() {
@@ -399,6 +469,13 @@ export class SettingsYourSavedInfoPageElement extends
     if (routes.YOUR_SAVED_INFO_TRAVEL) {
       map.set(routes.YOUR_SAVED_INFO_TRAVEL.path, '#travelManagerButton');
     }
+    if (routes.YOUR_SAVED_INFO_SHOPPING) {
+      map.set(routes.YOUR_SAVED_INFO_SHOPPING.path, '#shoppingManagerButton');
+    }
+    if (routes.SUGGESTIONS_FROM_GEMINI) {
+      map.set(
+          routes.SUGGESTIONS_FROM_GEMINI.path, '#suggestionsFromGeminiLinkRow');
+    }
     return map;
   }
 
@@ -423,12 +500,20 @@ export class SettingsYourSavedInfoPageElement extends
       case 'travel':
         triggerId = 'travelManagerButton';
         break;
+      case 'shopping':
+        triggerId = 'shoppingManagerButton';
+        break;
+      case 'suggestionsFromGemini':
+        triggerId = 'suggestionsFromGeminiLinkRow';
+        break;
       default:
         assertNotReached(`Unrecognized child view ID: ${childViewId}`);
     }
     const control =
         this.shadowRoot!.querySelector<HTMLElement>(`#${triggerId}`);
-    assert(control);
+    assert(
+        control,
+        `Failed to find associated control for child '${childViewId}'`);
     return control;
   }
 
@@ -440,12 +525,15 @@ export class SettingsYourSavedInfoPageElement extends
   }
 
   private getVisibleChips_(chips: DataChip[]): DataChip[] {
-    return chips.filter(chip => chip.computeAvailability() || !!chip.count)
+    return chips.filter(
+               chip =>
+                   chip.isVisibleWhenNoEntitiesOfTypeExists() || !!chip.count)
         .map(chip => ({...chip}));
   }
 
   private hasVisibleChips_(chips: DataChip[]): boolean {
-    return chips.some(chip => chip.computeAvailability() || !!chip.count);
+    return chips.some(
+        chip => chip.isVisibleWhenNoEntitiesOfTypeExists() || !!chip.count);
   }
 
   private onDataCategoryClick_(e: DataCategoryClickEvent) {
@@ -485,11 +573,20 @@ export class SettingsYourSavedInfoPageElement extends
       case YourSavedInfoDataCategory.TRAVEL:
         Router.getInstance().navigateTo(routes.YOUR_SAVED_INFO_TRAVEL);
         break;
+      case YourSavedInfoDataCategory.SHOPPING:
+        Router.getInstance().navigateTo(routes.YOUR_SAVED_INFO_SHOPPING);
+        break;
       case YourSavedInfoDataCategory.MAX_VALUE:
         assertNotReached();
       default:
         assertNotReachedCase(categoryId);
     }
+  }
+
+  private onSuggestionsFromGeminiClick_() {
+    this.metricsBrowserProxy_.recordSuggestionsFromGeminiEntryPointClick(
+        SuggestionsFromGeminiEntryPoint.YOUR_SAVED_INFO);
+    Router.getInstance().navigateTo(routes.SUGGESTIONS_FROM_GEMINI);
   }
 
   /**

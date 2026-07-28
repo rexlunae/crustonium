@@ -10,8 +10,10 @@
 
 #include <memory>
 
+#include "base/containers/flat_set.h"
 #include "base/files/platform_file.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gfx/buffer_usage_util.h"
@@ -90,6 +92,15 @@ bool GbmPixmapWayland::InitializeBuffer(
   }
 
   if (!gbm_bo_) {
+    // Only log an error for a failing format once to avoid console spam.
+    static base::NoDestructor<base::flat_set<viz::SharedImageFormat>>
+        failed_formats;
+
+    if (failed_formats->contains(format)) {
+      return false;
+    }
+    failed_formats->insert(format);
+
     LOG(ERROR) << "Cannot create bo with format=" << format.ToString()
                << " and usage=" << ui::NativePixmapUsageToString(usage);
     return false;
@@ -158,7 +169,7 @@ bool GbmPixmapWayland::SupportsZeroCopyWebGPUImport() const {
   return false;
 }
 
-uint64_t GbmPixmapWayland::GetBufferFormatModifier() const {
+uint64_t GbmPixmapWayland::GetFormatModifier() const {
   return gbm_bo_->GetFormatModifier();
 }
 
@@ -222,7 +233,7 @@ gfx::NativePixmapHandle GbmPixmapWayland::ExportHandle() const {
                                gbm_bo_->GetPlaneSize(i),
                                std::move(scoped_fds[i]));
   }
-  handle.modifier = GetBufferFormatModifier();
+  handle.modifier = GetFormatModifier();
   return handle;
 }
 

@@ -8,8 +8,8 @@
 #import <Foundation/Foundation.h>
 
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/form_input_interaction_delegate.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_client.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/form_input_interaction_delegate.h"
 
 @protocol FormInputAccessoryConsumer;
 @protocol FormInputAccessoryMediatorHandler;
@@ -77,6 +77,19 @@ class WebStateList;
 
 // Retrieves the first responder and reloads its input views if possible.
 - (void)reloadFirstResponderInputViews;
+
+// Clears suggestions and requests suggestions again for the same form.
+- (void)resetSuggestions;
+
+// Returns the username for the given passkey suggestion.
+- (NSString*)usernameForSuggestion:(FormSuggestion*)suggestion;
+
+// Returns YES if the suggestion label with the given RP ID should show its RP
+// ID.
+- (BOOL)shouldShowRPId:(NSString*)rpId;
+
+// Handles editing the suggestion.
+- (void)openEditForSuggestion:(FormSuggestion*)suggestion;
 
 @end
 

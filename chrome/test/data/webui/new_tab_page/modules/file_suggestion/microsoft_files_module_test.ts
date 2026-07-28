@@ -2,13 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {File} from 'chrome://new-tab-page/file_suggestion.mojom-webui.js';
-import {RecommendationType} from 'chrome://new-tab-page/file_suggestion.mojom-webui.js';
 import type {DisableModuleEvent, DismissModuleInstanceEvent, MicrosoftFilesModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {microsoftFilesModuleDescriptor, MicrosoftFilesProxyImpl, ParentTrustedDocumentProxy} from 'chrome://new-tab-page/lazy_load.js';
-import {MicrosoftFilesPageHandlerRemote} from 'chrome://new-tab-page/microsoft_files.mojom-webui.js';
-import {$$} from 'chrome://new-tab-page/new_tab_page.js';
-import {MicrosoftAuthUntrustedDocumentRemote} from 'chrome://new-tab-page/ntp_microsoft_auth_shared_ui.mojom-webui.js';
+import type {File} from 'chrome://new-tab-page/new_tab_page.js';
+import {$$, MicrosoftAuthUntrustedDocumentRemote, MicrosoftFilesPageHandlerRemote, RecommendationType} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
@@ -64,7 +61,7 @@ suite('MicrosoftFilesModule', () => {
     assertFalse(!!$$(microsoftFilesModule, 'ntp-info-dialog'));
 
     // Act.
-    const infoButton = microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
+    const infoButton = microsoftFilesModule.$.moduleHeader.shadowRoot
                            .querySelector<HTMLElement>('#info');
     assertTrue(!!infoButton);
     infoButton.click();
@@ -86,9 +83,8 @@ suite('MicrosoftFilesModule', () => {
 
     // Act.
     const whenFired = eventToPromise('disable-module', microsoftFilesModule);
-    const disableButton =
-        microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
-            .querySelector<HTMLElement>('#disable');
+    const disableButton = microsoftFilesModule.$.moduleHeader.shadowRoot
+                              .querySelector<HTMLElement>('#disable');
     assertTrue(!!disableButton);
     disableButton.click();
 
@@ -110,9 +106,8 @@ suite('MicrosoftFilesModule', () => {
     await microtasksFinished();
 
     // Act.
-    const signoutButton =
-        microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
-            .querySelector<HTMLElement>('#signout');
+    const signoutButton = microsoftFilesModule.$.moduleHeader.shadowRoot
+                              .querySelector<HTMLElement>('#signout');
     assertTrue(!!signoutButton);
     signoutButton.click();
 
@@ -131,9 +126,9 @@ suite('MicrosoftFilesModule', () => {
     await microtasksFinished();
 
     // Assert.
-    assertTrue(isVisible(microsoftFilesModule.$.moduleHeaderElementV2));
+    assertTrue(isVisible(microsoftFilesModule.$.moduleHeader));
     assertEquals(
-        microsoftFilesModule.$.moduleHeaderElementV2.headerText,
+        microsoftFilesModule.$.moduleHeader.headerText,
         modulesMicrosoftFilesName);
   });
 
@@ -159,9 +154,8 @@ suite('MicrosoftFilesModule', () => {
     // Dismiss module.
     const whenFired =
         eventToPromise('dismiss-module-instance', microsoftFilesModule);
-    const dismissButton =
-        microsoftFilesModule.$.moduleHeaderElementV2.shadowRoot
-            .querySelector<HTMLElement>('#dismiss');
+    const dismissButton = microsoftFilesModule.$.moduleHeader.shadowRoot
+                              .querySelector<HTMLElement>('#dismiss');
     assertTrue(!!dismissButton);
     dismissButton.click();
 

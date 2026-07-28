@@ -11,6 +11,7 @@
 #include <tuple>
 #include <utility>
 
+#include "base/check.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
@@ -26,11 +27,13 @@
 #include "content/browser/webid/test/mock_permission_delegate.h"
 #include "content/common/features.h"
 #include "content/public/browser/manifest_icon_downloader.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "content/public/common/content_features.h"
-#include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_renderer_host.h"
 #include "net/base/isolation_info.h"
 #include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
 #include "net/base/network_isolation_key.h"
 #include "net/base/network_isolation_partition.h"
 #include "net/http/http_request_headers.h"
@@ -45,29 +48,28 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
+
+namespace content::webid {
 
 using ::testing::_;
 using ::testing::ElementsAre;
 using ::testing::NiceMock;
 using ::testing::Return;
-using LoginState = content::IdentityRequestAccount::LoginState;
-
-namespace content::webid {
-
-using IdpClientMetadata = IdpNetworkRequestManager::ClientMetadata;
-using TokenResult = IdpNetworkRequestManager::TokenResult;
-using Endpoints = IdpNetworkRequestManager::Endpoints;
 using AccountsRequestCallback =
     IdpNetworkRequestManager::AccountsRequestCallback;
 using AccountsResponseInvalidReason =
     IdpNetworkRequestManager::AccountsResponseInvalidReason;
+using Endpoints = IdpNetworkRequestManager::Endpoints;
 using ErrorDialogType = IdpNetworkRequestManager::FedCmErrorDialogType;
 using ErrorUrlType = IdpNetworkRequestManager::FedCmErrorUrlType;
+using IdpClientMetadata = IdpNetworkRequestManager::ClientMetadata;
+using LoginState = IdentityRequestAccount::LoginState;
 using TokenResponseType = IdpNetworkRequestManager::FedCmTokenResponseType;
+using TokenResult = IdpNetworkRequestManager::TokenResult;
 
 namespace {
 
@@ -127,10 +129,11 @@ url::Origin GetOriginHeader(const network::ResourceRequest& request) {
                .value_or(std::string())));
 }
 
-class IdpNetworkRequestManagerTest : public ::testing::Test {
+class IdpNetworkRequestManagerTest : public RenderViewHostTestHarness {
  public:
   std::unique_ptr<IdpNetworkRequestManager> CreateTestManager(
       const char* top_level_origin = nullptr) {
+    CHECK(main_rfh());
     test_permission_delegate_ =
         std::make_unique<NiceMock<MockPermissionDelegate>>();
     url::Origin top_level_origin_obj;
@@ -142,7 +145,8 @@ class IdpNetworkRequestManagerTest : public ::testing::Test {
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &test_url_loader_factory_),
         test_permission_delegate_.get(),
-        network::mojom::ClientSecurityState::New(), content::FrameTreeNodeId());
+        network::mojom::ClientSecurityState::New(),
+        main_rfh()->GetFrameTreeNodeId(), main_rfh()->GetWeakDocumentPtr());
   }
 
   void AddResponse(const GURL& url,
@@ -219,8 +223,7 @@ class IdpNetworkRequestManagerTest : public ::testing::Test {
   }
 
   std::tuple<FetchStatus, IdpNetworkRequestManager::AccountsResponse>
-  SendAccountsRequestWithStoredAccounts(base::ListValue test_accounts,
-                                        const char* client_id = "") {
+  SendAccountsRequestWithStoredAccounts(base::ListValue test_accounts) {
     GURL accounts_endpoint(kTestAccountsEndpoint);
     url::Origin idp_origin = url::Origin::Create(accounts_endpoint);
 
@@ -239,8 +242,7 @@ class IdpNetworkRequestManagerTest : public ::testing::Test {
 
     EXPECT_CALL(*test_permission_delegate_, GetAccounts(_))
         .WillOnce(Return(test_accounts.Clone()));
-    manager->SendAccountsRequest(idp_origin, GURL(), client_id,
-                                 std::move(callback));
+    manager->SendAccountsRequest(idp_origin, GURL(), std::move(callback));
     run_loop.Run();
 
     return {parsed_accounts_response, parsed_accounts};
@@ -249,7 +251,6 @@ class IdpNetworkRequestManagerTest : public ::testing::Test {
   std::tuple<FetchStatus, IdpNetworkRequestManager::AccountsResponse>
   SendAccountsRequestAndWaitForResponse(
       const std::string& test_accounts,
-      const char* client_id = "",
       net::HttpStatusCode response_code = net::HTTP_OK,
       const std::string& mime_type = "application/json") {
     GURL accounts_endpoint(kTestAccountsEndpoint);
@@ -268,8 +269,7 @@ class IdpNetworkRequestManagerTest : public ::testing::Test {
 
     std::unique_ptr<IdpNetworkRequestManager> manager = CreateTestManager();
     manager->SendAccountsRequest(url::Origin::Create(accounts_endpoint),
-                                 accounts_endpoint, client_id,
-                                 std::move(callback));
+                                 accounts_endpoint, std::move(callback));
     run_loop.Run();
 
     return {parsed_accounts_response, parsed_accounts};
@@ -362,8 +362,6 @@ class IdpNetworkRequestManagerTest : public ::testing::Test {
   std::optional<ErrorUrlType> error_url_type() { return error_url_type_; }
 
  private:
-  content::BrowserTaskEnvironment task_environment_{
-      content::BrowserTaskEnvironment::MainThreadType::UI};
   network::TestURLLoaderFactory test_url_loader_factory_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder;
   base::HistogramTester histogram_tester_;
@@ -659,6 +657,32 @@ TEST_F(IdpNetworkRequestManagerTest, ComputeWellKnownUrl) {
                                               kWellKnownPath));
 }
 
+TEST_F(IdpNetworkRequestManagerTest, ComputeWebIdentitySubdomainWellKnownUrl) {
+  // Localhost: subdomain form is not applicable; helper returns nullopt so the
+  // legacy apex URL is used.
+  EXPECT_EQ(std::nullopt,
+            ComputeWebIdentitySubdomainWellKnownUrl(
+                GURL("https://localhost:8000/test/"), kWellKnownPath));
+
+  // Standard registrable-domain provider: subdomain prepended.
+  EXPECT_EQ(
+      "https://web-identity.well-known.google.com/.well-known/web-identity",
+      ComputeWebIdentitySubdomainWellKnownUrl(
+          GURL("https://www.google.com:8000/test/"), kWellKnownPath));
+
+  // Provider already on a subdomain still uses eTLD+1 with
+  // web-identity.well-known. label.
+  EXPECT_EQ(
+      "https://web-identity.well-known.example.com/.well-known/web-identity",
+      ComputeWebIdentitySubdomainWellKnownUrl(
+          GURL("https://idp.example.com/foo"), kWellKnownPath));
+
+  // IP literal: no eTLD+1 -> nullopt.
+  EXPECT_EQ(std::nullopt,
+            ComputeWebIdentitySubdomainWellKnownUrl(
+                GURL("https://192.101.0.1/test/"), kWellKnownPath));
+}
+
 TEST_F(IdpNetworkRequestManagerTest, ParseUsername) {
   const auto* test_accounts_json = R"({
   "accounts" : [
@@ -706,7 +730,7 @@ TEST_F(IdpNetworkRequestManagerTest, ParsePhoneNumber) {
   EXPECT_EQ("111-111-1111", accounts.accounts[0]->display_name);
 }
 
-TEST_F(IdpNetworkRequestManagerTest, ParseAccountPotentiallyApprovedOrigins) {
+TEST_F(IdpNetworkRequestManagerTest, ParseAccountPotentiallyApprovedSites) {
   base::test::ScopedFeatureList list;
   list.InitAndEnableFeature(features::kFedCmEmbedderInitiatedLogin);
   // given_name and picture fields are optional
@@ -716,12 +740,12 @@ TEST_F(IdpNetworkRequestManagerTest, ParseAccountPotentiallyApprovedOrigins) {
       "id": "1234",
       "email": "ken@idp.test",
       "name": "Ken R. Example",
-      "potentially_approved_origin_hashes": [
-        "622df46ad930842236c692ab72b62ae312b3b0164141f29b7bfdeb8e219b1043"
+      "potentially_approved_site_hashes": [
+        "870f48f3c28efb5dbf46d14881d802a4c34141a36ef9e66d28cec211b1969f7d"
       ]
     }
   ],
-  "origin_salt": "fc432178f9155c4e24762de5b9505f2e"
+  "site_salt": "fc432178f9155c4e24762de5b9505f2e"
   })";
 
   FetchStatus accounts_response;
@@ -731,14 +755,14 @@ TEST_F(IdpNetworkRequestManagerTest, ParseAccountPotentiallyApprovedOrigins) {
 
   EXPECT_EQ(ParseStatus::kSuccess, accounts_response.parse_status);
   EXPECT_EQ(net::HTTP_OK, accounts_response.response_code);
-  EXPECT_EQ("fc432178f9155c4e24762de5b9505f2e", accounts.origin_salt);
+  EXPECT_EQ("fc432178f9155c4e24762de5b9505f2e", accounts.site_salt);
   ASSERT_THAT(
-      accounts.accounts[0]->potentially_approved_origin_hashes,
+      accounts.accounts[0]->potentially_approved_site_hashes,
       ElementsAre(
-          "622df46ad930842236c692ab72b62ae312b3b0164141f29b7bfdeb8e219b1043"));
+          "870f48f3c28efb5dbf46d14881d802a4c34141a36ef9e66d28cec211b1969f7d"));
 
-  const auto& filtered_accounts = accounts.PotentialAccountsForOrigin(
-      url::Origin::Create(GURL("https://www.example.com/")));
+  const auto& filtered_accounts =
+      accounts.PotentialAccountsForSite("example.com");
   EXPECT_EQ(1ul, filtered_accounts.size());
 }
 
@@ -952,7 +976,8 @@ TEST_F(IdpNetworkRequestManagerTest, FetchWellKnownIllegalDomainFails) {
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           &test_url_loader_factory),
       test_permission_delegate_.get(),
-      network::mojom::ClientSecurityState::New(), content::FrameTreeNodeId());
+      network::mojom::ClientSecurityState::New(), FrameTreeNodeId(),
+      WeakDocumentPtr());
 
   base::RunLoop run_loop;
   auto callback = base::BindLambdaForTesting(
@@ -1502,25 +1527,24 @@ TEST_F(IdpNetworkRequestManagerTest, AccountSignedInStatus) {
   FetchStatus accounts_response;
   IdpNetworkRequestManager::AccountsResponse accounts;
   std::tie(accounts_response, accounts) =
-      SendAccountsRequestAndWaitForResponse(test_accounts_json, "xxx");
+      SendAccountsRequestAndWaitForResponse(test_accounts_json);
 
   EXPECT_TRUE(called);
   EXPECT_EQ(ParseStatus::kSuccess, accounts_response.parse_status);
   EXPECT_EQ(net::HTTP_OK, accounts_response.response_code);
   ASSERT_EQ(5ul, accounts.accounts.size());
-  ASSERT_TRUE(accounts.accounts[0]->idp_claimed_login_state.has_value());
-  EXPECT_EQ(LoginState::kSignIn,
-            *accounts.accounts[0]->idp_claimed_login_state);
-  ASSERT_TRUE(accounts.accounts[1]->idp_claimed_login_state.has_value());
-  EXPECT_EQ(LoginState::kSignUp,
-            *accounts.accounts[1]->idp_claimed_login_state);
-  ASSERT_TRUE(accounts.accounts[2]->idp_claimed_login_state.has_value());
-  EXPECT_EQ(LoginState::kSignUp,
-            *accounts.accounts[2]->idp_claimed_login_state);
-  EXPECT_FALSE(accounts.accounts[3]->idp_claimed_login_state.has_value());
-  ASSERT_TRUE(accounts.accounts[4]->idp_claimed_login_state.has_value());
-  EXPECT_EQ(LoginState::kSignIn,
-            *accounts.accounts[4]->idp_claimed_login_state);
+  ASSERT_TRUE(accounts.accounts[0]->approved_clients.has_value());
+  EXPECT_EQ(std::vector<std::string>{"xxx"},
+            *accounts.accounts[0]->approved_clients);
+  ASSERT_TRUE(accounts.accounts[1]->approved_clients.has_value());
+  EXPECT_TRUE((*accounts.accounts[1]->approved_clients).empty());
+  ASSERT_TRUE(accounts.accounts[2]->approved_clients.has_value());
+  EXPECT_EQ(std::vector<std::string>{"yyy"},
+            *accounts.accounts[2]->approved_clients);
+  EXPECT_FALSE(accounts.accounts[3]->approved_clients.has_value());
+  ASSERT_TRUE(accounts.accounts[4]->approved_clients.has_value());
+  EXPECT_EQ((std::vector<std::string>{"xxx", "yyy"}),
+            *accounts.accounts[4]->approved_clients);
 }
 
 // Tests the token request implementation.
@@ -1815,7 +1839,7 @@ TEST_F(IdpNetworkRequestManagerTest, RecordApprovedClientsMetrics) {
   FetchStatus accounts_response;
   IdpNetworkRequestManager::AccountsResponse accounts;
   std::tie(accounts_response, accounts) =
-      SendAccountsRequestAndWaitForResponse(test_accounts_json, "xxx");
+      SendAccountsRequestAndWaitForResponse(test_accounts_json);
 
   EXPECT_TRUE(called);
   EXPECT_EQ(ParseStatus::kSuccess, accounts_response.parse_status);
@@ -1862,8 +1886,7 @@ TEST_F(IdpNetworkRequestManagerTest, DontCallCallbackAfterManagerDeletion) {
   {
     std::unique_ptr<IdpNetworkRequestManager> manager = CreateTestManager();
     manager->SendAccountsRequest(url::Origin::Create(accounts_endpoint),
-                                 accounts_endpoint, /*client_id=*/"",
-                                 std::move(callback));
+                                 accounts_endpoint, std::move(callback));
     // Destroy `manager`.
   }
   base::RunLoop().RunUntilIdle();
@@ -1882,6 +1905,220 @@ TEST_F(IdpNetworkRequestManagerTest, ErrorFetchingWellKnown) {
   EXPECT_EQ(ParseStatus::kNoResponseError, fetch_status.parse_status);
   EXPECT_EQ(net::HTTP_REQUEST_TIMEOUT, fetch_status.response_code);
   EXPECT_EQ(std::set<GURL>{}, wellknown.provider_urls);
+}
+
+// Tests for the FedCmWebIdentitySubdomain flag covering FetchWellKnown()
+// (exercised via SendWellKnownRequestAndWaitForResponse) across the various
+// subdomain-discovery scenarios.
+class IdpNetworkRequestManagerWebIdentitySubdomainTest
+    : public IdpNetworkRequestManagerTest {
+ public:
+  IdpNetworkRequestManagerWebIdentitySubdomainTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kFedCmWebIdentitySubdomain);
+  }
+
+ protected:
+  // The subdomain (preferred) and apex (fallback) URLs that the implementation
+  // computes for kTestIdpUrl ("https://idp.test"). The
+  // "web-identity.well-known" label is the spec-defined prefix; not arbitrary.
+  static constexpr char kSubdomainWellKnownUrl[] =
+      "https://web-identity.well-known.idp.test/.well-known/web-identity";
+
+  // Wires a response for the subdomain URL, then runs FetchWellKnown() through
+  // the existing kTestIdpUrl helper. If `apex_data` is non-null, an apex
+  // response is also wired so the fallback can complete.
+  std::tuple<FetchStatus, IdpNetworkRequestManager::WellKnown>
+  FetchWithSubdomainResponse(const std::string& subdomain_data,
+                             net::HttpStatusCode subdomain_status,
+                             const char* apex_data = nullptr,
+                             net::HttpStatusCode apex_status = net::HTTP_OK) {
+    AddResponse(GURL(kSubdomainWellKnownUrl), subdomain_status,
+                "application/json", subdomain_data);
+    if (apex_data) {
+      AddResponse(GURL(kTestWellKnownUrl), apex_status, "application/json",
+                  apex_data);
+    }
+
+    base::RunLoop run_loop;
+    FetchStatus fetch_status;
+    IdpNetworkRequestManager::WellKnown well_known;
+    auto callback = base::BindLambdaForTesting(
+        [&](FetchStatus status,
+            const IdpNetworkRequestManager::WellKnown& result) {
+          fetch_status = status;
+          well_known = result;
+          run_loop.Quit();
+        });
+    std::unique_ptr<IdpNetworkRequestManager> manager = CreateTestManager();
+    manager->FetchWellKnown(GURL(kTestIdpUrl), std::move(callback));
+    run_loop.Run();
+    return {fetch_status, well_known};
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Subdomain fetch returns a single provider_urls entry: discovery succeeds
+// without falling back to apex. An apex response is also wired with a
+// *different* payload to prove the subdomain payload (not the apex one) reaches
+// the caller.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainSucceedsWithSingleProvider) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      R"({"provider_urls": ["https://idp.test/fedcm.json"]})", net::HTTP_OK,
+      R"({"provider_urls": ["https://idp.test/apex-only.json"]})",
+      net::HTTP_OK);
+
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls)
+      << "subdomain payload must take precedence over apex payload";
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", true, 1);
+}
+
+// Subdomain fetch returns more than one provider_urls entry: implementation
+// rejects it and falls back to the apex well-known.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainRejectedWhenMultipleProviders) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      R"({"provider_urls": ["https://idp.test/a.json",
+                            "https://idp.test/b.json"]})",
+      net::HTTP_OK, R"({"provider_urls": ["https://idp.test/fedcm.json"]})",
+      net::HTTP_OK);
+
+  // The apex result is what reaches the caller.
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls);
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", false, 1);
+}
+
+// Subdomain fetch returns 404: implementation falls back to apex.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainHttpErrorFallsBackToApex) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      /*subdomain_data=*/std::string(), net::HTTP_NOT_FOUND,
+      R"({"provider_urls": ["https://idp.test/fedcm.json"]})", net::HTTP_OK);
+
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls);
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", false, 1);
+}
+
+// Subdomain fetch returns malformed JSON: implementation falls back to apex.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainMalformedJsonFallsBackToApex) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      "not valid json", net::HTTP_OK,
+      R"({"provider_urls": ["https://idp.test/fedcm.json"]})", net::HTTP_OK);
+
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls);
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", false, 1);
+}
+
+// Subdomain fetch fails AND apex fetch fails: caller observes the apex error.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainAndApexBothFail) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      /*subdomain_data=*/std::string(), net::HTTP_NOT_FOUND,
+      /*apex_data=*/"", net::HTTP_REQUEST_TIMEOUT);
+
+  EXPECT_EQ(ParseStatus::kNoResponseError, fetch_status.parse_status);
+  EXPECT_EQ(net::HTTP_REQUEST_TIMEOUT, fetch_status.response_code);
+  EXPECT_TRUE(well_known.provider_urls.empty());
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", false, 1);
+}
+
+// Subdomain fetch returns valid JSON but with an empty provider_urls list:
+// implementation rejects it (the subdomain contract requires exactly one entry)
+// and falls back to the apex well-known.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainEmptyProviderListFallsBackToApex) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      R"({"provider_urls": []})", net::HTTP_OK,
+      R"({"provider_urls": ["https://idp.test/fedcm.json"]})", net::HTTP_OK);
+
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls);
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", false, 1);
+}
+
+// Subdomain fetch returns parseable JSON missing the provider_urls key:
+// implementation rejects it and falls back to the apex well-known.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       SubdomainMissingProviderUrlsFallsBackToApex) {
+  auto [fetch_status, well_known] = FetchWithSubdomainResponse(
+      R"({"unrelated_key": "ignored"})", net::HTTP_OK,
+      R"({"provider_urls": ["https://idp.test/fedcm.json"]})", net::HTTP_OK);
+
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls);
+  histogram_tester()->ExpectUniqueSample(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", false, 1);
+}
+
+// When the flag is enabled but the provider URL has no eTLD+1 (IP literal),
+// no subdomain URL can be computed, so the implementation goes straight to
+// apex without recording the discovery histogram.
+TEST_F(IdpNetworkRequestManagerWebIdentitySubdomainTest,
+       NoSubdomainAttemptedForIpLiteralProvider) {
+  GURL illegal_idp_url("https://192.101.0.1/test/");
+
+  base::RunLoop run_loop;
+  FetchStatus fetch_status;
+  IdpNetworkRequestManager::WellKnown well_known;
+  auto callback = base::BindLambdaForTesting(
+      [&](FetchStatus status,
+          const IdpNetworkRequestManager::WellKnown& result) {
+        fetch_status = status;
+        well_known = result;
+        run_loop.Quit();
+      });
+  std::unique_ptr<IdpNetworkRequestManager> manager = CreateTestManager();
+  manager->FetchWellKnown(illegal_idp_url, std::move(callback));
+  run_loop.Run();
+
+  // ComputeWellKnownUrl() also rejects this URL, so the manager short-circuits
+  // to a synthetic kHttpNotFoundError without issuing any network request.
+  EXPECT_EQ(ParseStatus::kHttpNotFoundError, fetch_status.parse_status);
+  EXPECT_EQ(0, test_url_loader_factory().NumPending())
+      << "no subdomain (or apex) request must be issued for an IP literal IdP";
+  histogram_tester()->ExpectTotalCount(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", 0);
+}
+
+// With the flag *disabled* the manager must not attempt the subdomain URL
+// or record the discovery histogram, even if the provider has a valid eTLD+1.
+// This test deliberately lives in the base fixture (which leaves the feature
+// flag at its default-disabled value) rather than the enabled-flag fixture.
+TEST_F(IdpNetworkRequestManagerTest,
+       FetchWellKnownDoesNotAttemptSubdomainWhenFlagDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kFedCmWebIdentitySubdomain);
+
+  // Only the apex URL is wired; if the implementation tried the subdomain URL
+  // the request would hang and the test would time out.
+  auto [fetch_status, well_known] = SendWellKnownRequestAndWaitForResponse(
+      R"({"provider_urls": ["https://idp.test/fedcm.json"]})");
+
+  EXPECT_EQ(ParseStatus::kSuccess, fetch_status.parse_status);
+  EXPECT_EQ(std::set<GURL>{GURL("https://idp.test/fedcm.json")},
+            well_known.provider_urls);
+  histogram_tester()->ExpectTotalCount(
+      "Blink.FedCm.WebIdentitySubdomain.DiscoverySucceeded", 0);
 }
 
 TEST_F(IdpNetworkRequestManagerTest, ErrorFetchingConfig) {
@@ -1905,7 +2142,7 @@ TEST_F(IdpNetworkRequestManagerTest, ErrorFetchingAccounts) {
       SendAccountsRequestAndWaitForResponse(R"({
   "accounts" : []
   })",
-                                            "", net::HTTP_BAD_REQUEST);
+                                            net::HTTP_BAD_REQUEST);
   EXPECT_EQ(ParseStatus::kNoResponseError, fetch_status.parse_status);
   EXPECT_EQ(net::HTTP_BAD_REQUEST, fetch_status.response_code);
 }
@@ -2008,7 +2245,7 @@ TEST_F(IdpNetworkRequestManagerTest, AccountsWrongMimeType) {
   FetchStatus accounts_response;
   IdpNetworkRequestManager::AccountsResponse accounts;
   std::tie(accounts_response, accounts) = SendAccountsRequestAndWaitForResponse(
-      test_single_account_json, /*client_id=*/"", net::HTTP_OK, "text/html");
+      test_single_account_json, net::HTTP_OK, "text/html");
 
   EXPECT_EQ(ParseStatus::kInvalidContentTypeError,
             accounts_response.parse_status);
@@ -2057,7 +2294,38 @@ TEST_F(IdpNetworkRequestManagerTest, FetchingTokenLeadsToAContinuationUrl) {
             token_response_type());
 }
 
-//+    kTokenReceivedAndErrorReceivedAndContinueOnReceived = 5,
+TEST_F(IdpNetworkRequestManagerTest, FetchingTokenLeadsToARedirectToUrl) {
+  net::HttpStatusCode http_status = net::HTTP_OK;
+  const std::string& mime_type = "application/json";
+
+  const char response[] =
+      R"({"redirect_to": "https://idp.test/an-absolute-url-for-redirect"})";
+  GURL token_endpoint(kTestTokenEndpoint);
+  AddResponse(token_endpoint, http_status, mime_type, response);
+
+  base::RunLoop run_loop;
+  auto callback = base::BindLambdaForTesting(
+      [&](FetchStatus status, TokenResult&& result) {});
+
+  auto on_redirect = base::BindLambdaForTesting(
+      [&](FetchStatus status, blink::mojom::RedirectParams::Tag method,
+          const GURL& url, const std::string& request_body) {
+        // Checks that we got a redirect url event back.
+        EXPECT_EQ("https://idp.test/an-absolute-url-for-redirect", url.spec());
+        run_loop.Quit();
+      });
+
+  std::unique_ptr<IdpNetworkRequestManager> manager = CreateTestManager();
+  manager->SendTokenRequest(token_endpoint, "account", "request", false,
+                            std::move(callback), base::DoNothing(),
+                            std::move(on_redirect),
+                            CreateErrorMetricsCallback(run_loop));
+  run_loop.Run();
+  EXPECT_EQ(
+      TokenResponseType::
+          kTokenNotReceivedAndErrorNotReceivedAndContinueOnNotReceivedAndRedirectToReceived,
+      token_response_type());
+}
 
 TEST_F(IdpNetworkRequestManagerTest, ContinueOnWithToken) {
   net::HttpStatusCode http_status = net::HTTP_OK;
@@ -2489,6 +2757,87 @@ TEST_F(IdpNetworkRequestManagerTest, DisconnectRequest) {
   EXPECT_EQ(net::HTTP_OK, disconnect_response.response_code);
   ASSERT_TRUE(disconnect_account_id.has_value());
   EXPECT_EQ(*disconnect_account_id, "accountId");
+}
+
+TEST_F(IdpNetworkRequestManagerTest, DisconnectRequestInjection) {
+  bool called = false;
+  auto interceptor = base::BindLambdaForTesting([&](const network::
+                                                        ResourceRequest&
+                                                            request) {
+    called = true;
+    EXPECT_EQ(GURL(kTestDisconnectEndpoint), request.url);
+
+    // Check that the request body is escaped.
+    ASSERT_NE(request.request_body, nullptr);
+    ASSERT_EQ(1ul, request.request_body->elements()->size());
+    const network::DataElement& elem = request.request_body->elements()->at(0);
+    ASSERT_EQ(network::DataElement::Tag::kBytes, elem.type());
+    const network::DataElementBytes& byte_elem =
+        elem.As<network::DataElementBytes>();
+    // If it's not escaped, it would be
+    // "client_id=client&inject=id&account_hint=hint&inject=account" If it's
+    // escaped, it should be
+    // "client_id=client%26inject%3Did&account_hint=hint%26inject%3Daccount"
+    EXPECT_EQ(
+        "client_id=client%26inject%3Did&account_hint=hint%26inject%3Daccount",
+        byte_elem.AsStringPiece());
+  });
+  test_url_loader_factory().SetInterceptor(interceptor);
+
+  const char test_disconnect_json[] = R"({
+  "account_id" : "accountId"
+  })";
+
+  GURL disconnect_endpoint(kTestDisconnectEndpoint);
+  AddResponse(disconnect_endpoint, net::HTTP_OK, "application/json",
+              test_disconnect_json);
+
+  base::RunLoop run_loop;
+  auto callback = base::BindLambdaForTesting(
+      [&](FetchStatus response, const std::string& account_id) {
+        run_loop.Quit();
+      });
+
+  std::unique_ptr<IdpNetworkRequestManager> manager = CreateTestManager();
+  manager->SendDisconnectRequest(disconnect_endpoint, "hint&inject=account",
+                                 "client&inject=id", std::move(callback));
+  run_loop.Run();
+
+  EXPECT_TRUE(called);
+}
+
+// If the frame is invalidated during the request initiation, the request is
+// aborted.
+TEST_F(IdpNetworkRequestManagerTest, RequestAbortedOnInvalidFrame) {
+  network::TestURLLoaderFactory test_url_loader_factory;
+  auto test_permission_delegate = std::make_unique<MockPermissionDelegate>();
+
+  // Simulate the initiator frame being invalidated by passing a default
+  // constructed `WeakDocumentPtr`.
+  auto network_manager = std::make_unique<IdpNetworkRequestManager>(
+      url::Origin::Create(GURL(kTestRpUrl)),
+      /*rp_embedding_origin=*/url::Origin(),
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory),
+      test_permission_delegate.get(),
+      network::mojom::ClientSecurityState::New(), FrameTreeNodeId(),
+      WeakDocumentPtr());
+
+  base::RunLoop run_loop;
+  auto callback = base::BindLambdaForTesting(
+      [&](FetchStatus fetch_status,
+          const IdpNetworkRequestManager::WellKnown& well_known) {
+        // The request should be aborted.
+        EXPECT_EQ(ParseStatus::kNoResponseError, fetch_status.parse_status);
+        EXPECT_EQ(net::ERR_ABORTED, fetch_status.response_code);
+        run_loop.Quit();
+      });
+
+  network_manager->FetchWellKnown(GURL("https://idp.example"),
+                                  std::move(callback));
+  run_loop.Run();
+
+  EXPECT_EQ(0, test_url_loader_factory.NumPending());
 }
 
 }  // namespace

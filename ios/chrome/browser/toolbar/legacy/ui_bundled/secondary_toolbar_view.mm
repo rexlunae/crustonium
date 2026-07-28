@@ -216,6 +216,9 @@ UIView* SecondaryToolbarLocationBarContainerView(
 
   if (IsBottomOmniboxAvailable()) {
     self.collapsedToolbarButton = SecondaryToolbarCollapsedToolbarButton();
+    self.collapsedToolbarButton.accessibilityLabel =
+        [self.buttonFactory.toolbarConfiguration
+                accessibilityLabelForCollapsedSecondaryToolbarButton];
     self.locationBarContainer =
         SecondaryToolbarLocationBarContainerView(self.buttonFactory);
     locationBarContainer = self.locationBarContainer;
@@ -316,7 +319,7 @@ UIView* SecondaryToolbarLocationBarContainerView(
                                       kToolbarSeparatorHeight)],
   ]];
   [NSLayoutConstraint activateConstraints:@[
-    [self.separator.bottomAnchor constraintEqualToAnchor:self.topAnchor],
+    [self.separator.topAnchor constraintEqualToAnchor:self.topAnchor],
   ]];
 }
 
@@ -380,16 +383,6 @@ UIView* SecondaryToolbarLocationBarContainerView(
   } else {
     _buttonStackViewNoOmniboxConstraint.active = YES;
   }
-}
-
-- (void)setLocationBarHeight:(CGFloat)locationBarHeight {
-  /// Location bar height is only handled by this property in multiline omnibox.
-  CHECK(IsMultilineBrowserOmniboxEnabled(), base::NotFatalUntil::M200);
-  if (locationBarHeight == _locationBarHeight) {
-    return;
-  }
-  _locationBarHeight = locationBarHeight;
-  self.locationBarContainerHeight.constant = locationBarHeight;
 }
 
 @end

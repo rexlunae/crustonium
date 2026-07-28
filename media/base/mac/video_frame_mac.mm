@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/base/mac/video_frame_mac.h"
 
@@ -13,7 +9,10 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <vector>
 
+#include "base/apple/bridging.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "media/base/mac/color_space_util_mac.h"
@@ -96,8 +95,9 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
     return pixel_buffer;
   }
 
-  const gfx::Rect& visible_rect = frame->visible_rect();
-  bool crop_needed = visible_rect != gfx::Rect(frame->coded_size());
+  const auto& coded_size = frame->coded_size();
+  const auto& visible_rect = frame->visible_rect();
+  const bool crop_needed = visible_rect != gfx::Rect(coded_size);
 
   if (!crop_needed) {
     // If the frame has a mappable SharedImage, yank out its IOSurface if it
@@ -167,16 +167,14 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
   DCHECK_LE(num_planes, kMaxPlanes);
 
   // Build arrays for each plane's data pointer, dimensions and byte alignment.
-  void* plane_ptrs[kMaxPlanes];
-  size_t plane_widths[kMaxPlanes];
-  size_t plane_heights[kMaxPlanes];
-  size_t plane_bytes_per_row[kMaxPlanes];
+  std::vector<void*> plane_ptrs(num_planes);
+  std::vector<size_t> plane_widths(num_planes);
+  std::vector<size_t> plane_heights(num_planes);
+  std::vector<size_t> plane_bytes_per_row(num_planes);
   for (int plane_i = 0; plane_i < num_planes; ++plane_i) {
-    plane_ptrs[plane_i] = const_cast<uint8_t*>(frame->visible_data(plane_i));
-    gfx::Size plane_size =
-        VideoFrame::PlaneSize(video_frame_format, plane_i, visible_rect.size());
-    plane_widths[plane_i] = plane_size.width();
-    plane_heights[plane_i] = plane_size.height();
+    plane_ptrs[plane_i] = const_cast<uint8_t*>(frame->data(plane_i));
+    plane_widths[plane_i] = frame->columns(plane_i);
+    plane_heights[plane_i] = frame->rows(plane_i);
     plane_bytes_per_row[plane_i] = frame->stride(plane_i);
   }
 
@@ -190,13 +188,41 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
   // give it a smart pointer to the frame, so instead pass a raw pointer and
   // increment the frame's reference count manually.
   CVReturn result = CVPixelBufferCreateWithPlanarBytes(
-      kCFAllocatorDefault, visible_rect.width(), visible_rect.height(),
-      cv_format, descriptor, 0, num_planes, plane_ptrs, plane_widths,
-      plane_heights, plane_bytes_per_row, &CvPixelBufferReleaseCallback,
-      frame.get(), nullptr, pixel_buffer.InitializeInto());
+      kCFAllocatorDefault, coded_size.width(), coded_size.height(), cv_format,
+      descriptor, 0, num_planes, plane_ptrs.data(), plane_widths.data(),
+      plane_heights.data(), plane_bytes_per_row.data(),
+      &CvPixelBufferReleaseCallback, frame.get(), nullptr,
+      pixel_buffer.InitializeInto());
   if (result != kCVReturnSuccess) {
     DLOG(ERROR) << " CVPixelBufferCreateWithPlanarBytes failed: " << result;
     return base::apple::ScopedCFTypeRef<CVPixelBufferRef>(nullptr);
+  }
+
+  // We must guarantee that every row of the CVPixelBuffer has the full stride,
+  // so we can't directly pass visible_data() pointers in. We must instead pass
+  // the full coded data along with the crop rect.
+  if (crop_needed) {
+    // Unlike our visible rect, the clean aperture offsets are relative to the
+    // center of image. There's not a lot of documentation on this calculation,
+    // but see crabby_avifCleanApertureBoxConvertCropRect() for another impl.
+    double horizontal_offset =
+        visible_rect.x() - (coded_size.width() - visible_rect.width()) / 2.0;
+    double vertical_offset =
+        visible_rect.y() - (coded_size.height() - visible_rect.height()) / 2.0;
+    NSDictionary* clean_aperture = @{
+      base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureWidthKey) :
+          @(visible_rect.width()),
+      base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureHeightKey) :
+          @(visible_rect.height()),
+      base::apple::CFToNSPtrCast(
+          kCVImageBufferCleanApertureHorizontalOffsetKey) :
+          @(horizontal_offset),
+      base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureVerticalOffsetKey) :
+          @(vertical_offset)
+    };
+    CVBufferSetAttachment(pixel_buffer.get(), kCVImageBufferCleanApertureKey,
+                          base::apple::NSToCFPtrCast(clean_aperture),
+                          kCVAttachmentMode_ShouldPropagate);
   }
 
   // The CVPixelBuffer now references the data of the frame, so increment its
@@ -206,22 +232,4 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
   SetCvPixelBufferColorSpace(frame->ColorSpace(), pixel_buffer.get());
   return pixel_buffer;
 }
-
-MEDIA_EXPORT bool IOSurfaceIsWebGPUCompatible(IOSurfaceRef io_surface) {
-  switch (IOSurfaceGetPixelFormat(io_surface)) {
-    case kCVPixelFormatType_64RGBAHalf:
-    case kCVPixelFormatType_TwoComponent16Half:
-    case kCVPixelFormatType_OneComponent16Half:
-    case kCVPixelFormatType_ARGB2101010LEPacked:
-    case kCVPixelFormatType_32RGBA:
-    case kCVPixelFormatType_32BGRA:
-    case kCVPixelFormatType_TwoComponent8:
-    case kCVPixelFormatType_OneComponent8:
-    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
-      return true;
-    default:
-      return false;
-  }
-}
-
 }  // namespace media

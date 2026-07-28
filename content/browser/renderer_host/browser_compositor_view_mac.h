@@ -24,8 +24,9 @@
 
 namespace ui {
 class AcceleratedWidgetMacNSView;
+class LayerSurface;
 class RecyclableCompositorMac;
-}
+}  // namespace ui
 
 namespace content {
 
@@ -39,6 +40,7 @@ class BrowserCompositorMacClient {
   virtual std::vector<viz::SurfaceId> CollectSurfaceIdsForEviction() = 0;
   virtual display::ScreenInfo GetCurrentScreenInfo() const = 0;
   virtual void SetCurrentDeviceScaleFactor(float device_scale_factor) = 0;
+  virtual bool ShouldUseDefaultDeadlineOnResize() const = 0;
 };
 
 // This class owns a DelegatedFrameHost, and will dynamically attach and
@@ -114,7 +116,7 @@ class CONTENT_EXPORT BrowserCompositorMac : public DelegatedFrameHostClient,
   static void DisableRecyclingForShutdown();
 
   // DelegatedFrameHostClient implementation.
-  ui::Layer* DelegatedFrameHostGetLayer() const override;
+  ui::LayerSurface* GetDelegatedFrameHostLayer() const override;
   bool DelegatedFrameHostIsVisible() const override;
   SkColor DelegatedFrameHostGetGutterColor() const override;
   void OnFrameTokenChanged(uint32_t frame_token,
@@ -123,6 +125,7 @@ class CONTENT_EXPORT BrowserCompositorMac : public DelegatedFrameHostClient,
   void InvalidateLocalSurfaceIdOnEviction() override;
   viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction() override;
   bool ShouldShowStaleContentOnEviction() override;
+  cc::DeadlinePolicy GetResizeDeadlinePolicy() const override;
 
   base::WeakPtr<BrowserCompositorMac> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -150,8 +153,6 @@ class CONTENT_EXPORT BrowserCompositorMac : public DelegatedFrameHostClient,
  private:
   // ui::LayerObserver implementation:
   void LayerDestroyed(ui::Layer* layer) override;
-
-  cc::DeadlinePolicy GetDeadlinePolicy(bool is_resize) const;
 
   // The state of |delegated_frame_host_| and |recyclable_compositor_| to
   // manage being visible, hidden, or drawn via a ui::Layer.
@@ -186,7 +187,7 @@ class CONTENT_EXPORT BrowserCompositorMac : public DelegatedFrameHostClient,
   std::unique_ptr<ui::RecyclableCompositorMac> recyclable_compositor_;
 
   std::unique_ptr<DelegatedFrameHost> delegated_frame_host_;
-  std::unique_ptr<ui::Layer> root_layer_;
+  std::unique_ptr<ui::LayerSurface> root_layer_;
 
   SkColor background_color_ = SK_ColorWHITE;
 

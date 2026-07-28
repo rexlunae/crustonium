@@ -6,8 +6,10 @@
 
 #include "base/check.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/tracing_buildflags.h"
 
@@ -52,12 +54,19 @@ bool WaitableEvent::TimedWait(TimeDelta wait_delta, const Location& location) {
     return IsSignaled();
   }
 
-  // Consider this thread blocked for scheduling purposes. Ignore this for
-  // non-blocking WaitableEvents.
+  // Consider this thread blocked unless the event is already signaled. Ignore
+  // this for non-blocking WaitableEvents.
   std::optional<internal::ScopedBlockingCallWithBaseSyncPrimitives>
       scoped_blocking_call;
+
   if (!only_used_while_idle_) {
-    scoped_blocking_call.emplace(location, BlockingType::MAY_BLOCK);
+    // Always verify thread restrictions to avoid fortuitous allowance if it's
+    // already signaled.
+    internal::AssertBaseSyncPrimitivesAllowed();
+    if (IsDefinitelySignaled()) {
+      return true;
+    }
+    scoped_blocking_call.emplace(location, BlockingType::WILL_BLOCK);
   }
 
   const bool result = TimedWaitImpl(wait_delta);
@@ -73,8 +82,15 @@ bool WaitableEvent::TimedWait(TimeDelta wait_delta, const Location& location) {
 
 size_t WaitableEvent::WaitMany(base::span<WaitableEvent*> events) {
   DCHECK(!events.empty()) << "Cannot wait on no events";
+
+  for (size_t i = 0; i < events.size(); ++i) {
+    if (events[i]->IsDefinitelySignaled()) {
+      return i;
+    }
+  }
+
   internal::ScopedBlockingCallWithBaseSyncPrimitives scoped_blocking_call(
-      FROM_HERE, BlockingType::MAY_BLOCK);
+      FROM_HERE, BlockingType::WILL_BLOCK);
 
   const size_t signaled_id = WaitManyImpl(events);
   WaitableEvent* const signaled_event = events[signaled_id];

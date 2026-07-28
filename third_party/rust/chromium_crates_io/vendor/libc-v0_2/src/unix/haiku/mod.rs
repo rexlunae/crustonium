@@ -371,7 +371,7 @@ s! {
     pub struct sem_t {
         pub type_: i32,
         pub named_sem_id: i32, // actually a union with unnamed_sem (i32)
-        pub padding: [i32; 2],
+        padding: Padding<[i32; 2]>,
     }
 
     pub struct ucred {
@@ -1091,13 +1091,13 @@ pub const PTHREAD_STACK_MIN: size_t = 8192;
 pub const PTHREAD_MUTEX_INITIALIZER: pthread_mutex_t = pthread_mutex_t {
     flags: 0,
     lock: 0,
-    unused: Padding::uninit(),
+    unused: Padding::new(0),
     owner: -1,
     owner_count: 0,
 };
 pub const PTHREAD_COND_INITIALIZER: pthread_cond_t = pthread_cond_t {
     flags: 0,
-    unused: Padding::uninit(),
+    unused: Padding::new(0),
     mutex: 0 as *mut _,
     waiter_count: 0,
     lock: 0,

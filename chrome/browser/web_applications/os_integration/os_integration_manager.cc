@@ -18,6 +18,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/functional/concurrent_closures.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -54,7 +55,6 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -148,6 +148,9 @@ void OsIntegrationManager::RegisterProfilePrefs(
                                 kCurrentAppShortcutsVersion);
   registry->RegisterStringPref(prefs::kAppShortcutsArch,
                                CurrentAppShortcutsArch());
+  // NOTE: If you add new prefs here that should be cleared during database
+  // corruption recovery, make sure to update
+  // `RemoveWebAppJob::RemoveForCorruptDatabase`.
 }
 
 // static
@@ -364,11 +367,6 @@ void OsIntegrationManager::GetShortcutInfoForAppFromRegistrar(
       base::BindOnce(&OsIntegrationManager::OnIconsRead,
                      weak_ptr_factory_.GetWeakPtr(), app_id,
                      std::move(callback)));
-}
-
-bool OsIntegrationManager::IsFileHandlingAPIAvailable(
-    const webapps::AppId& app_id) {
-  return true;
 }
 
 const apps::FileHandlers* OsIntegrationManager::GetEnabledFileHandlers(
@@ -613,10 +611,9 @@ void OsIntegrationManager::SetCurrentAppShortcutsVersion() {
   }
 }
 
-void OsIntegrationManager::OnIconsRead(
-    const webapps::AppId& app_id,
-    GetShortcutInfoCallback callback,
-    std::map<SquareSizePx, SkBitmap> icon_bitmaps) {
+void OsIntegrationManager::OnIconsRead(const webapps::AppId& app_id,
+                                       GetShortcutInfoCallback callback,
+                                       OrderedSizeToBitmap icon_bitmaps) {
   const WebApp* app = provider_->registrar_unsafe().GetAppById(app_id);
   if (!app) {
     std::move(callback).Run(nullptr);

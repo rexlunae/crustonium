@@ -265,12 +265,19 @@ void WebViewPermissionHelper::OnMediaPermissionResponse(
                             std::unique_ptr<content::MediaStreamUI>());
     return;
   }
-  if (!web_view_guest()->attached() ||
-      !web_view_guest()->embedder_web_contents()->GetDelegate()) {
-    std::move(callback).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
-        std::unique_ptr<content::MediaStreamUI>());
+  if (!web_view_guest()->attached()) {
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                FAILED_DUE_TO_SHUTDOWN_WEB_VIEW_NOT_ATTACHED,
+                            std::unique_ptr<content::MediaStreamUI>());
+    return;
+  }
+
+  if (!web_view_guest()->embedder_web_contents()->GetDelegate()) {
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                FAILED_DUE_TO_SHUTDOWN_NO_WEB_VIEW_DELEGATE,
+                            std::unique_ptr<content::MediaStreamUI>());
     return;
   }
 
@@ -318,6 +325,15 @@ void WebViewPermissionHelper::RequestPointerLockPermission(
     base::OnceCallback<void(bool)> callback) {
   web_view_permission_helper_delegate_->RequestPointerLockPermission(
       user_gesture, last_unlocked_by_target, std::move(callback));
+}
+
+void WebViewPermissionHelper::RequestMediaPermission(
+    ContentSettingsType type,
+    const GURL& requesting_frame_origin,
+    bool user_gesture,
+    base::OnceCallback<void(bool)> callback) {
+  web_view_permission_helper_delegate_->RequestMediaPermission(
+      type, requesting_frame_origin, user_gesture, std::move(callback));
 }
 
 void WebViewPermissionHelper::RequestGeolocationPermission(

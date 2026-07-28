@@ -7,6 +7,7 @@ package org.chromium.components.browser_ui.site_settings;
 import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
 import static org.chromium.components.browser_ui.settings.SearchUtils.handleSearchNavigation;
+import static org.chromium.components.browser_ui.styles.SemanticColorUtils.getDefaultTextColorLink;
 
 import android.content.Context;
 import android.content.DialogInterface;
@@ -128,7 +129,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
             if (mEmptyView == null) return;
 
             mEmptyView.setVisibility(hasEntries ? View.GONE : View.VISIBLE);
-            notifyPreferencesUpdated();
+            updateContainment();
         }
     }
 
@@ -351,6 +352,9 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
 
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
+        String title = getArguments().getString(EXTRA_TITLE);
+        if (title != null) mPageTitle.set(title);
+
         // Handled in onActivityCreated. Moving the addPreferencesFromResource call up to here
         // causes animation jank (crbug.com/985734).
     }
@@ -358,9 +362,6 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
     @Override
     public void onActivityCreated(@Nullable Bundle savedInstanceState) {
         addPreferencesFromXml();
-
-        String title = getArguments().getString(EXTRA_TITLE);
-        if (title != null) mPageTitle.set(title);
 
         mSelectedDomains =
                 getArguments().containsKey(EXTRA_SELECTED_DOMAINS)
@@ -408,7 +409,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
                             Menu.NONE,
                             R.id.menu_id_site_settings_help,
                             Menu.NONE,
-                            R.string.menu_help);
+                            getSiteSettingsDelegate().getHelpMenuStringRes());
             help.setIcon(
                     TraceEventVectorDrawableCompat.create(
                             getResources(), R.drawable.ic_help_24dp, getContext().getTheme()));
@@ -452,8 +453,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
     @Override
     public void onStart() {
         super.onStart();
-
-        if (mSearch == null && mSearchItem != null) {
+        if (mSearch != null && mSearchItem != null) {
             SearchUtils.clearSearch(mSearchItem, getActivity());
             mSearch = null;
         }
@@ -489,14 +489,16 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
                     new SpannableString(
                             getResources().getString(R.string.clear_browsing_data_link));
             spannableString.setSpan(
-                    new ForegroundColorSpan(
-                            getContext().getColor(R.color.default_text_color_link_baseline)),
+                    new ForegroundColorSpan(getDefaultTextColorLink(getContext())),
                     0,
                     spannableString.length(),
                     Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
             clearBrowsingDataLink.setSummary(spannableString);
             clearBrowsingDataLink.setOnPreferenceClickListener(
                     pref -> {
+                        if (mSearchItem != null) {
+                            SearchUtils.clearSearch(mSearchItem, getActivity());
+                        }
                         getSiteSettingsDelegate().launchClearBrowsingDataDialog(getActivity());
                         return true;
                     });

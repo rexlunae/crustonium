@@ -29,6 +29,7 @@ import androidx.appcompat.widget.AppCompatTextView;
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.widget.ImageViewCompat;
 
+import org.chromium.base.Callback;
 import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
@@ -86,6 +87,7 @@ public class ChipView extends LinearLayout {
     private @MonotonicNonNull LinearLayout mTextViewsWrapper;
     private @MonotonicNonNull AppCompatTextView mSecondaryText;
     private @Px int mMaxWidth = Integer.MAX_VALUE;
+    private @Nullable Callback<Boolean> mSelectHandler;
 
     /** Constructor for applying a theme overlay. */
     public ChipView(Context context, @StyleRes int themeOverlay) {
@@ -120,11 +122,16 @@ public class ChipView extends LinearLayout {
                         R.styleable.ChipView_chipStartPadding,
                         getResources().getDimensionPixelSize(R.dimen.chip_view_start_padding));
 
+        @Px int chipTopPadding = a.getDimensionPixelSize(R.styleable.ChipView_chipTopPadding, 0);
+
         @Px
         int chipEndPadding =
                 a.getDimensionPixelSize(
                         R.styleable.ChipView_chipEndPadding,
                         getResources().getDimensionPixelSize(R.dimen.chip_view_end_padding));
+
+        @Px
+        int chipBottomPadding = a.getDimensionPixelSize(R.styleable.ChipView_chipBottomPadding, 0);
 
         mEndIconMarginStart =
                 a.getDimensionPixelSize(
@@ -200,6 +207,10 @@ public class ChipView extends LinearLayout {
                         R.styleable.ChipView_primaryTextStartPadding,
                         getResources()
                                 .getDimensionPixelSize(R.dimen.chip_primary_text_start_padding));
+        int loadingViewSize =
+                a.getDimensionPixelSize(
+                        R.styleable.ChipView_loadingViewSize,
+                        getResources().getDimensionPixelSize(R.dimen.chip_loading_view_size));
         a.recycle();
 
         mStartIcon = new ChromeImageView(getContext());
@@ -212,7 +223,6 @@ public class ChipView extends LinearLayout {
             chipStartPadding = (chipHeight - iconHeight) / 2;
         }
 
-        int loadingViewSize = getResources().getDimensionPixelSize(R.dimen.chip_loading_view_size);
         int loadingViewHeightPadding = (iconHeight - loadingViewSize) / 2;
         int loadingViewWidthPadding = (iconWidth - loadingViewSize) / 2;
         mLoadingView = new LoadingView(getContext());
@@ -231,7 +241,8 @@ public class ChipView extends LinearLayout {
         // Setting this enforces 16dp padding at the end and 8dp at the start (unless overridden).
         // For text, the start padding needs to be 16dp which is why a ChipTextView contributes the
         // remaining 8dp.
-        this.setPaddingRelative(chipStartPadding, 0, chipEndPadding, 0);
+        this.setPaddingRelative(
+                chipStartPadding, chipTopPadding, chipEndPadding, chipBottomPadding);
 
         mPrimaryText =
                 new AppCompatTextView(new ContextThemeWrapper(getContext(), R.style.ChipTextView));
@@ -285,7 +296,8 @@ public class ChipView extends LinearLayout {
                         mCornerRadius,
                         chipStrokeColorId,
                         chipBorderWidthId,
-                        verticalInset);
+                        verticalInset,
+                        0);
         setIconWithTint(INVALID_ICON_ID, /* tintWithTextColor= */ false);
 
         updateLayoutDirection();
@@ -385,9 +397,10 @@ public class ChipView extends LinearLayout {
     /**
      * Shows a {@link LoadingView} at the start of the chip view. This replaces the start icon.
      *
-     * @param loadingViewObserver A {@link LoadingView.Observer} to add to the LoadingView.
+     * @param loadingViewObserver An optional {@link LoadingView.Observer} to add to the
+     *     LoadingView.
      */
-    public void showLoadingView(LoadingView.Observer loadingViewObserver) {
+    public void showLoadingView(LoadingView.@Nullable Observer loadingViewObserver) {
         mLoadingView.addObserver(
                 new LoadingView.Observer() {
                     @Override
@@ -400,18 +413,35 @@ public class ChipView extends LinearLayout {
                         mStartIcon.setVisibility(VISIBLE);
                     }
                 });
-        mLoadingView.addObserver(loadingViewObserver);
-        mLoadingView.showLoadingUi();
+        if (loadingViewObserver != null) {
+            mLoadingView.addObserver(loadingViewObserver);
+        }
+        mLoadingView.showLoadingUi(/* skipDelay= */ true);
     }
 
     /**
      * Hides the {@link LoadingView} at the start of the chip view.
      *
-     * @param loadingViewObserver A {@link LoadingView.Observer} to add to the LoadingView.
+     * @param loadingViewObserver An optional {@link LoadingView.Observer} to add to the
+     *     LoadingView.
      */
-    public void hideLoadingView(LoadingView.Observer loadingViewObserver) {
-        mLoadingView.addObserver(loadingViewObserver);
-        mLoadingView.hideLoadingUi();
+    public void hideLoadingView(LoadingView.@Nullable Observer loadingViewObserver) {
+        hideLoadingView(loadingViewObserver, /* skipDelay= */ false);
+    }
+
+    /**
+     * Hides the {@link LoadingView} at the start of the chip view.
+     *
+     * @param loadingViewObserver An optional {@link LoadingView.Observer} to add to the
+     *     LoadingView.
+     * @param skipDelay If true, the loading UI hides immediately without fading out.
+     */
+    public void hideLoadingView(
+            LoadingView.@Nullable Observer loadingViewObserver, boolean skipDelay) {
+        if (loadingViewObserver != null) {
+            mLoadingView.addObserver(loadingViewObserver);
+        }
+        mLoadingView.hideLoadingUi(skipDelay);
     }
 
     /** Adds a remove icon (X button) at the trailing end of the chip next to the primary text. */
@@ -704,5 +734,23 @@ public class ChipView extends LinearLayout {
                         : View.LAYOUT_DIRECTION_LTR;
 
         setLayoutDirection(layoutDirection);
+    }
+
+    /**
+     * Set a handler to be invoked when the selection state of the chip changes.
+     *
+     * @param selectHandler The callback to be invoked with the new selection state.
+     */
+    public void setSelectHandler(@Nullable Callback<Boolean> selectHandler) {
+        mSelectHandler = selectHandler;
+    }
+
+    @Override
+    public void setSelected(boolean isSelected) {
+        boolean wasSelected = isSelected();
+        super.setSelected(isSelected);
+        if (mSelectHandler != null && wasSelected != isSelected) {
+            mSelectHandler.onResult(isSelected);
+        }
     }
 }

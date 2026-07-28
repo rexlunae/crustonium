@@ -58,7 +58,13 @@ enum class OAuthMultiloginResponseStatus {
   // most once. The HTTP status code will be 400.
   kRetryWithTokenBindingChallenge = 6,
 
-  kMaxValue = kRetryWithTokenBindingChallenge,
+  // A network error occurred while trying to fetch OAuth multilogin. This
+  // is a transient issue, so the client may retry at a later time with
+  // exponential backoff or when the client is back online.
+  // Recorded in Signin.OAuthMultiloginResponseStatus2.
+  kNetworkError = 7,
+
+  kMaxValue = kNetworkError,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:OAuthMultiloginResponseStatus)
 
@@ -106,7 +112,7 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuthMultiloginResult {
   // device-bound session.
   struct COMPONENT_EXPORT(GOOGLE_APIS) DeviceBoundSession {
     // The supported top-level domains.
-    enum class Domain { kUnknown, kGoogle };
+    enum class Domain { kUnknown, kGoogle, kYoutube };
 
     DeviceBoundSession();
     ~DeviceBoundSession();

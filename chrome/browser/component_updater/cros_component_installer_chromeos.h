@@ -14,6 +14,8 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/thread_annotations.h"
+#include "base/threading/thread_checker.h"
 #include "components/component_updater/ash/component_manager_ash.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service.h"
@@ -275,23 +277,30 @@ class CrOSComponentInstaller : public ComponentManagerAsh {
   void DispatchLoadCallback(LoadCallback callback,
                             base::FilePath path,
                             bool success);
+
   // Repeatedly calls DispatchLoadCallback with failure parameters.
   void DispatchFailedLoads(std::vector<LoadCallback> callbacks);
 
   // Maps from a compatible component name to its info.
-  base::flat_map<std::string, CompatibleComponentInfo> compatible_components_;
+  base::flat_map<std::string, CompatibleComponentInfo> compatible_components_
+      GUARDED_BY_CONTEXT(thread_checker_);
 
   // A weak pointer to a Delegate for emitting D-Bus signal.
-  raw_ptr<Delegate> delegate_ = nullptr;
+  raw_ptr<Delegate> delegate_ GUARDED_BY_CONTEXT(thread_checker_) = nullptr;
 
   // Table storing metadata (installs, usage, etc.).
-  std::unique_ptr<MetadataTable> metadata_table_;
+  std::unique_ptr<MetadataTable> metadata_table_
+      GUARDED_BY_CONTEXT(thread_checker_);
 
   // The load cache stores ongoing load requests, as well as the finished
   // results.
-  std::map<std::string, LoadInfo> load_cache_;
+  std::map<std::string, LoadInfo> load_cache_
+      GUARDED_BY_CONTEXT(thread_checker_);
 
-  const raw_ptr<ComponentUpdateService> component_updater_;
+  const raw_ptr<ComponentUpdateService> component_updater_
+      GUARDED_BY_CONTEXT(thread_checker_);
+
+  THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<CrOSComponentInstaller> weak_factory_{this};
 };

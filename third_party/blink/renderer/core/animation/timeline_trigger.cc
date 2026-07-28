@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/animation/timeline_trigger.h"
 
+#include "cc/animation/animation_host.h"
 #include "cc/animation/animation_id_provider.h"
 #include "cc/animation/timeline_trigger.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_animation_trigger_behavior.h"
@@ -17,21 +18,24 @@
 #include "third_party/blink/renderer/core/animation/scroll_timeline.h"
 #include "third_party/blink/renderer/core/animation/timeline_trigger_range_list.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
-TimelineTrigger::TimelineTrigger(TimelineTriggerRangeList* ranges,
-                                 Element* owning_element)
+TimelineTrigger::TimelineTrigger(TimelineTriggerRangeList* ranges)
     : ranges_(ranges) {
-  owning_element_ = owning_element;
-
   // TODO(crbug.com/473568234): Support multiple timelines.
   if (AnimationTimeline* timeline = Timeline()) {
     timeline->GetDocument()->GetDocumentAnimations().AddAnimationTrigger(*this);
   }
+
+  UseCounter::Count(GetDocument(), WebFeature::kTimelineTrigger);
 
   // A default trigger will need to trip immediately.
   Update();
@@ -52,11 +56,18 @@ TimelineTrigger* TimelineTrigger::Create(
       execution_context, options_list, exception_state));
 }
 
-std::optional<TimelineTriggerState> TimelineTrigger::ComputeState() {
+std::optional<TimelineTrigger::State> TimelineTrigger::ComputeState() {
   return GetRange() ? GetRange()->UpdateState() : std::nullopt;
 }
 
 bool TimelineTrigger::Update() {
+  if (compositor_trigger_) {
+    // If a cc TimelineTrigger exists, it is the source of truth for
+    // the trigger's state. The state is synchronized in
+    // NotifyActivate/Deactivate.
+    return true;
+  }
+
   std::optional<State> new_state = ComputeState();
   if (!new_state) {
     return false;
@@ -122,8 +133,12 @@ void TimelineTrigger::HandlePostTripAdd(Animation* animation,
   };
 
   if (old_behavior_for_current_state != new_behavior_for_current_state) {
+    // We are retroactively activating or deactivating the animation. The same
+    // restrictions on activation/deactivation should apply.
+    base::AutoReset<bool> is_activating_or_deactivating(
+        &is_activating_or_deactivating_, true);
     PerformBehavior(*animation, *new_behavior_for_current_state,
-                    exception_state);
+                    /*async_event_time=*/std::nullopt, exception_state);
     animation->UpdateIfNecessary();
   }
 }
@@ -178,34 +193,63 @@ void TimelineTrigger::CreateCompositorTrigger() {
     return;
   }
 
+  Document* document = GetDocument();
+  if (!document || !document->View() ||
+      !document->View()->GetCompositorAnimationHost()) {
+    return;
+  }
+
   cc::AnimationTimeline* cc_timeline =
       Timeline() ? Timeline()->EnsureCompositorTimeline() : nullptr;
   if (!cc_timeline) {
     return;
   }
-  GetDocument()->AttachCompositorTimeline(cc_timeline);
+  document->AttachCompositorTimeline(cc_timeline);
+
+  std::optional<CcBoundaries> cc_boundaries = ComputeCcBoundaries(cc_timeline);
+  if (!cc_boundaries) {
+    return;
+  }
+
   cc::AnimationHost* host = cc_timeline->animation_host();
-  CHECK(host);
+  if (!host) {
+    return;
+  }
 
   scoped_refptr<cc::AnimationTimeline> scopedref_cc_timeline =
       host->GetScopedRefTimelineById(cc_timeline->id());
 
   scoped_refptr<cc::TimelineTrigger> cc_trigger = cc::TimelineTrigger::Create(
-      cc::AnimationIdProvider::NextAnimationTriggerId(), scopedref_cc_timeline);
+      cc::AnimationIdProvider::NextAnimationTriggerId(), state_,
+      scopedref_cc_timeline, *cc_boundaries);
   host->AddTrigger(cc_trigger);
 
   compositor_trigger_ =
       static_cast<scoped_refptr<cc::AnimationTrigger>>(cc_trigger);
 }
 
-void TimelineTrigger::DestroyCompositorTrigger() {
-  if (compositor_trigger_) {
-    cc::AnimationHost* host = compositor_trigger_->GetAnimationHost();
-    if (host) {
-      host->RemoveTrigger(compositor_trigger_);
-    }
-    compositor_trigger_ = nullptr;
-  }
+void TimelineTrigger::NotifyActivated(base::TimeTicks activate_time) {
+  state_ = State::kPrimary;
+  DCHECK(GetRange());
+  // The trigger typically gets its state from the underlying trigger ranges,
+  // so the trigger's state reflects the state of its underlying ranges.
+  // However, when triggering from the comppositor, the compositor determines
+  // the state of the trigger. So when updating to the compositor trigger state,
+  // the underlying ranges should also be kept in sync by having their state
+  // updated.
+  // Note that we only support a single range currently, so we only need to
+  // update the state for that single range.
+  GetRange()->SetState(state_);
+
+  PerformActivate(activate_time - base::TimeTicks());
+}
+
+void TimelineTrigger::NotifyDeactivated(base::TimeTicks deactivate_time) {
+  state_ = State::kInverse;
+  DCHECK(GetRange());
+  GetRange()->SetState(state_);
+
+  PerformDeactivate(deactivate_time - base::TimeTicks());
 }
 
 }  // namespace blink

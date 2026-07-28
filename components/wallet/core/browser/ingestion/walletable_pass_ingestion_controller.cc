@@ -15,10 +15,11 @@
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/strike_database/strike_database_base.h"
 #include "components/wallet/core/browser/data_models/data_model_utils.h"
-#include "components/wallet/core/browser/data_models/walletable_pass.h"
+#include "components/wallet/core/browser/data_models/wallet_pass.h"
+#include "components/wallet/core/browser/ingestion/walletable_pass_client.h"
+#include "components/wallet/core/browser/ingestion/walletable_pass_ingestion_utils.h"
 #include "components/wallet/core/browser/metrics/wallet_metrics.h"
 #include "components/wallet/core/browser/network/wallet_http_client.h"
-#include "components/wallet/core/browser/ingestion/walletable_pass_client.h"
 #include "components/wallet/core/browser/walletable_permission_utils.h"
 #include "components/wallet/core/common/wallet_features.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
@@ -42,11 +43,20 @@ optimization_guide::proto::PassCategory ToProtoPassCategory(
       return optimization_guide::proto::PASS_CATEGORY_EVENT_PASS;
     case PassCategory::kTransitTicket:
       return optimization_guide::proto::PASS_CATEGORY_TRANSIT_TICKET;
-    // Boarding pass is not supported by optimization_guide proto.
     case PassCategory::kBoardingPass:
     case PassCategory::kUnspecified:
       return optimization_guide::proto::PASS_CATEGORY_UNSPECIFIED;
   }
+}
+
+std::optional<WalletPass> CreateBoardingPass(const WalletBarcode& barcode) {
+  if (std::optional<BoardingPass> boarding_pass =
+          BoardingPass::FromBarcode(barcode)) {
+    WalletPass pass;
+    pass.pass_data = std::move(*boarding_pass);
+    return pass;
+  }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -119,8 +129,7 @@ void WalletablePassIngestionController::OnBoardingPassBarcodesDetected(
     std::vector<WalletBarcode> barcodes) {
   for (const auto& barcode : barcodes) {
     // TODO(crbug.com/465616560): Handle multiple barcodes properly.
-    std::optional<WalletablePass> pass =
-        WalletablePass::CreateBoardingPass(barcode);
+    std::optional<WalletPass> pass = CreateBoardingPass(barcode);
     if (pass) {
       ShowSaveBubble(url, std::move(*pass));
       return;
@@ -371,7 +380,7 @@ void WalletablePassIngestionController::OnExtractWalletablePass(
   }
 
   processing_state_.extracted_pass =
-      WalletablePass::FromProto(parsed_response->walletable_pass(0));
+      ExtractWalletPassFromProto(parsed_response->walletable_pass(0));
   if (!processing_state_.extracted_pass) {
     metrics::LogServerExtractionEvent(
         pass_category, WalletablePassServerExtractionFunnelEvents::
@@ -410,17 +419,13 @@ void WalletablePassIngestionController::FinishExtraction(const GURL& url) {
 
 void WalletablePassIngestionController::ShowSaveBubble(
     const GURL& url,
-    WalletablePass walletable_pass) {
+    WalletPass walletable_pass) {
   const PassCategory pass_category = walletable_pass.GetPassCategory();
 
-  // Create a copy of walletable_pass for the callback to avoid use-after-move.
-  WalletablePass walletable_pass_for_callback = walletable_pass;
-
   client_->ShowWalletablePassSaveBubble(
-      std::move(walletable_pass),
+      walletable_pass,
       base::BindOnce(&WalletablePassIngestionController::OnGetSaveBubbleResult,
-                     weak_ptr_factory_.GetWeakPtr(), url,
-                     std::move(walletable_pass_for_callback)));
+                     weak_ptr_factory_.GetWeakPtr(), url, walletable_pass));
   metrics::LogSaveEvent(
       pass_category,
       metrics::WalletablePassSaveFunnelEvents::kSaveBubbleWasShown);
@@ -428,17 +433,14 @@ void WalletablePassIngestionController::ShowSaveBubble(
 
 void WalletablePassIngestionController::OnGetSaveBubbleResult(
     const GURL& url,
-    WalletablePass walletable_pass,
+    WalletPass walletable_pass,
     WalletablePassClient::WalletablePassBubbleResult result) {
   const PassCategory pass_category = walletable_pass.GetPassCategory();
   const std::string category = PassCategoryToString(pass_category);
   switch (result) {
     case kAccepted:
-      if (base::FeatureList::IsEnabled(kWalletablePassSave)) {
-        client_->GetWalletHttpClient()->SavePass(
-            walletable_pass,
-            base::BindOnce(&WalletablePassIngestionController::OnPassSaved,
-                           weak_ptr_factory_.GetWeakPtr(), url));
+      if (base::FeatureList::IsEnabled(features::kWalletablePassSave)) {
+        // TODO(crbug.com/465616560): Call GetWalletHttpClient::UpsertPublicPass
       }
       save_strike_db_->ClearStrikes(
           WalletablePassSaveStrikeDatabaseByHost::GetId(category,
@@ -483,8 +485,8 @@ void WalletablePassIngestionController::OnGetSaveBubbleResult(
 
 void WalletablePassIngestionController::OnPassSaved(
     const GURL& url,
-    base::expected<WalletHttpClient::SavePassResult,
-                   WalletHttpClient::WalletRequestError> result) {
+    const base::expected<WalletPass, WalletHttpClient::WalletRequestError>&
+        result) {
   // TODO(crbug.com/470178423): Log save success / failure to UMA and cache url.
 }
 

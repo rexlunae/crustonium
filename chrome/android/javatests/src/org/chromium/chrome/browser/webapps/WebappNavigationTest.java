@@ -14,7 +14,10 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Base64;
+import android.view.View;
+import android.view.WindowManager;
 
 import androidx.test.filters.LargeTest;
 import androidx.test.filters.SmallTest;
@@ -39,20 +42,24 @@ import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.MaxAndroidSdkLevel;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.cc.input.BrowserControlsState;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
 import org.chromium.chrome.browser.customtabs.CustomTabsTestUtils;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.test.MockCertVerifierRuleAndroid;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
 import org.chromium.chrome.test.util.browser.webapps.WebappTestPage;
@@ -186,6 +193,130 @@ public class WebappNavigationTest {
         ChromeTabUtils.waitForTabPageLoaded(mActivityTestRule.getActivityTab(), offOriginUrl());
         WebappActivityTestRule.assertToolbarShownMaybeHideable(activity);
         assertEquals(Color.CYAN, activity.getToolbarManager().getPrimaryColor());
+    }
+
+    /**
+     * Test that navigating off-origin while the short-edges cutout feature is enabled and the page
+     * is drawing edge-to-edge (viewport-fit=cover): - Shows a CCT-like webapp toolbar. - Restores
+     * the default cutout mode and releases the page-driven edge-to-edge state.
+     */
+    @Test
+    @SmallTest
+    @Feature({"Webapps"})
+    @Restriction(DeviceFormFactor.PHONE)
+    // Keep testing this flow without E2E everywhere after its feature flag is cleaned up.
+    @MaxAndroidSdkLevel(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @EnableFeatures(ChromeFeatureList.WEB_APP_SHORT_EDGES_CUTOUT_MODE)
+    public void testRegularLinkOffOriginShortEdgesCutoutMode() throws Exception {
+        WebappActivity activity = runWebappActivityAndWaitForIdle(mActivityTestRule.createIntent());
+        assertEquals(
+                BrowserControlsState.HIDDEN, WebappActivityTestRule.getToolbarShowState(activity));
+
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                "var meta = document.createElement('meta');"
+                        + "meta.setAttribute('name', 'viewport');"
+                        + "meta.setAttribute('content', 'viewport-fit=cover');"
+                        + "document.head.appendChild(meta);");
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES));
+                });
+
+        // Navigate off-origin via JS; clicking an anchor is unreliable while the page draws
+        // edge-to-edge because the click coordinates are offset.
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                String.format("location.assign('%s');", offOriginUrl()));
+        ChromeTabUtils.waitForTabPageLoaded(
+                ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab()), offOriginUrl());
+        WebappActivityTestRule.assertToolbarShownMaybeHideable(activity);
+
+        // The new page never declared viewport-fit=cover; the cutout mode should be restored.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT));
+                });
+
+        // The page-driven edge-to-edge state should be released and the toolbar laid out normally.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getEdgeToEdgeManager().shouldContentFitsWindowInsets(),
+                            Matchers.is(true));
+
+                    View controlContainer = activity.findViewById(R.id.control_container);
+                    Criteria.checkThat(controlContainer, Matchers.notNullValue());
+                    Criteria.checkThat(controlContainer.getVisibility(), Matchers.is(View.VISIBLE));
+                    Criteria.checkThat(controlContainer.getHeight(), Matchers.greaterThan(0));
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Webapps"})
+    @Restriction(DeviceFormFactor.PHONE)
+    @MinAndroidSdkLevel(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    @EnableFeatures({
+        ChromeFeatureList.WEB_APP_SHORT_EDGES_CUTOUT_MODE,
+        ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE
+    })
+    public void testRegularLinkOffOriginShortEdgesCutoutMode_EdgeToEdgeEverywhere()
+            throws Exception {
+        WebappActivity activity = runWebappActivityAndWaitForIdle(mActivityTestRule.createIntent());
+        assertEquals(
+                BrowserControlsState.HIDDEN, WebappActivityTestRule.getToolbarShowState(activity));
+
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                "var meta = document.createElement('meta');"
+                        + "meta.setAttribute('name', 'viewport');"
+                        + "meta.setAttribute('content', 'viewport-fit=cover');"
+                        + "document.head.appendChild(meta);");
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES));
+                });
+
+        // Navigate off-origin via JS; clicking an anchor is unreliable while the page draws
+        // edge-to-edge because the click coordinates are offset.
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                String.format("location.assign('%s');", offOriginUrl()));
+        ChromeTabUtils.waitForTabPageLoaded(
+                ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab()), offOriginUrl());
+        WebappActivityTestRule.assertToolbarShownMaybeHideable(activity);
+
+        // The new page never declared viewport-fit=cover; the cutout mode should be restored.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT));
+                });
+
+        // The page-driven edge-to-edge state should be released and the toolbar laid out normally.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getEdgeToEdgeManager().shouldContentFitsWindowInsets(),
+                            Matchers.is(false));
+
+                    View controlContainer = activity.findViewById(R.id.control_container);
+                    Criteria.checkThat(controlContainer, Matchers.notNullValue());
+                    Criteria.checkThat(controlContainer.getVisibility(), Matchers.is(View.VISIBLE));
+                    Criteria.checkThat(controlContainer.getHeight(), Matchers.greaterThan(0));
+                });
     }
 
     /**
@@ -501,7 +632,7 @@ public class WebappNavigationTest {
     }
 
     private void clickNodeWithId(String id) throws Exception {
-        DOMUtils.clickNode(
+        DOMUtils.clickNodeWithJavaScript(
                 ThreadUtils.runOnUiThreadBlocking(
                                 () -> mActivityTestRule.getActivity().getActivityTab())
                         .getWebContents(),

@@ -8,10 +8,9 @@
 #import <optional>
 #import <vector>
 
-#import "base/ios/block_types.h"
 #import "base/memory/scoped_refptr.h"
-#import "ios/chrome/browser/passwords/bottom_sheet/coordinator/password_suggestion_bottom_sheet_exit_reason.h"
-#import "ios/chrome/browser/passwords/bottom_sheet/ui/credential_suggestion_bottom_sheet_delegate.h"
+#import "components/webauthn/ios/ios_passkey_client.h"
+#import "ios/chrome/browser/passwords/bottom_sheet/coordinator/credential_suggestion_bottom_sheet_mediator_base.h"
 
 namespace autofill {
 struct FormActivityParams;
@@ -33,19 +32,17 @@ class PasswordStoreInterface;
 class FaviconLoader;
 class PrefService;
 class WebStateList;
-class GURL;
 
 @class FormSuggestion;
 
-@protocol CredentialSuggestionBottomSheetConsumer;
 @protocol CredentialSuggestionBottomSheetPresenter;
 @protocol ReauthenticationProtocol;
 
-// This mediator fetches a list suggestions to display in the bottom sheet.
+// This mediator fetches a list of suggestions to display in the bottom sheet.
 // It also manages filling the form when a suggestion is selected, as well
 // as showing the keyboard if requested when the bottom sheet is dismissed.
 @interface CredentialSuggestionBottomSheetMediator
-    : NSObject <CredentialSuggestionBottomSheetDelegate>
+    : CredentialSuggestionBottomSheetMediatorBase
 
 - (instancetype)
       initWithWebStateList:(WebStateList*)webStateList
@@ -53,7 +50,6 @@ class GURL;
                prefService:(PrefService*)prefService
                     params:(const autofill::FormActivityParams&)params
               reauthModule:(id<ReauthenticationProtocol>)reauthModule
-                       URL:(const GURL&)URL
       profilePasswordStore:
           (scoped_refptr<password_manager::PasswordStoreInterface>)
               profilePasswordStore
@@ -63,42 +59,27 @@ class GURL;
     sharedURLLoaderFactory:
         (scoped_refptr<network::SharedURLLoaderFactory>)sharedURLLoaderFactory
          engagementTracker:(feature_engagement::Tracker*)engagementTracker
-                 presenter:
-                     (id<CredentialSuggestionBottomSheetPresenter>)presenter;
+    NS_DESIGNATED_INITIALIZER;
 
-// Disconnects the mediator.
-- (void)disconnect;
+- (instancetype)
+    initWithWebStateList:(WebStateList*)webStateList
+            reauthModule:(id<ReauthenticationProtocol>)reauthModule
+             requestInfo:
+                 (std::optional<webauthn::IOSPasskeyClient::RequestInfo>)
+                     requestInfo NS_UNAVAILABLE;
 
-// Whether the mediator has any suggestions for the user.
-- (BOOL)hasSuggestions;
+- (instancetype)init NS_UNAVAILABLE;
 
-// Return the credential associated with the form suggestion. It is an optional,
-// in case the credential can't be find.
+// Returns the credential associated with the form suggestion. It is an
+// optional, in case the credential can't be found.
 - (std::optional<password_manager::CredentialUIEntry>)
     getCredentialForFormSuggestion:(FormSuggestion*)formSuggestion;
 
-// The bottom sheet suggestions consumer.
-@property(nonatomic, strong) id<CredentialSuggestionBottomSheetConsumer>
-    consumer;
-
-// Logs bottom sheet exit reasons, like dismissal or using a credential.
-- (void)logExitReason:(PasswordSuggestionBottomSheetExitReason)exitReason;
-
-// Sends the information about which suggestion from the bottom sheet was
-// selected by the user, which is expected to fill the relevant fields.
-- (void)didSelectSuggestion:(FormSuggestion*)formSuggestion
-                    atIndex:(NSInteger)index
-                 completion:(ProceduralBlock)completion;
-
-// Handler called to perform operations (e.g. increment the dismiss count) when
-// the sheet was dismissed without using any credential action.
-- (void)onDismissWithoutAnyCredentialAction;
-
 // Refocuses the login field that was blurred to show this bottom sheet, if
-// deemded needed.
+// deemed needed.
 - (void)refocus;
 
-// Set vector of credentials that is used for testing.
+// Sets the vector of credentials that is used for testing.
 - (void)setCredentialsForTesting:
     (std::vector<password_manager::CredentialUIEntry>)credentials;
 

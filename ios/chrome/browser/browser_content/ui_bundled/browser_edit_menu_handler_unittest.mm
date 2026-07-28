@@ -9,7 +9,9 @@
 #import "components/search_engines/template_url_service.h"
 #import "ios/chrome/browser/browser_content/ui_bundled/browser_content_view_controller.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_edit_menu_builder.h"
+#import "ios/chrome/browser/enterprise/data_controls/model/data_controls_tab_helper.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_test_utils.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/link_to_text/ui_bundled/link_to_text_mediator.h"
 #import "ios/chrome/browser/partial_translate/ui_bundled/partial_translate_mediator.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
@@ -22,7 +24,6 @@
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/providers/partial_translate/test_partial_translate.h"
 #import "ios/chrome/test/scoped_key_window.h"
-#import "ios/components/enterprise/data_controls/features.h"
 #import "ios/web/public/test/scoped_testing_web_client.h"
 #import "ios/web/public/test/web_state_test_util.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -32,6 +33,10 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 #import "ui/base/device_form_factor.h"
+
+@interface SearchWithMediator (Testing)
+- (NSString*)buttonTitle;
+@end
 
 namespace {
 
@@ -82,7 +87,47 @@ NSString* const kPageHTML = @"<html>"
 
 // Return the base menu depending on the environment.
 NSMutableArray* GetExpectedMenu() {
-  if (@available(iOS 18.1, *)) {
+  if (@available(iOS 27, *)) {
+    return [NSMutableArray arrayWithArray:@[
+      @"0:m:com.apple.menu.standard-edit",
+      @"1:c:cut:",
+      @"1:c:copy:",
+      @"1:c:paste:",
+      @"1:c:delete:",
+      @"1:c:select:",
+      @"1:c:selectAll:",
+      @"0:m:com.apple.menu.replace",
+      @"1:c:promptForReplace:",
+      @"1:c:transliterateChinese:",
+      @"1:c:_insertDrawing:",
+      @"1:c:showWritingTools:",
+      @"1:m:com.apple.menu.autofill",
+      @"2:m:com.apple.menu.insert-from-external-sources",
+      @"2:c:captureTextFromCamera:",
+      @"0:m:com.apple.menu.open",
+      @"0:m:com.apple.menu.format",
+      @"1:m:com.apple.menu.text-style",
+      @"2:c:toggleBoldface:",
+      @"2:c:toggleItalics:",
+      @"2:c:toggleUnderline:",
+      @"1:m:com.apple.menu.writing-direction",
+      @"2:c:makeTextWritingDirectionRightToLeft:",
+      @"2:c:makeTextWritingDirectionLeftToRight:",
+      @"1:c:_showTextFormattingOptions:",
+      @"0:m:com.apple.menu.lookup",
+      @"1:c:_define:",
+      @"1:c:_translate:",
+      @"1:c:findSelected:",
+      @"0:m:com.apple.menu.learn",
+      @"1:c:addShortcut:",
+      @"0:m:com.apple.command.speech",
+      @"1:c:_accessibilitySpeak:",
+      @"1:c:_accessibilitySpeakLanguageSelection:",
+      @"1:c:_accessibilityPauseSpeaking:",
+      @"0:m:com.apple.menu.share",
+      @"1:c:share:"
+    ]];
+  } else if (@available(iOS 18.1, *)) {
     return [NSMutableArray arrayWithArray:@[
       @"0:m:com.apple.menu.standard-edit",
       @"1:c:cut:",
@@ -374,6 +419,7 @@ class BrowserEditMenuHandlerTest : public PlatformTest {
     web_state_ = web::WebState::Create(params);
 
     WebSelectionTabHelper::CreateForWebState(web_state_.get());
+    data_controls::DataControlsTabHelper::CreateForWebState(web_state_.get());
   }
 
   void SetUp() override {
@@ -489,9 +535,6 @@ TEST_F(BrowserEditMenuHandlerTest, CheckCustomizedMenuDescription) {
 // Tests that the share option is removed when sharing is blocked by Data
 // Controls.
 TEST_F(BrowserEditMenuHandlerTest, CheckShareRemoved) {
-  base::test::ScopedFeatureList feature_list(
-      data_controls::kEnableClipboardDataControlsIOS);
-
   // Set a policy to block sharing/copying from `kDataControlsBlockedUrl`.
   SetCopyBlockRule(profile_->GetPrefs());
 
@@ -514,9 +557,6 @@ TEST_F(BrowserEditMenuHandlerTest, CheckShareRemoved) {
 // Tests that the share option is not removed when sharing is allowed by Data
 // Controls.
 TEST_F(BrowserEditMenuHandlerTest, CheckShareNotRemovedByPolicy) {
-  base::test::ScopedFeatureList feature_list(
-      data_controls::kEnableClipboardDataControlsIOS);
-
   NSMutableArray* expectedMenuDescription = GetExpectedMenu();
   AddOpenInNewCanvas(expectedMenuDescription);
 
@@ -533,24 +573,46 @@ TEST_F(BrowserEditMenuHandlerTest, CheckShareNotRemovedByPolicy) {
   EXPECT_NSEQ(expectedMenuDescription, GetMenuDescription());
 }
 
-// Tests that the share option is not removed when Data Controls feature is
-// disabled.
-TEST_F(BrowserEditMenuHandlerTest, CheckShareNotRemovedFeatureDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      data_controls::kEnableClipboardDataControlsIOS);
+TEST_F(BrowserEditMenuHandlerTest, SearchWithButtonTitle_Adjacent) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      {{kPageActionMenu, {}},
+       {kExplainGeminiEditMenu, {{"PositionForExplainGeminiEditMenu", "3"}}}},
+      {});
 
-  NSMutableArray* expectedMenuDescription = GetExpectedMenu();
-  AddOpenInNewCanvas(expectedMenuDescription);
+  TemplateURLService* template_url_service =
+      ios::TemplateURLServiceFactory::GetForProfile(profile_.get());
+  TemplateURLData template_url_data;
+  template_url_data.SetURL(kGoogleSearchTemplate);
+  template_url_data.SetShortName(u"Google");
+  template_url_service->ApplyDefaultSearchChangeForTesting(
+      &template_url_data, DefaultSearchManager::FROM_USER);
 
-  BrowserEditMenuHandler* handler = [[BrowserEditMenuHandler alloc] init];
-  DataControlsEditMenuBuilder* menu_builder =
-      [[DataControlsEditMenuBuilder alloc] init];
-  handler.dataControlsDelegate = menu_builder;
-  [base_view_controller_ setHandler:handler];
-  [base_view_controller_.view addSubview:web_state_->GetView()];
-  web::test::LoadHtml(kPageHTML, web_state_.get());
+  SearchWithMediator* search_with_mediator = [[SearchWithMediator alloc]
+      initWithTemplateURLService:template_url_service
+                       incognito:NO];
 
-  // Sharing should be allowed because the feature is disabled.
-  EXPECT_NSEQ(expectedMenuDescription, GetMenuDescription());
+  EXPECT_NSEQ([search_with_mediator buttonTitle], @"Google Search");
+}
+
+TEST_F(BrowserEditMenuHandlerTest, SearchWithButtonTitle_Default) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      {{kPageActionMenu, {}},
+       {kExplainGeminiEditMenu, {{"PositionForExplainGeminiEditMenu", "1"}}}},
+      {});
+
+  TemplateURLService* template_url_service =
+      ios::TemplateURLServiceFactory::GetForProfile(profile_.get());
+  TemplateURLData template_url_data;
+  template_url_data.SetURL(kGoogleSearchTemplate);
+  template_url_data.SetShortName(u"Google");
+  template_url_service->ApplyDefaultSearchChangeForTesting(
+      &template_url_data, DefaultSearchManager::FROM_USER);
+
+  SearchWithMediator* search_with_mediator = [[SearchWithMediator alloc]
+      initWithTemplateURLService:template_url_service
+                       incognito:NO];
+
+  EXPECT_NSEQ([search_with_mediator buttonTitle], @"Search with Google");
 }

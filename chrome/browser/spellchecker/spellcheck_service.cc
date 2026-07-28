@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
@@ -22,6 +23,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_hunspell_dictionary.h"
 #include "components/language/core/browser/pref_names.h"
@@ -41,6 +44,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -390,6 +394,20 @@ void SpellcheckService::StartRecordingMetrics(bool spellcheck_enabled) {
 }
 
 void SpellcheckService::InitForRenderer(content::RenderProcessHost* host) {
+  // Skip initialization of the spellcheck service for top chrome and NTP web UI
+  // pages when Initial WebUI feature is enabled for optimizing browser startup.
+  if (base::FeatureList::IsEnabled(features::kInitialWebUI)) {
+    if (host->IsForTopChromeWebUI() &&
+        features::kInitialWebUIWithoutSpellCheck.Get()) {
+      return;
+    }
+  }
+  if (base::FeatureList::IsEnabled(features::kInitialWebUIWithoutSpellCheckForNtp)) {
+    if (host->GetUserData(search::kIsNTPProcessKey)) {
+      return;
+    }
+  }
+
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   content::BrowserContext* context = host->GetBrowserContext();
@@ -542,16 +560,17 @@ void SpellcheckService::OnCustomDictionaryChanged(
     const SpellcheckCustomDictionary::Change& change) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  const std::vector<std::string> additions(change.to_add().begin(),
-                                           change.to_add().end());
-  const std::vector<std::string> deletions(change.to_remove().begin(),
-                                           change.to_remove().end());
-  for (content::RenderProcessHost::iterator it(
-           content::RenderProcessHost::AllHostsIterator());
-       !it.IsAtEnd(); it.Advance()) {
+  const auto additions = base::ToVector(change.to_add());
+  const auto deletions = base::ToVector(change.to_remove());
+  for (auto it = content::RenderProcessHost::AllHostsIterator(); !it.IsAtEnd();
+       it.Advance()) {
     content::RenderProcessHost* process = it.GetCurrentValue();
-    if (!process->IsInitializedAndNotDead())
+    if (!process->IsInitializedAndNotDead() ||
+        SpellcheckServiceFactory::GetForContext(process->GetBrowserContext()) !=
+            this) {
       continue;
+    }
+
     GetSpellCheckerForProcess(process)->CustomDictionaryChanged(additions,
                                                                 deletions);
   }
@@ -818,10 +837,9 @@ SpellcheckService::GetSpellCheckerForProcess(content::RenderProcessHost* host) {
 
 void SpellcheckService::InitForAllRenderers() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  for (content::RenderProcessHost::iterator i(
-           content::RenderProcessHost::AllHostsIterator());
-       !i.IsAtEnd(); i.Advance()) {
-    content::RenderProcessHost* process = i.GetCurrentValue();
+  for (auto it = content::RenderProcessHost::AllHostsIterator(); !it.IsAtEnd();
+       it.Advance()) {
+    content::RenderProcessHost* process = it.GetCurrentValue();
     if (process && process->GetProcess().Handle())
       InitForRenderer(process);
   }

@@ -21,6 +21,8 @@
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profile_resetter/brandcode_config_fetcher.h"
@@ -29,7 +31,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -57,6 +58,7 @@
 #include "extensions/common/manifest.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/input_method/input_method_manager_impl.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -313,6 +315,15 @@ void ProfileResetter::ResetContentSettings() {
     map->SetDefaultContentSetting(info->website_settings_info()->type(),
                                   CONTENT_SETTING_DEFAULT);
   }
+
+  // Active File System Access grants are kept in memory by the permission
+  // context rather than in HostContentSettingsMap, so they need to be revoked
+  // explicitly.
+  if (auto* permission_context =
+          FileSystemAccessPermissionContextFactory::GetForProfile(profile_)) {
+    permission_context->RevokeAllActiveGrants();
+  }
+
   MarkAsDone(CONTENT_SETTINGS);
 }
 
@@ -548,9 +559,9 @@ void ProfileResetter::ResetKeyboardInputSettings() {
     manager->GetInputMethodUtil()->GetInputMethodIdsFromLanguageCode(
         locale, ash::input_method::kAllInputMethods, &input_method_ids);
     // Save the input method in the user's preference kLanguagePreloadEngines.
-    prefs->SetString(prefs::kLanguagePreloadEngines, input_method_ids.empty()
-                                                         ? std::string()
-                                                         : input_method_ids[0]);
+    prefs->SetString(
+        ash::prefs::kLanguagePreloadEngines,
+        input_method_ids.empty() ? std::string() : input_method_ids[0]);
   }
 
   // 2. Call to reset spell check languages, matching the default language and

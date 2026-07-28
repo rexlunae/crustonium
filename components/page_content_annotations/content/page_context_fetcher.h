@@ -9,31 +9,39 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/types/expected.h"
-#include "base/types/optional_ref.h"
 #include "components/content_extraction/content/browser/inner_text.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "components/page_content_annotations/content/page_context_fetcher_options.h"
+#include "components/viz/common/surfaces/tracked_element_rects.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "pdf/buildflags.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/origin.h"
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(ENABLE_PDF)
 #include "pdf/mojom/pdf.mojom.h"
-#endif
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 namespace content {
+class BrowserContext;
 class WebContents;
 }  // namespace content
 
@@ -41,90 +49,33 @@ namespace page_content_annotations {
 
 class PageContentScreenshotService;
 
-enum class ScreenshotIframeRedactionScope {
-  // No redaction.
-  kNone,
-  // Redact cross-site iframes.
-  kCrossSite,
-  // Redact cross-origin iframes.
-  kCrossOrigin,
-};
-
-struct PaintPreviewOptions {
-  // The maximum memory/file bytes used for the capture of a single frame.
-  // 0 means no limit.
-  size_t max_per_capture_bytes = 0;
-
-  // Whether iframe redaction is enabled, and which scope is used if so.
-  ScreenshotIframeRedactionScope iframe_redaction_scope =
-      ScreenshotIframeRedactionScope::kNone;
-};
-
-class ScreenshotOptions {
- public:
-  // Creates options for a full-page screenshot.
-  // Full-page screenshots always use the paint preview backend.
-  static ScreenshotOptions FullPage(PaintPreviewOptions paint_preview_options) {
-    return ScreenshotOptions(/*capture_full_page=*/true, paint_preview_options);
-  }
-
-  // Creates options for a viewport-only screenshot.
-  static ScreenshotOptions ViewportOnly(
-      std::optional<PaintPreviewOptions> paint_preview_options) {
-    return ScreenshotOptions(/*capture_full_page=*/false,
-                             std::move(paint_preview_options));
-  }
-
-  bool capture_full_page() const { return capture_full_page_; }
-  bool use_paint_preview() const { return paint_preview_options_.has_value(); }
-  base::optional_ref<const PaintPreviewOptions> paint_preview_options() const
-      LIFETIME_BOUND {
-    return paint_preview_options_;
-  }
-
- private:
-  // Private constructor to force object creation through static methods.
-  ScreenshotOptions(bool capture_full_page,
-                    std::optional<PaintPreviewOptions> paint_preview_options)
-      : capture_full_page_(capture_full_page),
-        paint_preview_options_(paint_preview_options) {}
-
-  // Whether to capture a full-page screenshot. If false, only the viewport will
-  // be captured.
-  bool capture_full_page_ = false;
-  // This field must be set if capture_full_page_ is true.
-  std::optional<PaintPreviewOptions> paint_preview_options_ = std::nullopt;
-};
-
-struct FetchPageContextOptions {
-  FetchPageContextOptions();
-  ~FetchPageContextOptions();
-
-  // Limit defining the number of bytes for inner text returned. A value
-  // of 0 indicates no inner text should be returned.
-  uint32_t inner_text_bytes_limit = 0;
-
-  // Options for taking a screenshot. If not set, no screenshot will be taken.
-  std::optional<ScreenshotOptions> screenshot_options = std::nullopt;
-
-  blink::mojom::AIPageContentOptionsPtr annotated_page_content_options;
-
-  // Limit defining number of bytes for PDF data that should be returned.
-  // A value of 0 indicates no pdf data should be returned.
-  uint32_t pdf_size_limit = 0;
-};
-
+// TODO(b/504577535): Support PDF bookmark extraction.
+// TODO(b/504577256): Support PDF accessibility info extraction.
 struct PdfResult {
   explicit PdfResult(url::Origin origin);
   PdfResult(url::Origin origin, std::vector<uint8_t> bytes);
+  PdfResult(url::Origin origin, std::string text);
+  PdfResult(const PdfResult&) = delete;
+  PdfResult& operator=(const PdfResult&) = delete;
+  PdfResult(PdfResult&&);
+  PdfResult& operator=(PdfResult&&);
   ~PdfResult();
+
   url::Origin origin;
-  std::vector<uint8_t> bytes;
+
+  // The PDF extraction result can be either bytes or string, depending on which
+  // extraction option is selected.
+  std::variant<std::vector<uint8_t>, std::string> data;
+
   bool size_exceeded = false;
 };
 
 struct ScreenshotResult {
   explicit ScreenshotResult(gfx::Size dimensions);
+  ScreenshotResult(const ScreenshotResult&) = delete;
+  ScreenshotResult& operator=(const ScreenshotResult&) = delete;
+  ScreenshotResult(ScreenshotResult&&);
+  ScreenshotResult& operator=(ScreenshotResult&&);
   ~ScreenshotResult();
   std::vector<uint8_t> screenshot_data;
   std::string mime_type;
@@ -150,12 +101,17 @@ struct PageContentResultWithEndTime
 
 struct FetchPageContextResult {
   FetchPageContextResult();
+  FetchPageContextResult(const FetchPageContextResult&) = delete;
+  FetchPageContextResult& operator=(const FetchPageContextResult&) = delete;
+  FetchPageContextResult(FetchPageContextResult&&);
+  FetchPageContextResult& operator=(FetchPageContextResult&&);
   ~FetchPageContextResult();
   base::expected<ScreenshotResult, std::string> screenshot_result;
   std::optional<InnerTextResultWithTruncation> inner_text_result;
   std::optional<PdfResult> pdf_result;
   base::expected<PageContentResultWithEndTime, std::string>
       annotated_page_content_result;
+  std::optional<optimization_guide::proto::ScreenshotInfo> screenshot_info;
 };
 
 enum class FetchPageContextError {
@@ -163,6 +119,7 @@ enum class FetchPageContextError {
   kWebContentsChanged,
   // The context is not eligible for sharing.
   kPageContextNotEligible,
+  kWebContentsWentAway,
 };
 
 std::string ToString(FetchPageContextError error);
@@ -178,10 +135,15 @@ using FetchPageContextResultCallbackArg =
                    FetchPageContextErrorDetails>;
 
 // Controls scaling and quality of tab screenshots.
+// Does not override screenshot_collection_options if they are set, only
+// modifies the default values.
 BASE_DECLARE_FEATURE(kGlicTabScreenshotExperiment);
 
 // Controls whether password fields are redacted from screenshots.
 BASE_DECLARE_FEATURE(kGlicScreenshotPasswordRedaction);
+
+// Controls whether sensitive payment fields are redacted from screenshots.
+BASE_DECLARE_FEATURE(kGlicScreenshotSensitivePaymentRedaction);
 
 extern const base::FeatureParam<int> kMaxScreenshotWidthParam;
 
@@ -193,14 +155,19 @@ extern const base::FeatureParam<std::string> kScreenshotImageType;
 
 extern const base::FeatureParam<base::TimeDelta> kScreenshotTimeout;
 
+extern const base::FeatureParam<base::TimeDelta>
+    kScreenshotTimeoutBrowserAllowance;
+
 // Callback used for relaying progress.
 class FetchPageProgressListener {
  public:
   virtual ~FetchPageProgressListener() = default;
-  virtual void BeginScreenshot() {}
-  virtual void EndScreenshot(std::optional<std::string> error) {}
-  virtual void BeginAPC() {}
-  virtual void EndAPC(std::optional<std::string> error) {}
+  virtual void BeginScreenshot() = 0;
+  virtual void ScreenshotCaptured(const SkBitmap& bitmap) = 0;
+  virtual void ScreenshotRedacted(const SkBitmap& bitmap) = 0;
+  virtual void EndScreenshot(std::optional<std::string> error) = 0;
+  virtual void BeginAPC() = 0;
+  virtual void EndAPC(std::optional<std::string> error) = 0;
 };
 
 using FetchPageContextResultCallback =
@@ -209,6 +176,11 @@ using FetchPageContextResultCallback =
 using GetScreenshotServiceCallback =
     base::RepeatingCallback<PageContentScreenshotService*(
         content::BrowserContext*)>;
+
+// Encodes a screenshot according to the enabled feature flags.
+std::optional<std::vector<uint8_t>> EncodeScreenshot(const SkBitmap& bitmap,
+    const std::optional<ScreenshotOptions::ScreenshotCollectionOptions>&
+        screenshot_collection_options);
 
 // Coordinates fetching multiple types of page context.
 class PageContextFetcher : public content::WebContentsObserver {
@@ -223,13 +195,35 @@ class PageContextFetcher : public content::WebContentsObserver {
                   FetchPageContextResultCallback callback);
 
  private:
-#if !BUILDFLAG(IS_ANDROID)
-  void ReceivedPdfBytes(const url::Origin& pdf_origin,
+  FRIEND_TEST_ALL_PREFIXES(PageContextFetcherTest,
+                           RedactScreenshotOnWorkerThread);
+  FRIEND_TEST_ALL_PREFIXES(PageContextFetcherTest,
+                           RedactScreenshotOnWorkerThreadNoRedaction);
+  FRIEND_TEST_ALL_PREFIXES(PageContextFetcherIframeInfoTest,
+                           AddIframeInfoSuccess);
+  FRIEND_TEST_ALL_PREFIXES(PageContextFetcherIframeInfoTest,
+                           AddIframeInfoNoUrlOrigin);
+  FRIEND_TEST_ALL_PREFIXES(PageContextFetcherIframeInfoTest,
+                           NoIframeInfoWhenFeatureDisabled);
+
+  // Redacts a screenshot by painting over sensitive regions with
+  // `redaction_color`.
+  static base::expected<SkBitmap, std::string> RedactScreenshotOnWorkerThread(
+      const SkBitmap& bitmap,
+      const std::vector<gfx::Rect>& visible_bounding_boxes_for_redaction,
+      SkColor4f redaction_color);
+
+#if BUILDFLAG(ENABLE_PDF)
+  void FetchPdfContent(const PdfOptions& options);
+  void ReceivedPdfBytes(url::Origin pdf_origin,
                         uint32_t pdf_size_limit,
                         pdf::mojom::PdfListener::GetPdfBytesStatus status,
                         const std::vector<uint8_t>& pdf_bytes,
                         uint32_t page_count);
-#endif
+  void ReceivedPdfText(url::Origin pdf_origin,
+                       uint32_t text_byte_limit,
+                       const std::u16string& text);
+#endif  // BUILDFLAG(ENABLE_PDF)
 
   void GetTabScreenshot(content::WebContents& web_contents,
                         const ScreenshotOptions& screenshot_options);
@@ -241,11 +235,12 @@ class PageContextFetcher : public content::WebContentsObserver {
   void ReceivedViewportBitmap(const content::CopyFromSurfaceResult& result);
 
   void RedactAndEncodeScreenshot(
-      std::vector<gfx::Rect> visible_bounding_boxes_for_password_redaction);
+      std::vector<gfx::Rect> visible_bounding_boxes_for_redaction);
 
   void RedactAndEncodeScreenshotIfNeeded();
 
   void ReceivedViewportBitmapOrError(
+      const viz::TrackedElementRects& tracked_element_rects,
       base::expected<const SkBitmap*, std::string> bitmap_result);
 
   // content::WebContentsObserver impl.
@@ -254,7 +249,8 @@ class PageContextFetcher : public content::WebContentsObserver {
   void OnScreenshotTimeout();
 
   void ReceivedEncodedScreenshot(
-      base::expected<std::vector<uint8_t>, std::string> screenshot_data);
+      base::expected<std::pair<std::vector<uint8_t>, SkBitmap>, std::string>
+          screenshot_data);
 
   void ReceivedInnerText(
       std::unique_ptr<content_extraction::InnerTextResult> result);
@@ -263,6 +259,17 @@ class PageContextFetcher : public content::WebContentsObserver {
       optimization_guide::AIPageContentResultOrError content);
 
   void RunCallbackIfComplete();
+
+  void ProcessTrackedElementRects(
+      const viz::TrackedElementRects& tracked_element_rects);
+
+  void CollectTrackedElementRectsForIframes(
+      const viz::TrackedElementRects& tracked_element_rects);
+
+  void MaybeAddIframeInfo();
+
+  void CollectTrackedElementRectsForPassword(
+      const viz::TrackedElementRects& tracked_element_rects);
 
   base::WeakPtr<PageContextFetcher> GetWeakPtr();
 
@@ -273,7 +280,11 @@ class PageContextFetcher : public content::WebContentsObserver {
 
   // screenshot processing dependencies.
   std::optional<SkBitmap> screenshot_bitmap_;
-  bool screenshot_needs_password_redaction_ = false;
+  bool screenshot_needs_redaction_using_apc_ = false;
+  std::vector<gfx::Rect> tracked_element_bounds_for_screenshot_redaction_;
+  gfx::Size original_view_size_pixels_;
+
+  std::vector<optimization_guide::proto::IframeInfo> iframe_info_;
 
   // Intermediate results:
 
@@ -284,6 +295,9 @@ class PageContextFetcher : public content::WebContentsObserver {
   bool inner_text_done_ = false;
   bool pdf_done_ = false;
   bool annotated_page_content_done_ = false;
+  SkColor4f screenshot_redaction_color_ = SkColors::kBlack;
+  std::optional<ScreenshotOptions::ScreenshotCollectionOptions>
+      screenshot_collection_options_;
   // Whether the primary page has changed since context fetching began.
   bool primary_page_changed_ = false;
   std::unique_ptr<FetchPageContextResult> pending_result_;

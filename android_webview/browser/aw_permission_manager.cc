@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 #include "android_webview/browser/aw_browser_permission_request_delegate.h"
@@ -15,6 +14,7 @@
 #include "android_webview/browser/aw_settings.h"
 #include "android_webview/common/aw_features.h"
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -22,6 +22,10 @@
 #include "base/notreached.h"
 #include "base/sequence_checker.h"
 #include "base/task/thread_pool.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/permissions/permission_manager.h"
 #include "components/permissions/permission_util.h"
 #include "content/public/browser/child_process_security_policy.h"
@@ -31,8 +35,11 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
 
 using blink::PermissionType;
 using blink::mojom::PermissionStatus;
@@ -41,6 +48,40 @@ using RequestPermissionsCallback =
     base::OnceCallback<void(const std::vector<content::PermissionResult>&)>;
 
 namespace android_webview {
+
+namespace {
+
+content::PermissionResult ToPermissionResult(
+    std::optional<blink::PermissionType> permission_type,
+    blink::mojom::PermissionStatus status) {
+  if (permission_type &&
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission) &&
+      (*permission_type == blink::PermissionType::GEOLOCATION ||
+       *permission_type == blink::PermissionType::GEOLOCATION_APPROXIMATE)) {
+    const content_settings::PermissionSettingsInfo* geolocation_info =
+        content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+            content_settings::GeolocationContentSettingsType());
+
+    // TODO(crbug.com/466367918): Decide whether we want to support a
+    // separate approximate only geolocation permission in webview.
+    return content::PermissionResult(
+        status, content::PermissionStatusSource::UNSPECIFIED,
+        geolocation_info->delegate().ToPermissionSetting(
+            permissions::PermissionUtil::PermissionStatusToContentSetting(
+                status)));
+  }
+  return content::PermissionResult(status);
+}
+
+content::PermissionResult ToPermissionResult(
+    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+    blink::mojom::PermissionStatus status) {
+  return ToPermissionResult(
+      blink::MaybePermissionDescriptorToPermissionType(permission_descriptor),
+      status);
+}
+}  // namespace
 
 class LastRequestResultCache {
  public:
@@ -155,7 +196,7 @@ class LastRequestResultCache {
     return requesting + "," + embedding;
   }
 
-  using StatusMap = std::unordered_map<std::string, PermissionStatus>;
+  using StatusMap = absl::flat_hash_map<std::string, PermissionStatus>;
   StatusMap pmi_result_cache_;
 };
 
@@ -253,7 +294,7 @@ AwPermissionManager::~AwPermissionManager() {
   CancelPermissionRequests();
 }
 
-void AwPermissionManager::RequestPermissions(
+void AwPermissionManager::RequestPermissionsFromCurrentDocument(
     content::RenderFrameHost* render_frame_host,
     const content::PermissionRequestDescription& request_description,
     base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
@@ -465,7 +506,7 @@ void AwPermissionManager::OnRequestResponse(
       continue;
     }
     it.GetCurrentValue()->SetPermissionResult(
-        permission, content::PermissionResult(status));
+        permission, ToPermissionResult(permission, status));
     if (it.GetCurrentValue()->IsCompleted()) {
       complete_request_ids.push_back(it.GetCurrentKey());
       if (!it.GetCurrentValue()->IsCancelled()) {
@@ -487,14 +528,6 @@ void AwPermissionManager::ResetPermission(PermissionType permission,
   result_cache_->ClearResult(permission, requesting_origin, embedding_origin);
 }
 
-void AwPermissionManager::RequestPermissionsFromCurrentDocument(
-    content::RenderFrameHost* render_frame_host,
-    const content::PermissionRequestDescription& request_description,
-    base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
-        callback) {
-  RequestPermissions(render_frame_host, request_description,
-                     std::move(callback));
-}
 
 PermissionStatus AwPermissionManager::GetPermissionStatus(
     const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
@@ -605,7 +638,7 @@ AwPermissionManager::GetPermissionResultForOriginWithoutContext(
       GetPermissionStatus(permission_descriptor, requesting_origin.GetURL(),
                           embedding_origin.GetURL());
 
-  return content::PermissionResult(status);
+  return ToPermissionResult(permission_descriptor, status);
 }
 
 content::PermissionResult
@@ -615,20 +648,23 @@ AwPermissionManager::GetPermissionResultForCurrentDocument(
     bool should_include_device_status) {
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
-  return content::PermissionResult(GetPermissionStatusInternal(
+  return ToPermissionResult(
       permission_descriptor,
-      permissions::PermissionUtil::GetLastCommittedOriginAsURL(
-          render_frame_host),
-      permissions::PermissionUtil::GetLastCommittedOriginAsURL(
-          render_frame_host->GetMainFrame()),
-      web_contents));
+      GetPermissionStatusInternal(
+          permission_descriptor,
+          permissions::PermissionUtil::GetLastCommittedOriginAsURL(
+              render_frame_host),
+          permissions::PermissionUtil::GetLastCommittedOriginAsURL(
+              render_frame_host->GetMainFrame()),
+          web_contents));
 }
 
 content::PermissionResult AwPermissionManager::GetPermissionResultForWorker(
     const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
     content::RenderProcessHost* render_process_host,
     const GURL& worker_origin) {
-  return content::PermissionResult(
+  return ToPermissionResult(
+      permission_descriptor,
       GetPermissionStatus(permission_descriptor, worker_origin, worker_origin));
 }
 
@@ -637,11 +673,13 @@ AwPermissionManager::GetPermissionResultForEmbeddedRequester(
     const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
     content::RenderFrameHost* render_frame_host,
     const url::Origin& requesting_origin) {
-  return content::PermissionResult(GetPermissionStatusInternal(
-      permission_descriptor, requesting_origin.GetURL(),
-      permissions::PermissionUtil::GetLastCommittedOriginAsURL(
-          render_frame_host->GetMainFrame()),
-      content::WebContents::FromRenderFrameHost(render_frame_host)));
+  return ToPermissionResult(
+      permission_descriptor,
+      GetPermissionStatusInternal(
+          permission_descriptor, requesting_origin.GetURL(),
+          permissions::PermissionUtil::GetLastCommittedOriginAsURL(
+              render_frame_host->GetMainFrame()),
+          content::WebContents::FromRenderFrameHost(render_frame_host)));
 }
 
 void AwPermissionManager::CancelPermissionRequest(int request_id) {

@@ -23,6 +23,7 @@
 #import "ios/chrome/browser/drive/model/drive_tab_helper.h"
 #import "ios/chrome/browser/drive/model/upload_task.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/download/download_task.h"
@@ -32,7 +33,6 @@
 DownloadManagerMediator::DownloadManagerMediator() : weak_ptr_factory_(this) {}
 
 DownloadManagerMediator::~DownloadManagerMediator() {
-  DCHECK(!application_foregrounding_observer_);
   SetDownloadTask(nullptr);
   identity_manager_observation_.Reset();
   identity_manager_ = nullptr;
@@ -59,6 +59,11 @@ void DownloadManagerMediator::SetDriveService(
   drive_service_ = drive_service;
 }
 
+void DownloadManagerMediator::SetAuthenticationService(
+    AuthenticationService* auth_service) {
+  auth_service_ = auth_service;
+}
+
 void DownloadManagerMediator::SetPrefService(PrefService* pref_service) {
   pref_service_ = pref_service;
 }
@@ -73,7 +78,6 @@ void DownloadManagerMediator::SetConsumer(
     id<DownloadManagerConsumer> consumer) {
   consumer_ = consumer;
   SetGoogleDriveAppInstalled(IsGoogleDriveAppInstalled());
-  UpdateConsumer();
 }
 
 void DownloadManagerMediator::SetDownloadTask(web::DownloadTask* task) {
@@ -118,8 +122,9 @@ void DownloadManagerMediator::StartDownloading() {
   // "Start Download" button.
   [consumer_ setState:DownloadManagerState::kInProgress];
 
-  download_task_->Start(
-      download_dir.Append(download_task_->GenerateFileName()));
+  base::FilePath task_dir = download_dir.Append(
+      base::SysNSStringToUTF8(download_task_->GetIdentifier()));
+  download_task_->Start(task_dir.Append(download_task_->GenerateFileName()));
   // If an upload task associated with the current download task exists, start
   // to observe it.
   UpdateUploadTask();
@@ -140,6 +145,14 @@ DownloadManagerState DownloadManagerMediator::GetDownloadManagerState() const {
       return DownloadManagerState::kInProgress;
     case web::DownloadTask::State::kComplete:
       if (!upload_task_) {
+        DownloadManagerTabHelper* tab_helper =
+            DownloadManagerTabHelper::FromWebState(
+                download_task_->GetWebState());
+        if (tab_helper) {
+          if (tab_helper->IsScannerProcessing()) {
+            return DownloadManagerState::kInProgress;
+          }
+        }
         return DownloadManagerState::kSucceeded;
       }
       switch (upload_task_->GetState()) {
@@ -152,6 +165,8 @@ DownloadManagerState DownloadManagerMediator::GetDownloadManagerState() const {
           return DownloadManagerState::kSucceeded;
         case UploadTask::State::kFailed:
           return DownloadManagerState::kFailed;
+        case UploadTask::State::kFailedNotResumable:
+          return DownloadManagerState::kFailedNotResumable;
       }
     case web::DownloadTask::State::kFailed:
       return DownloadManagerState::kFailed;
@@ -165,39 +180,11 @@ DownloadManagerState DownloadManagerMediator::GetDownloadManagerState() const {
 
 bool DownloadManagerMediator::IsSaveToDriveAvailable() const {
   return drive::IsSaveToDriveAvailable(is_incognito_, identity_manager_,
-                                       drive_service_, pref_service_);
+                                       drive_service_, pref_service_,
+                                       auth_service_);
 }
-
-void DownloadManagerMediator::StartObservingNotifications() {
-  DCHECK(!application_foregrounding_observer_);
-  application_foregrounding_observer_ = [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIApplicationWillEnterForegroundNotification
-                  object:nil
-                   queue:nil
-              usingBlock:
-                  base::CallbackToBlock(
-                      base::IgnoreArgs<NSNotification*>(base::BindRepeating(
-                          &DownloadManagerMediator::AppWillEnterForeground,
-                          weak_ptr_factory_.GetWeakPtr())))];
-}
-
-void DownloadManagerMediator::StopObservingNotifications() {
-  if (application_foregrounding_observer_) {
-    [[NSNotificationCenter defaultCenter]
-        removeObserver:application_foregrounding_observer_];
-    application_foregrounding_observer_ = nil;
-  }
-}
-
-#pragma mark - Private
 
 void DownloadManagerMediator::UpdateConsumer() {
-  if (base::FeatureList::IsEnabled(kIOSDownloadNoUIUpdateInBackground) &&
-      UIApplication.sharedApplication.applicationState ==
-          UIApplicationStateBackground) {
-    // If the app is in the background, do nothing.
-    return;
-  }
   if (!download_task_) {
     // If there is no download task, keep the latest state (not started or
     // finished) as it is not possible to determine what is the new state).
@@ -239,7 +226,6 @@ void DownloadManagerMediator::UpdateConsumer() {
   [consumer_ setFileName:base::apple::FilePathToNSString(filename)];
 
   NSString* originating_host = nil;
-  bool display_originating_host = false;
   if (@available(iOS 18.2, *)) {
     // The originating host is only populated when compiled with iOS18.2 SDK
     // and running on iOS18.2.
@@ -252,19 +238,9 @@ void DownloadManagerMediator::UpdateConsumer() {
       originating_host =
           base::SysUTF8ToNSString(download_task_->GetRedirectedUrl().GetHost());
     }
-    // Only show the compute the originating host if it is not what is displayed
-    // in the omnibox.
-    display_originating_host =
-        download_task_->GetWebState()->GetLastCommittedURL().GetHost() !=
-        base::SysNSStringToUTF8(originating_host);
-
-    // If the host was already displayed, keep it displayed
-    display_originating_host = display_originating_host || should_show_origin_;
-    should_show_origin_ = display_originating_host;
   }
 
-  [consumer_ setOriginatingHost:originating_host
-                        display:display_originating_host];
+  [consumer_ setOriginatingHost:originating_host];
 
   int a11y_announcement = GetDownloadManagerA11yAnnouncement();
   if (a11y_announcement != -1) {
@@ -275,6 +251,7 @@ void DownloadManagerMediator::UpdateConsumer() {
 
 void DownloadManagerMediator::SetGoogleDriveAppInstalled(bool installed) {
   is_google_drive_app_installed_ = installed;
+  UpdateConsumer();
 }
 
 int DownloadManagerMediator::GetDownloadManagerA11yAnnouncement() const {
@@ -317,7 +294,7 @@ void DownloadManagerMediator::UpdateUploadTask() {
   UploadTask* new_upload_task = nullptr;
   if (download_task_) {
     DriveTabHelper* drive_tab_helper =
-        DriveTabHelper::GetOrCreateForWebState(download_task_->GetWebState());
+        DriveTabHelper::FromWebState(download_task_->GetWebState());
     new_upload_task =
         drive_tab_helper->GetUploadTaskForDownload(download_task_);
   }
@@ -335,11 +312,6 @@ void DownloadManagerMediator::SetUploadTask(UploadTask* task) {
   }
 }
 
-void DownloadManagerMediator::AppWillEnterForeground() {
-  CHECK(base::FeatureList::IsEnabled(kIOSDownloadNoUIUpdateInBackground));
-  SetGoogleDriveAppInstalled(IsGoogleDriveAppInstalled());
-  UpdateConsumer();
-}
 
 #pragma mark - web::WebStateObserver overrides
 

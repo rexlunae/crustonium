@@ -4,11 +4,25 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/create_card_request.h"
 
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/check_op.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request_constants.h"
 
 namespace autofill::payments {
@@ -115,16 +129,15 @@ std::string CreateCardRequest::GetRequestContent() {
   if (request_details_.cvc.empty()) {
     request_content = base::StringPrintf(
         kCreateCardRequestFormatWithoutCvc,
-        base::EscapeUrlEncodedData(json_request, true).c_str(),
-        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true).c_str());
+        base::EscapeUrlEncodedData(json_request, true),
+        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true));
   } else {
     request_content = base::StringPrintf(
         kCreateCardRequestFormat,
-        base::EscapeUrlEncodedData(json_request, true).c_str(),
-        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true).c_str(),
+        base::EscapeUrlEncodedData(json_request, true),
+        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true),
         base::EscapeUrlEncodedData(base::UTF16ToASCII(request_details_.cvc),
-                                   true)
-            .c_str());
+                                   true));
   }
 
   DVLOG(3) << "createcard request body: " << request_content;

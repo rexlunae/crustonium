@@ -264,6 +264,12 @@ void HTMLParserScriptRunner::PendingScriptFinished(
     return;
   }
 
+  if (!document_) {
+    // It's possible to get here after HTMLParserScriptRunner::Detach(), which
+    // clears `document_`. See crbug.com/466701271.
+    return;
+  }
+
   // Posting the script execution part to a new task so that we can allow
   // yielding for cooperative scheduling. Cooperative scheduling requires that
   // the Blink C++ stack be thin when it executes JavaScript.
@@ -555,7 +561,7 @@ void HTMLParserScriptRunner::ProcessScriptElementInternal(
     // FIXME: Align trace event name and function name.
     TRACE_EVENT1("blink", "HTMLParserScriptRunner::execute", "data",
                  GetTraceArgsForScriptElement(*document_, script_start_position,
-                                              NullURL()));
+                                              NullUrl()));
     DCHECK(script_loader->IsParserInserted());
 
     // <spec>... If the active speculative HTML parser is null and the

@@ -8,10 +8,8 @@
 
 #include "base/byte_size.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-shared.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_bubble_observer.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -19,18 +17,12 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
-#include "chrome/browser/ui/views/performance_controls/memory_saver_chip_view.h"
 #include "chrome/browser/ui/views/performance_controls/memory_saver_resource_view.h"
 #include "chrome/browser/ui/views/performance_controls/test_support/memory_saver_unit_test_mixin.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/performance_manager/public/features.h"
-#include "components/performance_manager/public/user_tuning/prefs.h"
-#include "components/prefs/pref_service.h"
-#include "components/prefs/testing_pref_service.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/test/mock_navigation_handle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -115,7 +107,7 @@ TEST_F(MemorySaverBubbleViewTest, ShouldLogMetricsOnDialogDismiss) {
   // Open bubble
   StubMemorySaverBubbleObserver observer;
   auto* bubble = MemorySaverBubbleView::ShowBubble(
-      browser(), GetPageActionIconView(), &observer);
+      browser(), views::BubbleAnchor(GetPageActionIconView()), &observer);
   ASSERT_NE(GetBubbleView(), nullptr);
 
   // Close bubble
@@ -143,7 +135,8 @@ TEST_F(MemorySaverBubbleViewTest,
        ShowDialogWithoutExcludeSiteButtonInGuestMode) {
   AddNewTab(kMemorySavings, ::mojom::LifecycleUnitDiscardReason::PROACTIVE);
 
-  TestingProfile* const testprofile = browser()->profile()->AsTestingProfile();
+  TestingProfile* const testprofile =
+      browser()->GetProfile()->AsTestingProfile();
   EXPECT_TRUE(testprofile);
   testprofile->SetGuestSession(true);
 
@@ -212,22 +205,16 @@ TEST_F(MemorySaverBubbleViewTest,
 
 // The correct label should be rendered for different memory savings amounts.
 TEST_P(MemorySaverBubbleViewTest, ShowsCorrectLabelsForDifferentSavings) {
-  LOG(ERROR) << "<<<<<<<<<<<<<<<<<< " << __func__ << " 1";
   AddNewTab(std::get<0>(GetParam()),
             ::mojom::LifecycleUnitDiscardReason::PROACTIVE);
-  LOG(ERROR) << "<<<<<<<<<<<<<<<<<< " << __func__ << " 1";
   SetTabDiscardState(0, true);
 
-  LOG(ERROR) << "<<<<<<<<<<<<<<<<<< " << __func__ << " 1";
   ClickPageActionChip();
 
-  LOG(ERROR) << "<<<<<<<<<<<<<<<<<< " << __func__ << " 1";
   views::Label* label = GetMatchingView<views::Label>(
       MemorySaverResourceView::kMemorySaverResourceViewMemoryLabelElementId);
-  LOG(ERROR) << "<<<<<<<<<<<<<<<<<< " << __func__ << " 1";
   EXPECT_EQ(label->GetText(),
             l10n_util::GetStringUTF16(std::get<1>(GetParam())));
-  LOG(ERROR) << "<<<<<<<<<<<<<<<<<< " << __func__ << " 1";
 }
 
 INSTANTIATE_TEST_SUITE_P(

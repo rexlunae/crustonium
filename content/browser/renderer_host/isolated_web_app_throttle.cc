@@ -47,7 +47,7 @@ class WebContentsIsolationInfo
   bool is_isolated_application() { return isolated_origin_.has_value(); }
 
   const url::Origin& origin() {
-    DCHECK(is_isolated_application());
+    CHECK(is_isolated_application(), base::NotFatalUntil::M152);
     return isolated_origin_.value();
   }
 
@@ -185,7 +185,7 @@ IsolatedWebAppThrottle::MaybeThrottleNavigationTransition(
     ThrottleAction block_action) {
   auto* web_contents_isolation_info = WebContentsIsolationInfo::FromWebContents(
       navigation_handle()->GetWebContents());
-  DCHECK(web_contents_isolation_info);
+  CHECK(web_contents_isolation_info, base::NotFatalUntil::M152);
 
   // Block navigations into Isolated Web Apps (IWA) from non-IWA contexts.
   if (!web_contents_isolation_info->is_isolated_application()) {
@@ -218,7 +218,13 @@ IsolatedWebAppThrottle::MaybeThrottleNavigationTransition(
     // check `dest_needs_apps_isolation` too.
     if (dest_tuple != web_contents_isolation_tuple ||
         !dest_needs_apps_isolation) {
-      RunNavigationInDefaultBrowser(navigation_handle());
+      // Route the navigation to the default browser if the navigation happens
+      // in the primary main frame. Otherwise, we can simply cancel it as we
+      // don't want to continue background page navigations, e.g. prerendering,
+      // in the default browser.
+      if (navigation_handle()->IsInPrimaryMainFrame()) {
+        RunNavigationInDefaultBrowser(navigation_handle());
+      }
       return ThrottleAction::CANCEL;
     }
 

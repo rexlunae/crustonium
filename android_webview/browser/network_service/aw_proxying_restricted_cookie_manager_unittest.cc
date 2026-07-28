@@ -47,7 +47,7 @@ class MockRestrictedCookieManager
   void GetAllForUrl(const GURL& url,
                     const net::SiteForCookies& site_for_cookies,
                     const url::Origin& top_frame_origin,
-                    net::StorageAccessApiStatus storage_access_api_status,
+                    net::StorageAccessApiStatus /*storage_access_api_status*/,
                     network::mojom::CookieManagerGetOptionsPtr options,
                     bool is_ad_tagged,
                     bool apply_devtools_overrides,
@@ -56,15 +56,15 @@ class MockRestrictedCookieManager
     std::move(callback).Run(std::vector<net::CookieWithAccessResult>());
   }
 
-  void SetCanonicalCookie(const net::CanonicalCookie& cookie,
-                          const GURL& url,
-                          const net::SiteForCookies& site_for_cookies,
-                          const url::Origin& top_frame_origin,
-                          net::StorageAccessApiStatus storage_access_api_status,
-                          net::CookieInclusionStatus status,
-                          bool is_ad_tagged,
-                          bool apply_devtools_overrides,
-                          SetCanonicalCookieCallback callback) override {
+  void SetCanonicalCookie(
+      network::mojom::RestrictedCanonicalCookieParamsPtr cookie_params,
+      const GURL& url,
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
+      bool is_ad_tagged,
+      bool apply_devtools_overrides,
+      SetCanonicalCookieCallback callback) override {
     std::move(callback).Run(true);
   }
 
@@ -72,7 +72,7 @@ class MockRestrictedCookieManager
       const GURL& url,
       const net::SiteForCookies& site_for_cookies,
       const url::Origin& top_frame_origin,
-      net::StorageAccessApiStatus storage_access_api_status,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
       mojo::PendingRemote<network::mojom::CookieChangeListener> listener,
       AddChangeListenerCallback callback) override {
     std::move(callback).Run();
@@ -82,49 +82,42 @@ class MockRestrictedCookieManager
       const GURL& url,
       const net::SiteForCookies& site_for_cookies,
       const url::Origin& top_frame_origin,
-      net::StorageAccessApiStatus storage_access_api_status,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
+      bool is_ad_tagged,
+      bool apply_devtools_overrides,
+      const std::string& cookie) override {}
+
+  void GetCookiesString(
+      const GURL& url,
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
       bool get_version_shared_memory,
       bool is_ad_tagged,
       bool apply_devtools_overrides,
-      const std::string& cookie,
-      SetCookieFromStringCallback callback) override {
-    last_set_cookie_shared_memory_param_ = get_version_shared_memory;
-    std::move(callback).Run(nullptr);
-  }
-
-  void GetCookiesString(const GURL& url,
-                        const net::SiteForCookies& site_for_cookies,
-                        const url::Origin& top_frame_origin,
-                        net::StorageAccessApiStatus storage_access_api_status,
-                        bool get_version_shared_memory,
-                        bool is_ad_tagged,
-                        bool apply_devtools_overrides,
-                        bool force_disable_third_party_cookies,
-                        GetCookiesStringCallback callback) override {
+      bool force_disable_third_party_cookies,
+      GetCookiesStringCallback callback) override {
     last_get_cookies_shared_memory_param_ = get_version_shared_memory;
     std::move(callback).Run(network::mojom::kInvalidCookieVersion,
                             base::ReadOnlySharedMemoryRegion(), "");
   }
 
-  void CookiesEnabledFor(const GURL& url,
-                         const net::SiteForCookies& site_for_cookies,
-                         const url::Origin& top_frame_origin,
-                         net::StorageAccessApiStatus storage_access_api_status,
-                         bool apply_devtools_overrides,
-                         CookiesEnabledForCallback callback) override {
+  void CookiesEnabledFor(
+      const GURL& url,
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_frame_origin,
+      net::StorageAccessApiStatus /*storage_access_api_status*/,
+      bool apply_devtools_overrides,
+      CookiesEnabledForCallback callback) override {
     std::move(callback).Run(true);
   }
 
   bool last_get_cookies_shared_memory_param() const {
     return last_get_cookies_shared_memory_param_;
   }
-  bool last_set_cookie_shared_memory_param() const {
-    return last_set_cookie_shared_memory_param_;
-  }
 
  private:
   bool last_get_cookies_shared_memory_param_ = false;
-  bool last_set_cookie_shared_memory_param_ = false;
 };
 
 class AwProxyingRestrictedCookieManagerTest : public testing::Test {
@@ -140,12 +133,14 @@ class AwProxyingRestrictedCookieManagerTest : public testing::Test {
  protected:
   void CreateProxyOnIOThread(
       mojo::PendingRemote<network::mojom::RestrictedCookieManager> underlying,
-      mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver) {
+      mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver,
+      const net::SiteForCookies& site_for_cookies = net::SiteForCookies()) {
     AwProxyingRestrictedCookieManager::CreateAndBind(
         std::move(underlying),
         /*is_service_worker=*/false,
         /*process_id=*/0,
-        /*frame_id=*/0, std::move(receiver), &cookie_access_policy_);
+        /*frame_id=*/0, site_for_cookies, std::move(receiver),
+        &cookie_access_policy_);
   }
 
   content::BrowserTaskEnvironment task_environment_;
@@ -335,85 +330,6 @@ TEST_F(AwProxyingRestrictedCookieManagerTest,
 
   // Verify shared memory flag was blocked (always false when feature disabled).
   EXPECT_FALSE(mock_rcm.last_get_cookies_shared_memory_param());
-}
-
-// Test: SetCookieFromString passes through shared memory flag when feature
-// enabled.
-TEST_F(AwProxyingRestrictedCookieManagerTest,
-       SetCookieFromStringPassesSharedMemory_WhenFeatureEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kWebViewLatchedCookiePolicy);
-
-  cookie_access_policy_.SetShouldAcceptCookies(true);
-
-  MockRestrictedCookieManager mock_rcm;
-  mojo::Receiver<network::mojom::RestrictedCookieManager> mock_receiver(
-      &mock_rcm);
-
-  mojo::Remote<network::mojom::RestrictedCookieManager> proxy_remote;
-
-  CreateProxyOnIOThread(mock_receiver.BindNewPipeAndPassRemote(),
-                        proxy_remote.BindNewPipeAndPassReceiver());
-
-  ASSERT_TRUE(
-      base::test::RunUntil([&]() { return proxy_remote.is_connected(); }));
-
-  base::RunLoop run_loop;
-  proxy_remote->SetCookieFromString(
-      GURL("https://example.com"),
-      net::SiteForCookies::FromUrl(GURL("https://example.com")),
-      url::Origin::Create(GURL("https://example.com")),
-      net::StorageAccessApiStatus::kNone,
-      /*get_version_shared_memory=*/true,  // Request shared memory.
-      /*is_ad_tagged=*/false,
-      /*apply_devtools_overrides=*/false, "testcookie=value",
-      base::BindOnce(
-          [](base::RunLoop* run_loop,
-             network::mojom::CookiesResponsePtr response) { run_loop->Quit(); },
-          &run_loop));
-  run_loop.Run();
-
-  // Verify shared memory flag was passed through.
-  EXPECT_TRUE(mock_rcm.last_set_cookie_shared_memory_param());
-}
-
-// Test: SetCookieFromString blocks shared memory flag when feature disabled.
-TEST_F(AwProxyingRestrictedCookieManagerTest,
-       SetCookieFromStringBlocksSharedMemory_WhenFeatureDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kWebViewLatchedCookiePolicy);
-
-  cookie_access_policy_.SetShouldAcceptCookies(true);
-
-  MockRestrictedCookieManager mock_rcm;
-  mojo::Receiver<network::mojom::RestrictedCookieManager> mock_receiver(
-      &mock_rcm);
-
-  mojo::Remote<network::mojom::RestrictedCookieManager> proxy_remote;
-
-  CreateProxyOnIOThread(mock_receiver.BindNewPipeAndPassRemote(),
-                        proxy_remote.BindNewPipeAndPassReceiver());
-
-  ASSERT_TRUE(
-      base::test::RunUntil([&]() { return proxy_remote.is_connected(); }));
-
-  base::RunLoop run_loop;
-  proxy_remote->SetCookieFromString(
-      GURL("https://example.com"),
-      net::SiteForCookies::FromUrl(GURL("https://example.com")),
-      url::Origin::Create(GURL("https://example.com")),
-      net::StorageAccessApiStatus::kNone,
-      /*get_version_shared_memory=*/true,  // Request shared memory.
-      /*is_ad_tagged=*/false,
-      /*apply_devtools_overrides=*/false, "testcookie=value",
-      base::BindOnce(
-          [](base::RunLoop* run_loop,
-             network::mojom::CookiesResponsePtr response) { run_loop->Quit(); },
-          &run_loop));
-  run_loop.Run();
-
-  // Verify shared memory flag was blocked.
-  EXPECT_FALSE(mock_rcm.last_set_cookie_shared_memory_param());
 }
 
 }  // namespace

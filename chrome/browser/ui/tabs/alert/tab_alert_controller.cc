@@ -13,23 +13,24 @@
 #include "base/containers/flat_set.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
+#include "base/notreached.h"
 #include "chrome/browser/actor/ui/actor_ui_tab_controller.h"
+#include "chrome/browser/glic/browser_ui/glic_tab_indicator_helper.h"
+#include "chrome/browser/glic/public/context/glic_sharing_manager.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
-#include "chrome/browser/ui/tabs/alert/tab_alert.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/tabs/public/tab_alert.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_capability_type.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/browser_ui/glic_tab_indicator_helper.h"
-#include "chrome/browser/glic/public/context/glic_sharing_manager.h"
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#endif  // BUILDFLAG(ENABLE_GLIC)
 
 namespace tabs {
 
@@ -53,9 +54,9 @@ bool CompareAlerts::operator()(TabAlert first, TabAlert second) const {
            {TabAlert::kActorAccessing, 6},
            {TabAlert::kGlicAccessing, 5},
            {TabAlert::kGlicSharing, 4},
-           // NOTE: VR must take priority over the audio alert ones
-           // because most VR content has audio and its usage is implied by the
-           // VR icon.
+        // NOTE: VR must take priority over the audio alert ones
+        // because most VR content has audio and its usage is implied by the
+        // VR icon.
            {TabAlert::kVrPresentingInHeadset, 3},
            {TabAlert::kPipPlaying, 2},
            {TabAlert::kAudioMuting, 1},
@@ -63,6 +64,28 @@ bool CompareAlerts::operator()(TabAlert first, TabAlert second) const {
 
   return tab_alert_priority.at(first) > tab_alert_priority.at(second);
 }
+
+// Helper class that notifies subscribers if the alert state has changed when
+// the ScopedAlertNotifier is destroyed.
+class TabAlertController::ScopedAlertNotifier {
+ public:
+  explicit ScopedAlertNotifier(TabAlertController* tab_alert_controller)
+      : tab_alert_controller_(tab_alert_controller),
+        previous_alert_(tab_alert_controller->GetAlertToShow()) {}
+
+  ~ScopedAlertNotifier() {
+    std::optional<TabAlert> updated_alert =
+        tab_alert_controller_->GetAlertToShow();
+    if (previous_alert_ != updated_alert) {
+      tab_alert_controller_->alert_to_show_changed_callbacks_.Notify(
+          updated_alert);
+    }
+  }
+
+ private:
+  const raw_ptr<TabAlertController> tab_alert_controller_;
+  std::optional<TabAlert> previous_alert_;
+};
 
 TabAlertController::TabAlertController(TabInterface& tab)
     : tabs::ContentsObservingTabFeature(tab),
@@ -88,7 +111,6 @@ TabAlertController::TabAlertController(TabInterface& tab)
                 base::Unretained(this)));
   }
 
-#if BUILDFLAG(ENABLE_GLIC)
   glic::GlicTabIndicatorHelper* const glic_tab_indicator_helper =
       glic::GlicTabIndicatorHelper::From(&tab);
   if (glic_tab_indicator_helper) {
@@ -101,7 +123,6 @@ TabAlertController::TabAlertController(TabInterface& tab)
             base::BindRepeating(&TabAlertController::OnGlicAccessingStateChange,
                                 base::Unretained(this))));
   }
-#endif  // BUILDFLAG(ENABLE_GLIC)
 }
 
 TabAlertController::~TabAlertController() = default;
@@ -171,24 +192,16 @@ std::u16string TabAlertController::GetTabAlertStateText(
     case TabAlert::kVrPresentingInHeadset:
       return l10n_util::GetStringUTF16(
           IDS_TOOLTIP_TAB_ALERT_STATE_VR_PRESENTING);
-    // TODO(crbug.com/461457730) Create new resources for ACTOR_ACCESSING of
-    // relying on GLIC_ACCESSING resources below.
     case TabAlert::kActorAccessing:
     case TabAlert::kActorWaitingOnUser:
+      return l10n_util::GetStringUTF16(
+          IDS_TOOLTIP_TAB_ALERT_STATE_ACTOR_ACCESSING);
     case TabAlert::kGlicAccessing:
-#if BUILDFLAG(ENABLE_GLIC)
       return l10n_util::GetStringUTF16(
           IDS_TOOLTIP_TAB_ALERT_STATE_GLIC_ACCESSING);
-#else
-      return u"";
-#endif
     case TabAlert::kGlicSharing:
-#if BUILDFLAG(ENABLE_GLIC)
       return l10n_util::GetStringUTF16(
           IDS_TOOLTIP_TAB_ALERT_STATE_GLIC_SHARING);
-#else
-      return u"";
-#endif
   }
   NOTREACHED();
 }
@@ -226,18 +239,41 @@ int TabAlertController::GetAccessibleAlertStringId(const TabAlert alert_state) {
       return IDS_TAB_AX_LABEL_VR_PRESENTING;
     case TabAlert::kActorAccessing:
     case TabAlert::kActorWaitingOnUser:
+      return IDS_TAB_AX_LABEL_ACTOR_ACCESSING;
     case TabAlert::kGlicAccessing:
-#if BUILDFLAG(ENABLE_GLIC)
       return IDS_TAB_AX_LABEL_GLIC_ACCESSING;
-#else
-      NOTREACHED();
-#endif
     case TabAlert::kGlicSharing:
-#if BUILDFLAG(ENABLE_GLIC)
       return IDS_TAB_AX_LABEL_GLIC_SHARING;
-#else
-      NOTREACHED();
-#endif
+  }
+}
+
+// static:
+void TabAlertController::RecordCloseTabMetrics(const TabAlert alert_state) {
+  switch (alert_state) {
+    case TabAlert::kAudioPlaying:
+      base::RecordAction(base::UserMetricsAction("CloseTab_AudioIndicator"));
+      break;
+    case TabAlert::kMediaRecording:
+    case TabAlert::kAudioRecording:
+    case TabAlert::kVideoRecording:
+      base::RecordAction(
+          base::UserMetricsAction("CloseTab_RecordingIndicator"));
+      break;
+    case TabAlert::kAudioMuting:
+    case TabAlert::kDesktopCapturing:
+    case TabAlert::kTabCapturing:
+    case TabAlert::kBluetoothConnected:
+    case TabAlert::kBluetoothScanActive:
+    case TabAlert::kUsbConnected:
+    case TabAlert::kHidConnected:
+    case TabAlert::kSerialConnected:
+    case TabAlert::kPipPlaying:
+    case TabAlert::kVrPresentingInHeadset:
+    case TabAlert::kActorWaitingOnUser:
+    case TabAlert::kActorAccessing:
+    case TabAlert::kGlicAccessing:
+    case TabAlert::kGlicSharing:
+      break;
   }
 }
 
@@ -301,11 +337,13 @@ void TabAlertController::OnCapabilityTypesChanged(
   }
 
   const TabAlert alert = capability_type_to_alert.at(capability_type);
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(alert, used);
 }
 
 void TabAlertController::MediaPictureInPictureChanged(
     bool is_picture_in_picture) {
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(TabAlert::kPipPlaying, is_picture_in_picture);
 }
 
@@ -316,6 +354,7 @@ void TabAlertController::DidUpdateAudioMutingState(bool muted) {
   RecentlyAudibleHelper* const audible_helper =
       RecentlyAudibleHelper::FromWebContents(tab().GetContents());
   CHECK(audible_helper);
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(TabAlert::kAudioMuting,
                    audible_helper->WasRecentlyAudible() && muted);
 }
@@ -324,6 +363,7 @@ void TabAlertController::OnIsCapturingVideoChanged(
     content::WebContents* contents,
     bool is_capturing_video) {
   if (contents == web_contents()) {
+    ScopedAlertNotifier notifier(this);
     UpdateAlertState(TabAlert::kVideoRecording, is_capturing_video);
   }
 }
@@ -332,6 +372,7 @@ void TabAlertController::OnIsCapturingAudioChanged(
     content::WebContents* contents,
     bool is_capturing_audio) {
   if (contents == web_contents()) {
+    ScopedAlertNotifier notifier(this);
     UpdateAlertState(TabAlert::kAudioRecording, is_capturing_audio);
   }
 }
@@ -340,6 +381,7 @@ void TabAlertController::OnIsBeingMirroredChanged(
     content::WebContents* contents,
     bool is_being_mirrored) {
   if (contents == web_contents()) {
+    ScopedAlertNotifier notifier(this);
     UpdateAlertState(TabAlert::kTabCapturing, is_being_mirrored);
   }
 }
@@ -348,6 +390,7 @@ void TabAlertController::OnIsCapturingWindowChanged(
     content::WebContents* contents,
     bool is_capturing_window) {
   if (contents == web_contents()) {
+    ScopedAlertNotifier notifier(this);
     const bool is_desktop_capturing_active =
         is_capturing_window || MediaCaptureDevicesDispatcher::GetInstance()
                                    ->GetMediaStreamCaptureIndicator()
@@ -360,6 +403,7 @@ void TabAlertController::OnIsCapturingDisplayChanged(
     content::WebContents* contents,
     bool is_capturing_display) {
   if (contents == web_contents()) {
+    ScopedAlertNotifier notifier(this);
     const bool is_desktop_capturing_active =
         is_capturing_display || MediaCaptureDevicesDispatcher::GetInstance()
                                     ->GetMediaStreamCaptureIndicator()
@@ -369,21 +413,23 @@ void TabAlertController::OnIsCapturingDisplayChanged(
 }
 
 void TabAlertController::OnIsContentDisplayedInHeadsetChanged(bool state) {
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(TabAlert::kVrPresentingInHeadset, state);
 }
 
-#if BUILDFLAG(ENABLE_GLIC)
 void TabAlertController::OnGlicSharingStateChange(bool is_sharing) {
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(TabAlert::kGlicSharing, is_sharing);
 }
 
 void TabAlertController::OnGlicAccessingStateChange(bool is_accessing) {
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(TabAlert::kGlicAccessing, is_accessing);
 }
-#endif  // BUILDFLAG(ENABLE_GLIC)
 
 void TabAlertController::OnActorTabIndicatorStateChanged(
     actor::ui::TabIndicatorStatus tab_indicator_status) {
+  ScopedAlertNotifier notifier(this);
   switch (tab_indicator_status) {
     case actor::ui::TabIndicatorStatus::kNone:
       UpdateAlertState(TabAlert::kActorWaitingOnUser, false);
@@ -404,13 +450,13 @@ void TabAlertController::OnRecentlyAudibleStateChanged(bool was_audible) {
   // Muted alert state also needs to update when audible state changes to ensure
   // that the muted alert becomes active if the tab is already muted but is
   // recently audible or inactive after the tab is no longer audible.
-  DidUpdateAudioMutingState(tab().GetContents()->IsAudioMuted());
+  ScopedAlertNotifier notifier(this);
   UpdateAlertState(TabAlert::kAudioPlaying, was_audible);
+  UpdateAlertState(TabAlert::kAudioMuting,
+                   was_audible && tab().GetContents()->IsAudioMuted());
 }
 
 void TabAlertController::UpdateAlertState(TabAlert alert, bool is_active) {
-  std::optional<TabAlert> previous_alert = GetAlertToShow();
-
   if (alert == TabAlert::kAudioRecording ||
       alert == TabAlert::kVideoRecording) {
     UpdateMediaAlert();
@@ -420,11 +466,6 @@ void TabAlertController::UpdateAlertState(TabAlert alert, bool is_active) {
     } else {
       active_alerts_.erase(alert);
     }
-  }
-
-  std::optional<TabAlert> updated_alert = GetAlertToShow();
-  if (previous_alert != updated_alert) {
-    alert_to_show_changed_callbacks_.Notify(updated_alert);
   }
 }
 

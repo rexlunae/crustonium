@@ -191,7 +191,7 @@ class ConditionalFocusInteractiveUiTest : public WebRtcTestBase {
   raw_ptr<WebContents, AcrossTasksDanglingUntriaged> capturing_tab_ = nullptr;
 };
 
-// Flaky on Win bots and on linux release bots http://crbug.com/1264744
+// Flaky on Win bots and on linux release bots http://crbug.com/40203510
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) && defined(NDEBUG))
 #define MAYBE_CapturedTabFocusedIfNoExplicitCallToFocus \
   DISABLED_CapturedTabFocusedIfNoExplicitCallToFocus
@@ -206,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(ConditionalFocusInteractiveUiTest,
   EXPECT_TRUE(WaitForFocusSwitchToCapturedTab());
 }
 
-// Flaky on Win bots and on linux release bots http://crbug.com/1264744
+// Flaky on Win bots and on linux release bots http://crbug.com/40203510
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) && defined(NDEBUG))
 #define MAYBE_CapturedTabFocusedIfExplicitlyCallingFocus \
   DISABLED_CapturedTabFocusedIfExplicitlyCallingFocus
@@ -285,8 +285,15 @@ IN_PROC_BROWSER_TEST_P(
 // conditional focus window before focus occurs. Rather, that is just the
 // hard-limit that is employed in case the application attempts abuse by
 // blocking the main thread for too long.
+//
+// TODO(crbug.com/40913269): Flaky on Linux MSan.
+#if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
+#define MAYBE_FocusTriggeredByMicrotask DISABLED_FocusTriggeredByMicrotask
+#else
+#define MAYBE_FocusTriggeredByMicrotask FocusTriggeredByMicrotask
+#endif
 IN_PROC_BROWSER_TEST_F(ConditionalFocusInteractiveUiTest,
-                       FocusTriggeredByMicrotask) {
+                       MAYBE_FocusTriggeredByMicrotask) {
   SetUpTestTabs();
   Capture(0, FocusEnumValue::kNoValue);
   // Recall that the test fixture set the conditional focus window to 5s.

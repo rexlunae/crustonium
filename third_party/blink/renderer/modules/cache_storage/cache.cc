@@ -61,11 +61,11 @@ namespace {
 
 bool VaryHeaderContainsAsterisk(const Response* response) {
   const FetchHeaderList* headers = response->headers()->HeaderList();
-  String varyHeader;
-  if (headers->Get("vary", varyHeader)) {
-    Vector<String> fields;
-    varyHeader.Split(',', fields);
-    String (String::*strip_whitespace)() const = &String::StripWhiteSpace;
+  String vary_header;
+  if (headers->Get("vary", vary_header)) {
+    Vector<StringView> fields = StringView(vary_header).SplitSkippingEmpty(',');
+    StringView (StringView::*strip_whitespace)() const =
+        &StringView::StripWhiteSpace;
     return std::ranges::contains(fields, "*", strip_whitespace);
   }
   return false;
@@ -82,7 +82,7 @@ bool HasJavascriptMimeType(const Response* response) {
 void ValidateRequestForPut(const Request* request,
                            ExceptionState& exception_state) {
   const KURL& url = request->url();
-  if (!url.ProtocolIsInHTTPFamily() &&
+  if (!url.ProtocolIsInHttpFamily() &&
       !CommonSchemeRegistry::IsIsolatedAppScheme(url.Protocol().Ascii())) {
     exception_state.ThrowTypeError(
         StrCat({"Request scheme '", url.Protocol(), "' is unsupported"}));
@@ -126,7 +126,7 @@ CodeCachePolicy GetCodeCachePolicy(ExecutionContext* context,
   // Count the hint usage regardless of its value.
   context->CountUse(mojom::WebFeature::kCacheStorageCodeCacheHint);
 
-  if (EqualIgnoringASCIICase(header_value, "none")) {
+  if (EqualIgnoringAsciiCase(header_value, "none")) {
     return CodeCachePolicy::kNone;
   }
 

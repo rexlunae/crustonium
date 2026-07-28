@@ -65,6 +65,10 @@ namespace embedder_support {
 class OriginTrialsSettingsStorage;
 }  // namespace embedder_support
 
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/win/isolated_browser_support.h"
+#endif  // BUILDFLAG(IS_WIN)
+
 namespace extensions {
 class ExtensionsBrowserClient;
 }
@@ -161,7 +165,6 @@ class BrowserProcessImpl : public BrowserProcess,
 
   // BrowserProcess implementation.
   void EndSession() override;
-  void FlushLocalStateAndReply(base::OnceClosure reply) override;
   metrics_services_manager::MetricsServicesManager* GetMetricsServicesManager()
       override;
   metrics::MetricsService* metrics_service() override;
@@ -235,7 +238,11 @@ class BrowserProcessImpl : public BrowserProcess,
   SerialPolicyAllowedPorts* serial_policy_allowed_ports() override;
 #if !BUILDFLAG(IS_ANDROID)
   HidSystemTrayIcon* hid_system_tray_icon() override;
+  void set_hid_system_tray_icon_for_test(
+      std::unique_ptr<HidSystemTrayIcon> icon) override;
   UsbSystemTrayIcon* usb_system_tray_icon() override;
+  void set_usb_system_tray_icon_for_test(
+      std::unique_ptr<UsbSystemTrayIcon> icon) override;
 #endif
 
   os_crypt_async::OSCryptAsync* os_crypt_async() override;
@@ -281,6 +288,12 @@ class BrowserProcessImpl : public BrowserProcess,
 
   // ApplicationLocaleStorage callback
   void OnLocaleChanged(const std::string& new_locale);
+
+#if BUILDFLAG(IS_WIN)
+  void UpdateProcessIsolationState();
+  void OnProcessIsolationStateSet(
+      base::expected<chrome::IsolationState, HRESULT> result);
+#endif  // BUILDFLAG(IS_WIN)
 
   // Methods called to control our lifetime. The browser process can be "pinned"
   // to make sure it keeps running.

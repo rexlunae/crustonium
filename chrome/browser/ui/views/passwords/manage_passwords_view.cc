@@ -31,13 +31,11 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/views/controls/styled_label.h"
-#include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/flex_layout_view.h"
-#include "ui/views/layout/table_layout.h"
-#include "ui/views/layout/table_layout_view.h"
 #include "ui/views/view_class_properties.h"
 
 using password_manager::metrics_util::PasswordManagementBubbleInteractions;
@@ -55,12 +53,12 @@ ManagePasswordsView::ManagePasswordsView(content::WebContents* web_contents,
 
   // Title insets assume there is content (and thus have no bottom padding). Use
   // dialog insets to get the bottom margin back.
-  set_title_margins(
-      ChromeLayoutProvider::Get()->GetInsetsMetric(views::INSETS_DIALOG));
   // Set the right and left margins to 0 such that the `page_container_` fills
   // the whole page bubble width. Top margin is handled by the title above, and
   // remove bottom margin such that `page_container_` can assign it if needed.
-  set_margins(gfx::Insets());
+  set_frame_margins({.contents = gfx::Insets(),
+                     .title = ChromeLayoutProvider::Get()->GetInsetsMetric(
+                         views::INSETS_DIALOG)});
 
   page_container_ = AddChildView(
       std::make_unique<PageSwitcherView>(std::make_unique<views::View>()));
@@ -240,8 +238,8 @@ std::unique_ptr<views::View> ManagePasswordsView::CreateFooterView() {
           /*text_message_id=*/
           IDS_PASSWORD_BUBBLES_FOOTER_SAVING_ON_DEVICE,
           /*link_message_id=*/
-          IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE,
-          open_password_manager_closure, views::style::CONTEXT_BUBBLE_FOOTER);
+          IDS_PASSWORD_MANAGER_BRAND_NAME, open_password_manager_closure,
+          views::style::CONTEXT_BUBBLE_FOOTER);
     case ManagePasswordsBubbleController::SyncState::
         kActiveWithSyncFeatureEnabled:
       return CreateGooglePasswordManagerLabel(
@@ -277,7 +275,9 @@ ManagePasswordsView::CreateMovePasswordFooterView() {
 
   views::ImageView* icon_view = footer->AddChildView(
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          vector_icons::kSaveCloudIcon, ui::kColorIcon,
+          features::IsRoundedIconsEnabled() ? vector_icons::kCloudUploadIcon
+                                            : vector_icons::kSaveCloudOldIcon,
+          ui::kColorIcon,
           layout_provider->GetDistanceMetric(
               views::DISTANCE_BUBBLE_HEADER_VECTOR_ICON_SIZE))));
   icon_view->SetVerticalAlignment(views::ImageView::Alignment::kLeading);
@@ -366,9 +366,12 @@ void ManagePasswordsView::OnFaviconReady(const gfx::Image& favicon) {
 
 ui::ImageModel ManagePasswordsView::GetFaviconImageModel() const {
   // Use a globe fallback icon until the actual favicon is loaded.
-  return favicon_.IsEmpty() ? ui::ImageModel::FromVectorIcon(
-                                  kGlobeIcon, ui::kColorIcon, gfx::kFaviconSize)
-                            : ui::ImageModel::FromImage(favicon_);
+  return favicon_.IsEmpty()
+             ? ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                                  ? kGlobeIcon
+                                                  : kGlobeOldIcon,
+                                              ui::kColorIcon, gfx::kFaviconSize)
+             : ui::ImageModel::FromImage(favicon_);
 }
 
 void ManagePasswordsView::AuthenticateUserAndDisplayDetailsOf(

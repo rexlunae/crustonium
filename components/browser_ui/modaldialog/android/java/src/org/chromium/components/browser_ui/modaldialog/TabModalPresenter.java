@@ -26,6 +26,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.LayoutInflaterUtils;
+import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.interpolators.Interpolators;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -56,12 +57,6 @@ public abstract class TabModalPresenter extends ModalDialogManager.Presenter {
     /** Whether the action bar on selected text is temporarily cleared for showing dialogs. */
     private boolean mDidClearTextControls;
 
-    /**
-     * Whether the dialog should gain focus for accessibility when in front, determined by the
-     * dialog {@link ModalDialogProperties} FOCUS_DIALOG property.
-     */
-    private boolean mFocusDialog;
-
     private class ViewBinder extends ModalDialogViewBinder {
         @Override
         public void bind(PropertyModel model, ModalDialogView view, PropertyKey propertyKey) {
@@ -74,10 +69,6 @@ public abstract class TabModalPresenter extends ModalDialogManager.Presenter {
                             });
                 } else {
                     mDialogContainer.setOnClickListener(null);
-                }
-            } else if (ModalDialogProperties.FOCUS_DIALOG == propertyKey) {
-                if (model.get(ModalDialogProperties.FOCUS_DIALOG)) {
-                    mFocusDialog = true;
                 }
             } else if (ModalDialogProperties.TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE == propertyKey) {
                 if (model.get(ModalDialogProperties.TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE)) {
@@ -135,6 +126,9 @@ public abstract class TabModalPresenter extends ModalDialogManager.Presenter {
             PropertyModel model,
             @Nullable Callback<ComponentDialog> onDialogCreatedCallback,
             @Nullable Callback<View> onDialogShownCallback) {
+        assert model.get(ModalDialogProperties.TITLE) != null
+                        || model.get(ModalDialogProperties.CONTENT_DESCRIPTION) != null
+                : "Tab modal dialog must have either a title or a content description.";
         if (mDialogContainer == null) mDialogContainer = createDialogContainer();
 
         model.set(ModalDialogProperties.TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE, true);
@@ -192,17 +186,25 @@ public abstract class TabModalPresenter extends ModalDialogManager.Presenter {
      */
     public void updateContainerHierarchy(boolean toFront) {
         assumeNonNull(mDialogView);
+        PropertyModel model = getDialogModel();
+        if (model != null) {
+            CharSequence title = model.get(ModalDialogProperties.TITLE);
+            if (title == null) {
+                title = model.get(ModalDialogProperties.CONTENT_DESCRIPTION);
+            }
+            mDialogView.setAccessibilityPaneTitle(title);
+        }
+        AccessibilityEvent event =
+                AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
         if (toFront) {
             mDialogView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
-            mDialogView.requestFocus();
-            if (mFocusDialog) {
-                mDialogView.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED);
-            }
+            event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED);
         } else {
-            mDialogView.clearFocus();
+            event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED);
             mDialogView.setImportantForAccessibility(
                     View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         }
+        AccessibilityState.sendAccessibilityEvent(event);
     }
 
     /**
@@ -269,9 +271,13 @@ public abstract class TabModalPresenter extends ModalDialogManager.Presenter {
     }
 
     private void runExitAnimation() {
-        final View dialogView = assumeNonNull(mDialogView);
+        final ModalDialogView dialogView = assumeNonNull(mDialogView);
         // Clear focus so that keyboard can hide accordingly while entering tab switcher.
         dialogView.clearFocus();
+        // Disable interaction with the dialog while it is being animated out.
+        updateContainerHierarchy(false);
+        dialogView.blockInputs(true);
+        assumeNonNull(mDialogContainer).setClickable(false);
         assumeNonNull(mDialogContainer).animate().cancel();
         mDialogContainer
                 .animate()

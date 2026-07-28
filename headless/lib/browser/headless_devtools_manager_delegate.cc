@@ -4,6 +4,7 @@
 
 #include "headless/lib/browser/headless_devtools_manager_delegate.h"
 
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client_channel.h"
@@ -40,11 +41,10 @@ HeadlessDevToolsManagerDelegate::CreateNewTarget(
     return nullptr;
 
   HeadlessBrowserContext* context = browser_->GetDefaultBrowserContext();
-  HeadlessWebContentsImpl* web_contents_impl = HeadlessWebContentsImpl::From(
-      context->CreateWebContentsBuilder()
-          .SetInitialURL(url)
-          .SetWindowBounds(gfx::Rect(browser_->options()->window_size))
-          .Build());
+  HeadlessWebContents::CreateParams create_params(context, url);
+  create_params.window_bounds = gfx::Rect(browser_->options()->window_size);
+  HeadlessWebContentsImpl* web_contents_impl =
+      HeadlessWebContentsImpl::From(context->CreateWebContents(create_params));
   return target_type == content::DevToolsManagerDelegate::kTab
              ? content::DevToolsAgentHost::GetOrCreateForTab(
                    web_contents_impl->web_contents())
@@ -91,9 +91,11 @@ content::BrowserContext*
 HeadlessDevToolsManagerDelegate::CreateBrowserContext() {
   if (!browser_)
     return nullptr;
-  auto builder = browser_->CreateBrowserContextBuilder();
-  builder.SetIncognitoMode(true);
-  HeadlessBrowserContext* browser_context = builder.Build();
+  HeadlessBrowserContext::CreateParams params;
+  params.incognito_mode = true;
+  HeadlessBrowserContext* browser_context =
+      browser_->CreateBrowserContext(std::move(params));
+  CHECK(browser_context);
   return HeadlessBrowserContextImpl::From(browser_context);
 }
 
@@ -102,15 +104,6 @@ void HeadlessDevToolsManagerDelegate::DisposeBrowserContext(
     DisposeCallback callback) {
   HeadlessBrowserContextImpl* context =
       HeadlessBrowserContextImpl::From(browser_context);
-  std::vector<HeadlessWebContents*> web_contents = context->GetAllWebContents();
-  while (!web_contents.empty()) {
-    for (auto* wc : web_contents)
-      wc->Close();
-    // Since HeadlessWebContents::Close spawns a nested run loop to await
-    // closing, new web_contents could be opened. We need to re-query pages and
-    // close them too.
-    web_contents = context->GetAllWebContents();
-  }
   context->Close();
   std::move(callback).Run(true, "");
 }

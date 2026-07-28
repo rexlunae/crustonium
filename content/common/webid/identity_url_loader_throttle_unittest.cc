@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "content/common/webid/identity_url_loader_throttle.h"
+
 #include "base/strings/stringprintf.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/common/features.h"
 #include "content/public/common/content_features.h"
@@ -14,7 +14,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/origin.h"
 
 using blink::mojom::IdpSigninStatus;
@@ -28,25 +28,27 @@ class IdentityUrlLoaderThrottleTest : public testing::Test {
                                base::Unretained(this));
   }
 
-  void SetIdpStatus(const url::Origin& origin, IdpSigninStatus status) {
+  void SetIdpStatus(const std::optional<url::Origin>& initiator,
+                    const url::Origin& idp_origin,
+                    IdpSigninStatus status) {
     ++cb_num_calls_;
-    cb_origin_ = origin;
+    cb_initiator_ = initiator;
+    cb_idp_origin_ = idp_origin;
     cb_signin_status_ = status;
   }
 
-  base::HistogramTester histogram_tester_;
   int cb_num_calls_ = 0;
-  url::Origin cb_origin_;
+  std::optional<url::Origin> cb_initiator_;
+  url::Origin cb_idp_origin_;
   IdpSigninStatus cb_signin_status_ = IdpSigninStatus::kSignedOut;
 };
 
 class IdentityUrlLoaderThrottleTestParameterized
     : public IdentityUrlLoaderThrottleTest,
-      public testing::WithParamInterface<std::tuple<IdpSigninStatus, bool>> {};
+      public testing::WithParamInterface<IdpSigninStatus> {};
 
 TEST_P(IdentityUrlLoaderThrottleTestParameterized, Headers) {
-  IdpSigninStatus signin_status = std::get<0>(GetParam());
-  bool has_user_gesture = std::get<1>(GetParam());
+  IdpSigninStatus signin_status = GetParam();
 
   std::unique_ptr<blink::URLLoaderThrottle> throttle =
       MaybeCreateIdentityUrlLoaderThrottle(CreateCallback());
@@ -54,7 +56,7 @@ TEST_P(IdentityUrlLoaderThrottleTestParameterized, Headers) {
 
   network::ResourceRequest request;
   request.url = GURL("https://accounts.idp.example/");
-  request.has_user_gesture = has_user_gesture;
+  request.request_initiator = url::Origin::Create(GURL("https://rp.example/"));
   bool defer = false;
 
   throttle->WillStartRequest(&request, &defer);
@@ -73,22 +75,14 @@ TEST_P(IdentityUrlLoaderThrottleTestParameterized, Headers) {
   EXPECT_EQ(1, cb_num_calls_);
   EXPECT_EQ(signin_status, cb_signin_status_);
   EXPECT_EQ(url::Origin::Create(GURL("https://accounts.idp.example/")),
-            cb_origin_);
-  if (signin_status == IdpSigninStatus::kSignedIn) {
-    histogram_tester_.ExpectUniqueSample(
-        "Blink.FedCm.IdpSigninRequestInitiatedByUser", has_user_gesture, 1);
-  } else {
-    histogram_tester_.ExpectUniqueSample(
-        "Blink.FedCm.IdpSignoutRequestInitiatedByUser", has_user_gesture, 1);
-  }
+            cb_idp_origin_);
+  EXPECT_EQ(request.request_initiator, cb_initiator_);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    SignInOutAndUserGesture,
-    IdentityUrlLoaderThrottleTestParameterized,
-    testing::Combine(testing::Values(IdpSigninStatus::kSignedIn,
-                                     IdpSigninStatus::kSignedOut),
-                     testing::Values(false, true)));
+INSTANTIATE_TEST_SUITE_P(SignInOut,
+                         IdentityUrlLoaderThrottleTestParameterized,
+                         testing::Values(IdpSigninStatus::kSignedIn,
+                                         IdpSigninStatus::kSignedOut));
 
 TEST_F(IdentityUrlLoaderThrottleTest, NoRelevantHeader) {
   std::unique_ptr<blink::URLLoaderThrottle> throttle =
@@ -97,7 +91,6 @@ TEST_F(IdentityUrlLoaderThrottleTest, NoRelevantHeader) {
 
   network::ResourceRequest request;
   request.url = GURL("https://accounts.idp.example/");
-  request.has_user_gesture = true;
   bool defer = false;
 
   throttle->WillStartRequest(&request, &defer);

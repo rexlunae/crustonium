@@ -109,7 +109,14 @@ public class PaymentHandlerToolbarCoordinator implements PaymentHandlerToolbarMe
         mModel.set(PaymentHandlerToolbarProperties.CLOSE_BUTTON_ON_CLICK_CALLBACK, callback);
     }
 
-    /** @return The height of the toolbar in px. */
+    /** Set whether the custom close button is visible. */
+    public void setCloseButtonVisibility(boolean isVisible) {
+        mModel.set(PaymentHandlerToolbarProperties.CLOSE_BUTTON_VISIBILITY, isVisible);
+    }
+
+    /**
+     * @return The height of the toolbar in px.
+     */
     public int getToolbarHeightPx() {
         return mToolbarView.getToolbarHeightPx();
     }
@@ -156,7 +163,8 @@ public class PaymentHandlerToolbarCoordinator implements PaymentHandlerToolbarMe
                 maliciousContentStatus,
                 mIsSmallDevice,
                 /* skipIconForNeutralState= */ false,
-                /* useLockIconForSecureState= */ true);
+                /* useLockIconForSecureState= */ true,
+                /* isShowingHttpsFirstWarning= */ false);
     }
 
     // Implement PaymentHandlerToolbarMediatorDelegate.

@@ -17,7 +17,7 @@
 <translation id="2009755455353575666">Erro de conexión</translation>
 <translation id="2038229918502634450">Estase reiniciando o host para ter en conta un cambio de política.</translation>
 <translation id="2078880767960296260">Proceso de host</translation>
-<translation id="20876857123010370">Modo panel táctil</translation>
+<translation id="20876857123010370">Modo de panel táctil</translation>
 <translation id="2198363917176605566">Se queres utilizar <ph name="PRODUCT_NAME" />, tes que conceder o permiso Gravación de pantalla para que os contidos da pantalla deste Mac se poidan enviar ao equipo remoto.
 
 Para conceder este permiso, fai clic no botón <ph name="BUTTON_NAME" />, situado abaixo, e abrirase o panel de preferencias Gravación de pantalla. Despois, marca a caixa situada xunto a <ph name="SERVICE_SCRIPT_NAME" />.
@@ -186,7 +186,7 @@ Se a caixa que hai a carón de <ph name="SERVICE_SCRIPT_NAME" /> xa está selecc
 <translation id="8747048596626351634">A sesión fallou ou non puido comezar. Se hai unha secuencia de comandos ~/.chrome-remote-desktop-session no ordenador remoto, asegúrate de que inicie un proceso de longa duración en primeiro plano, como un administrador de ventás ou un contorno de escritorio.</translation>
 <translation id="8804164990146287819">Política de privacidade</translation>
 <translation id="8906511416443321782">É necesario acceder ao micrófono para capturar audio e transmitirllo en tempo real ao cliente do Escritorio remoto de Chrome.</translation>
-<translation id="9111855907838866522">Tes conexión co dispositivo remoto. Para abrir o menú, toca a pantalla cos dedos.</translation>
+<translation id="9111855907838866522">Tes conexión co dispositivo remoto. Para abrir o menú, toca a pantalla con catro dedos.</translation>
 <translation id="9126115402994542723">Non volver solicitar un PIN cando te conectes a este host desde este dispositivo.</translation>
 <translation id="916856682307586697">Inicia a XSession predeterminada</translation>
 <translation id="9187628920394877737">Concede o permiso Gravación de pantalla a <ph name="PRODUCT_NAME" /></translation>

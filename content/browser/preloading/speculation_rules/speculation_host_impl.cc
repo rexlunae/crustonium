@@ -91,6 +91,20 @@ SpeculationHostImpl::SpeculationHostImpl(
 
 SpeculationHostImpl::~SpeculationHostImpl() = default;
 
+bool SpeculationHostImpl::ValidateFrameState() {
+  // Window gets inactive randomly by user-interaction, which is not avoidable.
+  if (!render_frame_host().IsActive()) {
+    return false;
+  }
+  // Sending messages from sub frames won't happen unless it is compromised.
+  if (render_frame_host().GetParent()) {
+    mojo::ReportBadMessage(
+        "SpeculationHost mojo message is sent from a subframe.");
+    return false;
+  }
+  return true;
+}
+
 void SpeculationHostImpl::UpdateSpeculationCandidates(
     std::vector<blink::mojom::SpeculationCandidatePtr> candidates,
     bool enable_cross_origin_prerender_iframes) {
@@ -100,6 +114,7 @@ void SpeculationHostImpl::UpdateSpeculationCandidates(
   }
 
   // Only handle messages from an active main frame.
+  // TODO(crbug.com/489033320): Validate with ValidateFrameState().
   if (!render_frame_host().IsActive()) {
     return;
   }
@@ -113,30 +128,50 @@ void SpeculationHostImpl::UpdateSpeculationCandidates(
       candidates, enable_cross_origin_prerender_iframes);
 }
 
+void SpeculationHostImpl::EnactCandidate(
+    blink::mojom::SpeculationCandidatePtr candidate) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  // The renderer must only send EnactCandidate when renderer-side heuristics
+  // are enabled; reject the message otherwise.
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kSpeculationRulesRendererSideHeuristics)) {
+    mojo::ReportBadMessage("SH_ENACT_CANDIDATE_FEATURE_DISABLED");
+    return;
+  }
+
+  // Validate the candidate the same way as UpdateSpeculationCandidates. A
+  // compromised renderer must not be able to enact an invalid candidate.
+  std::vector<blink::mojom::SpeculationCandidatePtr> singleton;
+  singleton.push_back(std::move(candidate));
+  if (!CandidatesAreValid(singleton)) {
+    return;
+  }
+
+  // Only handle messages from an active main frame.
+  // TODO(crbug.com/489033320): Validate with ValidateFrameState().
+  if (!render_frame_host().IsActive()) {
+    return;
+  }
+  if (render_frame_host().GetParent()) {
+    return;
+  }
+
+  auto* preloading_decider =
+      PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
+  preloading_decider->EnactRendererSelectedCandidate(
+      std::move(singleton.front()));
+}
+
 void SpeculationHostImpl::OnLCPPredicted() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (!ValidateFrameState()) {
+    return;
+  }
   auto* preloading_decider =
       PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
   preloading_decider->OnLCPPredicted();
 }
 
-void SpeculationHostImpl::InitiatePreview(const GURL& url) {
-  if (!base::FeatureList::IsEnabled(blink::features::kLinkPreview)) {
-    mojo::ReportBadMessage("SH_PREVIEW");
-    return;
-  }
 
-  // Link Preview is not allowed in a frame with untrusted network disabled.
-  if (render_frame_host().IsUntrustedNetworkDisabled()) {
-    return;
-  }
-
-  WebContents* web_contents =
-      WebContents::FromRenderFrameHost(&render_frame_host());
-  CHECK(web_contents);
-  WebContentsDelegate* delegate = web_contents->GetDelegate();
-  CHECK(delegate);
-  delegate->InitiatePreview(*web_contents, url);
-}
 
 }  // namespace content

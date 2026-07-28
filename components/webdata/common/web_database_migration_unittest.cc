@@ -113,7 +113,7 @@ class WebDatabaseMigrationTest : public testing::Test {
     db.AddTable(&valuables_table);
 
     // This causes the migration to occur.
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath(), &encryptor_));
+    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath(), encryptor_));
   }
 
  protected:
@@ -157,7 +157,7 @@ class WebDatabaseMigrationTest : public testing::Test {
   //   > .dump
   void LoadDatabase(const base::FilePath::StringType& file);
 
-  os_crypt_async::TestEncryptor encryptor_;
+  scoped_refptr<os_crypt_async::TestEncryptor> encryptor_;
 
  private:
   base::ScopedTempDir temp_dir_;
@@ -1527,11 +1527,12 @@ class WebDatabaseMigrationTestEncryption
 
 // Tests addition of the url_hash column to the keywords table.
 TEST_P(WebDatabaseMigrationTestEncryption, MigrateVersion136ToCurrent) {
-  encryptor_.set_encryption_available_for_testing(IsEncryptionAvailable());
-  encryptor_.set_decryption_available_for_testing(IsEncryptionAvailable());
+  encryptor_->set_encryption_available_for_testing(IsEncryptionAvailable());
+  encryptor_->set_decryption_available_for_testing(IsEncryptionAvailable());
 
   ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_136.sql")));
   const char kTestUrl[] = "chrome://test/?q={searchTerms}";
+  const std::string_view kTestKeyword = "@testing";
   const TemplateURLID kTestId = 1;
   {
     sql::Database connection(sql::test::kTestTag);
@@ -1542,15 +1543,10 @@ TEST_P(WebDatabaseMigrationTestEncryption, MigrateVersion136ToCurrent) {
     // Insert a keyword to test that it is migrated correctly.
     ASSERT_TRUE(connection.ExecuteScriptForTesting(base::StrCat(
         {"INSERT INTO keywords VALUES(", base::NumberToString(kTestId),
-         ",'Test','@test','','", kTestUrl,
+         ",'Test','", kTestKeyword, "','','", kTestUrl,
          "',1,'',0,0,'','',0,0,0,'','[]','','','','','',0,0,1,2,0,0);"})));
   }
-  {
-    base::HistogramTester histograms;
-    DoMigration();
-    histograms.ExpectUniqueSample("Search.KeywordTable.MigrationSuccess.V137",
-                                  true, 1);
-  }
+  DoMigration();
   {
     sql::Database connection(sql::test::kTestTag);
     ASSERT_TRUE(connection.Open(GetDatabasePath()));
@@ -1568,11 +1564,13 @@ TEST_P(WebDatabaseMigrationTestEncryption, MigrateVersion136ToCurrent) {
 
     EXPECT_EQ(type, sql::ColumnType::kBlob);
     const auto encrypted_hash = stmt.ColumnBlob(0);
-    const auto hash = encryptor_.DecryptData(encrypted_hash);
+    const auto hash = encryptor_->DecryptData(encrypted_hash);
     EXPECT_TRUE(hash.has_value());
     TemplateURLData data;
     data.id = kTestId;
     data.SetURL(kTestUrl);
+    data.SetKeyword(base::UTF8ToUTF16(kTestKeyword));
+    data.starter_pack_id = 2;
     auto expected_hash = data.GenerateHash();
     EXPECT_EQ(hash->size(), expected_hash.size());
     EXPECT_TRUE(std::ranges::equal(
@@ -1609,12 +1607,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion136ToCurrentBadUrl) {
          ",'Test','@test','','", /*url=*/"",
          "',1,'',0,0,'','',0,0,0,'','[]','','','','','',0,0,1,2,0,0);"})));
   }
-  {
-    base::HistogramTester histograms;
-    DoMigration();
-    histograms.ExpectUniqueSample("Search.KeywordTable.MigrationSuccess.V137",
-                                  false, 1);
-  }
+  DoMigration();
 }
 #else
 // On non-Windows the 136 to 137 migration does nothing except update add the
@@ -1931,6 +1924,133 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion148ToCurrent) {
     EXPECT_EQ(WebDatabase::kCurrentVersionNumber,
               VersionFromConnection(&connection));
     EXPECT_FALSE(connection.DoesColumnExist("addresses", "last_modifier_id"));
+  }
+}
+
+TEST_F(WebDatabaseMigrationTest, MigrateVersion149ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_149.sql")));
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(149, VersionFromConnection(&connection));
+    EXPECT_FALSE(
+        connection.DoesColumnExist("token_service", "mtls_token_binding"));
+  }
+  DoMigration();
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(WebDatabase::kCurrentVersionNumber,
+              VersionFromConnection(&connection));
+    EXPECT_TRUE(
+        connection.DoesColumnExist("token_service", "mtls_token_binding"));
+  }
+}
+
+TEST_F(WebDatabaseMigrationTest, MigrateVersion150ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_150.sql")));
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(150, VersionFromConnection(&connection));
+  }
+  DoMigration();
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(WebDatabase::kCurrentVersionNumber,
+              VersionFromConnection(&connection));
+  }
+}
+
+TEST_F(WebDatabaseMigrationTest, MigrateVersion151ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_151.sql")));
+  const char kTestUrl[] = "chrome://test/?q={searchTerms}";
+  const std::string_view kTestKeyword = "@testing";
+  const TemplateURLID kTestId = 1;
+  const int kTestStarterPackId = 1234;
+  const int kTestEnforcedByPolicy = 1;
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(151, VersionFromConnection(&connection));
+
+    // Insert a keyword to test that it is migrated correctly.
+    ASSERT_TRUE(connection.ExecuteScriptForTesting(base::StrCat(
+        {"INSERT INTO keywords (id, short_name, keyword, favicon_url, url, "
+         "safe_for_autoreplace, url_hash, starter_pack_id, enforced_by_policy) "
+         "VALUES (",
+         base::NumberToString(kTestId), ",'Test','", kTestKeyword, "','','",
+         kTestUrl, "',1, NULL,", base::NumberToString(kTestStarterPackId), ",",
+         base::NumberToString(kTestEnforcedByPolicy), ");"})));
+  }
+  {
+    base::HistogramTester histograms;
+    DoMigration();
+    histograms.ExpectUniqueSample("Search.KeywordTable.MigrationSuccess.V152",
+                                  true, 1);
+  }
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(WebDatabase::kCurrentVersionNumber,
+              VersionFromConnection(&connection));
+    sql::Statement stmt(connection.GetUniqueStatement(
+        base::StrCat({"SELECT url, keyword, starter_pack_id, "
+                      "enforced_by_policy FROM keywords WHERE id=",
+                      base::NumberToString(kTestId)})));
+    EXPECT_TRUE(stmt.Step());
+    EXPECT_EQ(kTestUrl, stmt.ColumnString(0));
+    EXPECT_EQ(kTestKeyword, stmt.ColumnString(1));
+    EXPECT_EQ(kTestStarterPackId, stmt.ColumnInt(2));
+    EXPECT_EQ(kTestEnforcedByPolicy, stmt.ColumnInt(3));
+  }
+}
+
+// Tests replacing the origin column with is_user_confirmed in credit_cards
+// table.
+TEST_F(WebDatabaseMigrationTest, MigrateVersion152ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_152.sql")));
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(152, VersionFromConnection(&connection));
+    EXPECT_TRUE(connection.DoesColumnExist("credit_cards", "origin"));
+    EXPECT_FALSE(
+        connection.DoesColumnExist("credit_cards", "is_user_confirmed"));
+
+    // Insert dummy credit cards to test that values are migrated correctly.
+    ASSERT_TRUE(connection.ExecuteScriptForTesting(R"(
+      INSERT INTO credit_cards (guid, origin) VALUES ('guid1', 'Chrome settings');
+      INSERT INTO credit_cards (guid, origin) VALUES ('guid2', 'http://www.example.com');
+      INSERT INTO credit_cards (guid, origin) VALUES ('guid3', '');
+    )"));
+  }
+  DoMigration();
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(WebDatabase::kCurrentVersionNumber,
+              VersionFromConnection(&connection));
+    EXPECT_FALSE(connection.DoesColumnExist("credit_cards", "origin"));
+    EXPECT_TRUE(
+        connection.DoesColumnExist("credit_cards", "is_user_confirmed"));
+
+    sql::Statement stmt(connection.GetUniqueStatement(
+        "SELECT guid, is_user_confirmed FROM credit_cards ORDER BY guid"));
+    ASSERT_TRUE(stmt.Step());
+    EXPECT_EQ("guid1", stmt.ColumnString(0));
+    EXPECT_TRUE(stmt.ColumnBool(1));
+
+    ASSERT_TRUE(stmt.Step());
+    EXPECT_EQ("guid2", stmt.ColumnString(0));
+    EXPECT_FALSE(stmt.ColumnBool(1));
+
+    ASSERT_TRUE(stmt.Step());
+    EXPECT_EQ("guid3", stmt.ColumnString(0));
+    EXPECT_FALSE(stmt.ColumnBool(1));
+
+    EXPECT_FALSE(stmt.Step());
   }
 }
 

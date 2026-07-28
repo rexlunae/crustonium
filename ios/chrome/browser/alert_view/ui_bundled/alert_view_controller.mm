@@ -103,8 +103,12 @@ NSString* const kNotificationCenter = @"notification_center";
 NSString* const kBanners = @"banners";
 
 // Returns the width and height of a single pixel in point.
-CGFloat GetPixelLength() {
-  return 1.0 / [UIScreen mainScreen].scale;
+CGFloat GetPixelLength(UITraitCollection* traitCollection) {
+  CGFloat scale = traitCollection.displayScale;
+  if (scale == 0) {
+    scale = 2.0;
+  }
+  return 1.0 / scale;
 }
 
 // Returns the width of the alert.
@@ -158,13 +162,15 @@ void AddSeparatorToStackView(UIStackView* stackView) {
   separator.translatesAutoresizingMaskIntoConstraints = NO;
   [stackView addArrangedSubview:separator];
   if (stackView.axis == UILayoutConstraintAxisHorizontal) {
-    [separator.widthAnchor constraintEqualToConstant:GetPixelLength()].active =
-        YES;
+    [separator.widthAnchor
+        constraintEqualToConstant:GetPixelLength(stackView.traitCollection)]
+        .active = YES;
     AddSameConstraintsToSides(stackView, separator,
                               LayoutSides::kTop | LayoutSides::kBottom);
   } else {
-    [separator.heightAnchor constraintEqualToConstant:GetPixelLength()].active =
-        YES;
+    [separator.heightAnchor
+        constraintEqualToConstant:GetPixelLength(stackView.traitCollection)]
+        .active = YES;
     AddSameConstraintsToSides(stackView, separator,
                               LayoutSides::kTrailing | LayoutSides::kLeading);
   }
@@ -320,8 +326,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
 
 }  // namespace
 
-@interface AlertViewController () <UITextFieldDelegate,
-                                   UIGestureRecognizerDelegate>
+@interface AlertViewController () <UIGestureRecognizerDelegate,
+                                   UITextFieldDelegate>
 
 // The actions for to this alert. `copy` for safety against mutable objects.
 @property(nonatomic, copy) NSArray<NSArray<AlertAction*>*>* actions;
@@ -389,6 +395,10 @@ UIButton* GetButtonForAction(AlertAction* action) {
   UIImageView* _checkmark;
 
   UIView* _progressIndicatorContainerView;
+
+  // Width constraint for the content view. Updated when the preferred content
+  // size category changes.
+  NSLayoutConstraint* _contentViewWidthConstraint;
 }
 
 #pragma mark - Public
@@ -413,18 +423,14 @@ UIButton* GetButtonForAction(AlertAction* action) {
   self.swipeRecognizer.enabled = NO;
   [self.contentView addGestureRecognizer:self.swipeRecognizer];
 
-  NSLayoutConstraint* widthConstraint =
+  _contentViewWidthConstraint =
       [self.contentView.widthAnchor constraintEqualToConstant:GetAlertWidth()];
-  widthConstraint.priority = UILayoutPriorityRequired - 1;
+  _contentViewWidthConstraint.priority = UILayoutPriorityRequired - 1;
 
-  [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIContentSizeCategoryDidChangeNotification
-                  object:nil
-                   queue:[NSOperationQueue mainQueue]
-              usingBlock:^(NSNotification* _Nonnull note) {
-                widthConstraint.constant = GetAlertWidth();
-              }];
-  widthConstraint.active = YES;
+  [self
+      registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
+                   withAction:@selector(preferredContentSizeCategoryDidChange)];
+  _contentViewWidthConstraint.active = YES;
   PositionContentViewInParentView(self.contentView, self.view);
 
   UIScrollView* scrollView = [[UIScrollView alloc] init];
@@ -506,8 +512,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
     _spinner.translatesAutoresizingMaskIntoConstraints = NO;
 
     _checkmark = [[UIImageView alloc] init];
-    _checkmark.image = DefaultSymbolWithPointSize(kCheckmarkCircleFillSymbol,
-                                                  kConfirmationSymbolPointSize);
+    _checkmark.image = SymbolWithPointSize(SymbolCheckmarkCircleFill,
+                                           kConfirmationSymbolPointSize);
     _checkmark.tintColor = [UIColor systemGreenColor];
     _checkmark.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -657,8 +663,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
   };
   [self registerForTraitChanges:traits withHandler:handler];
 
-  traits = TraitCollectionSetForTraits(@[ UITraitUserInterfaceStyle.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                      withAction:@selector(selectImageForCurrentStyle)];
 }
 
@@ -715,7 +720,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
       _textFieldStackHolder.layer.borderColor =
           [UIColor colorNamed:kSeparatorColor].CGColor;
     }];
-    _textFieldStackHolder.layer.borderWidth = GetPixelLength();
+    _textFieldStackHolder.layer.borderWidth =
+        GetPixelLength(self.traitCollection);
     _textFieldStackHolder.clipsToBounds = YES;
     _textFieldStackHolder.backgroundColor =
         [UIColor colorNamed:kSecondaryBackgroundColor];
@@ -879,6 +885,11 @@ UIButton* GetButtonForAction(AlertAction* action) {
 }
 
 #pragma mark - Private
+
+// Called when the preferred content size category changes.
+- (void)preferredContentSizeCategoryDidChange {
+  _contentViewWidthConstraint.constant = GetAlertWidth();
+}
 
 // Configures the image.
 - (void)configureAnimationViewWrapper {

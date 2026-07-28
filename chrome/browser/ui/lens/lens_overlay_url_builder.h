@@ -62,10 +62,6 @@ GURL BuildLensSearchURL(
     lens::LensOverlayInvocationSource invocation_source,
     bool use_dark_mode);
 
-// Returns the value of the text query parameter value from the provided search
-// URL if any. Empty string otherwise.
-const std::string ExtractTextQueryParameterValue(const GURL& url);
-
 // Returns the value of the lens mode parameter value from the provided search
 // URL if any. Empty string otherwise.
 const std::string ExtractLensModeParameterValue(const GURL& url);
@@ -108,6 +104,10 @@ GURL GetSearchResultsUrlFromRedirectUrl(const GURL& url);
 // or when the SRP redirects to append parameters unrelated to the search
 // results.
 GURL RemoveIgnoredSearchURLParameters(const GURL& url);
+
+// If the given URL is a shopping URL (udm=28), strips certain parameters
+// (like "stick") that should not be carried over to the new tab.
+GURL MaybeStripParamsForShopping(const GURL& url);
 
 // Returns the URL to open in a new tab by adding a unique vsrid to the side
 // panel new tab URL. If the given URL is empty, or is a URL for a contextual

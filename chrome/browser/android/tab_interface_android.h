@@ -9,6 +9,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
+class Profile;
 class TabAndroid;
 
 // Wraps a WeakPtr to a `TabAndroid` in a class compatible with being in a
@@ -27,6 +28,11 @@ class TabInterfaceAndroid : public tabs::TabInterface {
   // TabInterface overrides:
   base::WeakPtr<tabs::TabInterface> GetWeakPtr() override;
   content::WebContents* GetContents() const override;
+  void LoadIfNeeded() override;
+  std::u16string GetTitle() const override;
+  GURL GetURL() const override;
+  base::Time GetLastActiveTime() const override;
+  Profile* GetProfile() const override;
   void Close() override;
   base::CallbackListSubscription RegisterWillDiscardContents(
       WillDiscardContentsCallback callback) override;
@@ -49,6 +55,8 @@ class TabInterfaceAndroid : public tabs::TabInterface {
       PinnedStateChangedCallback callback) override;
   base::CallbackListSubscription RegisterGroupChanged(
       GroupChangedCallback callback) override;
+  base::CallbackListSubscription RegisterBlockedStateChanged(
+      BlockedStateChangedCallback callback) override;
   bool CanShowModalUI() const override;
   std::unique_ptr<tabs::ScopedTabModalUI> ShowModalUI() override;
   base::CallbackListSubscription RegisterModalUIChanged(

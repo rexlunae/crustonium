@@ -15,6 +15,13 @@
 
 namespace allocator_shim {
 
+#if PA_BUILDFLAG(ENABLE_AUTO_PARTITIONING)
+inline constexpr size_t kNumPartitions = 2;
+#else
+inline constexpr size_t kNumPartitions = 1;
+#endif
+inline constexpr size_t kDefaultPartitionIndex = 0;
+
 namespace internal {
 
 class PA_COMPONENT_EXPORT(ALLOCATOR_SHIM) PartitionAllocMalloc {
@@ -26,10 +33,10 @@ class PA_COMPONENT_EXPORT(ALLOCATOR_SHIM) PartitionAllocMalloc {
   // TODO(crbug.com/477186304): Remove default value for `alloc_token`, once all
   // callers are updated and verified to make configuration for all roots.
   static partition_alloc::PartitionRoot* Allocator(
-      AllocToken alloc_token = kDefaultAllocToken);
+      AllocToken alloc_token = AllocToken(kDefaultPartitionIndex));
   // May return |nullptr|, will never return the same pointer as  |Allocator()|.
   static partition_alloc::PartitionRoot* OriginalAllocator(
-      AllocToken alloc_token = kDefaultAllocToken);
+      AllocToken alloc_token = AllocToken(kDefaultPartitionIndex));
 };
 
 template <partition_alloc::AllocFlags base_alloc_flags,
@@ -90,6 +97,8 @@ class PartitionAllocFunctionsInternal {
                                 void* context);
 
   static void Free(void* object, void* context);
+
+  static void AlignedFree(void* object, void* context);
 
   static void FreeWithSize(void* object, size_t size, void* context);
 
@@ -155,7 +164,7 @@ class PartitionAllocFunctionsInternal {
         &AlignedAllocUnchecked,    // aligned_malloc_unchecked_function
         &AlignedRealloc,           // aligned_realloc_function
         &AlignedReallocUnchecked,  // aligned_realloc_unchecked_function
-        &Free,                     // aligned_free_function
+        &AlignedFree,              // aligned_free_function
         nullptr,                   // next
     };
   }
@@ -184,6 +193,21 @@ extern template class PA_EXPORT_TEMPLATE_DECLARE(
             partition_alloc::FreeFlags::kSchedulerLoopQuarantine>;
 
 }  // namespace internal
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void InstallPartitionAllocWithAdvancedChecks();
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void InstallCustomDispatchForTesting(AllocatorDispatch* dispatch);
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void InstallCustomDispatchForTesting(const AllocatorDispatch* dispatch);
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void UninstallCustomDispatch();
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+const AllocatorDispatch* GetCustomDispatchForTesting();
 
 #if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 // Provide a ConfigurePartitions() helper, to mimic what Chromium uses. This way

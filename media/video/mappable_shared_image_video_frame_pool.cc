@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/video/mappable_shared_image_video_frame_pool.h"
 
 #include <GLES2/gl2.h>
@@ -25,6 +20,7 @@
 #include "base/barrier_closure.h"
 #include "base/bits.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
@@ -67,7 +63,6 @@
 
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
-#include "media/base/mac/video_frame_mac.h"
 #endif
 
 namespace media {
@@ -139,10 +134,9 @@ class MappableSharedImageVideoFramePool::PoolImpl
   // and prone to leakage. Switch this to pass around std::unique_ptr
   // such that callers own resource explicitly.
   struct FrameResource {
-    explicit FrameResource(const gfx::Size& size,
-                           gfx::BufferUsage usage,
-                           const gfx::ColorSpace& color_space)
-        : size(size), usage(usage), color_space(color_space) {}
+    explicit FrameResource(scoped_refptr<gpu::ClientSharedImage> shared_image)
+        : shared_image(std::move(shared_image)) {}
+
     void MarkUsed() {
       is_used_ = true;
       last_use_time_ = base::TimeTicks();
@@ -154,9 +148,13 @@ class MappableSharedImageVideoFramePool::PoolImpl
     bool is_used() const { return is_used_; }
     base::TimeTicks last_use_time() const { return last_use_time_; }
 
-    const gfx::Size size;
-    const gfx::BufferUsage usage;
-    const gfx::ColorSpace color_space;
+    bool IsMetadataCompatible(const gfx::Size& size,
+                              gfx::BufferUsage usage,
+                              const gfx::ColorSpace& color_space) const {
+      return size == shared_image->size() &&
+             usage == shared_image->buffer_usage() &&
+             color_space == shared_image->color_space();
+    }
 
     int32_t buffer_id = -1;
     scoped_refptr<gpu::ClientSharedImage> shared_image;
@@ -194,10 +192,11 @@ class MappableSharedImageVideoFramePool::PoolImpl
   // in the front of |frame_copy_requests_| queue.
   void StartCopy();
 
-  // Copy |video_frame| data into |frame_resource| and calls |frame_ready_cb|
-  // when done.
-  void CopyVideoFrameToGpuMemoryBuffer(scoped_refptr<VideoFrame> video_frame,
-                                       FrameResource* frame_resource);
+  // Copy |video_frame| data into the mappable SharedImage stored in
+  // |frame_resource| and calls |frame_ready_cb| when done.
+  void CopyVideoFrameToMappableSharedImage(
+      scoped_refptr<VideoFrame> video_frame,
+      FrameResource* frame_resource);
 
   // Called when all the data has been copied.
   void OnCopiesDone(bool copy_failed,
@@ -222,22 +221,11 @@ class MappableSharedImageVideoFramePool::PoolImpl
   // `frame_resource` and return nullptr.
   scoped_refptr<VideoFrame> BindAndCreateMailboxHardwareFrameResource(
       FrameResource* frame_resource,
-      const gfx::Size& coded_size,
       const gfx::Rect& visible_rect,
       const gfx::Size& natural_size,
       const gfx::ColorSpace& color_space,
       base::TimeDelta timestamp,
       bool video_frame_allow_overlay);
-
-  // Return true if |resource| can be used to represent a frame for
-  // specific |format|, |size| and |color_space|.
-  static bool IsFrameResourceCompatible(const FrameResource* resource,
-                                        const gfx::Size& size,
-                                        gfx::BufferUsage usage,
-                                        const gfx::ColorSpace& color_space) {
-    return size == resource->size && usage == resource->usage &&
-           color_space == resource->color_space;
-  }
 
   // Get the resource needed for a frame out of the pool, or create it if
   // necessary.
@@ -253,14 +241,20 @@ class MappableSharedImageVideoFramePool::PoolImpl
   void CompleteCopyRequestAndMaybeStartNextCopy(
       scoped_refptr<VideoFrame> video_frame);
 
+  // Called when `frame_resource` has become permanently unusable. This has to
+  // be called on the thread where |media_task_runner_| is current. Removes the
+  // resource from the pool and deletes it.
+  void DestroyFailedResource(FrameResource* frame_resource);
+
   // Callback called when a VideoFrame generated with GetOrCreateFrameResource
   // is no longer referenced.
   void SharedImageReleased(FrameResource* frame_resource,
                            const gpu::SyncToken& sync_token);
 
-  // Delete resource. This has to be called on the thread where |task_runner|
-  // is current.
-  static void DeleteFrameResource(
+  // Sets the destruction token of `frame_resource`'s ClientSharedImage to be
+  // the resource's sync token. This has to be called on the thread where
+  // |task_runner| is current.
+  static void UpdateSharedImageDestructionTokenForResource(
       GpuVideoAcceleratorFactories* const gpu_factories,
       FrameResource* frame_resource);
 
@@ -303,20 +297,34 @@ constexpr size_t kBytesPerCopyTarget = 1024 * 1024;  // 1MB
 // Return the SharedImageFormat format to use for a specific VideoPixelFormat.
 viz::SharedImageFormat OutputFormatToSharedImageFormat(
     GpuVideoAcceleratorFactories::OutputFormat format) {
+  viz::SharedImageFormat si_format;
   switch (format) {
     case GpuVideoAcceleratorFactories::OutputFormat::YV12:
-      return viz::MultiPlaneFormat::kYV12;
+      si_format = viz::MultiPlaneFormat::kYV12;
+      break;
     case GpuVideoAcceleratorFactories::OutputFormat::P010:
-      return viz::MultiPlaneFormat::kP010;
+      si_format = viz::MultiPlaneFormat::kP010;
+      break;
     case GpuVideoAcceleratorFactories::OutputFormat::NV12:
-      return viz::MultiPlaneFormat::kNV12;
+      si_format = viz::MultiPlaneFormat::kNV12;
+      break;
     case GpuVideoAcceleratorFactories::OutputFormat::XR30:
-      return viz::SinglePlaneFormat::kBGRA_1010102;
+      si_format = viz::SinglePlaneFormat::kBGRA_1010102;
+      break;
     case GpuVideoAcceleratorFactories::OutputFormat::XB30:
-      return viz::SinglePlaneFormat::kRGBA_1010102;
+      si_format = viz::SinglePlaneFormat::kRGBA_1010102;
+      break;
     case GpuVideoAcceleratorFactories::OutputFormat::UNDEFINED:
       NOTREACHED();
   }
+    // Set prefers external sampler only for multiplanar formats on ozone based
+    // platforms.
+#if BUILDFLAG(IS_OZONE)
+  if (si_format.is_multi_plane()) {
+    si_format.SetPrefersExternalSampler();
+  }
+#endif
+  return si_format;
 }
 
 VideoPixelFormat VideoFormat(
@@ -368,13 +376,15 @@ void CopyRowsToI420Buffer(size_t first_row,
   DCHECK_GE(bit_depth, 8u);
 
   if (bit_depth == 8u) {
-    libyuv::CopyPlane(source + source_stride * first_row, source_stride,
+    libyuv::CopyPlane(UNSAFE_TODO(source + source_stride * first_row),
+                      source_stride,
                       output.subspan(dest_stride * first_row).data(),
                       dest_stride, bytes_per_row, rows);
   } else {
     const int scale = 0x10000 >> (bit_depth - 8u);
     libyuv::Convert16To8Plane(
-        reinterpret_cast<const uint16_t*>(source + source_stride * first_row),
+        reinterpret_cast<const uint16_t*>(
+            UNSAFE_TODO(source + source_stride * first_row)),
         source_stride / 2, output.subspan(dest_stride * first_row).data(),
         dest_stride, scale, bytes_per_row, rows);
   }
@@ -402,16 +412,16 @@ void CopyRowsToP010Buffer(int first_row,
             source_frame->stride(VideoFrame::Plane::kY));
 
   const uint16_t* y_plane = reinterpret_cast<const uint16_t*>(
-      source_frame->visible_data(VideoFrame::Plane::kY) +
-      first_row * source_frame->stride(VideoFrame::Plane::kY));
+      UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kY) +
+                  first_row * source_frame->stride(VideoFrame::Plane::kY)));
   const size_t y_plane_stride = source_frame->stride(VideoFrame::Plane::kY) / 2;
-  const uint16_t* u_plane = reinterpret_cast<const uint16_t*>(
+  const uint16_t* u_plane = reinterpret_cast<const uint16_t*>(UNSAFE_TODO(
       source_frame->visible_data(VideoFrame::Plane::kU) +
-      (first_row / 2) * source_frame->stride(VideoFrame::Plane::kU));
+      (first_row / 2) * source_frame->stride(VideoFrame::Plane::kU)));
   const size_t u_plane_stride = source_frame->stride(VideoFrame::Plane::kU) / 2;
-  const uint16_t* v_plane = reinterpret_cast<const uint16_t*>(
+  const uint16_t* v_plane = reinterpret_cast<const uint16_t*>(UNSAFE_TODO(
       source_frame->visible_data(VideoFrame::Plane::kV) +
-      (first_row / 2) * source_frame->stride(VideoFrame::Plane::kV));
+      (first_row / 2) * source_frame->stride(VideoFrame::Plane::kV)));
   const size_t v_plane_stride = source_frame->stride(VideoFrame::Plane::kV) / 2;
 
   libyuv::I010ToP010(
@@ -464,15 +474,16 @@ void CopyRowsToNV12Buffer(int first_row,
 
     if (source_frame->format() == PIXEL_FORMAT_NV12) {
       libyuv::CopyPlane(
-          source_frame->visible_data(VideoFrame::Plane::kY) +
-              first_row * source_frame->stride(VideoFrame::Plane::kY),
+          UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kY) +
+                      first_row * source_frame->stride(VideoFrame::Plane::kY)),
           source_frame->stride(VideoFrame::Plane::kY),
           dest_y.subspan(base::checked_cast<size_t>(first_row * dest_stride_y))
               .data(),
           dest_stride_y, bytes_per_row_y, rows_y);
       libyuv::CopyPlane(
-          source_frame->visible_data(VideoFrame::Plane::kUV) +
-              first_row / 2 * source_frame->stride(VideoFrame::Plane::kUV),
+          UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kUV) +
+                      first_row / 2 *
+                          source_frame->stride(VideoFrame::Plane::kUV)),
           source_frame->stride(VideoFrame::Plane::kUV),
           dest_uv
               .subspan(
@@ -484,14 +495,16 @@ void CopyRowsToNV12Buffer(int first_row,
     }
 
     libyuv::I420ToNV12(
-        source_frame->visible_data(VideoFrame::Plane::kY) +
-            first_row * source_frame->stride(VideoFrame::Plane::kY),
+        UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kY) +
+                    first_row * source_frame->stride(VideoFrame::Plane::kY)),
         source_frame->stride(VideoFrame::Plane::kY),
-        source_frame->visible_data(VideoFrame::Plane::kU) +
-            first_row / 2 * source_frame->stride(VideoFrame::Plane::kU),
+        UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kU) +
+                    first_row / 2 *
+                        source_frame->stride(VideoFrame::Plane::kU)),
         source_frame->stride(VideoFrame::Plane::kU),
-        source_frame->visible_data(VideoFrame::Plane::kV) +
-            first_row / 2 * source_frame->stride(VideoFrame::Plane::kV),
+        UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kV) +
+                    first_row / 2 *
+                        source_frame->stride(VideoFrame::Plane::kV)),
         source_frame->stride(VideoFrame::Plane::kV),
         dest_y.subspan(base::checked_cast<size_t>(first_row * dest_stride_y))
             .data(),
@@ -505,18 +518,18 @@ void CopyRowsToNV12Buffer(int first_row,
               source_frame->stride(VideoFrame::Plane::kY));
 
     const uint16_t* y_plane = reinterpret_cast<const uint16_t*>(
-        source_frame->visible_data(VideoFrame::Plane::kY) +
-        first_row * source_frame->stride(VideoFrame::Plane::kY));
+        UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kY) +
+                    first_row * source_frame->stride(VideoFrame::Plane::kY)));
     const size_t y_plane_stride =
         source_frame->stride(VideoFrame::Plane::kY) / 2;
-    const uint16_t* u_plane = reinterpret_cast<const uint16_t*>(
+    const uint16_t* u_plane = reinterpret_cast<const uint16_t*>(UNSAFE_TODO(
         source_frame->visible_data(VideoFrame::Plane::kU) +
-        (first_row / 2) * source_frame->stride(VideoFrame::Plane::kU));
+        (first_row / 2) * source_frame->stride(VideoFrame::Plane::kU)));
     const size_t u_plane_stride =
         source_frame->stride(VideoFrame::Plane::kU) / 2;
-    const uint16_t* v_plane = reinterpret_cast<const uint16_t*>(
+    const uint16_t* v_plane = reinterpret_cast<const uint16_t*>(UNSAFE_TODO(
         source_frame->visible_data(VideoFrame::Plane::kV) +
-        (first_row / 2) * source_frame->stride(VideoFrame::Plane::kV));
+        (first_row / 2) * source_frame->stride(VideoFrame::Plane::kV)));
     const size_t v_plane_stride =
         source_frame->stride(VideoFrame::Plane::kV) / 2;
 
@@ -553,14 +566,14 @@ void CopyRowsToRGB10Buffer(bool is_rgba,
   DCHECK_EQ(source_frame->format(), PIXEL_FORMAT_YUV420P10);
 
   const auto* y_plane = reinterpret_cast<const uint16_t*>(
-      source_frame->visible_data(VideoFrame::Plane::kY) +
-      first_row * source_frame->stride(VideoFrame::Plane::kY));
+      UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kY) +
+                  first_row * source_frame->stride(VideoFrame::Plane::kY)));
   const auto* u_plane = reinterpret_cast<const uint16_t*>(
-      source_frame->visible_data(VideoFrame::Plane::kU) +
-      first_row / 2 * source_frame->stride(VideoFrame::Plane::kU));
+      UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kU) +
+                  first_row / 2 * source_frame->stride(VideoFrame::Plane::kU)));
   const auto* v_plane = reinterpret_cast<const uint16_t*>(
-      source_frame->visible_data(VideoFrame::Plane::kV) +
-      first_row / 2 * source_frame->stride(VideoFrame::Plane::kV));
+      UNSAFE_TODO(source_frame->visible_data(VideoFrame::Plane::kV) +
+                  first_row / 2 * source_frame->stride(VideoFrame::Plane::kV)));
 
   size_t y_plane_stride = source_frame->stride(VideoFrame::Plane::kY) / 2;
   size_t u_plane_stride = source_frame->stride(VideoFrame::Plane::kU) / 2;
@@ -593,42 +606,24 @@ void CopyRowsToRGB10Buffer(bool is_rgba,
 
 gfx::Size CodedSize(const VideoFrame* video_frame,
                     GpuVideoAcceleratorFactories::OutputFormat output_format) {
-  DCHECK(gfx::Rect(video_frame->coded_size())
-             .Contains(video_frame->visible_rect()));
-
-  size_t width = video_frame->visible_rect().width();
-  size_t height = video_frame->visible_rect().height();
-  gfx::Size output;
   switch (output_format) {
     case GpuVideoAcceleratorFactories::OutputFormat::YV12:
     case GpuVideoAcceleratorFactories::OutputFormat::P010:
-    case GpuVideoAcceleratorFactories::OutputFormat::NV12:
+    case GpuVideoAcceleratorFactories::OutputFormat::NV12: {
       DCHECK_EQ(video_frame->visible_rect().x() % 2, 0);
       DCHECK_EQ(video_frame->visible_rect().y() % 2, 0);
-      if (!viz::IsOddSizeMultiPlanarBuffersAllowed()) {
-        width = base::bits::AlignUp(width, size_t{2});
-        height = base::bits::AlignUp(height, size_t{2});
+      if (viz::IsOddSizeMultiPlanarBuffersAllowed()) {
+        return video_frame->visible_rect().size();
       }
-      output = gfx::Size(width, height);
-      break;
+      auto even_size = video_frame->visible_rect().size();
+      even_size.Enlarge(even_size.width() % 2, even_size.height() % 2);
+      return even_size;
+    }
     case GpuVideoAcceleratorFactories::OutputFormat::XR30:
     case GpuVideoAcceleratorFactories::OutputFormat::XB30:
-      output = gfx::Size(base::bits::AlignUp(width, size_t{2}), height);
-      break;
+      return video_frame->visible_rect().size();
     case GpuVideoAcceleratorFactories::OutputFormat::UNDEFINED:
       NOTREACHED();
-  }
-  DCHECK(gfx::Rect(video_frame->coded_size()).Contains(gfx::Rect(output)));
-  return output;
-}
-
-void SetPrefersExternalSampler(viz::SharedImageFormat& format) {
-  if (format.is_multi_plane()) {
-    // Set prefers external sampler only for multiplanar formats on ozone based
-    // platforms.
-#if BUILDFLAG(IS_OZONE)
-    format.SetPrefersExternalSampler();
-#endif
   }
 }
 
@@ -652,6 +647,16 @@ gfx::ColorSpace GetOutputColorSpace(
       NOTREACHED();
   }
 }
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class SupportZeroCopyImportType {
+  kEmptyBuffer = 0,
+  kSharedMemory = 1,
+  kNativePixmapSupported = 2,
+  kNativePixmapUnsupported = 3,
+  kMaxValue = kNativePixmapUnsupported
+};
 
 }  // unnamed namespace
 
@@ -689,7 +694,7 @@ void MappableSharedImageVideoFramePool::PoolImpl::CreateHardwareFrame(
   }
 #endif
 
-  if (!video_frame->IsMappable()) {
+  if (!video_frame->HasDirectCpuAccess()) {
     // Already a hardware frame.
     passthrough = true;
   }
@@ -759,13 +764,15 @@ void MappableSharedImageVideoFramePool::PoolImpl::CreateHardwareFrame(
 
   // TODO(https://crbug.com/webrtc/9033): Eliminate odd size video frame input
   // cases as they are not valid.
-  if (video_frame->coded_size().width() % 2 &&
-      !viz::IsOddSizeMultiPlanarBuffersAllowed()) {
-    passthrough = true;
-  }
-  if (video_frame->coded_size().height() % 2 &&
-      !viz::IsOddSizeMultiPlanarBuffersAllowed()) {
-    passthrough = true;
+  const bool is_multiplanar =
+      output_format_ == GpuVideoAcceleratorFactories::OutputFormat::YV12 ||
+      output_format_ == GpuVideoAcceleratorFactories::OutputFormat::NV12 ||
+      output_format_ == GpuVideoAcceleratorFactories::OutputFormat::P010;
+  if (is_multiplanar && !viz::IsOddSizeMultiPlanarBuffersAllowed()) {
+    if (video_frame->coded_size().width() % 2 ||
+        video_frame->coded_size().height() % 2) {
+      passthrough = true;
+    }
   }
 
   frame_copy_requests_.emplace_back(std::move(video_frame),
@@ -789,9 +796,8 @@ bool MappableSharedImageVideoFramePool::PoolImpl::OnMemoryDump(
       base::trace_event::MemoryAllocatorDump* dump =
           pmd->CreateAllocatorDump(dump_name);
 
-      auto size = frame_resource->size;
       size_t buffer_size_in_bytes =
-          shared_image->format().EstimatedSizeInBytes(size);
+          shared_image->format().EstimatedSizeInBytes(shared_image->size());
 
       dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
                       base::trace_event::MemoryAllocatorDump::kUnitsBytes,
@@ -820,10 +826,11 @@ void MappableSharedImageVideoFramePool::PoolImpl::OnCopiesDone(
     bool copy_failed,
     scoped_refptr<VideoFrame> video_frame,
     FrameResource* frame_resource) {
-  TRACE_EVENT_END("media",
-                  /*"CopyVideoFrameToGpuMemoryBuffer"*/ perfetto::NamedTrack(
-                      "CopyVideoFrameToGpuMemoryBuffer",
-                      video_frame->timestamp().InNanoseconds()));
+  TRACE_EVENT_END(
+      "media",
+      /*"CopyVideoFrameToMappableSharedImage"*/ perfetto::NamedTrack(
+          "CopyVideoFrameToMappableSharedImage",
+          video_frame->timestamp().InNanoseconds()));
 
   media_task_runner_->PostTask(
       FROM_HERE,
@@ -838,25 +845,43 @@ void MappableSharedImageVideoFramePool::PoolImpl::StartCopy() {
   while (!frame_copy_requests_.empty()) {
     VideoFrameCopyRequest& request = frame_copy_requests_.front();
 
+    if (request.passthrough) {
+      std::move(request.frame_ready_cb).Run(std::move(request.video_frame));
+      frame_copy_requests_.pop_front();
+      continue;
+    }
+
     // Some formats require conversion which may change the color space.
     auto output_color_space =
-        request.passthrough
-            ? request.video_frame->ColorSpace()
-            : GetOutputColorSpace(request.video_frame->ColorSpace(),
-                                  output_format_);
+        GetOutputColorSpace(request.video_frame->ColorSpace(), output_format_);
+
+    // TOOD(crbug.com/425634684): ColorSpace defaults should instead be added up
+    // the stack where the software VideoFrame is created (ffmpeg, widevine,
+    // etc.) and passed here to be copied to a hardware VideoFrame. This will
+    // ensure the same color space defaults are used here and in other places
+    // such as WebGL Canvas copies, VideoResourceUpdater etc.
+    if (!output_color_space.IsValid()) {
+      if (output_format_ == GpuVideoAcceleratorFactories::OutputFormat::XR30 ||
+          output_format_ == GpuVideoAcceleratorFactories::OutputFormat::XB30) {
+        output_color_space = gfx::ColorSpace::CreateSRGB();
+      } else {
+        output_color_space = gfx::ColorSpace::CreateREC709();
+      }
+    }
 
     // Acquire resource. Incompatible one will be dropped from the pool.
-    FrameResource* frame_resource =
-        request.passthrough
-            ? nullptr
-            : GetOrCreateFrameResource(
-                  CodedSize(request.video_frame.get(), output_format_),
-                  gfx::BufferUsage::SCANOUT_CPU_READ_WRITE, output_color_space);
+    FrameResource* frame_resource = GetOrCreateFrameResource(
+        CodedSize(request.video_frame.get(), output_format_),
+        gfx::BufferUsage::SCANOUT_CPU_READ_WRITE, output_color_space);
     if (!frame_resource || !frame_resource->shared_image ||
         !(frame_resource->scoped_mapping =
               frame_resource->shared_image->Map())) {
       if (frame_resource) {
+        // Note: Failure to create or map the SharedImage means that the frame
+        // resource is a permanent error, so drop the FrameResource rather than
+        // simply marking it unused.
         DLOG(ERROR) << "Could not get or map buffer.";
+        DestroyFailedResource(frame_resource);
       }
       std::move(request.frame_ready_cb).Run(std::move(request.video_frame));
       frame_copy_requests_.pop_front();
@@ -864,18 +889,19 @@ void MappableSharedImageVideoFramePool::PoolImpl::StartCopy() {
     }
 
     worker_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&PoolImpl::CopyVideoFrameToGpuMemoryBuffer,
-                                  this, request.video_frame, frame_resource));
+        FROM_HERE,
+        base::BindOnce(&PoolImpl::CopyVideoFrameToMappableSharedImage, this,
+                       request.video_frame, frame_resource));
     break;
   }
 }
 
-// Copies |video_frame| into |frame_resource| asynchronously, posting n tasks
-// that will be synchronized by a barrier.
+// Copies |video_frame| into the mappable SharedImage stored in |frame_resource|
+// asynchronously, posting n tasks that will be synchronized by a barrier.
 // After the barrier is passed OnCopiesDone will be called.
 void MappableSharedImageVideoFramePool::PoolImpl::
-    CopyVideoFrameToGpuMemoryBuffer(scoped_refptr<VideoFrame> video_frame,
-                                    FrameResource* frame_resource) {
+    CopyVideoFrameToMappableSharedImage(scoped_refptr<VideoFrame> video_frame,
+                                        FrameResource* frame_resource) {
   CHECK(frame_resource);
   CHECK(frame_resource->shared_image);
   CHECK(frame_resource->scoped_mapping);
@@ -884,8 +910,8 @@ void MappableSharedImageVideoFramePool::PoolImpl::
       base::BindOnce(&PoolImpl::OnCopiesDone, this, /*copy_failed=*/false,
                      video_frame, frame_resource);
   TRACE_EVENT_BEGIN(
-      "media", "CopyVideoFrameToGpuMemoryBuffer",
-      perfetto::NamedTrack("CopyVideoFrameToGpuMemoryBuffer",
+      "media", "CopyVideoFrameToMappableSharedImage",
+      perfetto::NamedTrack("CopyVideoFrameToMappableSharedImage",
                            video_frame->timestamp().InNanoseconds()));
 
   // Compute the number of tasks to post and create the barrier.
@@ -1014,7 +1040,8 @@ void MappableSharedImageVideoFramePool::PoolImpl::OnCopiesDoneOnMediaThread(
       resources_pool_.erase(it);
     }
 
-    DeleteFrameResource(gpu_factories_, frame_resource);
+    UpdateSharedImageDestructionTokenForResource(gpu_factories_,
+                                                 frame_resource);
     delete frame_resource;
 
     CompleteCopyRequestAndMaybeStartNextCopy(std::move(video_frame));
@@ -1022,8 +1049,7 @@ void MappableSharedImageVideoFramePool::PoolImpl::OnCopiesDoneOnMediaThread(
   }
 
   scoped_refptr<VideoFrame> frame = BindAndCreateMailboxHardwareFrameResource(
-      frame_resource, CodedSize(video_frame.get(), output_format_),
-      gfx::Rect(video_frame->visible_rect().size()),
+      frame_resource, gfx::Rect(video_frame->visible_rect().size()),
       video_frame->natural_size(), video_frame->ColorSpace(),
       video_frame->timestamp(), video_frame->metadata().allow_overlay);
   if (!frame) {
@@ -1044,7 +1070,6 @@ void MappableSharedImageVideoFramePool::PoolImpl::OnCopiesDoneOnMediaThread(
 scoped_refptr<VideoFrame> MappableSharedImageVideoFramePool::PoolImpl::
     BindAndCreateMailboxHardwareFrameResource(
         FrameResource* frame_resource,
-        const gfx::Size& coded_size,
         const gfx::Rect& visible_rect,
         const gfx::Size& natural_size,
         const gfx::ColorSpace& color_space,
@@ -1063,11 +1088,11 @@ scoped_refptr<VideoFrame> MappableSharedImageVideoFramePool::PoolImpl::
   // MappableSI and copy to it after mapping didn't fail.
   CHECK(frame_resource->shared_image);
 
-  auto handle = frame_resource->shared_image->CloneGpuMemoryBufferHandle();
+  const auto gmb_type = frame_resource->shared_image->GetGpuMemoryBufferType();
 
   // Log software/hardware backed MappableSI's
   // `output_format_` used to create the shared image.
-  auto name = (handle.type == gfx::GpuMemoryBufferType::SHARED_MEMORY_BUFFER)
+  auto name = (gmb_type == gfx::GpuMemoryBufferType::SHARED_MEMORY_BUFFER)
                   ? std::string("Media.GPU.OutputFormatSoftwareGmb")
                   : std::string("Media.GPU.OutputFormatHardwareGmb");
   base::UmaHistogramEnumeration(name, output_format_);
@@ -1075,37 +1100,60 @@ scoped_refptr<VideoFrame> MappableSharedImageVideoFramePool::PoolImpl::
 #if BUILDFLAG(IS_MAC)
   // Shared image uses iosurface as native resource which is compatible to
   // WebGPU always.
+  // Gate this on SharedImage usage as ScopedAccess now CHECKs for it.
+  // TODO(crbug.com/413659843): Move this support check as part of
+  // SharedImageCapabilities.
   is_webgpu_compatible =
-      media::IOSurfaceIsWebGPUCompatible(handle.io_surface().get());
+      frame_resource->shared_image->SupportsZeroCopyWebGPUImport() &&
+      frame_resource->shared_image->usage().Has(
+          gpu::SHARED_IMAGE_USAGE_WEBGPU_READ);
 #endif
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  // TOOD(crbug.com/425634684): Check for webgpu support from
-  // SharedImageCapabilities, once this metadata is compatible.
-  is_webgpu_compatible =
-      handle.type == gfx::NATIVE_PIXMAP &&
-      handle.native_pixmap_handle().supports_zero_copy_webgpu_import;
+  // Gate this on SharedImage usage as ScopedAccess now CHECKs for it.
+  // TOOD(crbug.com/425634684, crbug.com/413659843): Check for webgpu support
+  // from SharedImageCapabilities, once this metadata is compatible.
+  bool native_pixmap_supports_zero_copy =
+      gmb_type == gfx::GpuMemoryBufferType::NATIVE_PIXMAP &&
+      frame_resource->shared_image->SupportsZeroCopyWebGPUImport();
+
+  SupportZeroCopyImportType type = SupportZeroCopyImportType::kEmptyBuffer;
+  if (gmb_type == gfx::GpuMemoryBufferType::SHARED_MEMORY_BUFFER) {
+    type = SupportZeroCopyImportType::kSharedMemory;
+  } else if (gmb_type == gfx::GpuMemoryBufferType::NATIVE_PIXMAP) {
+    if (native_pixmap_supports_zero_copy) {
+      type = SupportZeroCopyImportType::kNativePixmapSupported;
+    } else {
+      type = SupportZeroCopyImportType::kNativePixmapUnsupported;
+    }
+  }
+  // TODO(crbug.com/413659843): Verify how popular this codepath is and if we
+  // even need a SharedImage capability for it.
+  base::UmaHistogramEnumeration(
+      "Media.GPU.MappableSIVideoFrameSupportZeroCopyImport", type);
+
+  is_webgpu_compatible = native_pixmap_supports_zero_copy &&
+                         frame_resource->shared_image->usage().Has(
+                             gpu::SHARED_IMAGE_USAGE_WEBGPU_READ);
 #endif
 
   // Bind the texture and create or rebind the image. This image may be read
   // via the raster interface for import into canvas and/or 2-copy import into
   // WebGL as well as potentially being read via the GLES interface for 1-copy
   // import into WebGL.
-  sii->UpdateSharedImage(frame_resource->sync_token,
-                         frame_resource->shared_image->mailbox());
-
   // Insert a sync_token, this is needed to make sure that the textures the
   // mailboxes refer to will be used only after all the previous commands posted
   // in the SharedImageInterface have been processed.
-  gpu::SyncToken sync_token = sii->GenUnverifiedSyncToken();
+  gpu::SyncToken sync_token =
+      frame_resource->shared_image->BackingWasExternallyUpdated(
+          frame_resource->sync_token);
 
   VideoPixelFormat frame_format = VideoFormat(output_format_);
 
   // Create the VideoFrame backed by native textures.
   scoped_refptr<VideoFrame> frame = VideoFrame::WrapSharedImage(
       frame_format, frame_resource->shared_image, sync_token,
-      VideoFrame::ReleaseMailboxCB(), coded_size, visible_rect, natural_size,
-      timestamp);
+      VideoFrame::ReleaseMailboxCB(), visible_rect, natural_size, timestamp);
 
   if (!frame) {
     frame_resource->MarkUnused(tick_clock_->NowTicks());
@@ -1173,8 +1221,9 @@ void MappableSharedImageVideoFramePool::PoolImpl::Shutdown() {
     }
 
     media_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&PoolImpl::DeleteFrameResource,
-                                  gpu_factories_, base::Owned(frame_resource)));
+        FROM_HERE,
+        base::BindOnce(&PoolImpl::UpdateSharedImageDestructionTokenForResource,
+                       gpu_factories_, base::Owned(frame_resource)));
   }
   resources_pool_.clear();
 }
@@ -1197,12 +1246,13 @@ MappableSharedImageVideoFramePool::PoolImpl::GetOrCreateFrameResource(
   while (it != resources_pool_.end()) {
     FrameResource* frame_resource = *it;
     if (!frame_resource->is_used()) {
-      if (IsFrameResourceCompatible(frame_resource, size, usage, color_space)) {
+      if (frame_resource->IsMetadataCompatible(size, usage, color_space)) {
         frame_resource->MarkUsed();
         return frame_resource;
       } else {
         resources_pool_.erase(it++);
-        DeleteFrameResource(gpu_factories_, frame_resource);
+        UpdateSharedImageDestructionTokenForResource(gpu_factories_,
+                                                     frame_resource);
         delete frame_resource;
       }
     } else {
@@ -1210,65 +1260,68 @@ MappableSharedImageVideoFramePool::PoolImpl::GetOrCreateFrameResource(
     }
   }
 
+  auto* sii = gpu_factories_->SharedImageInterface();
+  if (!sii) {
+    return nullptr;
+  }
+
+  // |si_format| could be modified internally later based on the
+  // type of buffer (shared memory or native gpu buffer) backing the
+  // shared image. https://issues.chromium.org/339546249.
+  viz::SharedImageFormat si_format =
+      OutputFormatToSharedImageFormat(output_format_);
+
+  gpu::SharedImageUsageSet si_usage = gpu::SHARED_IMAGE_USAGE_GLES2_READ |
+                                      gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                                      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+
+  // SCANOUT usage should be added only if scanout of SharedImages for this
+  // use case is supported.
+  auto si_caps = sii->GetCapabilities();
+#if BUILDFLAG(IS_WIN)
+  // On Windows, overlays are in general not supported. However, in some
+  // cases they are supported for the software video frame use case in
+  // particular. This cap details whether that support is present.
+  bool add_scanout_usage =
+      si_caps.supports_scanout_shared_images_for_software_video_frames;
+#else
+  // On all other platforms, whether scanout for SharedImages is supported
+  // for this particular use case is no different than the general case.
+  bool add_scanout_usage = si_caps.supports_scanout_shared_images;
+#endif
+
+  if (add_scanout_usage) {
+    si_usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
+  }
+
+  // TODO(crbug.com/425634684): Check for webgpu support from
+  // SharedImageCapabilities, once this metadata is compatible.
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableUnsafeWebGPU)) {
+    // This SharedImage may be used for zero-copy import into WebGPU.
+    si_usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ;
+  }
+#elif BUILDFLAG(IS_MAC)
+  // This SharedImage may be used for zero-copy import into WebGPU.
+  si_usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ;
+#endif
+
+  // Create a Mappable shared image.
+  auto shared_image =
+      sii->CreateSharedImage({si_format, size, color_space, si_usage,
+                              "MediaGmbVideoFramePoolMappableSI"},
+                             gpu::kNullSurfaceHandle, usage);
+  if (!shared_image) {
+    return nullptr;
+  }
+
   // Create the resource.
-  FrameResource* frame_resource = new FrameResource(size, usage, color_space);
+  FrameResource* frame_resource = new FrameResource(std::move(shared_image));
   resources_pool_.push_back(frame_resource);
   // Update the |buffer_id| to be used by memory dumps.
   frame_resource->buffer_id = ++buffer_id_;
-
-  if (auto* sii = gpu_factories_->SharedImageInterface()) {
-    viz::SharedImageFormat si_format =
-        OutputFormatToSharedImageFormat(output_format_);
-
-    // This needs to be called before creating the MappableSI
-    // here. |si_format| could be modified internally later based on the
-    // type of buffer (shared memory or native gpu buffer) backing the
-    // shared image. https://issues.chromium.org/339546249.
-    SetPrefersExternalSampler(si_format);
-
-    gpu::SharedImageUsageSet si_usage = gpu::SHARED_IMAGE_USAGE_GLES2_READ |
-                                        gpu::SHARED_IMAGE_USAGE_RASTER_READ |
-                                        gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
-
-    // SCANOUT usage should be added only if scanout of SharedImages for this
-    // use case is supported.
-    auto si_caps = sii->GetCapabilities();
-#if BUILDFLAG(IS_WIN)
-    // On Windows, overlays are in general not supported. However, in some
-    // cases they are supported for the software video frame use case in
-    // particular. This cap details whether that support is present.
-    bool add_scanout_usage =
-        si_caps.supports_scanout_shared_images_for_software_video_frames;
-#else
-    // On all other platforms, whether scanout for SharedImages is supported
-    // for this particular use case is no different than the general case.
-    bool add_scanout_usage = si_caps.supports_scanout_shared_images;
-#endif
-
-    if (add_scanout_usage) {
-      si_usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
-    }
-
-    // TOOD(crbug.com/425634684): Check for webgpu support from
-    // SharedImageCapabilities, once this metadata is compatible.
-#if BUILDFLAG(IS_CHROMEOS)
-    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kEnableUnsafeWebGPU)) {
-      // This SharedImage may be used for zero-copy import into WebGPU.
-      si_usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ;
-    }
-#elif BUILDFLAG(IS_MAC)
-    // This SharedImage may be used for zero-copy import into WebGPU.
-    si_usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ;
-#endif
-    // Create a Mappable shared image.
-    frame_resource->shared_image =
-        sii->CreateSharedImage({si_format, size, color_space, si_usage,
-                                "MediaGmbVideoFramePoolMappableSI"},
-                               gpu::kNullSurfaceHandle, usage);
-    return frame_resource;
-  }
-  return nullptr;
+  return frame_resource;
 }
 
 void MappableSharedImageVideoFramePool::PoolImpl::
@@ -1285,9 +1338,10 @@ void MappableSharedImageVideoFramePool::PoolImpl::
 }
 
 // static
-void MappableSharedImageVideoFramePool::PoolImpl::DeleteFrameResource(
-    GpuVideoAcceleratorFactories* const gpu_factories,
-    FrameResource* frame_resource) {
+void MappableSharedImageVideoFramePool::PoolImpl::
+    UpdateSharedImageDestructionTokenForResource(
+        GpuVideoAcceleratorFactories* const gpu_factories,
+        FrameResource* frame_resource) {
   // TODO(dcastagna): As soon as the context lost is dealt with in media,
   // make sure that we won't execute this callback (use a weak pointer to
   // the old context).
@@ -1299,6 +1353,15 @@ void MappableSharedImageVideoFramePool::PoolImpl::DeleteFrameResource(
     frame_resource->shared_image->UpdateDestructionSyncToken(
         frame_resource->sync_token);
   }
+}
+
+void MappableSharedImageVideoFramePool::PoolImpl::DestroyFailedResource(
+    FrameResource* frame_resource) {
+  DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
+  frame_resource->MarkUnused(tick_clock_->NowTicks());
+  resources_pool_.erase(std::find(resources_pool_.begin(),
+                                  resources_pool_.end(), frame_resource));
+  delete frame_resource;
 }
 
 // Called when a VideoFrame is no longer referenced. Put back the resource in
@@ -1315,7 +1378,8 @@ void MappableSharedImageVideoFramePool::PoolImpl::SharedImageReleased(
   frame_resource->sync_token = release_sync_token;
 
   if (in_shutdown_) {
-    DeleteFrameResource(gpu_factories_, frame_resource);
+    UpdateSharedImageDestructionTokenForResource(gpu_factories_,
+                                                 frame_resource);
     delete frame_resource;
     return;
   }
@@ -1330,7 +1394,7 @@ void MappableSharedImageVideoFramePool::PoolImpl::SharedImageReleased(
     if (!resource->is_used() &&
         now - resource->last_use_time() > kStaleFrameLimit) {
       resources_pool_.erase(it++);
-      DeleteFrameResource(gpu_factories_, resource);
+      UpdateSharedImageDestructionTokenForResource(gpu_factories_, resource);
       delete resource;
     } else {
       it++;

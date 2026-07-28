@@ -117,6 +117,10 @@ namespace viz {
 class RasterContextProvider;
 }
 
+namespace cppgc {
+class StackStartMarker;
+}
+
 namespace blink {
 
 class BrowserInterfaceBrokerProxy;
@@ -154,7 +158,8 @@ class BLINK_PLATFORM_EXPORT Platform {
   // you should use blink::Initialize. WebThreadScheduler must be owned by
   // the embedder. InitializeBlink must be called before WebThreadScheduler is
   // created and passed to InitializeMainThread.
-  static void InitializeBlink();
+  static void InitializeBlink(
+      std::optional<cppgc::StackStartMarker> stack_start_marker = std::nullopt);
   static void InitializeMainThread(
       Platform*,
       scheduler::WebThreadScheduler* main_thread_scheduler);
@@ -589,6 +594,9 @@ class BLINK_PLATFORM_EXPORT Platform {
   // Whether the platform supports elastic overscroll.
   virtual bool IsElasticOverscrollSupported() { return false; }
 
+  // Whether elastic overscroll is enabled for subscrolls.
+  virtual bool IsElasticOverscrollEnabledForSubscroll() { return false; }
+
   // Whether the scroll animator that produces smooth scrolling is enabled.
   virtual bool IsScrollAnimatorEnabled() { return true; }
 
@@ -602,6 +610,11 @@ class BLINK_PLATFORM_EXPORT Platform {
   virtual scoped_refptr<viz::RasterContextProvider>
   SharedCompositorWorkerContextProvider(
       cc::RasterDarkModeFilter* dark_mode_filter);
+
+  // Returns a worker context provider that will be bound on the media thread.
+  virtual void SharedMediaContextProvider(
+      base::OnceCallback<void(scoped_refptr<viz::RasterContextProvider>)>
+          callback);
 
   // Synchronously establish a channel to the GPU plugin if not previously
   // established or if it has been lost (for example if the GPU plugin crashed).

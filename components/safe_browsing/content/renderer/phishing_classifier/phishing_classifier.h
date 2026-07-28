@@ -14,18 +14,16 @@
 #include <stdint.h>
 
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/scorer.h"
+#include "components/safe_browsing/core/common/phishing_classifier/scorer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace content {
@@ -160,6 +158,10 @@ class PhishingClassifier {
   // Used to determine if the image embedder should be applied after the visual
   // tflite model was applied.
   std::optional<safe_browsing::mojom::ClientSideDetectionType> request_type_;
+
+  // The URL of the page being classified. Stored at the beginning of
+  // classification to ensure consistency in the verdict.
+  GURL classification_url_;
 
   // Used in scheduling BeginFeatureExtraction tasks.
   // These pointers are invalidated if classification is cancelled.

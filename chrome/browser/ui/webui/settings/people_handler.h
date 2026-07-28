@@ -127,6 +127,7 @@ class PeopleHandler : public SettingsPageUIHandler,
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest,
                            DashboardClearWhileSettingsOpen_ConfirmLater);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerDiceTest, StoredAccountsList);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerDiceTest, RecordSigninOffered);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerGuestModeTest, GetStoredAccountsList);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, SyncCookiesDisabled);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, TurnOffSync);
@@ -208,6 +209,7 @@ class PeopleHandler : public SettingsPageUIHandler,
   void HandleGetChromeSigninUserChoiceInfo(const base::ListValue& args);
   void HandleSetChromeSigninUserChoice(const base::ListValue& args);
   void HandleRecordSigninPendingOffered(const base::ListValue& args);
+  void HandleRecordSigninOffered(const base::ListValue& args);
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -228,10 +230,6 @@ class PeopleHandler : public SettingsPageUIHandler,
   void HandleGetSyncStatus(const base::ListValue& args);
 
 #if !BUILDFLAG(IS_CHROMEOS)
-  void HandleShowSyncPassphraseDialog(const base::ListValue& args);
-  void HandleShowAccountSettingsUI(const base::ListValue& args);
-  void HandleSetDatatype(const base::ListValue& args);
-
   // Displays the GAIA login form.
   void DisplayGaiaLogin(signin_metrics::AccessPoint access_point);
 
@@ -240,6 +238,9 @@ class PeopleHandler : public SettingsPageUIHandler,
       signin_metrics::AccessPoint access_point);
 #endif
 
+  void HandleShowSyncPassphraseDialog(const base::ListValue& args);
+  void HandleShowAccountSettingsUI(const base::ListValue& args);
+  void HandleSetDatatype(const base::ListValue& args);
   void HandleGetStoredAccounts(const base::ListValue& args);
   void HandleStartSyncingWithEmail(const base::ListValue& args);
   void HandleGetProfileAvatar(const base::ListValue& args);

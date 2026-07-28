@@ -23,21 +23,19 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/time/default_clock.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/google/core/common/google_util.h"
 #include "components/policy/core/common/management/management_service.h"
@@ -55,8 +53,11 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include <optional>
 
+#include "ash/constants/ash_constants.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/url_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "base/i18n/time_formatting.h"
 #include "base/strings/strcat.h"
@@ -67,6 +68,7 @@
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/tpm/tpm_firmware_update.h"
+#include "chrome/browser/ui/ash/system_web_apps/system_web_app_utils.h"
 #include "chrome/browser/ui/webui/ash/extended_updates/extended_updates_dialog.h"
 #include "chrome/browser/ui/webui/help/help_utils_chromeos.h"
 #include "chrome/browser/ui/webui/help/version_updater_chromeos.h"
@@ -183,7 +185,7 @@ base::FilePath GetRegulatoryLabelDirForRegion(std::string_view region) {
   // Check if the label image file exists in the full path, e.g.,
   // "/usr/share/chromeos-assets/regulatory_labels/us/label.png".
   const base::FilePath image_path =
-      base::FilePath(chrome::kChromeOSAssetPath)
+      base::FilePath(ash::kChromeOSAssetPath)
           .Append(region_path)
           .AppendASCII(kRegulatoryLabelImageFilename);
   return base::PathExists(image_path) ? region_path : base::FilePath();
@@ -215,7 +217,7 @@ base::FilePath FindRegulatoryLabelDir() {
 // Must be called from the blocking pool.
 std::string ReadRegulatoryLabelText(const base::FilePath& label_dir_path) {
   const base::FilePath text_path =
-      base::FilePath(chrome::kChromeOSAssetPath)
+      base::FilePath(ash::kChromeOSAssetPath)
           .Append(label_dir_path)
           .AppendASCII(kRegulatoryLabelTextFilename);
 
@@ -510,26 +512,30 @@ void AboutHandler::PromoteUpdater(const base::ListValue& args) {
 
 void AboutHandler::HandleOpenFeedbackDialog(const base::ListValue& args) {
   DCHECK(args.empty());
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_ui()->GetWebContents());
   chrome::OpenFeedbackDialog(browser,
                              feedback::kFeedbackSourceMdSettingsAboutPage);
 }
 
 void AboutHandler::HandleOpenHelpPage(const base::ListValue& args) {
   DCHECK(args.empty());
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_ui()->GetWebContents());
   chrome::ShowHelp(browser, chrome::HelpSource::kWebUI);
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
 void AboutHandler::HandleOpenDiagnostics(const base::ListValue& args) {
   DCHECK(args.empty());
-  chrome::ShowDiagnosticsApp(profile_);
+  ash::ShowDiagnosticsApp(profile_);
 }
 
 void AboutHandler::HandleOpenFirmwareUpdates(const base::ListValue& args) {
   DCHECK(args.empty());
-  chrome::ShowFirmwareUpdatesApp(profile_);
+  ash::ShowFirmwareUpdatesApp(profile_);
 }
 
 void AboutHandler::HandleCheckInternetConnection(const base::ListValue& args) {
@@ -553,7 +559,9 @@ void AboutHandler::HandleLaunchReleaseNotes(const base::ListValue& args) {
 
 void AboutHandler::HandleOpenOsHelpPage(const base::ListValue& args) {
   DCHECK(args.empty());
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_ui()->GetWebContents());
   chrome::ShowHelp(browser, chrome::HelpSource::kWebUIChromeOS);
 }
 
@@ -635,6 +643,9 @@ void AboutHandler::HandleGetChannelInfo(const base::ListValue& args) {
 }
 
 void AboutHandler::HandleCanChangeFirmware(const base::ListValue& args) {
+  // It's possible this function could fire prior to other runs
+  // of AllowJavascript(), ensure it's enabled.
+  AllowJavascript();
   CHECK_EQ(1U, args.size());
   const std::string& callback_id = args[0].GetString();
   ResolveJavascriptCallback(base::Value(callback_id),
@@ -765,8 +776,9 @@ std::u16string AboutHandler::GetEndOfLifeMessage(base::Time eol_date) const {
   int eol_string_id = eol_passed
                           ? IDS_SETTINGS_ABOUT_PAGE_END_OF_LIFE_MESSAGE_PAST
                           : IDS_SETTINGS_ABOUT_PAGE_END_OF_LIFE_MESSAGE_FUTURE;
-  const char16_t* eol_url =
-      eol_passed ? chrome::kEolNotificationURL : chrome::kAutoUpdatePolicyURL;
+  const char16_t* eol_url = eol_passed
+                                ? ash::external_urls::kEolNotificationURL
+                                : ash::external_urls::kAutoUpdatePolicyURL;
   return l10n_util::GetStringFUTF16(eol_string_id,
                                     base::TimeFormatMonthAndYearForTimeZone(
                                         eol_date, icu::TimeZone::getGMT()),
@@ -961,8 +973,8 @@ void AboutHandler::OnRegulatoryLabelTextRead(
 
   std::string image_path =
       label_dir_path.AppendASCII(kRegulatoryLabelImageFilename).MaybeAsASCII();
-  std::string url =
-      base::StrCat({"chrome://", chrome::kChromeOSAssetHost, "/", image_path});
+  std::string url = base::StrCat(
+      {"chrome://", ash::kChromeUIChromeOSAssetHost, "/", image_path});
   regulatory_info.Set("url", url);
 
   ResolveJavascriptCallback(base::Value(callback_id), regulatory_info);

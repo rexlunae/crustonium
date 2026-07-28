@@ -176,6 +176,13 @@ class DualLayerUserPrefStore : public PersistentPrefStore,
   // account.
   bool ShouldGetValueFromAccountStore(std::string_view key) const;
 
+  // Returns whether the pref with the given `key` should be inserted into the
+  // local pref store.
+  bool ShouldSetValueInLocalStore(std::string_view key) const;
+  // Returns whether the pref with the given `key` should be queried from the
+  // local pref store.
+  bool ShouldGetValueFromLocalStore(std::string_view key) const;
+
   // Returns whether the pref with the given `key` is mergeable.
   bool IsPrefKeyMergeable(std::string_view key) const;
 
@@ -190,19 +197,24 @@ class DualLayerUserPrefStore : public PersistentPrefStore,
                           base::Value& local_value,
                           base::Value& account_value);
 
+  // Updates the merged pref cache for `key` if it is mergeable and exists in
+  // both stores. Returns true if the merged value changed.
+  bool UpdateMergedPrefCacheIfMergeable(std::string_view key) const;
+
   // Unmerges `value` and returns the new local value and the account value (in
   // that order).
   std::pair<base::Value, base::Value> UnmergeValue(std::string_view pref_name,
                                                    base::Value value,
                                                    uint32_t flags) const;
 
-  // Get all prefs currently present in the account store.
+  // Get all syncable prefs currently present in `store`.
   // Note that this will also return prefs which can not be queried from the
-  // account store. For example, this method will return prefs requiring history
+  // `store`. For example, this method will return prefs requiring history
   // opt-in even if history sync is disabled. A GetValue() call for such a pref
   // will not query the account store. Thus it is the role of the callers to
   // check the history opt-in.
-  std::vector<std::string> GetPrefNamesInAccountStore() const;
+  std::vector<std::string> GetSyncablePrefNamesInStore(
+      const PersistentPrefStore* store) const;
 
   // Returns whether the user has history sync turned on.
   bool IsHistorySyncEnabled() const;

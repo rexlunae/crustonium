@@ -11,7 +11,7 @@ import { assertEquals, assertFalse, assertTrue } from 'chrome://webui-test/chai_
 import { isVisible } from 'chrome://webui-test/test_util.js';
 // </if>
 import { CrSettingsPrefs, loadTimeData, ModelExecutionEnterprisePolicyValue } from 'chrome://settings/settings.js';
-import type { SettingsAiLoggingInfoBullet, SettingsPrefsElement, SettingsToggleButtonElement } from 'chrome://settings/settings.js';
+import type { SettingsAiLoggingInfoBullet, SettingsPrefsElement, SettingsToggleButtonElement, CrPolicyPrefIndicatorElement } from 'chrome://settings/settings.js';
 import type { SettingsAutofillAiSectionElement } from 'chrome://settings/lazy_load.js';
 import { AiEnterpriseFeaturePrefName, EntityDataManagerProxyImpl } from 'chrome://settings/lazy_load.js';
 
@@ -49,6 +49,7 @@ suite('AutofillAiSectionUiReflectsEligibilityStatus', function() {
           editEntityTypeString: 'Edit car',
           deleteEntityTypeString: 'Delete car',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
         },
         entityInstanceLabel: 'Toyota',
         entityInstanceSubLabel: 'Car',
@@ -63,6 +64,7 @@ suite('AutofillAiSectionUiReflectsEligibilityStatus', function() {
           editEntityTypeString: 'Edit passport',
           deleteEntityTypeString: 'Delete passport',
           supportsWalletStorage: false,
+          passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
         },
         entityInstanceLabel: 'John Doe',
         entityInstanceSubLabel: 'Passport',
@@ -77,19 +79,19 @@ suite('AutofillAiSectionUiReflectsEligibilityStatus', function() {
 
   async function createSection(
       eligibleUser: boolean = true,
-      autofillAiIgnoresWhetherAddressFillingIsEnabled: boolean =
+      autofillSettingsEnterprisePolicyEnabled: boolean =
           false): Promise<SettingsAutofillAiSectionElement> {
     loadTimeData.overrideValues({
       userEligibleForAutofillAi: eligibleUser,
-      AutofillAiIgnoresWhetherAddressFillingIsEnabled:
-          autofillAiIgnoresWhetherAddressFillingIsEnabled,
+      AutofillSettingsEnterprisePolicyEnabled:
+          autofillSettingsEnterprisePolicyEnabled,
     });
     const section: SettingsAutofillAiSectionElement =
         document.createElement('settings-autofill-ai-section');
     settingsPrefs.set(
         `prefs.${AiEnterpriseFeaturePrefName.AUTOFILL_AI}.value`,
         ModelExecutionEnterprisePolicyValue.ALLOW);
-    section.prefs = settingsPrefs.prefs;
+    section.prefs = settingsPrefs.prefs!;
     document.body.appendChild(section);
 
     await flushTasks();
@@ -164,12 +166,12 @@ suite('AutofillAiSectionUiReflectsEligibilityStatus', function() {
   });
 
   test(
-      'DisablingClassicAutofillPrefDoesNotDisabledTheFeatureIfOverrideBehaviourIsEnabled',
+      'DisablingClassicAutofillPrefDoesNotDisablTheFeatureIfOtherDatatypesPrefIsEnabled',
       async function() {
         entityDataManager.setGetOptInStatusResponse(true);
         const section = await createSection(
             /*eligibleUser=*/ true,
-            /*autofillAiIgnoresWhetherAddressFillingIsEnable=*/ true);
+            /*autofillSettingsEnterprisePolicyEnabled=*/ true);
 
         const toggle =
             section.shadowRoot!.querySelector<SettingsToggleButtonElement>(
@@ -218,6 +220,7 @@ suite('AutofillAiSectionUiTest', function() {
         editEntityTypeString: 'Edit driver\'s license',
         deleteEntityTypeString: 'Delete driver\'s license',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
       },
       attributeInstances: [
         {
@@ -251,6 +254,7 @@ suite('AutofillAiSectionUiTest', function() {
         editEntityTypeString: 'Edit passport',
         deleteEntityTypeString: 'Delete passport',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PRIVATE_PASS,
       },
       {
         typeName: 2,
@@ -259,6 +263,7 @@ suite('AutofillAiSectionUiTest', function() {
         editEntityTypeString: 'Edit car',
         deleteEntityTypeString: 'Delete car',
         supportsWalletStorage: false,
+        passType: chrome.autofillPrivate.EntityPassType.PUBLIC_PASS,
       },
     ];
     // Initially not sorted alphabetically. The production code should sort them
@@ -271,6 +276,7 @@ suite('AutofillAiSectionUiTest', function() {
         entityInstanceLabel: 'Toyota',
         entityInstanceSubLabel: 'Car',
         storedInWallet: true,
+        walletEntityUrl: 'https://wallet.google.com',
       },
       {
         guid: '1fd09cdc-35b8-4367-8f1a-18c8c0733af0',
@@ -301,6 +307,10 @@ suite('AutofillAiSectionUiTest', function() {
     settingsPrefs.set(
         `prefs.${AiEnterpriseFeaturePrefName.AUTOFILL_AI}.value`,
         ModelExecutionEnterprisePolicyValue.ALLOW);
+    settingsPrefs.set('prefs.autofill.profile_enabled', {
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    });
   });
 
   teardown(function() {
@@ -311,9 +321,10 @@ suite('AutofillAiSectionUiTest', function() {
     loadTimeData.overrideValues({
       userEligibleForAutofillAi: true,
       autofillAiAvailableByDefault: autofillAiAvailableByDefault,
+      AutofillSettingsEnterprisePolicyEnabled: false,
     });
     section = document.createElement('settings-autofill-ai-section');
-    section.prefs = settingsPrefs.prefs;
+    section.prefs = settingsPrefs.prefs!;
     document.body.appendChild(section);
     await flushTasks();
   }
@@ -334,7 +345,7 @@ suite('AutofillAiSectionUiTest', function() {
     const firstBulletText =
         firstBullet.querySelector('.cr-secondary-text')!.textContent.trim();
     assertEquals(
-        loadTimeData.getString('autofillAiWhenOnUseToFill'), firstBulletText);
+        loadTimeData.getString('autofillAiWhenOnSavedInfo'), firstBulletText);
 
     const secondBullet = bulletsInFirstColumn.item(1);
     assertTrue(secondBullet !== null);
@@ -417,6 +428,66 @@ suite('AutofillAiSectionUiTest', function() {
                 'autofillAiSubpageSublabelLoggingManagedDisabled'),
             enterpriseLogginInfoBullet.loggingManagedDisabledCustomLabel);
       });
+
+  test('ToggleRespectsAddressAutofillPolicy', async function() {
+    settingsPrefs.set('prefs.autofill.profile_enabled', {
+      value: false,
+      enforcement: chrome.settingsPrivate.Enforcement.ENFORCED,
+      controlledBy: chrome.settingsPrivate.ControlledBy.USER_POLICY,
+    });
+    await createSection();
+
+    const policyIcon = section.$.prefToggle.shadowRoot!
+                           .querySelector<CrPolicyPrefIndicatorElement>(
+                               'cr-policy-pref-indicator');
+    assertEquals(
+        chrome.settingsPrivate.Enforcement.ENFORCED,
+        section.get('optedIn_.enforcement'));
+    assertEquals(
+        chrome.settingsPrivate.ControlledBy.USER_POLICY,
+        section.get('optedIn_.controlledBy'));
+    assertFalse(section.get('optedIn_.value'));
+    assertTrue(!!policyIcon);
+  });
+
+  test('ToggleRespectsAddressAutofillExtension', async function() {
+    settingsPrefs.set('prefs.autofill.profile_enabled', {
+      value: false,
+      enforcement: chrome.settingsPrivate.Enforcement.ENFORCED,
+      controlledBy: chrome.settingsPrivate.ControlledBy.EXTENSION,
+      extensionId: 'test-extension-id',
+    });
+    await createSection();
+
+    const extensionIndicator =
+        section.shadowRoot!.querySelector('#autofillExtensionIndicator');
+    assertEquals(
+        chrome.settingsPrivate.Enforcement.ENFORCED,
+        section.get('optedIn_.enforcement'));
+    assertEquals(
+        chrome.settingsPrivate.ControlledBy.EXTENSION,
+        section.get('optedIn_.controlledBy'));
+    assertFalse(section.get('optedIn_.value'));
+    assertTrue(!!extensionIndicator);
+  });
+
+  test('AddressAutofillNotEnforcesTrueValueOnToggle', async function() {
+    entityDataManager.setGetOptInStatusResponse(false);
+    settingsPrefs.set('prefs.autofill.profile_enabled', {
+      value: true,
+      enforcement: chrome.settingsPrivate.Enforcement.ENFORCED,
+      controlledBy: chrome.settingsPrivate.ControlledBy.EXTENSION,
+      extensionId: 'test-extension-id',
+    });
+    await createSection();
+
+    const extensionIndicator =
+        section.shadowRoot!.querySelector('#autofillExtensionIndicator');
+    assertEquals(undefined, section.get('optedIn_.enforcement'));
+    assertEquals(undefined, section.get('optedIn_.controlledBy'));
+    assertFalse(section.get('optedIn_.value'));
+    assertFalse(!!extensionIndicator);
+  });
 
   test('ToggleIsDisabledWhenUserIsNotEligible', async function() {
     await createSection();

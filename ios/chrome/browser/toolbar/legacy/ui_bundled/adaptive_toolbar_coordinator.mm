@@ -13,6 +13,8 @@
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter.h"
 #import "ios/chrome/browser/collaboration/model/messaging/messaging_backend_service_factory.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
@@ -28,10 +30,12 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_coordinator+subclassing.h"
@@ -64,6 +68,9 @@ using tab_groups::VersioningMessageController;
 @implementation AdaptiveToolbarCoordinator {
   // Observer that updates `toolbarViewController` for fullscreen events.
   std::unique_ptr<FullscreenUIUpdater> _fullscreenUIUpdater;
+  // Bridge to observe the FullscreenBrowserAgent.
+  std::unique_ptr<FullscreenBrowserAgentObserverBridge>
+      _fullscreenBrowserAgentObserverBridge;
 }
 
 @synthesize baseViewController = _baseViewController;
@@ -105,10 +112,15 @@ using tab_groups::VersioningMessageController;
   self.mediator.actionFactory = [[BrowserActionFactory alloc]
       initWithBrowser:browser
              scenario:kMenuScenarioHistogramToolbarMenu];
-  self.mediator.commandDispatcher = browser->GetCommandDispatcher();
 
-  _fullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
-      FullscreenController::FromBrowser(browser), self.viewController);
+  if (IsFullscreenRefactoringEnabled()) {
+    _fullscreenBrowserAgentObserverBridge =
+        std::make_unique<FullscreenBrowserAgentObserverBridge>(
+            self.viewController, FullscreenBrowserAgent::FromBrowser(browser));
+  } else {
+    _fullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
+        FullscreenController::FromBrowser(browser), self.viewController);
+  }
 
   self.viewController.menuProvider = self.mediator;
 
@@ -123,6 +135,7 @@ using tab_groups::VersioningMessageController;
   self.mediator = nil;
   [self.viewController disconnect];
   _fullscreenUIUpdater = nullptr;
+  _fullscreenBrowserAgentObserverBridge = nullptr;
   _started = NO;
 }
 
@@ -151,16 +164,27 @@ using tab_groups::VersioningMessageController;
   [self.viewController showPrerenderingAnimation];
 }
 
-- (void)setLocationBarHeight:(CGFloat)height {
-  [self.viewController setLocationBarHeight:height];
-}
-
 #pragma mark - AdaptiveToolbarViewControllerDelegate
 
-- (void)exitFullscreen:(FullscreenExitReason)FullscreenExitReason {
-  FullscreenController* fullscreenController =
-      FullscreenController::FromBrowser(self.browser);
-  fullscreenController->ExitFullscreen(FullscreenExitReason);
+- (void)exitFullscreen:
+    (FullscreenModeTransitionTrigger)fullscreenTransitionTrigger {
+  if (IsFullscreenRefactoringEnabled()) {
+    // TODO(crbug.com/500669310): Support forced fullscreen mode in
+    // FullscreenCommands.
+    id<FullscreenCommands> fullscreenHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), FullscreenCommands);
+    [fullscreenHandler exitFullscreenWithTrigger:fullscreenTransitionTrigger
+                                        animated:YES];
+  } else {
+    FullscreenController* fullscreenController =
+        FullscreenController::FromBrowser(self.browser);
+    if (fullscreenController->IsForceFullscreenMode()) {
+      fullscreenController->ExitForceFullscreenMode(
+          fullscreenTransitionTrigger);
+    } else {
+      fullscreenController->ExitFullscreen(fullscreenTransitionTrigger);
+    }
+  }
 
   web::WebState* webState =
       self.browser->GetWebStateList()->GetActiveWebState();
@@ -189,15 +213,8 @@ using tab_groups::VersioningMessageController;
   return nil;
 }
 
-- (void)didNavigateToNTPOnActiveWebState {
-  // Implemented in `ToolbarCoordinator`.
-}
 
 #pragma mark - ToolbarCommands
-
-- (void)triggerToolbarSlideInAnimation {
-  // Implemented in primary and secondary toolbars directly.
-}
 
 - (void)indicateLensOverlayVisible:(BOOL)lensOverlayVisible {
   // NO-OP
@@ -244,8 +261,9 @@ using tab_groups::VersioningMessageController;
   LegacyToolbarButtonFactory* buttonFactory =
       [[LegacyToolbarButtonFactory alloc] initWithStyle:style];
   buttonFactory.actionHandler = actionHandler;
-  if (IsGeminiCopresenceEnabled()) {
-    buttonFactory.geminiHandler = HandlerForProtocol(dispatcher, BWGCommands);
+  if (IsPageActionMenuEnabled()) {
+    buttonFactory.geminiHandler =
+        HandlerForProtocol(dispatcher, GeminiCommands);
   }
   buttonFactory.visibilityConfiguration =
       [[ToolbarButtonVisibilityConfiguration alloc] initWithType:type];

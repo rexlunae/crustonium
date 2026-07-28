@@ -9,15 +9,15 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
-#import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/service/sync_service.h"
 #import "ios/chrome/browser/authentication/history_sync/coordinator/history_sync_coordinator.h"
 #import "ios/chrome/browser/authentication/history_sync/coordinator/history_sync_popup_coordinator.h"
 #import "ios/chrome/browser/authentication/history_sync/model/history_sync_utils.h"
+#import "ios/chrome/browser/authentication/signin/reauth/coordinator/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
-#import "ios/chrome/browser/authentication/ui_bundled/signin/reauth/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_context_style.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
@@ -46,6 +46,7 @@
 #import "ios/chrome/browser/shared/ui/table_view/table_view_navigation_controller_constants.h"
 #import "ios/chrome/browser/sharing/ui_bundled/sharing_coordinator.h"
 #import "ios/chrome/browser/sharing/ui_bundled/sharing_params.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/sync/model/session_sync_service_factory.h"
@@ -80,9 +81,6 @@
   raw_ptr<AuthenticationService> _authenticationService;
   raw_ptr<syncer::SyncService> _syncService;
   SigninReauthCoordinator* _reauthCoordinator;
-  // TODO(crbug.com/471207686): Remove after kIdentityInAuthErrorFollowUps is
-  // launched.
-  SigninCoordinator* _signinCoordinator;
 }
 
 - (void)dealloc {
@@ -93,7 +91,6 @@
   CHECK(!_authenticationService, base::NotFatalUntil::M150);
   CHECK(!_syncService, base::NotFatalUntil::M150);
   CHECK(!_reauthCoordinator, base::NotFatalUntil::M150);
-  CHECK(!_signinCoordinator, base::NotFatalUntil::M150);
 }
 
 #pragma mark - ChromeCoordinator
@@ -147,8 +144,11 @@
   FaviconLoader* faviconLoader =
       IOSChromeFaviconLoaderFactory::GetForProfile(profile);
   _syncService = SyncServiceFactory::GetForProfile(profile);
+  AuthenticationService* authService =
+      AuthenticationServiceFactory::GetForProfile(profile);
   self.mediator =
       [[RecentTabsMediator alloc] initWithSessionSyncService:sessionSyncService
+                                                 authService:authService
                                              identityManager:identityManager
                                               restoreService:restoreService
                                                faviconLoader:faviconLoader
@@ -185,11 +185,9 @@
   self.recentTabsTableViewController.imageDataSource = nil;
   self.recentTabsTableViewController.browser = nil;
   self.recentTabsTableViewController = nil;
-  [self stopSigninCoordinator];
-  [self.recentTabsNavigationController
+  [self.recentTabsNavigationController.presentingViewController
       dismissViewControllerAnimated:YES
                          completion:self.completion];
-  [self stopSigninCoordinator];
   [self stopReauthCoordinator];
   self.recentTabsNavigationController = nil;
   self.recentTabsContextMenuHelper = nil;
@@ -204,10 +202,6 @@
 #pragma mark - RecentTabsPresentationDelegate
 
 - (void)showPrimaryAccountReauth {
-  if (!base::FeatureList::IsEnabled(switches::kIdentityInAuthErrorFollowUps)) {
-    [self showPrimaryAccountReauthLegacy];
-    return;
-  }
   if (_reauthCoordinator.viewWillPersist) {
     return;
   }
@@ -229,35 +223,6 @@
                                      kRecentTabs];
   _reauthCoordinator.delegate = self;
   [_reauthCoordinator start];
-}
-
-- (void)showPrimaryAccountReauthLegacy {
-  if (_signinCoordinator.viewWillPersist) {
-    return;
-  }
-  [self stopSigninCoordinator];
-  signin_metrics::AccessPoint accessPoint =
-      signin_metrics::AccessPoint::kRecentTabs;
-  signin_metrics::PromoAction promoAction =
-      signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO;
-  SigninContextStyle style = SigninContextStyle::kDefault;
-  Browser* regularBrowser = signin::GetRegularBrowser(self.browser);
-  _signinCoordinator = [SigninCoordinator
-      primaryAccountReauthCoordinatorWithBaseViewController:
-          self.recentTabsTableViewController
-                                                    browser:regularBrowser
-                                               contextStyle:style
-                                                accessPoint:accessPoint
-                                                promoAction:promoAction
-                                       continuationProvider:
-                                           DoNothingContinuationProvider()];
-  __weak __typeof(self) weakSelf = self;
-  _signinCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> completionIdentity) {
-        [weakSelf signinCoordinatorCompletedWithCoordinator:coordinator];
-      };
-  [_signinCoordinator start];
 }
 
 - (void)openAllTabsFromSession:(const synced_sessions::DistantSession*)session {
@@ -330,11 +295,12 @@
   SharingParams* params = [[SharingParams alloc] initWithURL:URL
                                                        title:title
                                                     scenario:scenario];
+  [self.sharingCoordinator stop];
   self.sharingCoordinator = [[SharingCoordinator alloc]
       initWithBaseViewController:self.recentTabsTableViewController
                          browser:self.browser
                           params:params
-                      originView:view];
+                      sourceItem:view];
   [self.sharingCoordinator start];
 }
 
@@ -366,11 +332,6 @@
 
 #pragma mark - Private
 
-- (void)signinCoordinatorCompletedWithCoordinator:
-    (SigninCoordinator*)coordinator {
-  CHECK_EQ(_signinCoordinator, coordinator, base::NotFatalUntil::M151);
-  [self stopSigninCoordinator];
-}
 
 - (void)dismissButtonTapped {
   base::RecordAction(base::UserMetricsAction("MobileRecentTabsClose"));
@@ -389,9 +350,5 @@
   _reauthCoordinator = nil;
 }
 
-- (void)stopSigninCoordinator {
-  [_signinCoordinator stop];
-  _signinCoordinator = nil;
-}
 
 @end

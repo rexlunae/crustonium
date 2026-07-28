@@ -88,7 +88,12 @@ def main(argv):
   cmd = build_utils.JavaCmd() + [
       '-classpath', options.turbine_jar_path, 'com.google.turbine.main.Main'
   ]
-  javac_cmd = ['--release', '17']
+  # Keep consistent with javac_args release flag in
+  # //build/android/gyp/compile_java.py and
+  # compileOptions in //build/android/gradle/android.jinja
+  # LINT.IfChange
+  javac_cmd = ['--release', '25']
+  # LINT.ThenChange(//depot/chromium/components/cronet/gn2bp/templates/Android.extras.bp.template)
 
   # Turbine reads lists from command line args by consuming args until one
   # starts with double dash (--). Thus command line args should be grouped

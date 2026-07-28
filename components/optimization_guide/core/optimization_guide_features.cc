@@ -4,16 +4,17 @@
 
 #include "components/optimization_guide/core/optimization_guide_features.h"
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
-#include "base/containers/enum_set.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -23,10 +24,9 @@
 #include "base/time/time.h"
 #include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
 #include "components/optimization_guide/core/model_execution/feature_keys.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
+#include "components/optimization_guide/core/model_execution/on_device_features.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
-#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
 #include "components/variations/hashing.h"
 #include "google_apis/gaia/gaia_constants.h"
@@ -34,8 +34,11 @@
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
 
-namespace optimization_guide {
-namespace features {
+#if BUILDFLAG(IS_ANDROID)
+#include "components/version_info/android/channel_getter.h"
+#endif
+
+namespace optimization_guide::features {
 
 namespace {
 
@@ -143,11 +146,27 @@ const base::FeatureParam<std::string> kPerformanceClassListForImageInput{
     &kOnDeviceModelPerformanceParams,
     "compatible_on_device_performance_classes_image_input", "3,4,5,6"};
 
-const base::FeatureParam<std::string> kPerformanceClassListForAudioInput{
-    &kOnDeviceModelPerformanceParams,
-    "compatible_on_device_performance_classes_audio_input", "5,6"};
+BASE_FEATURE(kOnDeviceModelBackgroundDownload,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kOptimizationGuideIconView, base::FEATURE_DISABLED_BY_DEFAULT);
+const base::FeatureParam<std::string>
+    kOnDeviceModelBackgroundDownloadAllowedFeatures{
+        &kOnDeviceModelBackgroundDownload, "allowed_features",
+        "PromptApi,WritingAssistanceApi,Summarize"};
+
+bool IsOnDeviceModelBackgroundDownloadEnabledForFeature(
+    mojom::OnDeviceFeature feature) {
+  if (!base::FeatureList::IsEnabled(kOnDeviceModelBackgroundDownload)) {
+    return false;
+  }
+  std::string allowed_features_string =
+      kOnDeviceModelBackgroundDownloadAllowedFeatures.Get();
+  std::vector<std::string_view> allowed_features =
+      base::SplitStringPiece(allowed_features_string, ",",
+                             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  return std::ranges::contains(allowed_features, GetVariantName(feature));
+}
+
 
 BASE_FEATURE(kBrokerModelSessionsForUntrustedProcesses,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -172,7 +191,7 @@ const base::FeatureParam<base::TimeDelta> kGetAIPageContentSubframeTimeoutParam{
     &kGetAIPageContentSubframeTimeoutEnabled, "timeout", base::Seconds(10)};
 
 // Controls whether to enforce a timeout for main frame page content extraction.
-// If enabled, defaults to 10 seconds. If disabled, wait indefinitely for the
+// If enabled, defaults to 30 seconds. If disabled, wait indefinitely for the
 // main frame to respond.
 BASE_FEATURE(kGetAIPageContentMainFrameTimeoutEnabled,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -180,6 +199,15 @@ const base::FeatureParam<base::TimeDelta>
     kGetAIPageContentMainFrameTimeoutParam{
         &kGetAIPageContentMainFrameTimeoutEnabled, "timeout",
         base::Seconds(30)};
+
+// Controls whether to enforce a timeout for GetImageBytes. If enabled, defaults
+// to 10 seconds.
+BASE_FEATURE(kGetAIPageContentGetImageBytesTimeoutEnabled,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+const base::FeatureParam<base::TimeDelta>
+    kGetAIPageContentGetImageBytesTimeoutParam{
+        &kGetAIPageContentGetImageBytesTimeoutEnabled, "timeout",
+        base::Seconds(10)};
 
 // The default value here is a bit of a guess.
 // TODO(crbug.com/40163041): This should be tuned once metrics are available.
@@ -202,7 +230,11 @@ std::string GetOptimizationGuideServiceAPIKey() {
         switches::kOptimizationGuideServiceAPIKey);
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  return google_apis::GetAPIKey(version_info::android::GetChannel());
+#else
   return google_apis::GetAPIKey();
+#endif
 }
 
 GURL GetOptimizationGuideServiceGetModelsURL() {
@@ -215,6 +247,8 @@ GURL GetOptimizationGuideServiceGetModelsURL() {
         switches::kOptimizationGuideServiceGetModelsURL));
   }
 
+  static const char kOptimizationGuideServiceGetModelsDefaultURL[] =
+      "https://optimizationguide-pa.googleapis.com/v1:GetModels";
   GURL get_models_url(kOptimizationGuideServiceGetModelsDefaultURL);
   CHECK(get_models_url.SchemeIs(url::kHttpsScheme));
   return get_models_url;
@@ -484,24 +518,40 @@ base::TimeDelta GetOnDeviceModelRetentionTime() {
       base::Days(30));
 }
 
-base::ByteCount GetDiskSpaceRequiredForOnDeviceModelInstall() {
-  return base::MiB(base::GetFieldTrialParamByFeatureAsInt(
-      kOptimizationGuideOnDeviceModel,
-      "on_device_model_free_space_mb_required_to_install",
-      base::GiB(20).InMiB()));
+base::ByteSize GetDiskSpaceRequiredForOnDeviceModelInstall() {
+  return base::MiBU(
+      base::saturated_cast<uint64_t>(base::GetFieldTrialParamByFeatureAsInt(
+          kOptimizationGuideOnDeviceModel,
+          "on_device_model_free_space_mb_required_to_install",
+          base::GiBU(20).InMiB())));
 }
 
 bool IsFreeDiskSpaceSufficientForOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes) {
+    base::ByteSize free_disk_space_bytes) {
   return GetDiskSpaceRequiredForOnDeviceModelInstall() <= free_disk_space_bytes;
 }
 
 bool IsFreeDiskSpaceTooLowForOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes) {
-  return base::MiB(base::GetFieldTrialParamByFeatureAsInt(
-             kOptimizationGuideOnDeviceModel,
-             "on_device_model_free_space_mb_required_to_retain",
-             base::GiB(5).InMiB())) >= free_disk_space_bytes;
+    base::ByteSize free_disk_space_bytes) {
+  return base::MiBU(base::saturated_cast<uint64_t>(
+             base::GetFieldTrialParamByFeatureAsInt(
+                 kOptimizationGuideOnDeviceModel,
+                 "on_device_model_free_space_mb_required_to_retain",
+                 base::GiBU(5).InMiB()))) >= free_disk_space_bytes;
+}
+
+base::ByteSize GetDiskSpaceRequiredForBackgroundOnDeviceModelInstall() {
+  return base::MiBU(
+      base::saturated_cast<uint64_t>(base::GetFieldTrialParamByFeatureAsInt(
+          features::kOnDeviceModelBackgroundDownload,
+          "on_device_model_free_space_mb_required_to_background_install",
+          base::GiBU(50).InMiB())));
+}
+
+bool IsFreeDiskSpaceSufficientForBackgroundOnDeviceModelInstall(
+    base::ByteSize free_disk_space_bytes) {
+  return GetDiskSpaceRequiredForBackgroundOnDeviceModelInstall() <=
+         free_disk_space_bytes;
 }
 
 bool GetOnDeviceModelRetractUnsafeContent() {
@@ -513,12 +563,6 @@ bool GetOnDeviceModelRetractUnsafeContent() {
 
 bool ShouldUseTextSafetyClassifierModel() {
   return base::FeatureList::IsEnabled(kTextSafetyClassifier);
-}
-
-bool ShouldUseGeneralizedSafetyModel() {
-  static const base::FeatureParam<bool> kUseGeneralizedSafetyModel{
-      &kTextSafetyClassifier, "use_generalized_safety_model", false};
-  return kUseGeneralizedSafetyModel.Get();
 }
 
 double GetOnDeviceModelLanguageDetectionMinimumReliability() {
@@ -551,7 +595,7 @@ bool GetOnDeviceModelRetractRepeats() {
 int GetOnDeviceModelDefaultTopK() {
   static const base::FeatureParam<int> kTopK{
       &optimization_guide::features::kOptimizationGuideOnDeviceModel,
-      "on_device_model_topk", 3};
+      "on_device_model_topk", 64};
   return kTopK.Get();
 }
 
@@ -564,7 +608,7 @@ int GetOnDeviceModelMaxTopK() {
 
 double GetOnDeviceModelDefaultTemperature() {
   static const base::FeatureParam<double> kTemperature{
-      &kOptimizationGuideOnDeviceModel, "on_device_model_temperature", 0.8};
+      &kOptimizationGuideOnDeviceModel, "on_device_model_temperature", 1.0};
   return kTemperature.Get();
 }
 
@@ -587,9 +631,6 @@ std::vector<uint32_t> GetOnDeviceModelAllowedAdaptationRanks() {
   return ranks;
 }
 
-bool ShouldEnableOptimizationGuideIconView() {
-  return base::FeatureList::IsEnabled(kOptimizationGuideIconView);
-}
 
 std::optional<base::TimeDelta> GetSubframeGetAIPageContentTimeout() {
   if (!base::FeatureList::IsEnabled(kGetAIPageContentSubframeTimeoutEnabled)) {
@@ -604,6 +645,12 @@ std::optional<base::TimeDelta> GetMainFrameGetAIPageContentTimeout() {
   }
   return kGetAIPageContentMainFrameTimeoutParam.Get();
 }
+std::optional<base::TimeDelta> GetAIPageContentGetImageBytesTimeout() {
+  if (!base::FeatureList::IsEnabled(
+          kGetAIPageContentGetImageBytesTimeoutEnabled)) {
+    return std::nullopt;
+  }
+  return kGetAIPageContentGetImageBytesTimeoutParam.Get();
+}
 
-}  // namespace features
-}  // namespace optimization_guide
+}  // namespace optimization_guide::features

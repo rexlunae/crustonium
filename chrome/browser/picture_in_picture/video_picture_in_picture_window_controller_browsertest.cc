@@ -30,6 +30,7 @@
 #include "chrome/browser/ui/views/overlay/skip_ad_label_button.h"
 #include "chrome/browser/ui/views/overlay/toggle_camera_button.h"
 #include "chrome/browser/ui/views/overlay/toggle_microphone_button.h"
+#include "chrome/browser/ui/views/overlay/toggle_mute_button.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -120,10 +121,13 @@ class MockVideoPictureInPictureWindowController
   MOCK_METHOD0(ToggleMicrophone, void());
   MOCK_METHOD0(ToggleCamera, void());
   MOCK_METHOD0(HangUp, void());
+  MOCK_METHOD1(RequestMute, void(bool));
+  MOCK_METHOD0(GetMuteStatus, bool());
   MOCK_METHOD0(PreviousSlide, void());
   MOCK_METHOD0(NextSlide, void());
   MOCK_METHOD1(SeekTo, void(base::TimeDelta time));
   MOCK_CONST_METHOD0(GetSourceBounds, const gfx::Rect&());
+  MOCK_CONST_METHOD0(IsImmersive, bool());
   void GetMediaImage(
       const media_session::MediaImage& image,
       int minimum_size_px,
@@ -351,7 +355,8 @@ class VideoPictureInPictureWindowControllerBrowserTest
   }
 
   MediaEngagementService* GetMediaEngagementService() const {
-    return MediaEngagementServiceFactory::GetForProfile(browser()->profile());
+    return MediaEngagementServiceFactory::GetForProfile(
+        browser()->GetProfile());
   }
 
   void SetExpectedHasHighEngagement(bool has_high_engagenent) const {
@@ -1193,7 +1198,7 @@ IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
       window_controller();
   EXPECT_TRUE(first_controller->GetWindowForTesting()->IsVisible());
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = CreateBrowser(browser()->GetProfile());
   LoadTabAndEnterPictureInPicture(
       second_browser, base::FilePath(kPictureInPictureWindowSizePage));
 
@@ -2245,6 +2250,55 @@ IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
   // page title.
   ClickButton(hang_up_button);
   WaitForTitle(active_web_contents, u"hangup");
+}
+
+// Test fixture with kPictureInPictureMuteControl enabled.
+class PictureInPictureMuteControlBrowserTest
+    : public VideoPictureInPictureWindowControllerBrowserTest {
+ public:
+  PictureInPictureMuteControlBrowserTest() {
+    scoped_feature_list_.InitWithFeatures({media::kPictureInPictureMuteControl},
+                                          {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(PictureInPictureMuteControlBrowserTest,
+                       MuteButton_VisibleAndTogglesState) {
+  LoadTabAndEnterPictureInPicture(
+      browser(), base::FilePath(kPictureInPictureWindowSizePage));
+  ASSERT_NE(GetOverlayWindow(), nullptr);
+
+  ToggleMuteButton* toggle_mute_button =
+      GetOverlayWindow()->toggle_mute_button_for_testing();
+  ASSERT_NE(nullptr, toggle_mute_button);
+
+  // The button should start in the unmuted state.
+  EXPECT_FALSE(toggle_mute_button->is_muted_for_testing());
+
+  // Clicking the mute button should toggle to muted. The mute request travels
+  // via mojo to the renderer and back, so we must wait for the state change.
+  GetOverlayWindow()->ForceControlsVisibleForTesting(true);
+  ClickButton(toggle_mute_button);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return toggle_mute_button->is_muted_for_testing(); }));
+
+  // Clicking again should toggle back to unmuted.
+  ClickButton(toggle_mute_button);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !toggle_mute_button->is_muted_for_testing(); }));
+}
+
+// When the feature is disabled, the mute button should not exist.
+IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
+                       MuteButton_NotVisibleWhenFeatureDisabled) {
+  LoadTabAndEnterPictureInPicture(
+      browser(), base::FilePath(kPictureInPictureWindowSizePage));
+  ASSERT_NE(GetOverlayWindow(), nullptr);
+
+  EXPECT_EQ(nullptr, GetOverlayWindow()->toggle_mute_button_for_testing());
 }
 
 IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,

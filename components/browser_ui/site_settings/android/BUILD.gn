@@ -8,6 +8,7 @@ import("//third_party/jni_zero/jni_zero.gni")
 generate_jni("site_settings_jni_headers") {
   sources = [
     "java/src/org/chromium/components/browser_ui/site_settings/GeolocationSetting.java",
+    "java/src/org/chromium/components/browser_ui/site_settings/PermissionSetting.java",
     "java/src/org/chromium/components/browser_ui/site_settings/WebsitePreferenceBridge.java",
   ]
 }
@@ -51,7 +52,8 @@ source_set("unit_tests") {
   ]
 }
 
-# Constants only target without dependencies to allow embedders to only include relevant code.
+# Constants only target without dependencies to allow embedders to only include
+# relevant code.
 android_library("constants_java") {
   sources = [ "java/src/org/chromium/components/browser_ui/site_settings/SingleCategorySettingsConstants.java" ]
 }
@@ -85,6 +87,7 @@ android_library("java") {
     "java/src/org/chromium/components/browser_ui/site_settings/NfcCategory.java",
     "java/src/org/chromium/components/browser_ui/site_settings/NotificationCategory.java",
     "java/src/org/chromium/components/browser_ui/site_settings/PermissionInfo.java",
+    "java/src/org/chromium/components/browser_ui/site_settings/PermissionSetting.java",
     "java/src/org/chromium/components/browser_ui/site_settings/RwsCookieInfo.java",
     "java/src/org/chromium/components/browser_ui/site_settings/SharedDictionaryInfo.java",
     "java/src/org/chromium/components/browser_ui/site_settings/SingleCategorySettings.java",
@@ -132,6 +135,7 @@ android_library("java") {
     "//components/permissions/android:core_java",
     "//components/permissions/android:java",
     "//components/prefs/android:java",
+    "//components/safe_browsing/android:safe_browsing_java",
     "//components/subresource_filter/android:java",
     "//components/url_formatter/android:url_formatter_java",
     "//components/user_prefs/android:java",
@@ -164,7 +168,6 @@ android_library("javatests") {
     "javatests/src/org/chromium/components/browser_ui/site_settings/WebsiteAddressTest.java",
     "javatests/src/org/chromium/components/browser_ui/site_settings/WebsiteGroupTest.java",
     "javatests/src/org/chromium/components/browser_ui/site_settings/WebsiteRowPreferenceTest.java",
-    "javatests/src/org/chromium/components/browser_ui/site_settings/WebsiteTest.java",
   ]
   deps = [
     ":java",
@@ -191,6 +194,7 @@ robolectric_library("junit") {
     "junit/src/org/chromium/components/browser_ui/site_settings/DesktopSiteMetricsUnitTest.java",
     "junit/src/org/chromium/components/browser_ui/site_settings/SiteDataCleanerUnitTest.java",
     "junit/src/org/chromium/components/browser_ui/site_settings/SiteSettingsUnitTest.java",
+    "junit/src/org/chromium/components/browser_ui/site_settings/WebsiteTest.java",
   ]
 
   deps = [
@@ -202,10 +206,14 @@ robolectric_library("junit") {
     "//components/browsing_data/content/android:java",
     "//components/content_settings/android:content_settings_enums_java",
     "//components/permissions/android:core_java",
+    "//components/safe_browsing/android:safe_browsing_java",
     "//content/public/android:content_java",
+    "//services/device/public/java:device_feature_list_java",
+    "//third_party/androidx:androidx_test_runner_java",
     "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
+    "//ui/android:ui_java_test_support",
     "//url:url_java",
   ]
 }

@@ -9,7 +9,6 @@ import android.content.res.Resources.NotFoundException;
 import android.os.Looper;
 import android.os.MessageQueue;
 import android.os.SystemClock;
-import android.util.Log;
 import android.util.Printer;
 import android.view.View;
 import android.view.ViewGroup;
@@ -18,6 +17,7 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.task.PostTask;
@@ -131,7 +131,7 @@ public class TraceEvent implements AutoCloseable {
             if (end == -1) {
                 end = logLine.length();
             }
-            return start != -1 ? logLine.substring(start + 2, end) : "";
+            return start != -1 && (end - start) >= 2 ? logLine.substring(start + 2, end) : "";
         }
     }
 
@@ -510,11 +510,10 @@ public class TraceEvent implements AutoCloseable {
         }
     }
 
-    /** Records 'Startup.TimeToFirstVisibleContent2' event with the 'interactions' category. */
-    public static void startupTimeToFirstVisibleContent2(
-            long activityId, long startTimeMs, long durationMs) {
+    /** Records 'Startup.Android.Cold.TimeToFirstFrame2' event with the 'startup' category. */
+    public static void startupTimeToFirstFrame2(long startTimeMs, long durationMs) {
         if (!sEnabled) return;
-        TraceEventJni.get().startupTimeToFirstVisibleContent2(activityId, startTimeMs, durationMs);
+        TraceEventJni.get().startupTimeToFirstFrame2(startTimeMs, durationMs);
     }
 
     /**
@@ -676,15 +675,15 @@ public class TraceEvent implements AutoCloseable {
 
         void initViewHierarchyDump(long id, Object list);
 
-        long startActivityDump(String name, long dumpProtoPtr);
+        long startActivityDump(@JniType("std::string") String name, long dumpProtoPtr);
 
         void addViewDump(
                 int id,
                 int parentId,
                 boolean isShown,
                 boolean isDirty,
-                String className,
-                String resourceName,
+                @JniType("std::string") String className,
+                @JniType("std::string") String resourceName,
                 long activityProtoPtr);
 
         void instantAndroidIPC(String name, long durMs);
@@ -711,7 +710,7 @@ public class TraceEvent implements AutoCloseable {
 
         void startupLaunchCause(long activityId, long startTimeMs, int launchCause);
 
-        void startupTimeToFirstVisibleContent2(long activityId, long startTimeMs, long durationMs);
+        void startupTimeToFirstFrame2(long startTimeMs, long durationMs);
     }
 
     /**
@@ -726,6 +725,7 @@ public class TraceEvent implements AutoCloseable {
 
         // Convert the Object back into the ArrayList of ActivityInfo, lifetime of this object is
         // maintained by the Runnable that we are running in currently.
+        @SuppressWarnings("unchecked")
         ArrayList<ActivityInfo> activities = (ArrayList<ActivityInfo>) list;
 
         for (ActivityInfo activity : activities) {

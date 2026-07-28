@@ -11,6 +11,7 @@
 #include "base/base64.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/browser_process.h"
@@ -32,6 +33,11 @@ void LogGetHmacKeyResult(AppShimRegistry::GetHmacKeyResult result) {
 
 void LogSaveHmacKeyResult(AppShimRegistry::SaveHmacKeyResult result) {
   base::UmaHistogramEnumeration("Apps.AppShimRegistry.HmacKeyStore.SaveResult",
+                                result);
+}
+
+void LogVerifyCdHashResult(AppShimRegistry::VerifyCdHashResult result) {
+  base::UmaHistogramEnumeration("Apps.AppShimRegistry.VerifyCdHashResult",
                                 result);
 }
 
@@ -142,9 +148,10 @@ void AppShimRegistry::OnAppInstalledForProfile(const std::string& app_id,
                                                const base::FilePath& profile) {
   std::set<base::FilePath> installed_profiles =
       GetInstalledProfilesForApp(app_id);
-  if (installed_profiles.count(profile))
+  bool inserted = installed_profiles.insert(profile).second;
+  if (!inserted) {
     return;
-  installed_profiles.insert(profile);
+  }
   // Also add the profile to the last active profiles. This way the next time
   // the app is launched, it will at least launch in the most recently
   // installed profile.
@@ -375,11 +382,12 @@ void AppShimRegistry::SaveCdHashForApp(const std::string& app_id,
           .Then(std::move(callback)));
 }
 
-void AppShimRegistry::DoSaveCdHashForApp(const std::string& app_id,
-                                         std::vector<uint8_t> cd_hash,
-                                         os_crypt_async::Encryptor encryptor) {
+void AppShimRegistry::DoSaveCdHashForApp(
+    const std::string& app_id,
+    std::vector<uint8_t> cd_hash,
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   std::string cd_hash_hmac_base64 = base::Base64Encode(
-      crypto::hmac::SignSha256(GetCdHashHmacKey(encryptor), cd_hash));
+      crypto::hmac::SignSha256(GetCdHashHmacKey(*encryptor), cd_hash));
   SetAppInfo(app_id, /*installed_profiles=*/nullptr,
              /*last_active_profiles=*/nullptr, /*handlers=*/nullptr,
              &cd_hash_hmac_base64,
@@ -402,23 +410,26 @@ void AppShimRegistry::VerifyCdHashForApp(
 bool AppShimRegistry::DoVerifyCdHashForApp(
     const std::string& app_id,
     std::vector<uint8_t> cd_hash,
-    os_crypt_async::Encryptor encryptor) {
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   const base::DictValue& cache = GetPrefService()->GetDict(kAppShims);
   const base::DictValue* app_info = cache.FindDict(app_id);
   if (!app_info) {
     LOG(WARNING) << "No info found for app_id";
+    LogVerifyCdHashResult(VerifyCdHashResult::kNoAppInfo);
     return false;
   }
 
   const std::string* cd_hash_hmac_base64 = app_info->FindString(kCdHashHmac);
   if (!cd_hash_hmac_base64 || cd_hash_hmac_base64->empty()) {
     LOG(WARNING) << "App shim has no associated code directory hash";
+    LogVerifyCdHashResult(VerifyCdHashResult::kNoCdHash);
     return false;
   }
 
   auto cd_hash_hmac = base::Base64Decode(*cd_hash_hmac_base64);
   if (!cd_hash_hmac) {
     LOG(WARNING) << "App shim's code directory hash could not be decoded";
+    LogVerifyCdHashResult(VerifyCdHashResult::kDecodeFailure);
     return false;
   }
 
@@ -426,11 +437,15 @@ bool AppShimRegistry::DoVerifyCdHashForApp(
       base::span(*cd_hash_hmac).to_fixed_extent<crypto::hash::kSha256Size>();
   if (!cd_hash_hmac_span) {
     LOG(WARNING) << "App shim's code directory hash is unexpected size";
+    LogVerifyCdHashResult(VerifyCdHashResult::kUnexpectedSize);
     return false;
   }
 
-  return crypto::hmac::VerifySha256(GetCdHashHmacKey(encryptor), cd_hash,
-                                    *cd_hash_hmac_span);
+  bool verified = crypto::hmac::VerifySha256(GetCdHashHmacKey(*encryptor),
+                                             cd_hash, *cd_hash_hmac_span);
+  LogVerifyCdHashResult(verified ? VerifyCdHashResult::kSuccess
+                                 : VerifyCdHashResult::kVerificationFailed);
+  return verified;
 }
 
 void AppShimRegistry::SaveNotificationPermissionStatusForApp(

@@ -9,7 +9,6 @@ import static org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.getDas
 import static org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.recordDashboardInteractions;
 import static org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.recordModuleState;
 
-import android.content.Context;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -27,7 +26,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.password_manager.PasswordStoreBridge;
-import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.DashboardInteractions;
 import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.DashboardModuleType;
 import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.LifecycleEvent;
@@ -37,7 +35,6 @@ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
-import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
 import org.chromium.components.browser_ui.util.TraceEventVectorDrawableCompat;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -79,7 +76,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
     private final SettableMonotonicObservableSupplier<String> mPageTitle =
             ObservableSuppliers.createMonotonic();
 
-    private SafetyHubModuleDelegate mDelegate;
+    private @Nullable SafetyHubModuleDelegate mDelegate;
     private @Nullable CallbackController mCallbackController;
     private List<SafetyHubModuleMediator> mModuleMediators;
     private @Nullable SafetyHubBrowserStateModuleMediator mBrowserStateModuleMediator;
@@ -103,7 +100,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
     private void setUpModuleMediators() {
         SafetyHubFetchService safetyHubFetchService =
                 SafetyHubFetchServiceFactory.getForProfile(getProfile());
-
+        assert mDelegate != null;
         SafetyHubModuleMediator updateCheckModuleMediator =
                 new SafetyHubUpdateCheckModuleMediator(
                         findPreference(PREF_UPDATE), this, mDelegate, safetyHubFetchService);
@@ -266,7 +263,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         menu.clear();
         MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
+                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, getHelpMenuStringRes());
         help.setIcon(
                 TraceEventVectorDrawableCompat.create(
                         getResources(), R.drawable.ic_help_24dp, getActivity().getTheme()));
@@ -319,6 +316,11 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
         if (mBrowserStateModuleMediator != null) {
             mBrowserStateModuleMediator.destroy();
             mBrowserStateModuleMediator = null;
+        }
+
+        if (mDelegate != null) {
+            mDelegate.destroy();
+            mDelegate = null;
         }
     }
 
@@ -392,23 +394,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
 
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new ChromeBaseSearchIndexProvider(
-                    SafetyHubFragment.class.getName(), R.xml.safety_hub_preferences) {
-
-                @Override
-                public void updateDynamicPreferences(
-                        Context context, SettingsIndexData indexData, Profile profile) {
-                    String frag = SafetyHubFragment.class.getName();
-                    if (!shouldShowNotificationModule()) {
-                        indexData.removeEntryForKey(frag, PREF_NOTIFICATIONS_REVIEW);
-                    }
-                    if (!shouldShowUnifiedPasswords()) {
-                        indexData.removeEntryForKey(frag, PREF_UNIFIED_PASSWORDS);
-                    } else {
-                        indexData.removeEntryForKey(frag, PREF_ACCOUNT_PASSWORDS);
-                    }
-                    if (!shouldShowLocalPasswords()) {
-                        indexData.removeEntryForKey(frag, PREF_LOCAL_PASSWORDS);
-                    }
-                }
-            };
+                    SafetyHubFragment.class.getName(),
+                    R.xml.safety_hub_preferences,
+                    /* isSearchable= */ false);
 }

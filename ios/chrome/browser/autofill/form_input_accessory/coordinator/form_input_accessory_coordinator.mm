@@ -31,34 +31,38 @@
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/password_manager/core/common/password_manager_features.h"
 #import "components/password_manager/ios/password_generation_provider.h"
-#import "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
-#import "components/plus_addresses/core/common/features.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/autofill/atmemory/coordinator/at_memory_coordinator.h"
+#import "ios/chrome/browser/autofill/atmemory/public/at_memory_commands.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator_handler.h"
-#import "ios/chrome/browser/autofill/form_input_accessory/public/scoped_form_input_accessory_reauth_module_override.h"
+#import "ios/chrome/browser/autofill/form_input_accessory/public/autofill_suggestion_context_menu_handler.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/ui/form_input_accessory_view_controller.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/ui/form_input_accessory_view_controller_delegate.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/address_coordinator.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/card_coordinator.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/expanded_manual_fill_coordinator.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/manual_fill_all_password_coordinator.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/manual_fill_all_password_coordinator_delegate.h"
+#import "ios/chrome/browser/autofill/manual_fill/coordinator/manual_fill_password_coordinator.h"
+#import "ios/chrome/browser/autofill/manual_fill/model/manual_fill_injection_handler.h"
+#import "ios/chrome/browser/autofill/manual_fill/public/manual_fill_constants.h"
+#import "ios/chrome/browser/autofill/manual_fill/ui/fallback_view_controller.h"
+#import "ios/chrome/browser/autofill/model/autofill_ai_util.h"
 #import "ios/chrome/browser/autofill/model/autofill_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/features.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
-#import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_util.h"
 #import "ios/chrome/browser/autofill/ui_bundled/branding/branding_coordinator.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/address_coordinator.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/card_coordinator.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/expanded_manual_fill_coordinator.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/fallback_view_controller.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/manual_fill_all_password_coordinator.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/manual_fill_all_password_coordinator_delegate.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/manual_fill_all_plus_address_coordinator.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/manual_fill_constants.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/manual_fill_injection_handler.h"
-#import "ios/chrome/browser/autofill/ui_bundled/manual_fill/manual_fill_password_coordinator.h"
+#import "ios/chrome/browser/autofill/ui_bundled/util/autofill_credit_card_util.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_constants.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_account_password_store_factory.h"
+#import "ios/chrome/browser/passwords/model/ios_chrome_password_check_manager.h"
+#import "ios/chrome/browser/passwords/model/ios_chrome_password_check_manager_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/password_tab_helper.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
@@ -81,7 +85,6 @@
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/web_state.h"
-#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
@@ -104,8 +107,6 @@ const base::Feature* FetchIPHFeatureFromEnum(
     case SuggestionFeatureForIPH::kAutofillExternalAccountProfile:
       return &feature_engagement::
           kIPHAutofillExternalAccountProfileSuggestionFeature;
-    case SuggestionFeatureForIPH::kPlusAddressCreation:
-      return &feature_engagement::kIPHPlusAddressCreateSuggestionFeature;
     case SuggestionFeatureForIPH::kHomeAndWorkAddressSuggestion:
       return &feature_engagement::kIPHAutofillHomeWorkProfileSuggestionFeature;
     case SuggestionFeatureForIPH::kAccountNameEmailSuggestion:
@@ -115,25 +116,41 @@ const base::Feature* FetchIPHFeatureFromEnum(
   }
 }
 
+// Returns the AutofillSettingsPage corresponding to the given suggestion.
+AutofillSettingsPage SuggestionToAutofillSettingsPage(
+    FormSuggestion* suggestion) {
+  switch (suggestion.type) {
+    case autofill::SuggestionType::kPasswordEntry:
+    case autofill::SuggestionType::kBackupPasswordEntry:
+      return AutofillSettingsPage::kPasswordManager;
+    case autofill::SuggestionType::kCreditCardEntry:
+    case autofill::SuggestionType::kVirtualCreditCardEntry:
+      return AutofillSettingsPage::kCreditCards;
+    case autofill::SuggestionType::kAddressEntry:
+    case autofill::SuggestionType::kFillAutofillAi:
+      return AutofillSettingsPage::kAddresses;
+    default:
+      NOTREACHED();
+  }
+}
+
 }  // namespace
 
 @interface FormInputAccessoryCoordinator () <
     AddressCoordinatorDelegate,
+    AtMemoryCommands,
+    AutofillSuggestionContextMenuHandler,
     CardCoordinatorDelegate,
+    ExpandedManualFillCoordinatorDelegate,
     FormInputAccessoryMediatorHandler,
     FormInputAccessoryViewControllerDelegate,
     ManualFillAllPasswordCoordinatorDelegate,
-    ManualFillAllPlusAddressCoordinatorDelegate,
     PasswordCoordinatorDelegate,
-    ExpandedManualFillCoordinatorDelegate,
     SecurityAlertCommands>
 
 // The object in charge of interacting with the web view. Used to fill the data
 // in the forms.
 @property(nonatomic, strong) ManualFillInjectionHandler* injectionHandler;
-
-// Reauthentication Module used for re-authentication.
-@property(nonatomic, strong) ReauthenticationModule* reauthenticationModule;
 
 // Active Form Input View Controller.
 @property(nonatomic, strong) UIViewController* formInputViewController;
@@ -167,8 +184,8 @@ const base::Feature* FetchIPHFeatureFromEnum(
   // Modal alert.
   AlertCoordinator* _alertCoordinator;
 
-  // Coordinator in charge of presenting the view to show all plus addresses.
-  ManualFillAllPlusAddressCoordinator* _allPlusAddressCoordinator;
+  // The coordinator for the AtMemory Autofill feature.
+  AtMemoryCoordinator* _atMemoryCoordinator;
 }
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
@@ -178,11 +195,12 @@ const base::Feature* FetchIPHFeatureFromEnum(
     CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
     [dispatcher startDispatchingToTarget:self
                              forProtocol:@protocol(SecurityAlertCommands)];
+    [dispatcher startDispatchingToTarget:self
+                             forProtocol:@protocol(AtMemoryCommands)];
 
     _brandingCoordinator =
         [[BrandingCoordinator alloc] initWithBaseViewController:viewController
                                                         browser:browser];
-    _reauthenticationModule = [[ReauthenticationModule alloc] init];
   }
   return self;
 }
@@ -205,6 +223,9 @@ const base::Feature* FetchIPHFeatureFromEnum(
   auto accountPasswordStore =
       IOSChromeAccountPasswordStoreFactory::GetForProfile(
           self.profile, ServiceAccessType::EXPLICIT_ACCESS);
+  id<ReauthenticationProtocol> reauthenticationModule =
+      ReauthenticationServiceFactory::GetForProfile(self.profile)
+          ->GetReauthModule();
 
   // There is no personal data manager in OTR (incognito). Get the original
   // one for manual fallback.
@@ -222,11 +243,12 @@ const base::Feature* FetchIPHFeatureFromEnum(
         profilePasswordStore:profilePasswordStore
         accountPasswordStore:accountPasswordStore
         securityAlertHandler:securityAlertHandler
-      reauthenticationModule:_reauthenticationModule
+      reauthenticationModule:reauthenticationModule
            engagementTracker:feature_engagement::TrackerFactory::GetForProfile(
                                  self.profile)];
   _formInputAccessoryViewController.formSuggestionClient =
       _formInputAccessoryMediator;
+  _formInputAccessoryViewController.contextMenuHandler = self;
 
   self.layoutGuide =
       [layoutGuideCenter makeLayoutGuideNamed:kAutofillFirstSuggestionGuide];
@@ -245,7 +267,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
   _injectionHandler = [[ManualFillInjectionHandler alloc]
         initWithWebStateList:self.browser->GetWebStateList()
         securityAlertHandler:securityAlertHandler
-      reauthenticationModule:self.reauthenticationModule
+      reauthenticationModule:reauthenticationModule
         formSuggestionClient:_formInputAccessoryMediator
       autofillProviderGetter:autofillProviderGetter];
 }
@@ -281,6 +303,11 @@ const base::Feature* FetchIPHFeatureFromEnum(
   [_formInputAccessoryMediator reloadFirstResponderInputViews];
 }
 
+- (void)resetLoadingStates {
+  [_formInputAccessoryViewController resetLoadingStates];
+  [_formInputAccessoryMediator resetSuggestions];
+}
+
 #pragma mark - Presenting Children
 
 - (void)clearPresentedState {
@@ -289,6 +316,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
   [self stopManualFillAllPasswordCoordinator];
 
   [self dismissAlertCoordinator];
+  [self dismissAtMemory];
 }
 
 - (void)stopChildren {
@@ -303,16 +331,24 @@ const base::Feature* FetchIPHFeatureFromEnum(
 - (void)startManualFillFromButton:(UIButton*)button
                       forDataType:(manual_fill::ManualFillDataType)dataType
          invokedOnObfuscatedField:(BOOL)invokedOnObfuscatedField {
+  if (dataType == manual_fill::ManualFillDataType::kAtMemory) {
+    [self showAtMemory];
+    return;
+  }
+
   manual_fill::ManualFillDataType focusedFieldDataType = [ManualFillUtil
       manualFillDataTypeFromFillingProduct:
           [_formInputAccessoryMediator currentProviderMainFillingProduct]];
+  id<ReauthenticationProtocol> reauthModule =
+      ReauthenticationServiceFactory::GetForProfile(self.profile)
+          ->GetReauthModule();
   ExpandedManualFillCoordinator* expandedManualFillCoordinator =
       [[ExpandedManualFillCoordinator alloc]
           initWithBaseViewController:self.baseViewController
                              browser:self.browser
                          forDataType:dataType
                 focusedFieldDataType:focusedFieldDataType
-              reauthenticationModule:self.reauthenticationModule];
+              reauthenticationModule:reauthModule];
 
   expandedManualFillCoordinator.injectionHandler = self.injectionHandler;
   expandedManualFillCoordinator.invokedOnObfuscatedField =
@@ -322,7 +358,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
       expandedManualFillCoordinator;
   [expandedManualFillCoordinator start];
 
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+  if ([ManualFillUtil shouldUsePopover]) {
     [expandedManualFillCoordinator presentFromButton:button];
   } else {
     self.formInputViewController = expandedManualFillCoordinator.viewController;
@@ -339,7 +375,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
 }
 
 - (void)dismissPopover {
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+  if ([ManualFillUtil shouldUsePopover]) {
     // Close the popover view.
     [self stopChildren];
   }
@@ -356,9 +392,6 @@ const base::Feature* FetchIPHFeatureFromEnum(
       case SuggestionFeatureForIPH::kAutofillExternalAccountProfile:
         tracker->NotifyEvent(
             "autofill_external_account_profile_suggestion_accepted");
-        break;
-      case SuggestionFeatureForIPH::kPlusAddressCreation:
-        tracker->NotifyEvent("plus_address_create_suggestion_feature_used");
         break;
       case SuggestionFeatureForIPH::kHomeAndWorkAddressSuggestion:
         tracker->NotifyEvent(
@@ -389,6 +422,65 @@ const base::Feature* FetchIPHFeatureFromEnum(
       kAutofillSuggestionHighlightDelay);
 }
 
+- (void)openPasswordDetailsInEditMode:
+    (const password_manager::CredentialUIEntry&)credential {
+  [self reset];
+
+  password_manager::CredentialUIEntry resolvedCredential = credential;
+  if (resolvedCredential.stored_in.empty()) {
+    ProfileIOS* profile = self.profile;
+    if (profile) {
+      scoped_refptr<IOSChromePasswordCheckManager> checkManager =
+          IOSChromePasswordCheckManagerFactory::GetForProfile(profile);
+      if (checkManager && checkManager->GetSavedPasswordsPresenter()) {
+        std::vector<password_manager::CredentialUIEntry> saved_credentials =
+            checkManager->GetSavedPasswordsPresenter()->GetSavedCredentials();
+        auto it = std::ranges::find_if(
+            saved_credentials,
+            [&resolvedCredential](const auto& saved_credential) {
+              return saved_credential.username == resolvedCredential.username &&
+                     saved_credential.GetFirstSignonRealm() ==
+                         resolvedCredential.GetFirstSignonRealm();
+            });
+        if (it != saved_credentials.end()) {
+          resolvedCredential = *it;
+        }
+      }
+    }
+  }
+
+  [self dispatchCommandToEditPassword:resolvedCredential];
+}
+
+- (void)openCreditCardDetails:(const autofill::CreditCard&)card
+                   inEditMode:(BOOL)editMode {
+  [self reset];
+
+  // Check if the card should be edited from the Payments web page.
+  if (editMode &&
+      [AutofillCreditCardUtil shouldEditCardFromPaymentsWebPage:card]) {
+    GURL paymentsURL =
+        autofill::payments::GetManageInstrumentUrl(card.instrument_id());
+    OpenNewTabCommand* command =
+        [OpenNewTabCommand commandWithURLFromChrome:paymentsURL];
+    id<SceneCommands> sceneHandler =
+        HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+    [sceneHandler openURLInNewTab:command];
+
+    return;
+  }
+
+  CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
+  id<SettingsCommands> settingsHandler =
+      HandlerForProtocol(dispatcher, SettingsCommands);
+  [settingsHandler showCreditCardDetails:card inEditMode:editMode];
+}
+
+- (void)openAddressDetailsInEditModeForSuggestion:
+    (const autofill::AutofillProfile&)address {
+  [self openAddressDetailsInEditMode:address offerMigrateToAccount:NO];
+}
+
 #pragma mark - FormInputAccessoryViewControllerDelegate
 
 - (void)formInputAccessoryViewController:
@@ -399,7 +491,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
   BOOL invokedOnObfuscatedField =
       [_formInputAccessoryMediator lastFocusedFieldWasObfuscated];
 
-  if (ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
+  if (![ManualFillUtil shouldUsePopover]) {
     [self stopChildren];
   }
 
@@ -421,6 +513,70 @@ const base::Feature* FetchIPHFeatureFromEnum(
   [self resetInputViews];
 }
 
+- (BOOL)formInputAccessoryViewController:
+            (FormInputAccessoryViewController*)formInputAccessoryViewController
+               isSuggestionAutofillAsync:(FormSuggestion*)formSuggestion {
+  if (!self.profile) {
+    return NO;
+  }
+
+  if ([_formInputAccessoryMediator currentProviderMainFillingProduct] !=
+      autofill::FillingProduct::kAutofillAi) {
+    return NO;
+  }
+
+  // Filling entities will unconditionally call
+  // ChromeAutofillClientIOS::HideAutofillSuggestions once the filling is
+  // completed. This process is asynchronous if the payload requires a server
+  // fetch (e.g., retrieving a masked entity from Google Wallet).
+  autofill::Suggestion::Payload payload = formSuggestion.payload;
+  if (const auto* ai_payload =
+          std::get_if<autofill::Suggestion::AutofillAiPayload>(&payload)) {
+    return ai_payload->requires_server_fetch;
+  }
+
+  return NO;
+}
+
+- (NSString*)formInputAccessoryViewController:
+                 (FormInputAccessoryViewController*)
+                     formInputAccessoryViewController
+                        usernameForSuggestion:(FormSuggestion*)suggestion {
+  return [_formInputAccessoryMediator usernameForSuggestion:suggestion];
+}
+
+- (BOOL)formInputAccessoryViewController:
+            (FormInputAccessoryViewController*)formInputAccessoryViewController
+                          shouldShowRPId:(NSString*)rpId {
+  return [_formInputAccessoryMediator shouldShowRPId:rpId];
+}
+
+#pragma mark - AutofillSuggestionContextMenuHandler
+
+- (void)openSettingsForSuggestion:(FormSuggestion*)suggestion {
+  [self reset];
+  [self.navigator
+      openSettingsForPage:SuggestionToAutofillSettingsPage(suggestion)];
+}
+
+- (void)openEditForSuggestion:(FormSuggestion*)suggestion {
+  [_formInputAccessoryMediator openEditForSuggestion:suggestion];
+}
+
+- (BOOL)isPersonalContextSuggestion:(FormSuggestion*)suggestion {
+  web::WebState* activeWebState = [self activeWebState];
+  if (!activeWebState) {
+    return NO;
+  }
+  base::optional_ref<const autofill::EntityInstance> entity =
+      autofill::GetEntityInstance(
+          ProfileIOS::FromBrowserState(activeWebState->GetBrowserState()),
+          suggestion.payload);
+  return entity.has_value() &&
+         entity->record_type() ==
+             autofill::EntityInstance::RecordType::kPersonalContext;
+}
+
 #pragma mark - FallbackCoordinatorDelegate
 
 - (void)fallbackCoordinatorDidDismissPopover:
@@ -432,7 +588,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
 
 - (void)openPasswordManager {
   [self reset];
-  [self.navigator openPasswordManager];
+  [self.navigator openSettingsForPage:AutofillSettingsPage::kPasswordManager];
 
   UMA_HISTOGRAM_ENUMERATION(
       "PasswordManager.ManagePasswordsReferrer",
@@ -443,7 +599,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
 
 - (void)openPasswordSettings {
   [self reset];
-  [self.navigator openPasswordSettings];
+  [self.navigator openSettingsForPage:AutofillSettingsPage::kPasswordSettings];
 }
 
 - (void)openAllPasswordsPicker {
@@ -487,24 +643,12 @@ const base::Feature* FetchIPHFeatureFromEnum(
   [self dispatchCommandToEditPassword:credential];
 }
 
-#pragma mark - ManualFillAllPlusAddressCoordinatorDelegate
-
-- (void)manualFillAllPlusAddressCoordinatorWantsToBeDismissed:
-    (ManualFillAllPlusAddressCoordinator*)coordinator {
-  [self stopManualFillAllPlusAddressCoordinator];
-}
-
-- (void)dismissManualFillAllPlusAddressAndOpenManagePlusAddress {
-  [self stopManualFillAllPlusAddressCoordinator];
-  [self openManagePlusAddress];
-}
-
 #pragma mark - CardCoordinatorDelegate
 
 - (void)cardCoordinatorDidTriggerOpenCardSettings:
     (CardCoordinator*)cardCoordinator {
   [self reset];
-  [self.navigator openCreditCardSettings];
+  [self.navigator openSettingsForPage:AutofillSettingsPage::kCreditCards];
 }
 
 - (void)cardCoordinatorDidTriggerOpenAddCreditCard:
@@ -519,26 +663,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
 - (void)cardCoordinator:(CardCoordinator*)cardCoordinator
     didTriggerOpenCardDetails:(autofill::CreditCard)card
                    inEditMode:(BOOL)editMode {
-  [self reset];
-
-  // Check if the card should be edited from the Payments web page.
-  if (editMode &&
-      [AutofillCreditCardUtil shouldEditCardFromPaymentsWebPage:card]) {
-    GURL paymentsURL =
-        autofill::payments::GetManageInstrumentUrl(card.instrument_id());
-    OpenNewTabCommand* command =
-        [OpenNewTabCommand commandWithURLFromChrome:paymentsURL];
-    id<SceneCommands> sceneHandler =
-        HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
-    [sceneHandler openURLInNewTab:command];
-
-    return;
-  }
-
-  CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
-  id<SettingsCommands> settingsHandler =
-      HandlerForProtocol(dispatcher, SettingsCommands);
-  [settingsHandler showCreditCardDetails:card inEditMode:editMode];
+  [self openCreditCardDetails:card inEditMode:editMode];
 }
 
 #pragma mark - AddressCoordinatorDelegate
@@ -547,37 +672,31 @@ const base::Feature* FetchIPHFeatureFromEnum(
                offerMigrateToAccount:(BOOL)offerMigrateToAccount {
   [self reset];
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableSupportForHomeAndWork)) {
-    autofill::AutofillProfile::RecordType type = address.record_type();
-    id<SceneCommands> sceneHandler =
-        HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
-    if (type == autofill::AutofillProfile::RecordType::kAccountHome) {
-      OpenNewTabCommand* command = [OpenNewTabCommand
-          commandWithURLFromChrome:GURL(kGoogleMyAccountHomeAddressURL)];
-      [sceneHandler openURLInNewTab:command];
-      return;
-    }
-
-    if (type == autofill::AutofillProfile::RecordType::kAccountWork) {
-      OpenNewTabCommand* command = [OpenNewTabCommand
-          commandWithURLFromChrome:GURL(kGoogleMyAccountWorkAddressURL)];
-      [sceneHandler openURLInNewTab:command];
-      return;
-    }
+  autofill::AutofillProfile::RecordType type = address.record_type();
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+  if (type == autofill::AutofillProfile::RecordType::kAccountHome) {
+    OpenNewTabCommand* command = [OpenNewTabCommand
+        commandWithURLFromChrome:GURL(kGoogleMyAccountHomeAddressURL)];
+    [sceneHandler openURLInNewTab:command];
+    return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableSupportForNameAndEmail)) {
-    id<SceneCommands> sceneHandler =
-        HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
-    if (address.record_type() ==
-        autofill::AutofillProfile::RecordType::kAccountNameEmail) {
-      OpenNewTabCommand* command = [OpenNewTabCommand
-          commandWithURLFromChrome:GURL(kGoogleAccountNameEmailAddressEditURL)];
-      [sceneHandler openURLInNewTab:command];
-      return;
-    }
+  if (type == autofill::AutofillProfile::RecordType::kAccountWork) {
+    OpenNewTabCommand* command = [OpenNewTabCommand
+        commandWithURLFromChrome:GURL(kGoogleMyAccountWorkAddressURL)];
+    [sceneHandler openURLInNewTab:command];
+    return;
+  }
+
+  sceneHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+  if (address.record_type() ==
+      autofill::AutofillProfile::RecordType::kAccountNameEmail) {
+    OpenNewTabCommand* command = [OpenNewTabCommand
+        commandWithURLFromChrome:GURL(kGoogleAccountNameEmailAddressEditURL)];
+    [sceneHandler openURLInNewTab:command];
+    return;
   }
 
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
@@ -590,52 +709,7 @@ const base::Feature* FetchIPHFeatureFromEnum(
 
 - (void)openAddressSettings {
   [self reset];
-  [self.navigator openAddressSettings];
-}
-
-#pragma mark - PlusAddressCoordinatorDelegate
-
-// Opens the create plus address bottom sheet.
-- (void)openCreatePlusAddressSheet {
-  [self reset];
-
-  web::WebState* activeWebState = [self activeWebState];
-
-  __weak __typeof(self) weakSelf = self;
-  auto callback = base::BindOnce(^(const std::string& plusAddress) {
-    [weakSelf.injectionHandler
-        userDidPickContent:base::SysUTF8ToNSString(plusAddress)
-             passwordField:NO
-             requiresHTTPS:NO];
-  });
-
-  AutofillBottomSheetTabHelper* tabHelper =
-      AutofillBottomSheetTabHelper::FromWebState(activeWebState);
-  tabHelper->ShowPlusAddressesBottomSheet(std::move(callback));
-}
-
-- (void)openAllPlusAddressesPicker:(BOOL)isAddressManualFallback {
-  [self reset];
-
-  [self stopManualFillAllPlusAddressCoordinator];
-
-  _allPlusAddressCoordinator = [[ManualFillAllPlusAddressCoordinator alloc]
-      initWithBaseViewController:self.baseViewController
-                         browser:self.browser
-                injectionHandler:self.injectionHandler];
-  _allPlusAddressCoordinator.manualFillAllPlusAddressCoordinatorDelegate = self;
-  _allPlusAddressCoordinator.isAddressManualFallback = isAddressManualFallback;
-  [_allPlusAddressCoordinator start];
-}
-
-- (void)openManagePlusAddress {
-  OpenNewTabCommand* command = [OpenNewTabCommand
-      commandWithURLFromChrome:
-          GURL(plus_addresses::features::kPlusAddressManagementUrl.Get())];
-
-  id<SceneCommands> sceneHandler =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
-  [sceneHandler openURLInNewTab:command];
+  [self.navigator openSettingsForPage:AutofillSettingsPage::kAddresses];
 }
 
 #pragma mark - ExpandedManualFillCoordinatorDelegate
@@ -649,6 +723,31 @@ const base::Feature* FetchIPHFeatureFromEnum(
 - (void)expandedManualFillCoordinatorDidDismissPopover:
     (ExpandedManualFillCoordinator*)coordinator {
   [self reset];
+}
+
+#pragma mark - AtMemoryCommands
+
+- (void)showAtMemory {
+  if (_atMemoryCoordinator) {
+    return;
+  }
+  _atMemoryCoordinator = [[AtMemoryCoordinator alloc]
+      initWithBaseViewController:self.baseViewController
+                         browser:self.browser];
+
+  [self.childCoordinators addObject:_atMemoryCoordinator];
+
+  [_atMemoryCoordinator start];
+}
+
+- (void)dismissAtMemory {
+  if (!_atMemoryCoordinator) {
+    return;
+  }
+  AtMemoryCoordinator* coordinator = _atMemoryCoordinator;
+  _atMemoryCoordinator = nil;
+  [coordinator stop];
+  [self.childCoordinators removeObject:coordinator];
 }
 
 #pragma mark - SecurityAlertCommands
@@ -678,8 +777,8 @@ const base::Feature* FetchIPHFeatureFromEnum(
 #pragma mark - CRWResponderInputView
 
 - (UIView*)inputView {
-  BOOL isIPad = ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET;
-  return isIPad ? nil : self.formInputViewController.view;
+  return [ManualFillUtil shouldUsePopover] ? nil
+                                           : self.formInputViewController.view;
 }
 
 - (UIView*)inputAccessoryView {
@@ -697,14 +796,6 @@ const base::Feature* FetchIPHFeatureFromEnum(
 
 #pragma mark - Private
 
-// Returns the reauthentication module, which can be an override for testing
-// purposes.
-- (ReauthenticationModule*)reauthenticationModule {
-  id<ReauthenticationProtocol> overrideModule =
-      ScopedFormInputAccessoryReauthModuleOverride::Get();
-  return overrideModule ? overrideModule : _reauthenticationModule;
-}
-
 // Returns the active web state.
 - (web::WebState*)activeWebState {
   web::WebState* webState =
@@ -717,12 +808,6 @@ const base::Feature* FetchIPHFeatureFromEnum(
   [_allPasswordCoordinator stop];
   _allPasswordCoordinator.manualFillAllPasswordCoordinatorDelegate = nil;
   _allPasswordCoordinator = nil;
-}
-
-- (void)stopManualFillAllPlusAddressCoordinator {
-  [_allPlusAddressCoordinator stop];
-  _allPlusAddressCoordinator.manualFillAllPlusAddressCoordinatorDelegate = nil;
-  _allPlusAddressCoordinator = nil;
 }
 
 - (void)dismissAlertCoordinator {
@@ -806,11 +891,6 @@ const base::Feature* FetchIPHFeatureFromEnum(
           IDS_AUTOFILL_IPH_EXTERNAL_ACCOUNT_PROFILE_SUGGESTION);
       voiceOverText = l10n_util::GetNSString(
           IDS_AUTOFILL_IPH_EXTERNAL_ACCOUNT_PROFILE_SUGGESTION);
-      break;
-    case SuggestionFeatureForIPH::kPlusAddressCreation:
-      text = l10n_util::GetNSString(IDS_PLUS_ADDRESS_CREATE_SUGGESTION_IPH_IOS);
-      voiceOverText = l10n_util::GetNSString(
-          IDS_PLUS_ADDRESS_CREATE_SUGGESTION_IPH_SCREENREADER_IOS);
       break;
     case SuggestionFeatureForIPH::kHomeAndWorkAddressSuggestion:
       text = l10n_util::GetNSString(
@@ -930,6 +1010,32 @@ const base::Feature* FetchIPHFeatureFromEnum(
   id<SettingsCommands> settingsHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), SettingsCommands);
   [settingsHandler showPasswordDetailsForCredential:credential inEditMode:YES];
+}
+
+// Notifies the delegate that the manual filling process for a card has
+// completed. This is called after the card is selected and any necessary
+// unmasking or authentication has finished. The delegate can use this
+// notification to re-present the manual fallback UI if it was temporarily
+// dismissed.
+- (void)cardCoordinatorDidCompleteManualFill:(CardCoordinator*)cardCoordinator {
+  // This is re-triggered automatically only when it is an input view (as
+  // opposed to a popover anchored to a button).
+  if ([ManualFillUtil shouldUsePopover]) {
+    return;
+  }
+
+  // Determine if the field was obfuscated (e.g. password field).
+  BOOL invokedOnObfuscatedField =
+      [_formInputAccessoryMediator lastFocusedFieldWasObfuscated];
+
+  // Re-start the manual fill for Payment Methods.
+  [self
+      startManualFillFromButton:nil
+                    forDataType:manual_fill::ManualFillDataType::kPaymentMethod
+       invokedOnObfuscatedField:invokedOnObfuscatedField];
+
+  // Ensure the keyboard accessory knows we are now in manual filling mode.
+  [self updateKeyboardAccessoryForManualFilling];
 }
 
 @end

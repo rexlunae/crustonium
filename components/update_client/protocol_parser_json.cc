@@ -14,11 +14,11 @@
 #include "base/check.h"
 #include "base/json/json_reader.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "components/update_client/protocol_definition.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace update_client {
 
@@ -158,8 +158,8 @@ void ParseData(const base::Value& data_node_val, ProtocolParser::App* result) {
   }
   const base::DictValue& data_node = data_node_val.GetDict();
 
-  result->data.emplace_back(
-      GetValueString(data_node, "index"), GetValueString(data_node, "#text"));
+  result->data.emplace_back(GetValueString(data_node, "index"),
+                            GetValueString(data_node, "#text"));
 }
 
 bool ParseUpdateCheck(const base::Value* node_val,
@@ -269,14 +269,12 @@ bool ProtocolParserJSON::DoParse(std::string_view response_json,
 
   // The JSON response contains a prefix to prevent XSSI.
   static constexpr std::string_view kJSONPrefix = ")]}'";
-  if (!base::StartsWith(response_json, kJSONPrefix,
-                        base::CompareCase::SENSITIVE)) {
+  if (!response_json.starts_with(kJSONPrefix)) {
     ParseError("Missing secure JSON prefix.");
     return false;
   }
-  const auto doc =
-      base::JSONReader::ReadDict(response_json.substr(kJSONPrefix.size()),
-                                 base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  const auto doc = base::JSONReader::ReadDict(
+      response_json.substr(kJSONPrefix.size()), base::JSON_PARSE_RFC);
   if (!doc) {
     ParseError("JSON read error.");
     return false;
@@ -292,8 +290,9 @@ bool ProtocolParserJSON::DoParse(std::string_view response_json,
     return false;
   }
   if (*protocol != protocol_request::kProtocolVersion) {
-    ParseError("Incorrect protocol. (expected '%s', found '%s')",
-               protocol_request::kProtocolVersion, protocol->c_str());
+    ParseError(
+        absl::StrFormat("Incorrect protocol. (expected '%s', found '%s')",
+                        protocol_request::kProtocolVersion, *protocol));
     return false;
   }
 
@@ -314,7 +313,7 @@ bool ProtocolParserJSON::DoParse(std::string_view response_json,
       if (ParseApp(app, &result, &error)) {
         results->apps.push_back(result);
       } else {
-        ParseError("%s", error.c_str());
+        ParseError(error);
       }
     }
   }

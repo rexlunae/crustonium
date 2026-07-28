@@ -4,8 +4,13 @@
 
 #include "chrome/browser/privacy_sandbox/notice/notice_storage.h"
 
+#include <array>
+
+#include "base/containers/span.h"
 #include "base/json/json_reader.h"
 #include "base/json/values_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -57,10 +62,6 @@ std::unique_ptr<Notice> MakeNoticeWithFeature(NoticeId id,
   auto notice = std::make_unique<Notice>(id);
   notice->SetFeature(&feature);
   return notice;
-}
-
-base::Time TimeFromMs(int64_t ms) {
-  return base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(ms));
 }
 
 void ParseDict(base::DictValue* dict, std::string&& json_string) {
@@ -124,7 +125,7 @@ class PrivacySandboxNoticeStorageTest : public testing::Test {
       MakeNoticeWithFeature(kNotice1, kTestFeature1);
   std::unique_ptr<Notice> notice_2_ =
       MakeNoticeWithFeature(kNotice2, kTestFeature2);
-  std::vector<Notice*> notices_{notice_1_.get(), notice_2_.get()};
+  std::vector<raw_ptr<Notice>> notices_{notice_1_.get(), notice_2_.get()};
 };
 
 TEST_F(PrivacySandboxNoticeStorageTest, NoticePathNotFound) {
@@ -132,33 +133,45 @@ TEST_F(PrivacySandboxNoticeStorageTest, NoticePathNotFound) {
   EXPECT_FALSE(actual.has_value());
 }
 
-const auto kStartupTestValues =
-    std::vector<std::tuple<std::vector<Event>, std::optional<Event>>>{
-        {{}, std::nullopt},
-        {{kShown}, kShown},
-        {{kShown, kClosed}, kClosed},
-        {{kShown, kSettings, kShown, kOptIn}, kOptIn},
-        {{kShown, kOptOut}, kOptOut},
-        {{kShown, kAck}, kAck},
-        {{kShown, kSettings}, kSettings}};
+struct StartupTestParam {
+  base::raw_span<const Event> events;
+  std::optional<Event> expected;
+};
+
+constexpr auto kStartupShownOnly = std::to_array<Event>({kShown});
+constexpr auto kStartupClosed = std::to_array<Event>({kShown, kClosed});
+constexpr auto kStartupOptIn =
+    std::to_array<Event>({kShown, kSettings, kShown, kOptIn});
+constexpr auto kStartupOptOut = std::to_array<Event>({kShown, kOptOut});
+constexpr auto kStartupAck = std::to_array<Event>({kShown, kAck});
+constexpr auto kStartupSettings = std::to_array<Event>({kShown, kSettings});
+
+constexpr auto kStartupTestValues = std::to_array<StartupTestParam>({
+    {.events = base::raw_span<const Event>(), .expected = std::nullopt},
+    {.events = kStartupShownOnly, .expected = kShown},
+    {.events = kStartupClosed, .expected = kClosed},
+    {.events = kStartupOptIn, .expected = kOptIn},
+    {.events = kStartupOptOut, .expected = kOptOut},
+    {.events = kStartupAck, .expected = kAck},
+    {.events = kStartupSettings, .expected = kSettings},
+});
 
 class PrivacySandboxNoticeStorageStartupTest
     : public PrivacySandboxNoticeStorageTest,
-      public testing::WithParamInterface<
-          std::tuple<std::vector<Event>, std::optional<Event>>> {};
+      public testing::WithParamInterface<StartupTestParam> {};
 
 TEST_P(PrivacySandboxNoticeStorageStartupTest, StartupStateEmitsSuccessfully) {
-  auto [events, expected] = GetParam();
-  for (auto event : events) {
+  const auto& param = GetParam();
+  for (auto event : param.events) {
     notice_storage()->RecordEvent(notice_1(), event);
     AdvanceMs(10);
   }
 
   notice_storage()->RecordStartupHistograms();
-  if (expected) {
+  if (param.expected) {
     histogram_tester_.ExpectBucketCount(
         "PrivacySandbox.Notice.Startup.LastRecordedEvent.Notice1StorageName",
-        *expected, 1);
+        *param.expected, 1);
   } else {
     const std::string histograms = histogram_tester_.GetAllHistogramsRecorded();
     EXPECT_THAT(histograms,
@@ -396,237 +409,18 @@ TEST_F(PrivacySandboxNoticeStorageTest, SetMultipleNotices) {
       "PrivacySandbox.Notice.NoticeEvent.Notice2StorageName", kShown, 1);
 }
 
-using NoticeEvents = base::span<const std::unique_ptr<EventTimePair>>;
-
-class PrivacySandboxNoticeStorageV2Test
-    : public PrivacySandboxNoticeStorageTest {};
-
-TEST_F(PrivacySandboxNoticeStorageV2Test,
-       AllEventsPopulatedMigrateSuccessfully) {
-  SetNoticeStateFromJSON("Notice1StorageName", R"({
-    "schema_version": 1,
-    "notice_last_shown": "100",
-    "notice_action_taken": 1,
-    "notice_action_taken_time": "200"
-    })");
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  auto notice_data = notice_storage()->ReadNoticeData("Notice1StorageName");
-  ASSERT_TRUE(notice_data.has_value());
-  EXPECT_EQ(notice_data->schema_version, 2);
-
-  const NoticeEvents& events = notice_data->notice_events;
-  EXPECT_THAT(events,
-              ElementsAre(Pointee(Eq(EventTimePair{kShown, TimeFromMs(100)})),
-                          Pointee(Eq(EventTimePair{kAck, TimeFromMs(200)}))));
-}
-
-TEST_F(PrivacySandboxNoticeStorageV2Test,
-       NoticeShownPopulatedMigrateSuccessfully) {
-  SetNoticeStateFromJSON("Notice1StorageName", R"({
-    "schema_version": 1,
-    "notice_last_shown": "500"
-    })");
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  auto notice_data = notice_storage()->ReadNoticeData("Notice1StorageName");
-  ASSERT_TRUE(notice_data.has_value());
-  EXPECT_EQ(notice_data->schema_version, 2);
-
-  EXPECT_THAT(notice_data->notice_events,
-              ElementsAre(Pointee(Eq(EventTimePair{kShown, TimeFromMs(500)}))));
-}
-
-TEST_F(PrivacySandboxNoticeStorageV2Test, SchemaAlreadyUpToDateDoesNotMigrate) {
+TEST_F(PrivacySandboxNoticeStorageTest, CleanupDeprecatedNotices) {
+  // Since kDeprecatedNotices is empty by default, this verifies it doesn't
+  // crash and doesn't remove active notices.
   SetNoticeStateFromJSON("Notice1StorageName", R"({"schema_version": 2})");
 
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-  const NoticeEvents& events =
-      notice_storage()->ReadNoticeData("Notice1StorageName")->notice_events;
-  EXPECT_THAT(events, ElementsAre());
-}
-
-class PrivacySandboxNoticeStorageV2ActionsTest
-    : public PrivacySandboxNoticeStorageTest,
-      public testing::WithParamInterface<
-          std::tuple<NoticeActionTaken, std::optional<Event>>> {};
-
-TEST_P(PrivacySandboxNoticeStorageV2ActionsTest,
-       NoticeActionWithoutShownPopulatedMigrateSuccessfully) {
-  const auto& [action, notice_event] = GetParam();
-
-  auto json = absl::StrFormat(R"({
-                                "schema_version": 1,
-                                "notice_action_taken": %d,
-                                "notice_action_taken_time": "200"
-                              })",
-                              static_cast<int>(action));
-  SetNoticeStateFromJSON("Notice1StorageName", std::move(json));
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  auto notice_data = notice_storage()->ReadNoticeData("Notice1StorageName");
-  ASSERT_TRUE(notice_data.has_value());
-  EXPECT_EQ(notice_data->schema_version, 2);
-
-  const NoticeEvents& events = notice_data->notice_events;
-  if (notice_event) {
-    EXPECT_THAT(events, ElementsAre(Pointee(Eq(
-                            EventTimePair{*notice_event, TimeFromMs(200)}))));
-  } else {
-    EXPECT_THAT(events, ElementsAre());
-  }
-}
-
-TEST_P(PrivacySandboxNoticeStorageV2ActionsTest,
-       NoticeActionPopulatedWithoutTimestampMigrateSuccessfully) {
-  const auto& [action, notice_event] = GetParam();
-  auto json =
-      absl::StrFormat(R"({"schema_version": 1,"notice_action_taken": %d})",
-                      static_cast<int>(action));
-  SetNoticeStateFromJSON("Notice1StorageName", std::move(json));
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  auto notice_data = notice_storage()->ReadNoticeData("Notice1StorageName");
-  ASSERT_TRUE(notice_data.has_value());
-  EXPECT_EQ(notice_data->schema_version, 2);
-
-  const NoticeEvents& events = notice_data->notice_events;
-  if (notice_event) {
-    EXPECT_THAT(
-        events,
-        ElementsAre(Pointee(Eq(EventTimePair{*notice_event, base::Time()}))));
-  } else {
-    EXPECT_THAT(events, ElementsAre());
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    PrivacySandboxNoticeStorageV2ActionsTest,
-    PrivacySandboxNoticeStorageV2ActionsTest,
-    ValuesIn(std::vector<std::tuple<NoticeActionTaken, std::optional<Event>>>{
-        {NoticeActionTaken::kNotSet, std::nullopt},
-        {NoticeActionTaken::kAck, kAck},
-        {NoticeActionTaken::kClosed, kClosed},
-        {NoticeActionTaken::kLearnMore_Deprecated, std::nullopt},
-        {NoticeActionTaken::kOptIn, kOptIn},
-        {NoticeActionTaken::kOptOut, kOptOut},
-        {NoticeActionTaken::kOther, std::nullopt},
-        {NoticeActionTaken::kSettings, kSettings},
-        {NoticeActionTaken::kUnknownActionPreMigration, std::nullopt},
-        {NoticeActionTaken::kTimedOut, std::nullopt}}));
-
-TEST_F(PrivacySandboxNoticeStorageV2Test,
-       V1FieldsPresentSchemaV2_ErasesV1Fields) {
-  SetNoticeStateFromJSON("Notice1StorageName", R"({
-    "schema_version": 2,
-    "notice_action_taken": 1,
-    "notice_action_taken_time": "333333",
-    "notice_last_shown": "222222",
-    "events": [{"event": 5, "timestamp": "333333"}]
-    })");
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  base::DictValue expected_stored_prefs;
-  ParseDict(&expected_stored_prefs, R"({
-    "schema_version": 2,
-    "events": [{"event": 5, "timestamp": "333333"}]
-    })");
+  notice_storage()->CleanupDeprecatedNotices();
 
   const base::DictValue* actual_stored_prefs =
       prefs()
           ->GetDict("privacy_sandbox.notices")
           .FindDict("Notice1StorageName");
-  ASSERT_NE(nullptr, actual_stored_prefs);
-  EXPECT_EQ(*actual_stored_prefs, expected_stored_prefs);
-}
-
-TEST_F(PrivacySandboxNoticeStorageV2Test,
-       V1FieldsPresentAndDefaultWithSchemaV1_V1FieldsErased_MigratesToEmptyV2) {
-  SetNoticeStateFromJSON("Notice1StorageName", R"({
-    "schema_version": 1,
-    "chrome_version": "1.2.3",
-    "notice_action_taken": 0,    // NoticeActionTaken::kNotSet
-    "notice_action_taken_time": "0",
-    "notice_last_shown": "0"
-    })");
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  base::DictValue expected_stored_prefs;
-  ParseDict(&expected_stored_prefs,
-            R"({"schema_version": 2, "chrome_version": "1.2.3"})");
-
-  const base::DictValue* actual_stored_prefs =
-      prefs()
-          ->GetDict("privacy_sandbox.notices")
-          .FindDict("Notice1StorageName");
-  ASSERT_NE(nullptr, actual_stored_prefs);
-  EXPECT_EQ(*actual_stored_prefs, expected_stored_prefs);
-}
-
-TEST_F(
-    PrivacySandboxNoticeStorageV2Test,
-    V1FieldsAllDefaultAndAbsentWithSchemaV1_NoFieldsErased_MigratesToEmptyV2) {
-  SetNoticeStateFromJSON("Notice1StorageName", R"({"schema_version": 1})");
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  base::DictValue expected_stored_prefs;
-  ParseDict(&expected_stored_prefs, R"({"schema_version": 2})");
-
-  const base::DictValue* actual_stored_prefs =
-      prefs()
-          ->GetDict("privacy_sandbox.notices")
-          .FindDict("Notice1StorageName");
-  ASSERT_NE(nullptr, actual_stored_prefs);
-  EXPECT_EQ(*actual_stored_prefs, expected_stored_prefs);
-}
-
-TEST_F(PrivacySandboxNoticeStorageV2Test, NoNoticeData_UpdateDoesNothing) {
-  ASSERT_TRUE(prefs()->GetDict("privacy_sandbox.notices").empty());
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  EXPECT_TRUE(prefs()->GetDict("privacy_sandbox.notices").empty());
-  const base::DictValue* actual_stored_prefs =
-      prefs()
-          ->GetDict("privacy_sandbox.notices")
-          .FindDict("Notice1StorageName");
-  EXPECT_EQ(nullptr, actual_stored_prefs);
-}
-
-TEST_F(PrivacySandboxNoticeStorageV2Test,
-       NonDefaultV1FieldsPresentSchemaV1_ErasesV1Fields_Migrates) {
-  SetNoticeStateFromJSON("Notice1StorageName", R"({
-    "schema_version": 1,
-    "notice_action_taken": 4,    // NoticeActionTaken::kOptIn
-    "notice_last_shown": "100100",
-    "notice_action_taken_time": "222222"
-    })");
-
-  PrivacySandboxNoticeStorage::UpdateNoticeSchemaV2(prefs());
-
-  base::DictValue expected_stored_prefs;
-  // V1 fields are erased. Events are migrated.
-  ParseDict(&expected_stored_prefs, R"({
-    "schema_version": 2,
-    "events": [
-      { "event": 5, "timestamp": "100100" }, // kShown event
-      { "event": 2, "timestamp": "222222" }  // kOptIn event
-    ]
-    })");
-
-  const base::DictValue* actual_stored_prefs =
-      prefs()
-          ->GetDict("privacy_sandbox.notices")
-          .FindDict("Notice1StorageName");
-  ASSERT_NE(nullptr, actual_stored_prefs);
-  EXPECT_EQ(*actual_stored_prefs, expected_stored_prefs);
+  EXPECT_NE(nullptr, actual_stored_prefs);
 }
 
 }  // namespace

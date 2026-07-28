@@ -15,6 +15,7 @@
 #include "base/auto_reset.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -93,8 +94,15 @@ class ContentSettingBubbleModel {
     bool has_link;
     bool has_blocked_badge;
     int32_t item_id;
+    // The original GURL of the item. Only populated and valid if the list item
+    // represents a URL (e.g. popups or redirects) where secure, dynamic elision
+    // in the UI is required.
+    GURL url;
   };
   typedef std::vector<ListItem> ListItems;
+
+  static std::u16string FormatTitleWithBullet(const std::u16string& title);
+  static std::u16string FormatUrlWithBullet(const GURL& url);
 
   class Owner {
    public:
@@ -495,6 +503,8 @@ class ContentSettingSubresourceFilterBubbleModel
   void OnLearnMoreClicked() override;
   void CommitChanges() override;
 
+  base::WeakPtr<content::Page> page_;
+  GURL page_url_;
   bool is_checked_ = false;
 };
 
@@ -576,6 +586,7 @@ class ContentSettingStorageAccessBubbleModel
                         bool is_allowed) override;
 
  private:
+  GURL page_url_;
   std::map<net::SchemefulSite, /*is_allowed*/ bool> changed_permissions_;
 };
 

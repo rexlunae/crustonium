@@ -14,6 +14,7 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
@@ -69,17 +70,14 @@ class FakeGPUImageDecodeTestRasterInterface : public viz::TestRasterInterface,
 
   base::span<uint8_t> MapTransferCacheEntry(uint32_t serialized_size) override {
     mapped_entry_size_ = serialized_size;
-    auto buffer =
-        PaintOpWriter::AllocateAlignedBuffer<uint8_t>(serialized_size);
-    mapped_entry_.swap(buffer);
-    return UNSAFE_TODO(base::span(mapped_entry_.get(), mapped_entry_size_));
+    mapped_entry_ = PaintOpWriter::AllocateAlignedBuffer(serialized_size);
+    return mapped_entry_.as_span();
   }
 
   void UnmapAndCreateTransferCacheEntry(uint32_t type, uint32_t id) override {
-    transfer_cache_helper_->CreateEntryDirect(
-        MakeEntryKey(type, id),
-        UNSAFE_TODO(base::span(mapped_entry_.get(), mapped_entry_size_)));
-    mapped_entry_ = nullptr;
+    transfer_cache_helper_->CreateEntryDirect(MakeEntryKey(type, id),
+                                              mapped_entry_.as_span());
+    mapped_entry_ = base::AlignedHeapArray<uint8_t>();
     mapped_entry_size_ = 0;
   }
 
@@ -107,7 +105,7 @@ class FakeGPUImageDecodeTestRasterInterface : public viz::TestRasterInterface,
  private:
   raw_ptr<TransferCacheTestHelper> transfer_cache_helper_;
   size_t mapped_entry_size_ = 0;
-  std::unique_ptr<uint8_t, base::AlignedFreeDeleter> mapped_entry_;
+  base::AlignedHeapArray<uint8_t> mapped_entry_;
 };
 
 class FakeRasterDarkModeFilter : public RasterDarkModeFilter {
@@ -139,15 +137,10 @@ class GpuImageDecodeCacheTest
     : public ::testing::TestWithParam<
           std::tuple<SkColorType,
                      bool /* do_yuv_decode */,
-                     bool /* enable_clipped_image_scaling */,
-                     bool /* no_discardable_memory */>> {
+                     bool /* enable_clipped_image_scaling */>> {
  public:
   void SetUp() override {
     std::vector<base::test::FeatureRef> enabled_features;
-    no_discardable_memory_ = std::get<3>(GetParam());
-    if (no_discardable_memory_)
-      enabled_features.push_back(
-          features::kNoDiscardableMemoryForGpuDecodePath);
     feature_list_.InitWithFeatures(enabled_features,
                                    {} /* disabled_features */);
     enable_clipped_image_scaling_ = std::get<2>(GetParam());
@@ -453,7 +446,6 @@ class GpuImageDecodeCacheTest
   SkColorType color_type_;
   bool do_yuv_decode_;
   bool enable_clipped_image_scaling_;
-  bool no_discardable_memory_;
   int max_texture_size_ = 0;
 };
 
@@ -2988,10 +2980,8 @@ TEST_P(GpuImageDecodeCacheTest, KeepOnlyLast2ContentIds) {
     cache->DrawWithImageFinished(draw_images[i], decoded_draw_images[i]);
   }
 
-  // We have a single tracked entry, that gets cleared once we purge the cache.
+  // We have a single tracked entry.
   EXPECT_EQ(cache->paint_image_entries_count_for_testing(), 1u);
-  cache->OnMemoryPressure(base::MEMORY_PRESSURE_LEVEL_CRITICAL);
-  EXPECT_EQ(cache->paint_image_entries_count_for_testing(), 0u);
 }
 
 TEST_P(GpuImageDecodeCacheTest, DecodeToScale) {
@@ -3981,10 +3971,10 @@ SkColorType test_color_types[] = {kN32_SkColorType, kARGB_4444_SkColorType,
 INSTANTIATE_TEST_SUITE_P(
     GpuImageDecodeCacheTests,
     GpuImageDecodeCacheTest,
-    testing::Combine(testing::ValuesIn(test_color_types),
-                     testing::Bool() /* do_yuv_decode */,
-                     testing::Values(false) /* enable_clipped_image_scaling */,
-                     testing::Values(false) /* no_discardable_memory */));
+    testing::Combine(
+        testing::ValuesIn(test_color_types),
+        testing::Bool() /* do_yuv_decode */,
+        testing::Values(false) /* enable_clipped_image_scaling */));
 
 class GpuImageDecodeCachePurgeOnTimerTest : public GpuImageDecodeCacheTest {
  public:
@@ -4248,10 +4238,10 @@ TEST_P(GpuImageDecodeCachePurgeOnTimerTest, NoCache) {
 INSTANTIATE_TEST_SUITE_P(
     GpuImageDecodeCacheTests,
     GpuImageDecodeCachePurgeOnTimerTest,
-    testing::Combine(testing::Values(kN32_SkColorType),
-                     testing::Bool() /* do_yuv_decode */,
-                     testing::Values(false) /* enable_clipped_image_scaling */,
-                     testing::Bool() /* no_discardable_memory */));
+    testing::Combine(
+        testing::Values(kN32_SkColorType),
+        testing::Bool() /* do_yuv_decode */,
+        testing::Values(false) /* enable_clipped_image_scaling */));
 
 TEST_P(GpuImageDecodeCacheTest, GainmapImage) {
   auto cache = CreateCache();

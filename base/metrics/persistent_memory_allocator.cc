@@ -13,6 +13,7 @@
 
 #include "base/bits.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/debug/alias.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
@@ -53,7 +54,7 @@ constexpr uint32_t kGlobalCookie = 0x408305DC;
 
 // The current version of the metadata. If updates are made that change the
 // metadata, the version number can be queried to operate in a backward-
-// compatible manner until the memory segment is completely re-initalized.
+// compatible manner until the memory segment is completely re-initialized.
 // Note: If you update the metadata in a non-backwards compatible way, reset
 // `kCompatibleVersions`. Otherwise, add the previous version.
 constexpr uint32_t kGlobalVersion = 3;
@@ -504,6 +505,10 @@ void PersistentMemoryAllocator::CreateTrackingHistograms(
 
 void PersistentMemoryAllocator::Flush(bool sync) {
   FlushPartial(used(), sync);
+}
+
+span<const uint8_t> PersistentMemoryAllocator::bytes() const {
+  return UNSAFE_TODO({static_cast<const uint8_t*>(data()), size()});
 }
 
 void PersistentMemoryAllocator::SetMemoryState(uint8_t memory_state) {
@@ -1191,8 +1196,8 @@ FilePersistentMemoryAllocator::FilePersistentMemoryAllocator(
     std::string_view name,
     AccessMode access_mode)
     : PersistentMemoryAllocator(
-          Memory(const_cast<uint8_t*>(file->data()), MEM_FILE),
-          max_size != 0 ? max_size : file->length(),
+          Memory(file->mutable_bytes().data(), MEM_FILE),
+          max_size != 0 ? max_size : file->mutable_bytes().size(),
           0,
           id,
           name,
@@ -1205,7 +1210,8 @@ FilePersistentMemoryAllocator::~FilePersistentMemoryAllocator() = default;
 bool FilePersistentMemoryAllocator::IsFileAcceptable(
     const MemoryMappedFile& file,
     bool readonly) {
-  return IsMemoryAcceptable(file.data(), file.length(), 0, readonly);
+  const base::span<const uint8_t> bytes = file.bytes();
+  return IsMemoryAcceptable(bytes.data(), bytes.size(), 0, readonly);
 }
 
 void FilePersistentMemoryAllocator::Cache() {

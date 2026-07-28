@@ -16,13 +16,18 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAAudioDriver);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAAudioInput);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kAAudioPerStreamDeviceSelection);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kAlwaysUseAudioManagerOutputFramesPerBuffer);
-MEDIA_EXPORT BASE_DECLARE_FEATURE(kAndroidAudioDeviceListener);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kAudioStereoInputStreamParameters);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAAudioVariableSizedCallbacks);
 #endif
 
 #if BUILDFLAG(IS_MAC)
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMacAVFoundationPlayback);
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kMacCatapRestartOnDeviceChange);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kMacCatapRestartAudioProcessOnTimeout);
+#endif
+
+#if BUILDFLAG(IS_WIN)
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kWasapiInputDeviceInUseRetry);
 #endif
 
 MEDIA_EXPORT BASE_DECLARE_FEATURE(kWebAudioRemoveAudioDestinationResampler);

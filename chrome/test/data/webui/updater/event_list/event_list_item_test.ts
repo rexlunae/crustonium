@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 import 'chrome://updater/event_list/event_list_item.js';
+import 'chrome://updater/enterprise_policy_table/enterprise_policy_table.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {MergedHistoryEvent, MergedInstallEvent, MergedUpdaterProcessEvent, PersistedDataEvent, PolicySet, Scope} from 'chrome://updater/event_history.js';
 import {localizeEventType, UpdaterProcessMap} from 'chrome://updater/event_history.js';
 import type {EventListItemElement} from 'chrome://updater/event_list/event_list_item.js';
-import type {RawEventDetailsElement} from 'chrome://updater/event_list/raw_event_details.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertStringContains, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
@@ -263,7 +263,8 @@ suite('EventListItemElement', () => {
         processToken: '',
         bound: 'END',
         errors: [],
-        outcome: 'UPDATED',
+        updateStates: [{deviceUptime: 1000, state: 'UPDATED'}],
+        result: 'SUCCESS',
         nextVersion: '2.0',
       },
     };
@@ -275,19 +276,20 @@ suite('EventListItemElement', () => {
         item.shadowRoot.textContent,
         loadTimeData.getStringF('updatedTo', '2.0'));
 
-    event.endEvent.outcome = 'NO_UPDATE';
+    event.endEvent.updateStates = [{deviceUptime: 1000, state: 'NO_UPDATE'}];
     item.event = {...event};
     await microtasksFinished();
     assertStringContains(
         item.shadowRoot.textContent, loadTimeData.getString('noUpdate'));
 
-    event.endEvent.outcome = 'UPDATE_ERROR';
+    event.endEvent.updateStates = [{deviceUptime: 1000, state: 'UPDATE_ERROR'}];
     item.event = {...event};
     await microtasksFinished();
     assertStringContains(
         item.shadowRoot.textContent, loadTimeData.getString('updateError'));
 
-    event.endEvent.outcome = 'UNKNOWN_OUTCOME';
+    event.endEvent.updateStates =
+        [{deviceUptime: 1000, state: 'UNKNOWN_OUTCOME'}];
     item.event = {...event};
     await microtasksFinished();
     assertStringContains(
@@ -464,12 +466,6 @@ suite('EventListItemElement', () => {
     item.event = mergedEvent;
     await microtasksFinished();
     assertEquals('error', item.status);
-    assertStringContains(
-        item.shadowRoot.textContent,
-        loadTimeData.getStringF('errorDetails', 4, 5, 6));
-    assertStringContains(
-        item.shadowRoot.textContent,
-        loadTimeData.getStringF('errorDetails', 7, 8, 9));
   });
 
   test('toggles details', async () => {
@@ -646,9 +642,9 @@ suite('EventListItemElement', () => {
     };
     item.event = event;
     await microtasksFinished();
-    const appSpan = item.shadowRoot.querySelector('.event-app');
-    assertTrue(!!appSpan);
-    assertEquals('Chrome', appSpan.textContent.trim());
+    const appColumn = item.shadowRoot.querySelector('.event-app-column');
+    assertTrue(!!appColumn);
+    assertEquals('Chrome', appColumn.textContent.trim());
   });
 
   test('displays app id for unknown app', async () => {
@@ -680,9 +676,9 @@ suite('EventListItemElement', () => {
     };
     item.event = event;
     await microtasksFinished();
-    const appSpan = item.shadowRoot.querySelector('.event-app');
-    assertTrue(!!appSpan);
-    assertEquals('{UNKNOWN-APP}', appSpan.textContent.trim());
+    const appColumn = item.shadowRoot.querySelector('.event-app-column');
+    assertTrue(!!appColumn);
+    assertEquals('{UNKNOWN-APP}', appColumn.textContent.trim());
   });
 
   test('displays scope icon', () => {
@@ -787,7 +783,8 @@ suite('EventListItemElement', () => {
           processToken: '',
           bound: 'END',
           errors: [],
-          outcome: 'UPDATED',
+          updateStates: [{deviceUptime: 1000, state: 'UPDATED'}],
+          result: 'SUCCESS',
         },
       };
       await microtasksFinished();
@@ -818,7 +815,8 @@ suite('EventListItemElement', () => {
           processToken: '',
           bound: 'END',
           errors: [],
-          outcome: 'NO_UPDATE',
+          updateStates: [{deviceUptime: 1000, state: 'NO_UPDATE'}],
+          result: 'SUCCESS',
         },
       };
       await microtasksFinished();
@@ -849,7 +847,8 @@ suite('EventListItemElement', () => {
           processToken: '',
           bound: 'END',
           errors: [],
-          outcome: 'UPDATE_ERROR',
+          updateStates: [{deviceUptime: 1000, state: 'UPDATE_ERROR'}],
+          result: 'SUCCESS',
         },
       };
       await microtasksFinished();
@@ -928,7 +927,8 @@ suite('EventListItemElement', () => {
           processToken: '',
           bound: 'END',
           errors: [],
-          outcome: 'UPDATED',
+          updateStates: [{deviceUptime: 1000, state: 'UPDATED'}],
+          result: 'SUCCESS',
         },
       };
       await microtasksFinished();
@@ -956,7 +956,8 @@ suite('EventListItemElement', () => {
           processToken: '',
           bound: 'END',
           errors: [],
-          outcome: 'UPDATE_ERROR',
+          updateStates: [{deviceUptime: 1000, state: 'UPDATE_ERROR'}],
+          result: 'SUCCESS',
         },
       };
       await microtasksFinished();
@@ -1010,7 +1011,8 @@ suite('EventListItemElement', () => {
           processToken: '',
           bound: 'END',
           errors: [],
-          outcome: 'NO_UPDATE',
+          updateStates: [{deviceUptime: 1000, state: 'NO_UPDATE'}],
+          result: 'SUCCESS',
         },
       };
       await microtasksFinished();
@@ -1063,10 +1065,9 @@ suite('EventListItemElement', () => {
     item.policies = policies;
     await microtasksFinished();
 
-    const rawPolicyView =
-        item.shadowRoot.querySelector<RawEventDetailsElement>('#policySource');
-    assertTrue(rawPolicyView !== undefined);
-    assertEquals(loadTimeData.getString('policyDetails'), rawPolicyView!.label);
-    assertDeepEquals([policies], rawPolicyView!.events);
+    const policyTable =
+        item.shadowRoot.querySelector('enterprise-policy-table');
+    assertTrue(!!policyTable);
+    assertEquals(policies, policyTable.policies);
   });
 });

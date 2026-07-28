@@ -34,7 +34,7 @@ SvgTextLayoutAlgorithm::SvgTextLayoutAlgorithm(InlineNode node,
 }
 
 PhysicalSize SvgTextLayoutAlgorithm::Layout(
-    const String& ifc_text_content,
+    const FragmentItemsBuilder& builder,
     FragmentItemsBuilder::ItemWithOffsetList& items) {
   TRACE_EVENT0("blink", "SvgTextLayoutAlgorithm::Layout");
   // https://svgwg.org/svg2-draft/text.html#TextLayoutAlgorithm
@@ -44,12 +44,12 @@ PhysicalSize SvgTextLayoutAlgorithm::Layout(
   // "CSS_positions", and "resolved" is the number of addressable characters.
 
   // 1. Setup
-  if (!Setup(ifc_text_content.length())) {
+  if (!Setup(builder.TextContentLengthMax())) {
     return PhysicalSize();
   }
 
   // 2. Set flags and assign initial positions
-  SetFlags(ifc_text_content, items);
+  SetFlags(builder, items);
   if (addressable_count_ == 0) {
     return PhysicalSize();
   }
@@ -112,7 +112,7 @@ bool SvgTextLayoutAlgorithm::Setup(wtf_size_t approximate_count) {
 
 // This function updates |result_|.
 void SvgTextLayoutAlgorithm::SetFlags(
-    const String& ifc_text_content,
+    const FragmentItemsBuilder& builder,
     const FragmentItemsBuilder::ItemWithOffsetList& items) {
   // This function collects information per an "addressable" character in DOM
   // order. So we need to access FragmentItems in the logical order.
@@ -170,18 +170,22 @@ void SvgTextLayoutAlgorithm::SetFlags(
     info.inline_size = horizontal_ ? item.Size().width : item.Size().height;
     result_.push_back(info);
 
-    StringView item_string(ifc_text_content, item.StartOffset(),
-                           item.TextLength());
+    const String& text_content = builder.TextContent(item.UsesFirstLineStyle());
+    StringView item_string(text_content, item.StartOffset(), item.TextLength());
     // 2.2. Set middle to true if the character at index i is the second or
     // later character that corresponds to a typographic character.
     CodePointIterator iterator = item_string.begin();
     const CodePointIterator end = item_string.end();
-    for (++iterator; iterator != end; ++iterator) {
+    if (iterator != end) {
+      ++iterator;  // Skip the first code point.
+    }
+    while (iterator != end) {
       SvgPerCharacterInfo middle_info;
       middle_info.middle = true;
       middle_info.item_index = info.item_index;
       result_.push_back(middle_info);
       css_positions_.push_back(css_positions_.back());
+      ++iterator;
     }
   }
   addressable_count_ = result_.size();
@@ -361,10 +365,9 @@ void SvgTextLayoutAlgorithm::ResolveTextLength(
       visual_indexes.push_back(k);
     }
     if (inline_node_.IsBidiEnabled()) {
-      std::sort(visual_indexes.begin(), visual_indexes.end(),
-                [&](wtf_size_t a, wtf_size_t b) {
-                  return result_[a].item_index < result_[b].item_index;
-                });
+      std::ranges::sort(visual_indexes, [&](wtf_size_t a, wtf_size_t b) {
+        return result_[a].item_index < result_[b].item_index;
+      });
     }
 
     for (wtf_size_t k : visual_indexes) {
@@ -410,13 +413,11 @@ void SvgTextLayoutAlgorithm::ResolveTextLength(
 
   // Remove resolved_descendant_node_starts entries for descendant nodes,
   // and register an entry for this node.
-  auto new_end =
-      std::remove_if(resolved_descendant_node_starts.begin(),
-                     resolved_descendant_node_starts.end(),
-                     [i, j_plus_1](const auto& start_index) {
-                       return i <= start_index && start_index < j_plus_1;
-                     });
-  resolved_descendant_node_starts.erase(new_end,
+  auto removed = std::ranges::remove_if(
+      resolved_descendant_node_starts, [i, j_plus_1](const auto& start_index) {
+        return i <= start_index && start_index < j_plus_1;
+      });
+  resolved_descendant_node_starts.erase(removed.begin(),
                                         resolved_descendant_node_starts.end());
   resolved_descendant_node_starts.push_back(i);
 }
@@ -861,7 +862,6 @@ PhysicalSize SvgTextLayoutAlgorithm::WriteBackToFragmentItems(
     data->rect = scaled_rect;
     data->length_adjust_scale = info.length_adjust_scale;
     data->is_svg = true;
-    data->is_fit_text_inline = false;
     data->angle = info.rotate.value_or(0.0f);
     data->baseline_shift = info.baseline_shift;
     data->in_text_path = info.in_text_path;

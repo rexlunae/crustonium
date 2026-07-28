@@ -13,6 +13,8 @@
 #include "components/autofill/core/browser/form_structure_test_api.h"
 #include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
 #include "components/autofill/core/common/form_data_test_api.h"
@@ -32,14 +34,8 @@ namespace {
 using ::autofill::test::CreateTestFormField;
 using ::base::Bucket;
 using ::base::BucketsAre;
+using ::testing::ElementsAre;
 using ::testing::WithParamInterface;
-
-constexpr FieldTypeSet kMLSupportedTypesForTesting = {
-    UNKNOWN_TYPE,       NAME_FIRST,
-    NAME_LAST,          NAME_FULL,
-    EMAIL_ADDRESS,      PHONE_HOME_NUMBER,
-    ADDRESS_HOME_LINE1, ADDRESS_HOME_STREET_ADDRESS,
-    ADDRESS_HOME_CITY};
 
 class PredictionQualityMetricsTest : public AutofillMetricsBaseTest,
                                      public testing::Test {
@@ -74,27 +70,20 @@ TEST_F(PredictionQualityMetricsTest, SaneMetricsWithCacheMismatch) {
                            FormControlType::kInputText),
        CreateTestFormField("Unknown", "unknown", "garbage",
                            FormControlType::kInputText)});
-  test_api(form).field(0).set_is_autofilled(true);
+  test_api(form).field(0).set_is_autofilled_according_to_renderer(true);
 
   std::vector<FieldType> heuristic_types = {NAME_FULL, PHONE_HOME_NUMBER,
                                             ADDRESS_HOME_CITY, UNKNOWN_TYPE};
   std::vector<FieldType> server_types = {NAME_FULL, PHONE_HOME_NUMBER,
                                          PHONE_HOME_NUMBER, UNKNOWN_TYPE};
-  std::vector<FieldType> ml_types = server_types;
 
   std::unique_ptr<FormStructure> form_structure =
       std::make_unique<FormStructure>(test::WithoutValues(form));
 
-  for (auto [field, heuristic_type, server_type, ml_type] : base::zip(
-           form_structure->fields(), heuristic_types, server_types, ml_types)) {
+  for (auto [field, heuristic_type, server_type] :
+       base::zip(form_structure->fields(), heuristic_types, server_types)) {
     field->set_heuristic_type(GetActiveHeuristicSource(), heuristic_type);
     field->set_server_predictions({test::CreateFieldPrediction(server_type)});
-    // ML predictions can be overridden when regexes predict a type that the ML
-    // model does not know - we need to set these so that the ML predction is
-    // used.
-    field->set_ml_supported_types(kMLSupportedTypesForTesting);
-    field->set_heuristic_type(HeuristicSource::kAutofillMachineLearning,
-                              ml_type);
   }
   test_api(autofill_manager()).AddSeenFormStructure(std::move(form_structure));
 
@@ -122,14 +111,6 @@ TEST_F(PredictionQualityMetricsTest, SaneMetricsWithCacheMismatch) {
   SubmitForm(form);
 
   std::vector<std::string> sources = {"Heuristic", "Server", "Overall"};
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
-  // Quality metrics for ".ML" are only recorded if the ML predictions are
-  // computed but not the active heuristic source.
-  if (base::FeatureList::IsEnabled(features::kAutofillModelPredictions) &&
-      GetActiveHeuristicSource() != HeuristicSource::kAutofillMachineLearning) {
-    sources.push_back("ML");
-  }
-#endif
 
   for (const std::string& source : sources) {
     SCOPED_TRACE(testing::Message() << source);
@@ -165,8 +146,6 @@ TEST_F(PredictionQualityMetricsTest, SaneMetricsWithCacheMismatch) {
         return server_types;
       } else if (source == "Overall") {
         return server_types;
-      } else if (source == "ML") {
-        return ml_types;
       }
       NOTREACHED();
     }();
@@ -476,6 +455,92 @@ TEST_F(PredictionQualityMetricsTest,
       "Autofill.FieldPredictionOverlap.AutocompleteAttributeAbsent."
       "NoPredictionExists.NAME_FIRST",
       1);
+}
+
+TEST_F(PredictionQualityMetricsTest, FieldTypeAtSubmission) {
+  GetAndAddSeenForm(
+      {.fields = {
+           {.role = NAME_FULL,
+            .server_type = NO_SERVER_DATA,
+            .autocomplete_attribute = "name"},
+           {.role = EMAIL_ADDRESS, .server_type = EMAIL_ADDRESS},
+           {.role = PHONE_HOME_CITY_AND_NUMBER, .server_type = NO_SERVER_DATA},
+           {.role = PHONE_HOME_CITY_AND_NUMBER, .server_type = NO_SERVER_DATA},
+           {.role = UNKNOWN_TYPE, .server_type = NO_SERVER_DATA}}});
+  ASSERT_EQ(test_api(autofill_manager()).form_structures().size(), 1u);
+
+  FormGlobalId form_id =
+      test_api(autofill_manager()).form_structures().front()->global_id();
+  FormStructure& form =
+      *test_api(autofill_manager()).FindCachedFormById(form_id);
+
+  form.field(2)->SetTypeTo(AutofillType(PHONE_HOME_COUNTRY_CODE),
+                           AutofillPredictionSource::kRationalization);
+
+  ASSERT_EQ(form.field(0)->Type().GetAddressType(), NAME_FULL);
+  ASSERT_EQ(form.field(0)->PredictionSource(),
+            AutofillPredictionSource::kAutocomplete);
+  ASSERT_EQ(form.field(1)->Type().GetAddressType(), EMAIL_ADDRESS);
+  ASSERT_EQ(form.field(1)->PredictionSource(),
+            AutofillPredictionSource::kServerCrowdsourcing);
+  ASSERT_EQ(form.field(2)->Type().GetAddressType(), PHONE_HOME_COUNTRY_CODE);
+  ASSERT_EQ(form.field(2)->PredictionSource(),
+            AutofillPredictionSource::kRationalization);
+  ASSERT_EQ(form.field(3)->Type().GetAddressType(), PHONE_HOME_CITY_AND_NUMBER);
+  ASSERT_EQ(form.field(3)->PredictionSource(),
+            AutofillPredictionSource::kHeuristics);
+  ASSERT_THAT(form.field(4)->Type().GetTypes(), ElementsAre(UNKNOWN_TYPE));
+  ASSERT_FALSE(form.field(4)->PredictionSource().has_value());
+
+  base::HistogramTester histogram_tester;
+  SubmitForm(form.ToFormData());
+
+  EXPECT_THAT(histogram_tester.GetAllSamples(
+                  "Autofill.FieldTypeAtSubmission.HeuristicType"),
+              BucketsAre(Bucket(NAME_FULL, 1), Bucket(EMAIL_ADDRESS, 1),
+                         Bucket(PHONE_HOME_CITY_AND_NUMBER, 2)));
+
+  EXPECT_THAT(histogram_tester.GetAllSamples(
+                  "Autofill.FieldTypeAtSubmission.ServerType"),
+              BucketsAre(Bucket(EMAIL_ADDRESS, 1)));
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Autofill.FieldTypeAtSubmission.HtmlType"),
+      BucketsAre(Bucket(NAME_FULL, 1)));
+
+  EXPECT_THAT(histogram_tester.GetAllSamples(
+                  "Autofill.FieldTypeAtSubmission.OverallType"),
+              BucketsAre(Bucket(NAME_FULL, 1), Bucket(EMAIL_ADDRESS, 1),
+                         Bucket(PHONE_HOME_COUNTRY_CODE, 1),
+                         Bucket(PHONE_HOME_CITY_AND_NUMBER, 1)));
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples(
+          "Autofill.FieldTypeAtSubmission.PreferredSource.Aggregate"),
+      BucketsAre(Bucket(AutofillPredictionSource::kAutocomplete, 1),
+                 Bucket(AutofillPredictionSource::kServerCrowdsourcing, 1),
+                 Bucket(AutofillPredictionSource::kRationalization, 1),
+                 Bucket(AutofillPredictionSource::kHeuristics, 1)));
+
+  auto get_bucket = [](FieldType type, AutofillPredictionSource source) {
+    return type << 4 | std::to_underlying(source);
+  };
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Autofill.FieldTypeAtSubmission."
+                                     "PreferredSource.ByFieldType"),
+      BucketsAre(
+          Bucket(get_bucket(NAME_FULL, AutofillPredictionSource::kAutocomplete),
+                 1),
+          Bucket(get_bucket(EMAIL_ADDRESS,
+                            AutofillPredictionSource::kServerCrowdsourcing),
+                 1),
+          Bucket(get_bucket(PHONE_HOME_COUNTRY_CODE,
+                            AutofillPredictionSource::kRationalization),
+                 1),
+          Bucket(get_bucket(PHONE_HOME_CITY_AND_NUMBER,
+                            AutofillPredictionSource::kHeuristics),
+                 1)));
 }
 
 }  // namespace

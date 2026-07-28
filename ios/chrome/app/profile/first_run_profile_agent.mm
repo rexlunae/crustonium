@@ -10,6 +10,7 @@
 #import "components/feature_engagement/public/tracker.h"
 #import "components/metrics/metrics_service.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/signin_switches.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/application_delegate/startup_information.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
@@ -20,8 +21,8 @@
 #import "ios/chrome/browser/first_run/coordinator/first_run_coordinator.h"
 #import "ios/chrome/browser/first_run/coordinator/first_run_post_action_provider.h"
 #import "ios/chrome/browser/first_run/coordinator/first_run_screen_provider.h"
-#import "ios/chrome/browser/first_run/guided_tour/coordinator/guided_tour_coordinator.h"
 #import "ios/chrome/browser/first_run/guided_tour/coordinator/guided_tour_promo_coordinator.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/safari_data_import/public/safari_data_import_entry_point.h"
 #import "ios/chrome/browser/safari_data_import/public/safari_data_import_ui_handler.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
@@ -43,8 +44,16 @@
 #import "ios/chrome/browser/synced_set_up/public/synced_set_up_metrics.h"
 #import "ios/chrome/browser/synced_set_up/utils/utils.h"
 
-namespace first_run {
+// Used to create PassKey to access the UIViewController through the
+// BrowserProvider interface (crbug.com/40606165).
+class FirstRunProfileAgentPassKeyFactory {
+ public:
+  static BrowserProviderPassKey CreateKey() {
+    return base::PassKey<FirstRunProfileAgentPassKeyFactory>();
+  }
+};
 
+namespace first_run {
 // Helper class used to access the passkey needed to call
 // MetricsService::StartOutOfBandUploadIfPossible().
 class FirstRunProfileAgentMetricsHelper final {
@@ -75,7 +84,6 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
 }  // namespace
 
 @interface FirstRunProfileAgent () <FirstRunCoordinatorDelegate,
-                                    GuidedTourCoordinatorDelegate,
                                     GuidedTourPromoCoordinatorDelegate,
                                     SafariDataImportUIHandler,
                                     SceneStateObserver>
@@ -101,11 +109,9 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
   // Coordinator for the Guided Tour Promo.
   GuidedTourPromoCoordinator* _guidedTourPromoCoordinator;
 
-  // Coordinator for the first step of the guided tour.
-  GuidedTourCoordinator* _guidedTourCoordinator;
-
-  // The current step in the guided tour.
-  GuidedTourStep _currentGuidedTourStep;
+  // The current step in the guided tour. nullopt if the tour is not in
+  // progress.
+  std::optional<GuidedTourStep> _currentGuidedTourStep;
 
   // Used to force the device orientation in portrait mode on iPhone.
   std::unique_ptr<ScopedForcePortraitOrientation> _scopedForceOrientation;
@@ -118,7 +124,6 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
   CHECK(!_firstRunUIBlocker, base::NotFatalUntil::M155);
   CHECK(!_firstRunCoordinator, base::NotFatalUntil::M155);
   CHECK(!_guidedTourPromoCoordinator, base::NotFatalUntil::M155);
-  CHECK(!_guidedTourCoordinator, base::NotFatalUntil::M155);
   CHECK(!_scopedForceOrientation, base::NotFatalUntil::M155);
   CHECK(!_displayLock, base::NotFatalUntil::M155);
 }
@@ -131,19 +136,68 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
         HandlerForProtocol([self commandDispatcher], TabGridToolbarCommands);
     __weak FirstRunProfileAgent* weakSelf = self;
     ProceduralBlock completion = ^{
+      [weakSelf stepCompleted:GuidedTourStep::kTabGridIncognito];
       [weakSelf showLongPressStep];
     };
     [handler showGuidedTourIncognitoStepWithDismissalCompletion:completion];
   }
 }
 
+- (void)stopGuidedTour {
+  // If guided tour promo is showing, count this as a dismissal.
+  if (_guidedTourPromoCoordinator) {
+    [self dismissGuidedTourPromo];
+    return;
+  }
+  if (!_currentGuidedTourStep) {
+    return;
+  }
+
+  CommandDispatcher* dispatcher = [self commandDispatcher];
+
+  switch (_currentGuidedTourStep.value()) {
+    case GuidedTourStep::kNTP: {
+      if ([dispatcher dispatchingForProtocol:@protocol(GuidedTourCommands)]) {
+        id<GuidedTourCommands> handler =
+            HandlerForProtocol(dispatcher, GuidedTourCommands);
+        [handler stepCompleted:GuidedTourStep::kNTP];
+      }
+
+      if ([dispatcher dispatchingForProtocol:@protocol(SceneCommands)]) {
+        id<SceneCommands> sceneHandler =
+            HandlerForProtocol(dispatcher, SceneCommands);
+        [sceneHandler hideGuidedTourNTPStep];
+      }
+      break;
+    }
+    // Both tab grid steps are exited in the same way.
+    case GuidedTourStep::kTabGridIncognito:
+    case GuidedTourStep::kTabGridTabGroup: {
+      if ([dispatcher
+              dispatchingForProtocol:@protocol(TabGridToolbarCommands)]) {
+        id<TabGridToolbarCommands> tabGridToolbarHandler =
+            HandlerForProtocol(dispatcher, TabGridToolbarCommands);
+        [tabGridToolbarHandler hideTabGridToolbarGuidedTour];
+      }
+      break;
+    }
+    case GuidedTourStep::kTabGridLongPress: {
+      if ([dispatcher dispatchingForProtocol:@protocol(TabGridCommands)]) {
+        id<TabGridCommands> tabGridHandler =
+            HandlerForProtocol(dispatcher, TabGridCommands);
+        [tabGridHandler hideTabGridGuidedTour];
+      }
+      break;
+    }
+  }
+
+  _currentGuidedTourStep = std::nullopt;
+}
+
 #pragma mark - SceneStateObserver
 
 - (void)sceneStateDidDisableUI:(SceneState*)sceneState {
   [self releaseUILocks];
-
-  [_guidedTourCoordinator stop];
-  _guidedTourCoordinator = nil;
 
   [_guidedTourPromoCoordinator stopWithCompletion:nil];
   _guidedTourPromoCoordinator = nil;
@@ -167,7 +221,8 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
   AppState* appState = profileState.appState;
   if (appState.startupInformation.isFirstRun) {
     _scopedForceOrientation = ForcePortraitOrientationOnIphone(appState);
-    if (IsBestOfAppFREEnabled()) {
+
+    if (IsBestOfAppFREEnabled() || IsAppStoreInAppEventsEnabled()) {
       id<BrowserProvider> presentingInterface =
           _presentingSceneState.browserProviderInterface.currentBrowserProvider;
       Browser* browser = presentingInterface.browser;
@@ -211,37 +266,6 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
   [self showFirstRunUI];
 }
 
-#pragma mark - GuidedTourCoordinatorDelegate
-
-- (void)stepCompleted:(GuidedTourStep)step {
-  CHECK_EQ(step, _currentGuidedTourStep);
-  if (step == GuidedTourStep::kNTP) {
-    [_guidedTourCoordinator stop];
-    _guidedTourCoordinator = nil;
-
-    _currentGuidedTourStep = GuidedTourStep::kTabGridIncognito;
-    id<SceneCommands> sceneHandler =
-        HandlerForProtocol([self commandDispatcher], SceneCommands);
-    [sceneHandler displayTabGridInMode:TabGridOpeningMode::kRegular];
-  }
-}
-
-- (void)nextTappedForStep:(GuidedTourStep)step {
-  base::UmaHistogramEnumeration(kGuidedTourStepDidFinishHistogram, step);
-  if (IsManualUploadForBestOfAppEnabled()) {
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(^{
-          first_run::FirstRunProfileAgentMetricsHelper metricsHelper;
-          metricsHelper.StartOutOfBandUploadIfPossible();
-        }));
-  }
-  if (step == GuidedTourStep::kNTP) {
-    id<GuidedTourCommands> handler =
-        HandlerForProtocol([self commandDispatcher], GuidedTourCommands);
-    [handler stepCompleted:GuidedTourStep::kNTP];
-  }
-}
-
 #pragma mark - GuidedTourPromoCoordinatorDelegate
 
 - (void)dismissGuidedTourPromo {
@@ -252,6 +276,8 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
 }
 
 - (void)startGuidedTour {
+  _currentGuidedTourStep = GuidedTourStep::kNTP;
+  [_postActionsProvider setGuidedTourStarted:YES];
   __weak FirstRunProfileAgent* weakSelf = self;
   ProceduralBlock completion = ^{
     [weakSelf showNTPStep];
@@ -330,19 +356,22 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
   DCHECK(_presentingSceneState);
 
   ProfileIOS* profile = [self originalProfile];
+  CHECK(profile);
 
   DCHECK(!_firstRunUIBlocker);
-  _firstRunUIBlocker = std::make_unique<ScopedUIBlocker>(_presentingSceneState);
+  _firstRunUIBlocker = ScopedUIBlocker::ProfileScoped(_presentingSceneState);
 
-  // TODO(crbug.com/343699504): Remove pre-fetching capabilities once these are
-  // loaded in iSL.
-  RunSystemCapabilitiesPrefetch(signin::GetIdentitiesOnDevice(profile));
+  if (!base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext)) {
+    // Capabilities prefetching is no longer necessary; all capabilities fetches
+    // are deferred until External Privacy Contexts are built.
+    RunSystemCapabilitiesPrefetch(signin::GetIdentitiesOnDevice(profile));
+  }
 
   FirstRunScreenProvider* provider =
       [[FirstRunScreenProvider alloc] initForProfile:profile];
   UIViewController* baseViewController =
-      _presentingSceneState.browserProviderInterface.currentBrowserProvider
-          .viewController;
+      [_presentingSceneState.browserProviderInterface.currentBrowserProvider
+          viewController:FirstRunProfileAgentPassKeyFactory::CreateKey()];
   Browser* mainBrowser = _presentingSceneState.browserProviderInterface
                              .mainBrowserProvider.browser;
   _firstRunCoordinator =
@@ -382,7 +411,6 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
     case kHistorySync:
     case kDefaultBrowserPromo:
     case kChoice:
-    case kDockingPromo:
     case kBestFeatures:
     case kLensInteractivePromo:
     case kLensAnimatedPromo:
@@ -400,7 +428,9 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
       _presentingSceneState.browserProviderInterface.currentBrowserProvider;
   Browser* browser = presentingInterface.browser;
   _guidedTourPromoCoordinator = [[GuidedTourPromoCoordinator alloc]
-      initWithBaseViewController:presentingInterface.viewController
+      initWithBaseViewController:
+          [presentingInterface
+              viewController:FirstRunProfileAgentPassKeyFactory::CreateKey()]
                          browser:browser];
   _guidedTourPromoCoordinator.delegate = self;
   [_guidedTourPromoCoordinator start];
@@ -413,14 +443,35 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
       HandlerForProtocol([self commandDispatcher], GuidedTourCommands);
   [handler highlightViewInStep:GuidedTourStep::kNTP];
 
-  id<BrowserProvider> presentingInterface =
-      _presentingSceneState.browserProviderInterface.currentBrowserProvider;
-  _guidedTourCoordinator = [[GuidedTourCoordinator alloc]
-            initWithStep:GuidedTourStep::kNTP
-      baseViewController:presentingInterface.viewController
-                 browser:presentingInterface.browser
-                delegate:self];
-  [_guidedTourCoordinator start];
+  __weak FirstRunProfileAgent* weakSelf = self;
+  ProceduralBlock completionBlock = ^{
+    [weakSelf guidedTourNTPStepCompleted];
+  };
+
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol([self commandDispatcher], SceneCommands);
+  [sceneHandler showGuidedTourNTPStepWithCompletion:completionBlock];
+}
+
+// Handles the completion of the NTP step of the Guided Tour.
+- (void)guidedTourNTPStepCompleted {
+  if (IsManualUploadForBestOfAppEnabled()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(^{
+          first_run::FirstRunProfileAgentMetricsHelper metricsHelper;
+          metricsHelper.StartOutOfBandUploadIfPossible();
+        }));
+  }
+  id<GuidedTourCommands> handler =
+      HandlerForProtocol([self commandDispatcher], GuidedTourCommands);
+  [handler stepCompleted:GuidedTourStep::kNTP];
+
+  [self stepCompleted:GuidedTourStep::kNTP];
+
+  _currentGuidedTourStep = GuidedTourStep::kTabGridIncognito;
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol([self commandDispatcher], SceneCommands);
+  [sceneHandler displayTabGridInMode:TabGridOpeningMode::kRegular];
 }
 
 // Shows the Long Press step of the Guided Tour in the tab grid..
@@ -428,6 +479,7 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
   _currentGuidedTourStep = GuidedTourStep::kTabGridLongPress;
   __weak FirstRunProfileAgent* weakSelf = self;
   ProceduralBlock completion = ^{
+    [weakSelf stepCompleted:GuidedTourStep::kTabGridLongPress];
     [weakSelf showTabGroupStep];
   };
   id<TabGridCommands> handler =
@@ -442,6 +494,7 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
       HandlerForProtocol([self commandDispatcher], TabGridToolbarCommands);
   __weak FirstRunProfileAgent* weakSelf = self;
   ProceduralBlock completion = ^{
+    [weakSelf stepCompleted:GuidedTourStep::kTabGridTabGroup];
     [weakSelf guidedTourCompleted];
   };
   [handler showGuidedTourTabGroupStepWithDismissalCompletion:completion];
@@ -449,8 +502,16 @@ const char kGuidedTourStepDidFinishHistogram[] = "IOS.GuidedTour.DidFinishStep";
 
 // Called when the Guided Tour flow is completed.
 - (void)guidedTourCompleted {
+  _currentGuidedTourStep = std::nullopt;
   [self releaseUILocks];
   [self performNextPostFirstRunAction];
+}
+
+// Handles the dismissal completion of a step in the guided tour.
+- (void)stepCompleted:(GuidedTourStep)step {
+  CHECK(_currentGuidedTourStep);
+  CHECK_EQ(step, _currentGuidedTourStep.value());
+  base::UmaHistogramEnumeration(kGuidedTourStepDidFinishHistogram, step);
 }
 
 // Shows the entry point to import data from Safari.

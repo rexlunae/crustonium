@@ -140,6 +140,7 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
     std::unique_ptr<PosixFileDescriptorInfo> files_to_register,
     bool can_use_warm_up_connection,
     bool is_spare_renderer,
+    bool is_for_outermost_main_frame,
     bool* is_synchronous_launch,
     int* launch_result) {
   DCHECK(!options);
@@ -183,7 +184,8 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
   AddRef();  // Balanced by OnChildProcessStarted.
   java_peer_.Reset(Java_ChildProcessLauncherHelperImpl_createAndStart(
       env, reinterpret_cast<intptr_t>(this), j_argv, j_file_infos,
-      can_use_warm_up_connection, is_spare_renderer));
+      can_use_warm_up_connection, is_spare_renderer,
+      is_for_outermost_main_frame));
 
   client_task_runner_->PostTask(
       FROM_HERE,
@@ -322,7 +324,7 @@ void ChildProcessLauncherHelper::SetRenderProcessPriorityOnLauncherThread(
       priority.has_foreground_service_worker, priority.frame_depth,
       priority.intersects_viewport, priority.boost_for_pending_views,
       priority.boost_for_loading, priority.is_spare_renderer,
-      static_cast<int32_t>(priority.importance), priority.has_active_clients);
+      static_cast<int32_t>(priority.importance));
   if (result != static_cast<int32_t>(SpareRendererPriority::SPARE_NO_CHANGE)) {
     client_task_runner_->PostTask(
         FROM_HERE,

@@ -300,8 +300,8 @@ void CommandService::OnExtensionUninstalled(
   // Adding a component extensions will only trigger install the first time on a
   // clean profile or on a version increase (see
   // ComponentLoader::AddComponentExtension). It will, however, always trigger
-  // an uninstall on removal. See http://crbug.com/458612. Isolate this case and
-  // ignore it.
+  // an uninstall on removal. See http://crbug.com/41157546. Isolate this case
+  // and ignore it.
   if (reason == extensions::UNINSTALL_REASON_COMPONENT_REMOVED)
     return;
 
@@ -360,7 +360,7 @@ Command CommandService::FindCommandByName(const ExtensionId& extension_id,
         shortcut, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     CHECK(tokens.size() >= 2);
 
-    return Command(*command_name, std::u16string(), std::string(tokens[1]),
+    return Command(*command_name, std::u16string(), tokens[1],
                    global.value_or(false));
   }
 
@@ -468,7 +468,7 @@ void CommandService::RemoveRelinquishedKeybindings(const Extension* extension) {
     // assigned to ui::VKEY_UNKNOWN), which happens for browser action commands.
     // See CommandsHandler::MaybeSetActionDefault().
     // TODO(devlin): Should this logic apply to ActionInfo::Type::kAction?
-    // See https://crbug.com/893373.
+    // See https://crbug.com/40597224.
     const bool should_relinquish =
         !new_command ||
         (type == ActionInfo::Type::kBrowser &&

@@ -30,8 +30,8 @@
 
 using base::UserMetricsAction;
 
-@interface OmniboxViewController () <OmniboxTextInputDelegate,
-                                     OmniboxKeyboardDelegate,
+@interface OmniboxViewController () <OmniboxKeyboardDelegate,
+                                     OmniboxTextInputDelegate,
                                      UIScribbleInteractionDelegate>
 
 // Override of UIViewController's view with a different type.
@@ -141,11 +141,9 @@ using base::UserMetricsAction;
                    action:@selector(clearButtonPressed)
          forControlEvents:UIControlEventTouchUpInside];
 
-  if (base::FeatureList::IsEnabled(kEnableLensOverlay)) {
-    [self.view.thumbnailButton addTarget:self
-                                  action:@selector(didTapThumbnailButton)
-                        forControlEvents:UIControlEventTouchUpInside];
-  }
+  [self.view.thumbnailButton addTarget:self
+                                action:@selector(didTapThumbnailButton)
+                      forControlEvents:UIControlEventTouchUpInside];
 
   [NSNotificationCenter.defaultCenter
       addObserver:self
@@ -301,9 +299,7 @@ using base::UserMetricsAction;
   [self updateClearButtonVisibility];
   [self updateLeadingImage];
 
-  if (base::FeatureList::IsEnabled(kEnableLensOverlay)) {
-    self.view.thumbnailButton.selected = NO;
-  }
+  self.view.thumbnailButton.selected = NO;
 
   self.semanticContentAttribute = [self.textInput bestSemanticContentAttribute];
 
@@ -313,14 +309,14 @@ using base::UserMetricsAction;
 
 // Records the metrics as needed.
 - (void)textInputDidEndEditing:(id<OmniboxTextInput>)textInput {
-  if (base::FeatureList::IsEnabled(kEnableLensOverlay)) {
-    self.view.thumbnailButton.selected = NO;
-  }
+  self.view.thumbnailButton.selected = NO;
 
   if (!self.omniboxInteractedWhileFocused) {
     RecordAction(
         UserMetricsAction("Mobile_FocusedDefocusedOmnibox_WithNoAction"));
   }
+
+  [self.mutator onDidEndEditing];
 }
 
 - (UIMenu*)textInput:(id<OmniboxTextInput>)textInput
@@ -708,10 +704,6 @@ using base::UserMetricsAction;
 
 /// Returns the placeholder text for the current state.
 - (NSString*)currentPlaceholderText {
-  if (!base::FeatureList::IsEnabled(kEnableLensOverlay)) {
-    return self.searchOrTypeURLPlaceholderText;
-  }
-
   if (self.view.thumbnailImage) {
     return l10n_util::GetNSString(IDS_IOS_OMNIBOX_PLACEHOLDER_IMAGE_SEARCH);
   } else if (self.searchOnlyUI) {

@@ -19,7 +19,9 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
 
 }  // namespace
 
-@interface ComposeboxDebuggerCoordinator () <AimDebuggerPresenter>
+@interface ComposeboxDebuggerCoordinator () <AimDebuggerPresenter> {
+  NSMutableArray<ComposeboxDebuggerEvent*>* _events;
+}
 
 @end
 
@@ -33,10 +35,72 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
   CHECK(experimental_flags::IsOmniboxDebuggingEnabled());
   [self setupOptionsButton];
   [self setupOptionsMenu];
+  _events = [[NSMutableArray alloc] init];
 }
 
 - (void)stop {
   [self dismissAimDebuggerWithAnimation:NO];
+  [_optionsButton removeFromSuperview];
+  _optionsButton = nil;
+}
+
+- (void)logEvent:(ComposeboxDebuggerEvent*)event {
+  [_events addObject:event];
+}
+
+#pragma mark - TabPickerLogger
+
+- (void)logTabPickerShown {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+      composeboxGeneralEvent:composebox_debugger::event::Composebox::
+                                 kTabPickerShown];
+  [self logEvent:event];
+}
+
+- (void)logTabPickerHidden {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+      composeboxGeneralEvent:composebox_debugger::event::Composebox::
+                                 kTabPickerHidden];
+  [self logEvent:event];
+}
+
+- (void)logWillLoadTabWithTitle:(NSString*)title tabID:(web::WebStateID)tabID {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+       tabEvent:composebox_debugger::event::Tabs::kWillLoadTab
+      withTitle:title
+          tabID:tabID.identifier()];
+  [self logEvent:event];
+}
+
+- (void)logDidLoadTabWithSuccess:(BOOL)success
+                           title:(NSString*)title
+                           tabID:(web::WebStateID)tabID {
+  composebox_debugger::event::Tabs tabEvent =
+      success ? composebox_debugger::event::Tabs::kDidLoadTab
+              : composebox_debugger::event::Tabs::kFailedToLoadTab;
+  ComposeboxDebuggerEvent* event =
+      [ComposeboxDebuggerEvent tabEvent:tabEvent
+                              withTitle:title
+                                  tabID:tabID.identifier()];
+  [self logEvent:event];
+}
+
+- (void)logWillRealizeTabWithTitle:(NSString*)title
+                             tabID:(web::WebStateID)tabID {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+       tabEvent:composebox_debugger::event::Tabs::kWillRealizeTab
+      withTitle:title
+          tabID:tabID.identifier()];
+  [self logEvent:event];
+}
+
+- (void)logDidRealizeTabWithTitle:(NSString*)title
+                            tabID:(web::WebStateID)tabID {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+       tabEvent:composebox_debugger::event::Tabs::kDidRealizeTab
+      withTitle:title
+          tabID:tabID.identifier()];
+  [self logEvent:event];
 }
 
 #pragma mark - private
@@ -80,7 +144,7 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
               }];
   UIAction* aimEligibilityDebuggerAction = [UIAction
       actionWithTitle:@"AIM Eligibility"
-                image:CustomSymbolWithPointSize(kMagnifyingglassSparkSymbol, 16)
+                image:SymbolWithPointSize(SymbolMagnifyingglassSpark, 16)
            identifier:nil
               handler:^(UIAction* action) {
                 [weakSelf startAIMDebugger];
@@ -108,57 +172,9 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
 }
 
 - (void)showBreadcrumbsLogs {
-  // A list of demo events in preparation of real logging.
   UIViewController* breadcrumbsViewController =
-      [[ComposeboxDebuggerBreadcrumbsViewController alloc] initWithEvents:@[
-        [ComposeboxDebuggerEvent
-            composeboxGeneralEvent:composebox_debugger::event::Composebox::
-                                       kOpened],
-        [ComposeboxDebuggerEvent
-            composeboxGeneralEvent:composebox_debugger::event::Composebox::
-                                       kCompactModeEnabled],
-        [ComposeboxDebuggerEvent
-            inputPlateTapOnElement:composebox_debugger::element::InputPlate::
-                                       kPlusMenu],
-        [ComposeboxDebuggerEvent
-            contextMenuTapOnElement:composebox_debugger::element::ContextMenu::
-                                        kTabsAttachment],
-        [ComposeboxDebuggerEvent
-            composeboxGeneralEvent:composebox_debugger::event::Composebox::
-                                       kTabPickerShown],
-        [ComposeboxDebuggerEvent
-             tabEvent:composebox_debugger::event::Tabs::kWillLoadTab
-            withTitle:@"example.com"
-                tabID:@"1234"],
-        [ComposeboxDebuggerEvent
-             tabEvent:composebox_debugger::event::Tabs::kWillLoadTab
-            withTitle:@"other.com"
-                tabID:@"3234"],
-        [ComposeboxDebuggerEvent
-             tabEvent:composebox_debugger::event::Tabs::kDidLoadTab
-            withTitle:@"other.com"
-                tabID:@"3234"],
-        [ComposeboxDebuggerEvent
-             tabEvent:composebox_debugger::event::Tabs::kDidLoadTab
-            withTitle:@"example.com"
-                tabID:@"1234"],
-        [ComposeboxDebuggerEvent apcEvent:composebox_debugger::event::APC::
-                                              kExtractionCompletedSuccessfully
-                                withTitle:@"example.com"
-                                    tabID:@"1234"],
-        [ComposeboxDebuggerEvent
-             tabEvent:composebox_debugger::event::Tabs::kDidSelectTab
-            withTitle:@"example.com"
-                tabID:@"1234"],
-        [ComposeboxDebuggerEvent
-            tabPickerTapOnElement:composebox_debugger::element::TabPicker::
-                                      kConfirmSelection],
-        [ComposeboxDebuggerEvent
-            queryAttachmentEvent:composebox_debugger::event::QueryAttachment::
-                                     kUploadCompletedSuccessfully
-                        withType:composebox_debugger::AttachmentType::kTab
-                           title:@"example.com"]
-      ]];
+      [[ComposeboxDebuggerBreadcrumbsViewController alloc]
+          initWithEvents:_events];
 
   [self.baseViewController presentViewController:breadcrumbsViewController
                                         animated:YES

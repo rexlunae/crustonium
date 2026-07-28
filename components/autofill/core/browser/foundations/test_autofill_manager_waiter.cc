@@ -76,9 +76,8 @@ std::string TestAutofillManagerWaiter::DescribeState() const {
   return base::StringPrintf(
       "TestAutofillManagerWaiter created at %s for %zu relevant events has "
       "seen events [%s] is %stimed out",
-      waiter_location_.ToString().c_str(), state_->num_expected_relevant_events,
-      base::JoinString(events_vector, ", ").c_str(),
-      state_->timed_out ? "" : "not ");
+      waiter_location_.ToString(), state_->num_expected_relevant_events,
+      base::JoinString(events_vector, ", "), state_->timed_out ? "" : "not ");
 }
 
 size_t TestAutofillManagerWaiter::num_pending_events() const {
@@ -177,8 +176,7 @@ void TestAutofillManagerWaiter::OnBeforeTextFieldValueChanged(
 void TestAutofillManagerWaiter::OnAfterTextFieldValueChanged(
     AutofillManager& manager,
     FormGlobalId form,
-    FieldGlobalId field,
-    const std::u16string& text_value) {
+    FieldGlobalId field) {
   OnAfter(Event::kTextFieldValueChanged);
 }
 
@@ -284,6 +282,20 @@ void TestAutofillManagerWaiter::OnBeforeFormSubmitted(AutofillManager& manager,
 void TestAutofillManagerWaiter::OnAfterFormSubmitted(AutofillManager& manager,
                                                      const FormData& form) {
   OnAfter(Event::kFormSubmitted);
+}
+
+void TestAutofillManagerWaiter::OnBeforeFormWithEmailVerificationTokenSubmitted(
+    AutofillManager& manager,
+    const FormData& form,
+    const FieldGlobalId& field_id) {
+  OnBefore(Event::kFormWithEmailVerificationTokenSubmitted);
+}
+
+void TestAutofillManagerWaiter::OnAfterFormWithEmailVerificationTokenSubmitted(
+    AutofillManager& manager,
+    const FormData& form,
+    const FieldGlobalId& field_id) {
+  OnAfter(Event::kFormWithEmailVerificationTokenSubmitted);
 }
 
 void TestAutofillManagerWaiter::OnBeforeLoadedServerPredictions(

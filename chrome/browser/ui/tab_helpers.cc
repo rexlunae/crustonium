@@ -32,9 +32,13 @@
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
 #include "chrome/browser/file_system_access/file_system_access_tab_helper.h"
+#include "chrome/browser/finds/core/finds_features.h"
+#include "chrome/browser/finds/core/finds_tab_helper.h"
+#include "chrome/browser/finds/finds_service_factory.h"
 #include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/history/top_sites_factory.h"
 #include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
+#include "chrome/browser/history_embeddings/history_embeddings_service_factory.h"
 #include "chrome/browser/history_embeddings/history_embeddings_tab_helper.h"
 #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
 #include "chrome/browser/login_detection/login_detection_tab_helper.h"
@@ -63,6 +67,7 @@
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/resource_coordinator/tab_helper.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/browser/site_protection/site_protection_metrics_observer.h"
 #include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
@@ -78,8 +83,6 @@
 #include "chrome/browser/sync/sessions/sync_sessions_web_contents_router_factory.h"
 #include "chrome/browser/tab_contents/navigation_metrics_recorder.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
-#include "chrome/browser/tpcd/http_error_observer/http_error_tab_helper.h"
-#include "chrome/browser/tpcd/metadata/devtools_observer.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
 #include "chrome/browser/ui/autofill/autofill_client_provider.h"
@@ -126,6 +129,7 @@
 #include "components/offline_pages/buildflags/buildflags.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
+#include "components/page_content_annotations/content/annotate_page_content_request.h"
 #include "components/page_content_annotations/content/page_content_annotations_web_contents_observer.h"
 #include "components/page_content_annotations/core/page_content_extraction_types.h"
 #include "components/page_info/core/features.h"
@@ -140,6 +144,7 @@
 #include "components/safe_browsing/content/browser/ui_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/search/ntp_features.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/site_engagement/content/site_engagement_helper.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/tabs/public/tab_interface.h"
@@ -195,7 +200,6 @@
 #include "chrome/browser/ui/sync/browser_synced_tab_delegate.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/uma_browsing_activity_observer.h"
-#include "chrome/browser/ui/views/side_panel/history_clusters/history_clusters_tab_helper.h"
 #include "components/image_fetcher/core/image_fetcher_service.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
@@ -207,11 +211,10 @@
 #include "chrome/browser/ash/child_accounts/time_limits/web_time_navigation_observer.h"
 #include "chrome/browser/ash/growth/campaigns_manager_session_tab_helper.h"
 #include "chrome/browser/ash/mahi/web_contents/mahi_tab_helper.h"
-#include "chrome/browser/chromeos/cros_apps/cros_apps_tab_helper.h"
 #include "chrome/browser/chromeos/gemini_app/gemini_app_tab_helper.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_tab_helper.h"
-#include "chrome/browser/chromeos/printing/print_preview/printing_init_cros.h"
 #include "chrome/browser/ui/ash/google_one/google_one_offer_iph_tab_helper.h"
+#include "chromeos/ash/experiences/isolated_web_app/cros_isolated_web_app_enabler.h"
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -280,6 +283,12 @@
 #include "components/safe_browsing/content/browser/safe_browsing_tab_observer.h"
 #endif
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "chrome/browser/contextual_tasks/search_ai_mode_promo_tab_helper.h"
+#include "components/contextual_tasks/public/features.h"
+#include "components/signin/public/base/signin_switches.h"
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
 using content::WebContents;
 
 namespace {
@@ -304,7 +313,8 @@ std::optional<int64_t> GetPageContentAnnotationsTabId(
 // WARNING: Do not use this class for desktop chrome. Use TabFeatures instead.
 // See
 // https://chromium.googlesource.com/chromium/src/+/main/docs/chrome_browser_design_principles.md
-void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+void TabHelpers::AttachTabHelpers(WebContents* web_contents,
+                                  bool enable_autofill) {
   // If already adopted, nothing to be done.
   base::SupportsUserData::Data* adoption_tag =
       web_contents->GetUserData(&kTabContentsAttachedTabHelpersUserDataKey);
@@ -343,9 +353,11 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
                                                    optimization_guide_decider);
     }
   }
-  autofill::AutofillClientProvider& autofill_client_provider =
-      autofill::AutofillClientProviderFactory::GetForProfile(profile);
-  autofill_client_provider.CreateClientForWebContents(web_contents);
+  if (enable_autofill) {
+    autofill::AutofillClientProvider& autofill_client_provider =
+        autofill::AutofillClientProviderFactory::GetForProfile(profile);
+    autofill_client_provider.CreateClientForWebContents(web_contents);
+  }
 
 #if BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(media::kAutoPictureInPictureAndroid)) {
@@ -359,7 +371,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   // The sensitive content client has to be instantiated after the autofill
   // client, because the sensitive content client starts a flow which uses
   // `ScopedAutofillManagersObservation`.
-  if (base::android::android_info::sdk_int() >=
+  if (enable_autofill &&
+      base::android::android_info::sdk_int() >=
           base::android::android_info::SdkVersion::SDK_VERSION_V &&
       base::FeatureList::IsEnabled(
           sensitive_content::features::kSensitiveContent)) {
@@ -378,12 +391,17 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       web_contents);
   ChainedBackNavigationTracker::CreateForWebContents(web_contents);
   chrome_browser_net::NetErrorTabHelper::CreateForWebContents(web_contents);
-  if (!autofill_client_provider.uses_platform_autofill()) {
-    ChromePasswordManagerClient::CreateForWebContents(web_contents);
-  }
+  if (enable_autofill) {
+    autofill::AutofillClientProvider& autofill_client_provider =
+        autofill::AutofillClientProviderFactory::GetForProfile(profile);
+    if (!autofill_client_provider.uses_platform_autofill()) {
+      ChromePasswordManagerClient::CreateForWebContents(web_contents);
+    }
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  ChromePasswordReuseDetectionManagerClient::CreateForWebContents(web_contents);
+    ChromePasswordReuseDetectionManagerClient::CreateForWebContents(
+        web_contents);
 #endif
+  }
   CreateSubresourceFilterWebContentsHelper(web_contents);
 #if BUILDFLAG(ENABLE_RLZ)
   ChromeRLZTrackerWebContentsObserver::CreateForWebContentsIfNeeded(
@@ -443,9 +461,24 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       download::NavigationMonitorFactory::GetForKey(profile->GetProfileKey()));
   history::WebContentsTopSitesObserver::CreateForWebContents(
       web_contents, TopSitesFactory::GetForProfile(profile).get());
-  HistoryTabHelper::CreateForWebContents(web_contents);
-  HistoryClustersTabHelper::CreateForWebContents(web_contents);
-  HistoryEmbeddingsTabHelper::CreateForWebContents(web_contents);
+  if (!profile->IsOffTheRecord()) {
+    auto* history_tab_helper =
+        HistoryTabHelper::GetOrCreateForWebContents(web_contents);
+    HistoryClustersTabHelper::CreateForWebContents(web_contents,
+                                                   history_tab_helper);
+    if (HistoryEmbeddingsServiceFactory::GetForProfile(profile)) {
+      HistoryEmbeddingsTabHelper::CreateForWebContents(web_contents);
+      auto* history_embeddings_tab_helper =
+          HistoryEmbeddingsTabHelper::FromWebContents(web_contents);
+      if (history_tab_helper && history_embeddings_tab_helper) {
+        history_embeddings_tab_helper->SetHistoryTabHelperSubscription(
+            history_tab_helper->RegisterOnUpdatedHistoryForNavigationCallback(
+                base::BindRepeating(
+                    &HistoryEmbeddingsTabHelper::OnUpdatedHistoryForNavigation,
+                    history_embeddings_tab_helper->GetWeakPtr())));
+      }
+    }
+  }
   HttpsOnlyModeTabHelper::CreateForWebContents(web_contents);
   webapps::InstallableManager::CreateForWebContents(web_contents);
   login_detection::LoginDetectionTabHelper::MaybeCreateForWebContents(
@@ -471,12 +504,19 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
           PageContentAnnotationsServiceFactory::GetForProfile(profile);
   if (page_content_annotations_service) {
     page_content_annotations::PageContentAnnotationsWebContentsObserver::
-        CreateForWebContents(
-            web_contents, *page_content_annotations_service,
-            page_content_annotations::PageContentExtractionServiceFactory::
-                GetForProfile(profile),
-            base::BindRepeating(&page_content_annotations::FetchPageContext),
-            base::BindRepeating(&GetPageContentAnnotationsTabId));
+        CreateForWebContents(web_contents, *page_content_annotations_service);
+
+    // TODO(b/478883979): Consider decoupling this from
+    // PageContentAnnotationsService.
+    auto* page_content_extraction_service = page_content_annotations::
+        PageContentExtractionServiceFactory::GetForProfile(profile);
+    if (page_content_extraction_service) {
+      page_content_annotations::AnnotatedPageContentRequest::
+          CreateForWebContents(
+              web_contents, *page_content_extraction_service,
+              base::BindRepeating(&page_content_annotations::FetchPageContext),
+              base::BindRepeating(&GetPageContentAnnotationsTabId));
+    }
 
 #if BUILDFLAG(IS_ANDROID)
     // If enabled, save sensitivity data for each non-incognito android tab.
@@ -526,7 +566,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       web_contents);
 #endif  // BUILDFLAG(IS_ANDROID)
   // TODO(siggi): Remove this once the Resource Coordinator refactoring is done.
-  //     See https://crbug.com/910288.
+  //     See https://crbug.com/40604438.
   resource_coordinator::ResourceCoordinatorTabHelper::CreateForWebContents(
       web_contents);
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
@@ -564,6 +604,13 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
 #endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   SafetyTipWebContentsObserver::CreateForWebContents(web_contents);
   SearchEngineTabHelper::CreateForWebContents(web_contents);
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  if (base::FeatureList::IsEnabled(switches::kEnableSearchAIModeSigninPromo) &&
+      base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks)) {
+    contextual_tasks::SearchAiModePromoTabHelper::CreateForWebContents(
+        web_contents);
+  }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   if (site_engagement::SiteEngagementService::IsEnabled()) {
     site_engagement::SiteEngagementService::Helper::CreateForWebContents(
         web_contents,
@@ -585,10 +632,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
     SupervisedUserNavigationObserver::CreateForWebContents(web_contents);
   }
 #endif
-  HttpErrorTabHelper::CreateForWebContents(web_contents);
   tasks::TaskTabHelper::CreateForWebContents(web_contents);
-  tpcd::metadata::TpcdMetadataDevtoolsObserver::CreateForWebContents(
-      web_contents);
 #if !BUILDFLAG(IS_ANDROID)
   TabCaptureContentsBorderHelper::CreateForWebContents(web_contents);
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -612,13 +656,24 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
 #if BUILDFLAG(IS_ANDROID)
   webapps::MLInstallabilityPromoter::CreateForWebContents(web_contents);
   {
-    // Remove after fixing https://crbug/905919
+    // Remove after fixing https://crbug.com/41426655
     TRACE_EVENT0("browser", "AppBannerManagerAndroid::CreateForWebContents");
     webapps::AppBannerManagerAndroid::CreateForWebContents(
         web_contents, std::make_unique<webapps::ChromeAppBannerManagerAndroid>(
                           *web_contents));
   }
   ContextMenuHelper::CreateForWebContents(web_contents);
+
+  if (base::FeatureList::IsEnabled(finds::features::kChromeFinds)) {
+    if (auto* finds_service =
+            finds::FindsServiceFactory::GetForProfile(profile)) {
+      finds::FindsTabHelper::CreateForWebContents(
+          web_contents, finds_service,
+          OptimizationGuideKeyedServiceFactory::GetForProfile(profile),
+          TemplateURLServiceFactory::GetForProfile(profile),
+          profile->GetPrefs());
+    }
+  }
 
   if (base::FeatureList::IsEnabled(
           page_load_metrics::features::kBeaconLeakageLogging)) {
@@ -668,8 +723,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   }
   SearchTabHelper::CreateForWebContents(web_contents);
   TabDialogs::CreateForWebContents(web_contents);
-  if (base::FeatureList::IsEnabled(features::kTabHoverCardImages) ||
-      base::FeatureList::IsEnabled(features::kWebUITabStrip)) {
+  if (base::FeatureList::IsEnabled(features::kTabHoverCardImages)) {
     ThumbnailTabHelper::CreateForWebContents(web_contents);
   }
   UMABrowsingActivityObserver::TabHelper::CreateForWebContents(web_contents);
@@ -693,7 +747,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   }
   ash::BootTimesRecorderTabHelper::MaybeCreateForWebContents(web_contents);
 
-  CrosAppsTabHelper::MaybeCreateForWebContents(web_contents);
+  ash::CrosIsolatedWebAppEnabler::CreateForWebContents(web_contents);
   GeminiAppTabHelper::MaybeCreateForWebContents(web_contents);
   mahi::MahiTabHelper::MaybeCreateForWebContents(web_contents);
   policy::DlpContentTabHelper::MaybeCreateForWebContents(web_contents);
@@ -771,15 +825,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   PluginObserver::CreateForWebContents(web_contents);
 #endif
 
-// Only enable ChromeOS print preview if `kPrintPreviewCrosPrimary` is enabled
-// and is a ChromeOS build. Otherwise instantiate browser print preview.
-#if BUILDFLAG(ENABLE_PRINTING) && BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(::features::kPrintPreviewCrosPrimary)) {
-    chromeos::printing::InitializePrintingForWebContents(web_contents);
-  } else {
-    printing::InitializePrintingForWebContents(web_contents);
-  }
-#elif BUILDFLAG(ENABLE_PRINTING)
+#if BUILDFLAG(ENABLE_PRINTING)
   printing::InitializePrintingForWebContents(web_contents);
 #endif
 

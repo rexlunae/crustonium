@@ -10,6 +10,7 @@
 #include <array>
 #include <iosfwd>
 #include <list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,10 +18,11 @@
 
 #include "base/containers/span.h"
 #include "base/time/time.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/address.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/contact_info.h"
 #include "components/autofill/core/browser/data_model/addresses/phone_number.h"
 #include "components/autofill/core/browser/data_model/form_group.h"
@@ -60,7 +62,7 @@ class AutofillProfile : public FormGroup {
     // migrate it to a kAccount profile on form submission.
     kLocalOrSyncable = 0,
     // The default type of new profiles for signed-in, account storage eligible
-    // users (most users are eligible, see `ContactInfoPreconditionChecker`).
+    // users (most users are eligible, see `ContactInfoDataTypeController`).
     // Addresses of this type are stored in the signed-in users account and are
     // available across devices through `ContactInfoSyncBridge`.
     kAccount = 1,
@@ -71,7 +73,7 @@ class AutofillProfile : public FormGroup {
     // Like kAccount addresses, kAccountHome and kAccountWork are read through
     // `ContactInfoSyncBridge` (but the latter two are not written, since they
     // are read-only). As a result, the same eligiblity criteria from
-    // `ContactInfoPreconditionChecker` apply.
+    // `ContactInfoDataTypeController` apply.
     // Users need to set a Home/Work addresses from outside of Chrome (e.g. in
     // MyAccount) for them to become available in Chrome. At most one of each
     // type can exist.
@@ -82,7 +84,7 @@ class AutofillProfile : public FormGroup {
     // A profile created from the sign-in user's account name and email address.
     // It it created from data of the `signin::IdentityManager` and not synced
     // through `ContactInfoSyncBridge`, so it isn't restricted by the
-    // `ContactInfoPreconditionChecker`'s eligibility criteria (but it does
+    // `ContactInfoDataTypeController`'s eligibility criteria (but it does
     // respect the "Addresses and more" sync setting).
     // Like kAccountHome and kAccountWork, kAccountNameEmail is read-only in
     // Chrome and at most one kAccountNameEmail can exist.
@@ -216,10 +218,6 @@ class AutofillProfile : public FormGroup {
 
   // Returns true if there are no values (field types) set.
   bool IsEmpty(std::string_view app_locale) const;
-
-  // Returns true if the `type` of data in this profile is present, but invalid.
-  // Otherwise returns false.
-  bool IsPresentButInvalid(FieldType type) const;
 
   // Comparison for Sync.  Returns 0 if the profile is the same as `this`,
   // or < 0, or > 0 if it is different.  The implied ordering can be used for

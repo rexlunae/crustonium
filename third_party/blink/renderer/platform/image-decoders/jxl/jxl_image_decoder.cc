@@ -4,32 +4,44 @@
 
 #include "third_party/blink/renderer/platform/image-decoders/jxl/jxl_image_decoder.h"
 
+#include <cstdint>
+
 #include "base/check_op.h"
 #include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/time/time.h"
 #include "third_party/blink/renderer/platform/image-decoders/fast_shared_buffer_reader.h"
+#include "third_party/blink/renderer/platform/image-decoders/image_frame.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
+#include "third_party/rust/jxl/v0_4/wrapper/lib.rs.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkTypes.h"
 
 namespace blink {
 
 using jxl_rs::jxl_rs_decoder_create;
+using jxl_rs::jxl_rs_scan_decoder_create;
+using jxl_rs::jxl_rs_seek_decoder_to_frame;
 using jxl_rs::jxl_rs_signature_check;
 using jxl_rs::JxlRsBasicInfo;
 using jxl_rs::JxlRsDecoder;
-using jxl_rs::JxlRsFrameHeader;
 using jxl_rs::JxlRsPixelFormat;
 using jxl_rs::JxlRsProcessResult;
 using jxl_rs::JxlRsStatus;
+using jxl_rs::JxlRsVisibleFrameInfo;
 
 namespace {
-
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+// 16 million pixels in a RGBA image.
+constexpr uint64_t kMaxDecodedSamples = 64ULL * 1024 * 1024;
+#else
 // The maximum number of decoded samples we allow. This helps prevent resource
 // exhaustion from malicious files. The jxl-rs API counts pixels * channels,
 // so an RGBA image counts 4 samples per pixel. JPEG XL codestream level 5
 // limits specify ~268M pixels, so we allow ~1B samples to support that.
-constexpr uint64_t kMaxDecodedPixels = 1024ULL * 1024 * 1024;
+constexpr uint64_t kMaxDecodedSamples = 1024ULL * 1024 * 1024;
+#endif
 
 }  // namespace
 
@@ -57,7 +69,7 @@ const AtomicString& JXLImageDecoder::MimeType() const {
 }
 
 bool JXLImageDecoder::ImageIsHighBitDepth() {
-  return is_high_bit_depth_;
+  return basic_info_.has_value() && basic_info_->bits_per_sample > 8;
 }
 
 bool JXLImageDecoder::MatchesJXLSignature(
@@ -71,64 +83,219 @@ bool JXLImageDecoder::MatchesJXLSignature(
       rust::Slice<const uint8_t>(data.data(), data.size()));
 }
 
+// ---------------------------------------------------------------------------
+// Shared basic-info processing
+// ---------------------------------------------------------------------------
+
+void JXLImageDecoder::SetPixelFormat(JxlRsDecoder* decoder) {
+  CHECK(basic_info_.has_value());
+  bool decode_to_half_float =
+      ImageIsHighBitDepth() &&
+      high_bit_depth_decoding_option_ == kHighBitDepthToHalfFloat;
+  // Set pixel format on decoder.
+  // Use native 8-bit ordering for kN32, and RGBA F16 for half float.
+#if SK_PMCOLOR_BYTE_ORDER(B, G, R, A)
+  constexpr JxlRsPixelFormat kNativePixelFormat = JxlRsPixelFormat::Bgra8;
+#elif SK_PMCOLOR_BYTE_ORDER(R, G, B, A)
+  constexpr JxlRsPixelFormat kNativePixelFormat = JxlRsPixelFormat::Rgba8;
+#else
+#error "Unsupported Skia pixel order"
+#endif
+  JxlRsPixelFormat pixel_format =
+      decode_to_half_float ? JxlRsPixelFormat::RgbaF16 : kNativePixelFormat;
+  decoder->set_pixel_format(pixel_format, basic_info_->num_extra_channels);
+}
+
+bool JXLImageDecoder::SetBasicInfo() {
+  if (basic_info_.has_value()) {
+    return true;
+  }
+
+  CHECK(scanner_.has_value());
+
+  basic_info_ = (*scanner_)->get_basic_info();
+  if (!SetSize(basic_info_->width, basic_info_->height)) {
+    return false;
+  }
+
+  // The output ICC profile may depend on the pixel format. Thus, let's ensure
+  // that we set the pixel format here.
+  SetPixelFormat(&**scanner_);
+
+  // Extract ICC color profile.
+  rust::Slice<const uint8_t> icc_data = (*scanner_)->get_icc_profile();
+  if (!IgnoresColorSpace() && !icc_data.empty()) {
+    auto profile = ColorProfile::Create(icc_data);
+    if (profile) {
+      SetEmbeddedColorProfile(std::move(profile));
+    }
+  }
+
+  // Record bpp information only for 8-bit, color, still images without
+  // alpha.
+  if (basic_info_->bits_per_sample == 8 && !basic_info_->is_grayscale &&
+      !basic_info_->have_animation && !basic_info_->has_alpha) {
+    static constexpr char kType[] = "Jxl";
+    update_bpp_histogram_callback_ =
+        CrossThreadBindOnce(&UpdateBppHistogram<kType>);
+  }
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Frame scanning (no pixel decoding)
+// ---------------------------------------------------------------------------
+
+void JXLImageDecoder::ScanFrames() {
+  if (scanner_done_ || Failed()) {
+    return;
+  }
+
+  if (!scanner_.has_value()) {
+    scanner_ = jxl_rs_scan_decoder_create(kMaxDecodedSamples);
+  }
+
+  FastSharedBufferReader reader(data_.get());
+  const size_t data_size = reader.size();
+  if (data_size < scanner_input_offset_) {
+    // In some cases, the input buffer may shrink. This in particular seems to
+    // happen when changing tabs during a partial decode of the image. If that
+    // happens, we cannot possibly make progress, so wait to be called again
+    // with a bigger buffer.
+    return;
+  }
+
+  while (!scanner_done_ &&
+         (scanner_input_offset_ < data_size ||
+          (IsAllDataReceived() && scanner_input_offset_ == data_size))) {
+    base::span<const uint8_t> data_span =
+        scanner_input_offset_ < data_size
+            ? reader.GetSomeData(scanner_input_offset_)
+            : base::span<const uint8_t>();
+    CHECK_LE(scanner_input_offset_ + data_span.size(), data_size);
+    bool all_input = IsAllDataReceived() &&
+                     (scanner_input_offset_ + data_span.size() == data_size);
+    rust::Slice<const uint8_t> input_slice(data_span.data(), data_span.size());
+
+    JxlRsProcessResult result =
+        (*scanner_)->process(input_slice, rust::Slice<uint8_t>(), 0, 0, 0);
+
+    if (result.status == JxlRsStatus::Error) {
+      SetFailed();
+      return;
+    }
+
+    scanner_input_offset_ += result.bytes_consumed;
+    CHECK_LE(scanner_input_offset_, data_size);
+
+    if (result.status == JxlRsStatus::NeedMoreInput) {
+      // If more data is available in the buffer, continue feeding.
+      if (result.bytes_consumed > 0 && scanner_input_offset_ < data_size) {
+        continue;
+      }
+      if (!all_input) {
+        return;
+      }
+
+      // A truncated still image can contain enough data to render a partial
+      // frame. Let the pixel decoder try to output that partial frame.
+      if (!(*scanner_)->has_basic_info()) {
+        SetFailed();
+        return;
+      }
+      if (!SetBasicInfo()) {
+        return;
+      }
+      if (basic_info_->have_animation) {
+        SetFailed();
+        return;
+      }
+      scanner_done_ = true;
+      break;
+    }
+
+    if (!(*scanner_)->has_more_frames()) {
+      scanner_done_ = true;
+    }
+  }
+
+  // Extract basic info from scanner if not yet available.
+  if ((*scanner_)->has_basic_info()) {
+    if (!SetBasicInfo()) {
+      return;
+    }
+  }
+
+  // Update frame_infos_ / frame_timings_ from the scanner's discovered frames.
+  size_t scanned_count = (*scanner_)->frame_count();
+  base::TimeDelta cumulative_time;
+
+  if (!frame_timings_.empty()) {
+    const auto& last = frame_timings_.back();
+    cumulative_time = last.timestamp + last.duration;
+  }
+
+  for (size_t i = frame_infos_.size(); i < scanned_count; i++) {
+    frame_infos_.push_back((*scanner_)->get_frame_info(i));
+
+    FrameTiming timing;
+    timing.duration = base::Milliseconds(frame_infos_.back().duration_ms);
+    timing.timestamp = cumulative_time;
+    base::TimeDelta next_cumulative_time = cumulative_time + timing.duration;
+    // TimeDelta overflow clamps to Min/Max, and TimeDelta::is_inf() reports
+    // those sentinel values as infinities.
+    if (next_cumulative_time.is_inf() && !cumulative_time.is_inf() &&
+        !timing.duration.is_inf()) {
+      SetFailed();
+      return;
+    }
+    cumulative_time = next_cumulative_time;
+    frame_timings_.push_back(timing);
+  }
+}
+
 void JXLImageDecoder::DecodeSize() {
-  Decode(0, /*only_size=*/true);
+  if (!basic_info_.has_value()) {
+    ScanFrames();
+  }
 }
 
 wtf_size_t JXLImageDecoder::DecodeFrameCount() {
-  // Parse metadata (BasicInfo) to know if this is an animation.
-  if (!have_basic_info_) {
-    Decode(0, /*only_size=*/true);
-  }
+  ScanFrames();
 
-  if (!basic_info_.have_animation) {
+  if (!basic_info_.has_value() || !basic_info_->have_animation) {
     return 1;
   }
 
-  // Frame discovery strategy:
-  // - When all data is received: discover ALL frames. The animation system
-  //   needs complete frame metadata (durations, timestamps) for proper
-  //   playback.
-  // - During incremental loading: peek-ahead discovery (decode up to 2 frames
-  //   per call) to avoid blocking while data streams in.
-  if (IsAllDataReceived()) {
-    // Discover all frames when all data is available.
-    while (!all_frames_discovered_ && !Failed()) {
-      Decode(num_decoded_frames_, /*only_size=*/false);
-    }
-  } else {
-    // Peek-ahead discovery during incremental loading.
-    for (int i = 0; i < 2 && !all_frames_discovered_ && !Failed(); i++) {
-      Decode(num_decoded_frames_, /*only_size=*/false);
-    }
+  // Resize the frame buffer cache to match discovered frames.
+  if (frame_infos_.size() > frame_buffer_cache_.size()) {
+    frame_buffer_cache_.resize(frame_infos_.size());
   }
 
-  // Return discovered count. Frame count increases as more data arrives and
-  // frames are parsed via FrameCount() -> DecodeFrameCount().
-  wtf_size_t count = num_discovered_frames_;
-
-  return count;
+  return frame_buffer_cache_.size();
 }
 
 void JXLImageDecoder::InitializeNewFrame(wtf_size_t index) {
   CHECK_LT(index, frame_buffer_cache_.size());
-  auto& buffer = frame_buffer_cache_[index];
+  auto& frame = frame_buffer_cache_[index];
 
-  if (is_high_bit_depth_ &&
+  if (ImageIsHighBitDepth() &&
       high_bit_depth_decoding_option_ == kHighBitDepthToHalfFloat) {
-    buffer.SetPixelFormat(ImageFrame::PixelFormat::kRGBA_F16);
+    frame.SetPixelFormat(ImageFrame::PixelFormat::kRGBA_F16);
   }
 
-  buffer.SetHasAlpha(basic_info_.has_alpha);
-  buffer.SetOriginalFrameRect(gfx::Rect(Size()));
-  buffer.SetRequiredPreviousFrameIndex(kNotFound);
+  frame.SetPremultiplyAlpha(premultiply_alpha_);
+  frame.SetHasAlpha(basic_info_.has_value() && basic_info_->has_alpha);
+  frame.SetOriginalFrameRect(gfx::Rect(Size()));
+  frame.SetRequiredPreviousFrameIndex(kNotFound);
 
   // Set duration/timestamp if the frame header has been parsed.
   // This is available before the frame is fully decoded.
-  if (index < frame_info_.size()) {
-    const FrameInfo& info = frame_info_[index];
-    buffer.SetDuration(info.duration);
-    buffer.SetTimestamp(info.timestamp);
+  if (index < frame_timings_.size()) {
+    const FrameTiming& timing = frame_timings_[index];
+    frame.SetDuration(timing.duration);
+    frame.SetTimestamp(timing.timestamp);
   }
 }
 
@@ -137,317 +304,249 @@ void JXLImageDecoder::Decode(wtf_size_t index) {
 }
 
 void JXLImageDecoder::Decode(wtf_size_t index, bool only_size) {
+  // Ensure that the frame scanner has fully caught up with the file received so
+  // far.
+  ScanFrames();
   if (Failed()) {
     return;
   }
 
-  if (only_size && IsDecodedSizeAvailable() && have_basic_info_) {
+  // If we have basic image information, it has already been processed by the
+  // frame scanner. Thus, we don't need to do anything else here.
+  // Moreover, if we do *not* have basic info, there is nothing we can do.
+  if (only_size || !basic_info_.has_value()) {
     return;
   }
 
   // Early return if the requested frame is already fully decoded and cached.
-  if (!only_size && index < frame_buffer_cache_.size()) {
+  if (index < frame_buffer_cache_.size()) {
     auto status = frame_buffer_cache_[index].GetStatus();
     if (status == ImageFrame::kFrameComplete) {
       return;
     }
   }
 
+  // If we want to decode a frame that is *not* the next frame, seek to that
+  // frame.
+  if (basic_info_->have_animation && index != next_frame_to_decode_) {
+    CHECK_GE(decoder_state_, DecoderState::kHaveBasicInfo);
+    SeekToFrame(index);
+  }
+
   FastSharedBufferReader reader(data_.get());
-  size_t data_size = reader.size();
-
-  // Handle animation loop rewind.
-  if (decoder_.has_value() && !only_size && basic_info_.have_animation) {
-    bool frame_already_cached =
-        index < frame_buffer_cache_.size() &&
-        frame_buffer_cache_[index].GetStatus() == ImageFrame::kFrameComplete;
-
-    if (!frame_already_cached && index < num_decoded_frames_) {
-      (*decoder_)->rewind();
-      decoder_state_ = DecoderState::kInitial;
-      num_decoded_frames_ = 0;
-      num_discovered_frames_ = 0;
-      all_frames_discovered_ = false;
-      input_offset_ = 0;
-      // Keep basic_info_ and have_basic_info_ since the stream hasn't changed.
-    }
+  const size_t data_size = reader.size();
+  if (data_size < decoder_input_offset_) {
+    // In some cases, the input buffer may shrink. This in particular seems to
+    // happen when changing tabs during a partial decode of the image. If that
+    // happens, we cannot possibly make progress, so wait to be called again
+    // with a bigger buffer.
+    return;
   }
 
   // Create decoder if needed. Pass premultiply_alpha_ so jxl-rs handles
   // premultiplication natively (faster and handles alpha_associated correctly).
   if (!decoder_.has_value()) {
-    decoder_ = jxl_rs_decoder_create(kMaxDecodedPixels, premultiply_alpha_);
+    decoder_ = jxl_rs_decoder_create(kMaxDecodedSamples, premultiply_alpha_);
   }
 
-  // Initialize frame buffer early for progressive decoding if we have metadata.
-  // This ensures ImageDecoderWrapper sees a non-empty frame and caches our
-  // decoder between calls. Must be done before the decode loop since we may
-  // be resuming from a previous partial decode.
-  if (!only_size && have_basic_info_ && index < 1) {
-    wtf_size_t frame_index = 0;
-    if (frame_buffer_cache_.size() <= frame_index) {
-      frame_buffer_cache_.resize(frame_index + 1);
+  auto flush_partial_frame = [this](wtf_size_t frame_index) -> bool {
+    if (basic_info_->have_animation) {
+      return true;
     }
+
+    // Since we never flush frames in animations, the frame index must be 0.
+    CHECK_EQ(frame_index, 0U);
+
+    CHECK_LT(frame_index, frame_buffer_cache_.size());
     ImageFrame& frame = frame_buffer_cache_[frame_index];
-    if (frame.GetStatus() == ImageFrame::kFrameEmpty) {
-      frame.SetPremultiplyAlpha(premultiply_alpha_);
-      if (!InitFrameBuffer(frame_index)) {
+
+    const SkBitmap& bitmap = frame.Bitmap();
+    uint8_t* frame_pixels = static_cast<uint8_t*>(bitmap.getPixels());
+    const size_t row_stride = bitmap.rowBytes();
+    if (!frame_pixels) {
+      return false;
+    }
+
+    const size_t buffer_size = row_stride * basic_info_->height;
+    rust::Slice<uint8_t> output_slice(frame_pixels, buffer_size);
+    JxlRsProcessResult flush_result = (*decoder_)->flush_pixels(
+        output_slice, basic_info_->width, basic_info_->height, row_stride);
+    if (flush_result.status == JxlRsStatus::Error) {
+      return false;
+    }
+    if (flush_result.status == JxlRsStatus::Success &&
+        frame.GetStatus() != ImageFrame::kFrameComplete) {
+      frame.SetPixelsChanged(true);
+      frame.SetStatus(ImageFrame::kFramePartial);
+    }
+
+    return true;
+  };
+
+  // Process until we get what we need. Uses GetSomeData() to read one
+  // buffer segment at a time, avoiding copies across segment boundaries.
+  while (decoder_state_ != DecoderState::kDone) {
+    CHECK_LE(decoder_input_offset_, data_size);
+    if (decoder_input_offset_ == data_size && !IsAllDataReceived()) {
+      return;
+    }
+
+    base::span<const uint8_t> data_span =
+        decoder_input_offset_ < data_size
+            ? reader.GetSomeData(decoder_input_offset_)
+            : base::span<const uint8_t>();
+    bool all_input = IsAllDataReceived() &&
+                     (decoder_input_offset_ + data_span.size() == data_size);
+    rust::Slice<const uint8_t> input_slice(data_span.data(), data_span.size());
+
+    rust::Slice<uint8_t> output_slice;
+
+    const uint32_t width = basic_info_->width;
+    const uint32_t height = basic_info_->height;
+    size_t row_stride = 0;
+
+    if (decoder_state_ >= DecoderState::kHaveBasicInfo) {
+      if (frame_buffer_cache_.size() <= next_frame_to_decode_) {
+        frame_buffer_cache_.resize(next_frame_to_decode_ + 1);
+      }
+
+      ImageFrame& frame = frame_buffer_cache_[next_frame_to_decode_];
+      if (frame.GetStatus() == ImageFrame::kFrameEmpty) {
+        // IMPORTANT: InitializeNewFrame() must run before InitFrameBuffer(),
+        // so the base class allocates the correct backing store (e.g.
+        // RGBA_F16 for high bit depth + half float).
+        InitializeNewFrame(next_frame_to_decode_);
+        if (!InitFrameBuffer(next_frame_to_decode_)) {
+          SetFailed();
+          return;
+        }
+      }
+
+      frame.SetHasAlpha(basic_info_->has_alpha);
+
+      // Get direct access to the frame buffer's backing store.
+      const SkBitmap& bitmap = frame.Bitmap();
+      uint8_t* frame_pixels = static_cast<uint8_t*>(bitmap.getPixels());
+      row_stride = bitmap.rowBytes();
+
+      if (!frame_pixels) {
         SetFailed();
         return;
       }
-      frame.SetHasAlpha(basic_info_.has_alpha);
-      frame.SetStatus(ImageFrame::kFramePartial);
-    }
-  }
 
-  // Process until we get what we need.
-  for (;;) {
-    size_t remaining_size = data_size - input_offset_;
-    // When all data is received, process it all at once for efficiency.
-    // Only use smaller chunks for true progressive loading (streaming data).
-    size_t chunk_size;
-    if (IsAllDataReceived()) {
-      chunk_size = remaining_size;  // Process all available data
-    } else {
-      // Progressive streaming: use smaller chunks to allow partial rendering
-      constexpr size_t kMaxChunkSize = 64 * 1024;
-      chunk_size = std::min(remaining_size, kMaxChunkSize);
+      // Calculate buffer size for the decoder.
+      size_t buffer_size = row_stride * height;
+      output_slice = rust::Slice<uint8_t>(frame_pixels, buffer_size);
     }
 
-    base::span<const uint8_t> data_span;
-    Vector<uint8_t> chunk_buffer;
-    if (chunk_size > 0) {
-      chunk_buffer.resize(chunk_size);
-      data_span = reader.GetConsecutiveData(input_offset_, chunk_size,
-                                            base::span(chunk_buffer));
+    // Decode directly into the frame buffer.
+    // Premultiplication is handled by jxl-rs based on premultiply_alpha_.
+    JxlRsProcessResult result = (*decoder_)->process(input_slice, output_slice,
+                                                     width, height, row_stride);
+
+    if (result.status == JxlRsStatus::Error) {
+      SetFailed();
+      return;
     }
 
-    bool all_input =
-        IsAllDataReceived() && (input_offset_ + chunk_size >= data_size);
-    rust::Slice<const uint8_t> input_slice(data_span.data(), data_span.size());
+    decoder_input_offset_ += result.bytes_consumed;
+    CHECK_LE(decoder_input_offset_, data_size);
+
+    if (result.status == JxlRsStatus::NeedMoreInput) {
+      // If more data is available in the buffer, continue feeding.
+      if (result.bytes_consumed > 0 && decoder_input_offset_ < data_size) {
+        continue;
+      }
+      // We've exhausted all available data or made no progress.
+      if (all_input) {
+        // Truncated still images may have a useful partial frame, but only
+        // once the decoder has reached the state where the output pixel
+        // format is set. Flushing before that point is an API misuse that
+        // the jxl-rs decoder cannot handle. See crbug.com/526010666.
+        if (decoder_state_ >= DecoderState::kHaveBasicInfo) {
+          if (!flush_partial_frame(next_frame_to_decode_)) {
+            SetFailed();
+          }
+        }
+        return;
+      }
+      // If we got here, the frame scanner has found basic info.
+      // Hence, we should have enough data to reach the end of basic info
+      // ourselves.
+      CHECK_GE(decoder_state_, DecoderState::kHaveBasicInfo);
+
+      // We may already be able to output some pixel data before we
+      // reach the first visible frame.
+      if (!flush_partial_frame(next_frame_to_decode_)) {
+        SetFailed();
+      }
+      return;
+    }
 
     switch (decoder_state_) {
       case DecoderState::kInitial: {
-        JxlRsProcessResult result =
-            (*decoder_)->parse_basic_info(input_slice, all_input);
-
-        if (result.status == JxlRsStatus::Error) {
-          SetFailed();
-          return;
-        }
-        if (result.status == JxlRsStatus::NeedMoreInput) {
-          input_offset_ += result.bytes_consumed;
-          if (all_input) {
-            SetFailed();
-          }
-          return;
-        }
-
-        // Success - got basic info
-        basic_info_ = (*decoder_)->get_basic_info();
-        input_offset_ += result.bytes_consumed;
-
-        if (!SetSize(basic_info_.width, basic_info_.height)) {
-          return;
-        }
-
-        if (basic_info_.bits_per_sample > 8) {
-          is_high_bit_depth_ = true;
-        }
-
-        decode_to_half_float_ =
-            ImageIsHighBitDepth() &&
-            high_bit_depth_decoding_option_ == kHighBitDepthToHalfFloat;
-
-        // Set pixel format on decoder.
-        // Use native 8-bit ordering for kN32, and RGBA F16 for half float.
-#if SK_PMCOLOR_BYTE_ORDER(B, G, R, A)
-        constexpr JxlRsPixelFormat kNativePixelFormat = JxlRsPixelFormat::Bgra8;
-#elif SK_PMCOLOR_BYTE_ORDER(R, G, B, A)
-        constexpr JxlRsPixelFormat kNativePixelFormat = JxlRsPixelFormat::Rgba8;
-#else
-#error "Unsupported Skia pixel order"
-#endif
-        JxlRsPixelFormat pixel_format = decode_to_half_float_
-                                            ? JxlRsPixelFormat::RgbaF16
-                                            : kNativePixelFormat;
-        (*decoder_)->set_pixel_format(pixel_format,
-                                      basic_info_.num_extra_channels);
-
-        // Extract ICC color profile.
-        if (!IgnoresColorSpace()) {
-          auto icc_data = (*decoder_)->get_icc_profile();
-          if (!icc_data.empty()) {
-            Vector<uint8_t> icc_copy;
-            icc_copy.AppendRange(icc_data.begin(), icc_data.end());
-            auto profile = ColorProfile::Create(base::span(icc_copy));
-            if (profile) {
-              SetEmbeddedColorProfile(std::move(profile));
-            }
-          }
-        }
-
-        // Record bpp information only for 8-bit, color, still images without
-        // alpha.
-        if (!have_basic_info_ && basic_info_.bits_per_sample == 8 &&
-            !basic_info_.is_grayscale && !basic_info_.have_animation &&
-            !basic_info_.has_alpha) {
-          static constexpr char kType[] = "Jxl";
-          update_bpp_histogram_callback_ =
-              CrossThreadBindOnce(&UpdateBppHistogram<kType>);
-        }
-
-        have_basic_info_ = true;
+        SetPixelFormat(&**decoder_);
         decoder_state_ = DecoderState::kHaveBasicInfo;
-
-        if (only_size) {
-          return;
-        }
         break;
       }
-
       case DecoderState::kHaveBasicInfo: {
-        JxlRsProcessResult result =
-            (*decoder_)->parse_frame_header(input_slice, all_input);
-
-        if (result.status == JxlRsStatus::Error) {
-          SetFailed();
-          return;
-        }
-        if (result.status == JxlRsStatus::NeedMoreInput) {
-          input_offset_ += result.bytes_consumed;
-          if (all_input) {
-            // No more frame headers available - we've discovered all frames.
-            all_frames_discovered_ = true;
-          }
-          // Signal partial progress to prevent decoder from being destroyed
-          if (index < frame_buffer_cache_.size()) {
-            ImageFrame& frame = frame_buffer_cache_[index];
-            frame.SetPixelsChanged(true);
-          }
-          return;
-        }
-
-        input_offset_ += result.bytes_consumed;
-
-        // Successfully parsed a frame header - increment discovered count.
-        JxlRsFrameHeader header = (*decoder_)->get_frame_header();
-        num_discovered_frames_++;
-
-        if (basic_info_.have_animation) {
-          wtf_size_t frame_idx = num_decoded_frames_;
-          FrameInfo info;
-          info.duration = base::Milliseconds(header.duration_ms);
-          info.timestamp = base::TimeDelta();
-
-          if (frame_idx > 0 && frame_idx - 1 < frame_info_.size()) {
-            const FrameInfo& prev = frame_info_[frame_idx - 1];
-            info.timestamp = prev.timestamp + prev.duration;
-          }
-
-          if (frame_idx < frame_info_.size()) {
-            frame_info_[frame_idx] = info;
-          } else {
-            CHECK_EQ(frame_idx, frame_info_.size());
-            frame_info_.push_back(info);
-          }
-        }
-
         decoder_state_ = DecoderState::kHaveFrameHeader;
         break;
       }
-
       case DecoderState::kHaveFrameHeader: {
-        wtf_size_t frame_index = num_decoded_frames_;
-
-        // Ensure frame buffer cache is large enough.
-        if (frame_buffer_cache_.size() <= frame_index) {
-          frame_buffer_cache_.resize(frame_index + 1);
-        }
-
-        ImageFrame& frame = frame_buffer_cache_[frame_index];
-        if (frame.GetStatus() == ImageFrame::kFrameEmpty) {
-          frame.SetPremultiplyAlpha(premultiply_alpha_);
-        }
-
-        if (!InitFrameBuffer(frame_index)) {
-          SetFailed();
-          return;
-        }
-
-        frame.SetHasAlpha(basic_info_.has_alpha);
-
-        const uint32_t width = basic_info_.width;
-        const uint32_t height = basic_info_.height;
-
-        // Get direct access to the frame buffer's backing store.
-        const SkBitmap& bitmap = frame.Bitmap();
-        uint8_t* frame_pixels = static_cast<uint8_t*>(bitmap.getPixels());
-        size_t row_stride = bitmap.rowBytes();
-
-        if (!frame_pixels) {
-          SetFailed();
-          return;
-        }
-
-        // Calculate buffer size for the decoder.
-        size_t buffer_size = row_stride * height;
-        rust::Slice<uint8_t> output_slice(frame_pixels, buffer_size);
-
-        // Decode directly into the frame buffer.
-        // Premultiplication is handled by jxl-rs based on premultiply_alpha_.
-        JxlRsProcessResult result = (*decoder_)->decode_frame_with_stride(
-            input_slice, all_input, output_slice, width, height, row_stride);
-
-        if (result.status == JxlRsStatus::Error) {
-          SetFailed();
-          return;
-        }
-        if (result.status == JxlRsStatus::NeedMoreInput) {
-          // Update offset with consumed bytes for progressive decoding.
-          input_offset_ += result.bytes_consumed;
-
-          // Signal that pixels may have changed for progressive rendering.
-          frame.SetPixelsChanged(true);
-          if (all_input) {
-            SetFailed();
-          }
-          return;
-        }
-
-        input_offset_ += result.bytes_consumed;
+        ImageFrame& frame = frame_buffer_cache_[next_frame_to_decode_];
         frame.SetPixelsChanged(true);
         frame.SetStatus(ImageFrame::kFrameComplete);
 
-        if (frame_index < frame_info_.size()) {
-          const FrameInfo& info = frame_info_[frame_index];
-          frame.SetDuration(info.duration);
-          frame.SetTimestamp(info.timestamp);
-        }
+        CHECK_LT(next_frame_to_decode_, frame_timings_.size());
+        const FrameTiming& timing = frame_timings_[next_frame_to_decode_];
+        frame.SetDuration(timing.duration);
+        frame.SetTimestamp(timing.timestamp);
 
-        num_decoded_frames_++;
+        next_frame_to_decode_++;
 
         // Record bpp histogram for still images when fully decoded.
         if (IsAllDataReceived() && update_bpp_histogram_callback_) {
           std::move(update_bpp_histogram_callback_).Run(Size(), data_->size());
         }
 
-        // Check if there are more frames after this one.
-        if (!(*decoder_)->has_more_frames()) {
-          all_frames_discovered_ = true;
+        if ((*decoder_)->has_more_frames()) {
+          // Go back to waiting for next frame header.
+          decoder_state_ = DecoderState::kHaveBasicInfo;
+        } else {
+          decoder_state_ = DecoderState::kDone;
         }
 
-        // Go back to waiting for next frame header.
-        decoder_state_ = DecoderState::kHaveBasicInfo;
-
         // Check if we've decoded the requested frame.
-        if (frame_index >= index) {
+        if (next_frame_to_decode_ > index) {
           return;
         }
         break;
       }
+      case DecoderState::kDone: {
+        LOG(FATAL) << "DecoderState::kDone is unreachable";
+      }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Seek setup (integrates with the main decode loop)
+// ---------------------------------------------------------------------------
+
+void JXLImageDecoder::SeekToFrame(wtf_size_t index) {
+  CHECK_LT(index, frame_infos_.size());
+  CHECK(scanner_.has_value());
+
+  // Position the decoder at the start of the frame group containing
+  // the target frame. The full seek target (including internal jxl-rs
+  // state) is looked up from the scanner. Visible frame skipping (for
+  // non-keyframes) is handled automatically by jxl-rs.
+  jxl_rs_seek_decoder_to_frame(**scanner_, **decoder_, index);
+  decoder_input_offset_ = frame_infos_[index].decode_start_file_offset;
+
+  decoder_state_ = DecoderState::kHaveBasicInfo;
+  next_frame_to_decode_ = index;
 }
 
 bool JXLImageDecoder::CanReusePreviousFrameBuffer(
@@ -464,52 +563,48 @@ bool JXLImageDecoder::FrameIsReceivedAtIndex(wtf_size_t index) const {
 
 std::optional<base::TimeDelta> JXLImageDecoder::FrameTimestampAtIndex(
     wtf_size_t index) const {
-  // Use frame_info_ which is populated at header parsing time,
+  // Use frame_timings_ which is populated at frame scanning time,
   // not frame_buffer_cache_ which is only set after decoding.
-  if (index < frame_info_.size()) {
-    return frame_info_[index].timestamp;
+  if (index < frame_timings_.size()) {
+    return frame_timings_[index].timestamp;
   }
   return std::nullopt;
 }
 
 base::TimeDelta JXLImageDecoder::FrameDurationAtIndex(wtf_size_t index) const {
-  // Durations are available in frame_info_ for all discovered frames.
-  // Frame discovery happens in DecodeFrameCount() which is called by
-  // FrameCount() whenever new data arrives.
-  if (index < frame_info_.size()) {
-    return frame_info_[index].duration;
+  // Durations are available in frame_timings_ for all discovered frames.
+  // Frame discovery happens in ScanFrames() which is called by
+  // DecodeFrameCount() whenever new data arrives.
+  if (index < frame_timings_.size()) {
+    return frame_timings_[index].duration;
   }
   return base::TimeDelta();
 }
 
 int JXLImageDecoder::RepetitionCount() const {
-  if (!basic_info_.have_animation) {
+  if (!basic_info_.has_value() || !basic_info_->have_animation) {
     return kAnimationNone;
   }
 
-  if (basic_info_.animation_loop_count == 0) {
+  if (basic_info_->animation_loop_count == 0) {
     return kAnimationLoopInfinite;
   }
-  return basic_info_.animation_loop_count;
+  // RepetitionCount() is n + 1 plays; JXL's loop count is the actual count.
+  return basic_info_->animation_loop_count - 1;
 }
 
 wtf_size_t JXLImageDecoder::ClearCacheExceptFrame(
     wtf_size_t clear_except_frame) {
-  if (basic_info_.have_animation) {
-    // JXL animations can reference prior frames; jxl-rs does not yet expose
-    // per-frame dependencies, so keep all frames for correctness.
-    return 0;
-  }
-
+  // With frame seeking support, we can clear cached frames and re-decode
+  // them on demand by seeking to the appropriate offset.
   return ImageDecoder::ClearCacheExceptFrame(clear_except_frame);
 }
 
-SkColorType JXLImageDecoder::GetSkColorType() const {
-  if (is_high_bit_depth_ &&
-      high_bit_depth_decoding_option_ == kHighBitDepthToHalfFloat) {
-    return kRGBA_F16_SkColorType;
+void JXLImageDecoder::OnSetData(scoped_refptr<SegmentReader> data) {
+  if (data) {
+    // Ensure frame metadata is fully up to date.
+    ScanFrames();
   }
-  return kN32_SkColorType;
 }
 
 }  // namespace blink

@@ -78,11 +78,14 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
     DownloadListSnapshot;
 
 @interface DownloadListTableViewController () <
-    TableViewIllustratedEmptyViewDelegate>
+    TableViewIllustratedEmptyViewDelegate,
+    UISearchResultsUpdating>
 // Filter header view for download list.
 @property(nonatomic, strong) DownloadListTableViewHeader* filterHeaderView;
 // Counter to track number of updates for throttling logic.
 @property(nonatomic, assign) NSInteger updateCounter;
+// Search controller for filtering downloads by keyword.
+@property(nonatomic, strong) UISearchController* searchController;
 @end
 
 @implementation DownloadListTableViewController {
@@ -91,6 +94,10 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
   NSArray<DownloadListItem*>* _cachedDownloadItems;
   // Repeating timer for periodic UI updates.
   base::RepeatingTimer _updateTimer;
+  // Height of the on-screen keyboard overlapping `self.view`. Used to keep
+  // the empty-state illustration vertically centered within the visible
+  // (un-occluded) area while the search keyboard is up.
+  CGFloat _keyboardOverlap;
 }
 
 - (void)viewDidLoad {
@@ -116,6 +123,9 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
   // Setup filter header view.
   [self setupFilterHeaderView];
 
+  // Setup search controller.
+  [self setupSearchController];
+
   [self configureDiffableDataSource];
 
   // Load download records.
@@ -127,6 +137,7 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
 
 #pragma mark - Private
 
+// Sets up the filter header view for the download list.
 - (void)setupFilterHeaderView {
   self.filterHeaderView = [[DownloadListTableViewHeader alloc]
       initWithFrame:CGRectMake(0, 0, self.tableView.bounds.size.width,
@@ -134,6 +145,19 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
   self.filterHeaderView.mutator = self.mutator;
 }
 
+// Sets up the search controller for filtering downloads by keyword.
+- (void)setupSearchController {
+  self.searchController =
+      [[UISearchController alloc] init];
+  self.searchController.searchResultsUpdater = self;
+  self.searchController.obscuresBackgroundDuringPresentation = NO;
+  self.navigationItem.searchController = self.searchController;
+  // For iPad, the search bar does not show at the first time when the view
+  // appears. Set the search bar always visible.
+  self.navigationItem.hidesSearchBarWhenScrolling = NO;
+}
+
+// Updates the frame of the table header view to fit its content.
 - (void)updateTableHeaderViewFrame {
   if (!self.filterHeaderView) {
     return;
@@ -173,10 +197,88 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
   [self resumePeriodicUpdates];
+  // Observe keyboard frame changes so the empty-state illustration can be
+  // kept above the keyboard (it would otherwise stay centered against the
+  // full tableView bounds and slide behind the search keyboard).
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(keyboardWillChangeFrame:)
+             name:UIKeyboardWillChangeFrameNotification
+           object:nil];
+  // Drop any stale keyboard overlap captured during the previous appearance
+  // and re-apply to any existing empty view so it doesn't render off-center.
+  _keyboardOverlap = 0;
+  TableViewIllustratedEmptyView* emptyView =
+      base::apple::ObjCCast<TableViewIllustratedEmptyView>(
+          self.tableView.backgroundView);
+  if (emptyView) {
+    [self applyEmptyViewKeyboardOverlap:emptyView];
+  }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+  [super viewDidDisappear:animated];
+  [[NSNotificationCenter defaultCenter]
+      removeObserver:self
+                name:UIKeyboardWillChangeFrameNotification
+              object:nil];
 }
 
 - (void)dealloc {
   [self stopPeriodicUpdates];
+}
+
+#pragma mark - Keyboard Handling
+
+// Re-centers the empty-state illustration above the on-screen keyboard. The
+// inner scroll view of `TableViewIllustratedEmptyView` is centerY-pinned to
+// its container, so growing its bottom content inset by the overlap height
+// shifts the centered stack up by overlap/2 — leaving it visually centered
+// in the un-occluded area without re-laying-out the table view itself.
+- (void)keyboardWillChangeFrame:(NSNotification*)note {
+  if (!self.viewLoaded || !self.view.window) {
+    return;
+  }
+  NSValue* endFrameValue = note.userInfo[UIKeyboardFrameEndUserInfoKey];
+  if (!endFrameValue) {
+    return;
+  }
+  CGRect endFrameInView = [self.view convertRect:[endFrameValue CGRectValue]
+                                        fromView:nil];
+  _keyboardOverlap =
+      MAX(0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(endFrameInView));
+
+  TableViewIllustratedEmptyView* emptyView =
+      base::apple::ObjCCast<TableViewIllustratedEmptyView>(
+          self.tableView.backgroundView);
+  if (!emptyView) {
+    return;
+  }
+  NSTimeInterval duration =
+      [note.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+  UIViewAnimationCurve curve = static_cast<UIViewAnimationCurve>(
+      [note.userInfo[UIKeyboardAnimationCurveUserInfoKey] integerValue]);
+  __weak __typeof(self) weakSelf = self;
+  [UIView animateWithDuration:duration
+                        delay:0
+                      options:(curve << 16) |
+                              UIViewAnimationOptionBeginFromCurrentState
+                   animations:^{
+                     [weakSelf applyEmptyViewKeyboardOverlap:emptyView];
+                   }
+                   completion:nil];
+}
+
+// Pushes the cached keyboard overlap height into the empty view's inner
+// scroll-view bottom inset. Called both from the keyboard notification and
+// when an empty view is freshly installed while the keyboard is already up.
+- (void)applyEmptyViewKeyboardOverlap:(TableViewIllustratedEmptyView*)view {
+  UIEdgeInsets insets = view.scrollViewContentInsets;
+  if (insets.bottom == _keyboardOverlap) {
+    return;
+  }
+  insets.bottom = _keyboardOverlap;
+  view.scrollViewContentInsets = insets;
 }
 
 #pragma mark - Periodic Updates
@@ -215,6 +317,7 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
   _updateTimer.Stop();
 }
 
+// Resumes periodic updates by restarting the timer if not already running.
 - (void)resumePeriodicUpdates {
   if (!_updateTimer.IsRunning()) {
     [self startPeriodicUpdates];
@@ -443,6 +546,7 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
                                                actionProvider:actionProvider];
 }
 
+// Creates a context menu with available actions for the given download item.
 - (UIMenu*)createMenuForDownloadItem:(DownloadListItem*)item {
   NSMutableArray<UIMenuElement*>* actions = [[NSMutableArray alloc] init];
   __weak __typeof(self) weakSelf = self;
@@ -540,9 +644,7 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
 
 - (void)setEmptyState:(BOOL)empty {
   if (empty) {
-    // Empty downloads: show small title and empty view.
-    self.navigationItem.largeTitleDisplayMode =
-        UINavigationItemLargeTitleDisplayModeNever;
+    // Show empty view illustration.
     if (!self.tableView.backgroundView) {
       UIImage* emptyImage = [UIImage imageNamed:@"download_list_empty"];
       TableViewIllustratedEmptyView* emptyView = [[TableViewIllustratedEmptyView
@@ -554,12 +656,20 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
                                    IDS_IOS_DOWNLOAD_LIST_NO_ENTRIES_MESSAGE))];
       emptyView.delegate = self;
       self.tableView.backgroundView = emptyView;
+      // If the keyboard is already up (e.g. user typed a non-matching
+      // search), apply the current overlap so the prompt is installed
+      // already-centered in the visible area.
+      [self applyEmptyViewKeyboardOverlap:emptyView];
+    }
+    // Only hide search bar when genuinely empty, not during active search
+    // with no matching results.
+    if (!self.searchController.isActive) {
+      self.navigationItem.searchController = nil;
     }
   } else {
-    // Non-empty downloads: show large title initially and hide empty view.
-    self.navigationItem.largeTitleDisplayMode =
-        UINavigationItemLargeTitleDisplayModeAlways;
+    // Hide the empty view and show search bar.
     self.tableView.backgroundView = nil;
+    self.navigationItem.searchController = self.searchController;
   }
   if (self.filterHeaderView && self.filterHeaderView.isHidden == NO) {
     [self.filterHeaderView setAttributionTextShown:!empty];
@@ -568,12 +678,17 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
 
 - (void)setDownloadListHeaderShown:(BOOL)shown {
   if (shown) {
-    // Show the filter view if it's not already set.
+    // Records exist: allow automatic large/small title transition based on
+    // scroll position, and show filter header.
+    self.navigationItem.largeTitleDisplayMode =
+        UINavigationItemLargeTitleDisplayModeAutomatic;
     if (self.tableView.tableHeaderView != self.filterHeaderView) {
       self.tableView.tableHeaderView = self.filterHeaderView;
     }
   } else {
-    // Hide the filter view by setting tableHeaderView to nil.
+    // No records at all: show small title and hide filter header.
+    self.navigationItem.largeTitleDisplayMode =
+        UINavigationItemLargeTitleDisplayModeNever;
     self.tableView.tableHeaderView = nil;
   }
 }
@@ -585,6 +700,15 @@ typedef NSDiffableDataSourceSnapshot<DownloadListGroupItem*, DownloadListItem*>
     (UIPresentationController*)presentationController {
   [self.downloadListHandler hideDownloadList];
 }
+
+#pragma mark - UISearchResultsUpdating
+
+- (void)updateSearchResultsForSearchController:
+    (UISearchController*)searchController {
+  NSString* searchText = searchController.searchBar.text;
+  [self.mutator filterRecordsWithKeyword:searchText];
+}
+
 #pragma mark - TableViewIllustratedEmptyViewDelegate
 
 // Invoked when a link in `view`'s subtitle is tapped.

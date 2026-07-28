@@ -20,6 +20,7 @@
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "ash/webui/settings/public/constants/setting.mojom.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
@@ -39,8 +40,8 @@
 #include "chrome/browser/manta/manta_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "chromeos/components/magic_boost/public/cpp/magic_boost_state.h"
 #include "chromeos/components/mahi/public/cpp/mahi_manager.h"
 #include "chromeos/components/mahi/public/cpp/mahi_media_app_content_manager.h"
@@ -50,6 +51,9 @@
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/feedback/feedback_constants.h"
 #include "components/manta/manta_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/widget/unique_widget_ptr.h"
@@ -553,10 +557,17 @@ void MahiManagerImpl::OnContextMenuClicked(
 
       return;
     case MahiActionType::kSettings:
-      chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-          ProfileManager::GetActiveUserProfile(),
-          chromeos::settings::mojom::kSystemPreferencesSectionPath,
-          chromeos::settings::mojom::Setting::kMahiOnOff);
+      if (auto* session =
+              session_manager::SessionManager::Get()->GetActiveSession()) {
+        // TODO(crbug.com/447287122): Revisit here to see if there're cases
+        // where no active session exists.
+        ash::SettingsAppManager::Get()->Open(
+            CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                session->account_id())),
+            {.sub_page =
+                 chromeos::settings::mojom::kSystemPreferencesSectionPath,
+             .setting_id = chromeos::settings::mojom::Setting::kMahiOnOff});
+      }
       return;
     case MahiActionType::kNone:
     case MahiActionType::kOutline:
@@ -599,8 +610,9 @@ void MahiManagerImpl::OpenFeedbackDialog() {
   ai_metadata.Set(feedback::kMahiMetadataKey, "true");
 
   chrome::ShowFeedbackPage(
-      /*browser=*/chrome::FindBrowserWithProfile(
-          ProfileManager::GetActiveUserProfile()),
+      /*browser=*/ProfileBrowserCollection::GetForProfile(
+          ProfileManager::GetActiveUserProfile())
+          ->GetLastActiveBrowser(),
       /*source=*/feedback::kFeedbackSourceAI, description_template,
       /*description_placeholder_text=*/
       base::UTF16ToUTF8(
@@ -854,7 +866,7 @@ void MahiManagerImpl::OnGetPageContentForSummary(
     return;
   }
 
-  std::optional<std::string> context = std::nullopt;
+  std::optional<std::string> context;
   if (current_selected_text_ != std::nullopt) {
     context = base::UTF16ToUTF8(current_panel_content_.page_content);
   }

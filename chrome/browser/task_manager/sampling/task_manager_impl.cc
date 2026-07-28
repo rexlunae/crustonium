@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
 #include "base/functional/bind.h"
@@ -365,9 +365,8 @@ const TaskIdList& TaskManagerImpl::GetTaskIdsList() const {
 #if !BUILDFLAG(IS_ANDROID)
       // Move vm processes up over the arc tasks.
       should_make_adjustment =
-          base::FeatureList::IsEnabled(features::kTaskManagerDesktopRefresh) &&
-          ((a->GetType() == Task::ARC && b->GetType() == Task::CROSTINI) ||
-           (b->GetType() == Task::ARC && a->GetType() == Task::CROSTINI));
+          (a->GetType() == Task::ARC && b->GetType() == Task::CROSTINI) ||
+          (b->GetType() == Task::ARC && a->GetType() == Task::CROSTINI);
 #endif
       return std::make_tuple(
                  a->HasParentTask(),
@@ -693,6 +692,9 @@ void TaskManagerImpl::StopUpdating() {
   arc_vm_task_groups_by_proc_id_.clear();
   task_groups_by_task_id_.clear();
   sorted_task_ids_.clear();
+
+  waiting_for_memory_dump_ = false;
+  weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
 Task* TaskManagerImpl::GetTaskByRoute(

@@ -392,6 +392,10 @@ void FakeShillManagerClient::ConfigureService(
     const base::DictValue& properties,
     chromeos::ObjectPathCallback callback,
     ErrorCallback error_callback) {
+  if (!configure_service_hook_.is_null()) {
+    configure_service_hook_.Run(properties);
+  }
+
   switch (simulate_configuration_result_) {
     case FakeShillSimulatedResult::kSuccess:
       break;
@@ -822,11 +826,46 @@ int FakeShillManagerClient::GetRecentlyDisconnectedP2PGroupId() {
   return recent_disconnected_group_id;
 }
 
+void FakeShillManagerClient::TestHostsConnectivity(
+    const std::vector<std::string>& hosts,
+    const base::flat_map<std::string, std::string>& options,
+    TestHostsConnectivityCallback callback,
+    ErrorCallback error_callback,
+    std::optional<int> timeout_ms) {
+  switch (simulate_test_hosts_connectivity_result_) {
+    case FakeShillSimulatedResult::kSuccess:
+      break;
+    case FakeShillSimulatedResult::kFailure:
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(error_callback),
+                                    "org.chromium.flimflam.Error.Failed",
+                                    "Simulated D-Bus error"));
+      return;
+    case FakeShillSimulatedResult::kTimeout:
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed and the caller should eventually timeout.
+      return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(std::move(callback), test_hosts_connectivity_response_));
+}
+
 ShillManagerClient::TestInterface* FakeShillManagerClient::GetTestInterface() {
   return this;
 }
 
 // ShillManagerClient::TestInterface overrides.
+
+void FakeShillManagerClient::SetTestHostsConnectivityResponse(
+    const std::vector<uint8_t>& response) {
+  test_hosts_connectivity_response_ = response;
+}
+
+void FakeShillManagerClient::SetSimulateTestHostsConnectivityResult(
+    FakeShillSimulatedResult result) {
+  simulate_test_hosts_connectivity_result_ = result;
+}
 
 void FakeShillManagerClient::AddDevice(const std::string& device_path) {
   if (AppendIfNotPresent(GetListProperty(shill::kDevicesProperty),
@@ -1209,6 +1248,12 @@ void FakeShillManagerClient::SetSimulateDisconnectFromP2PGroupResult(
       FakeShillSimulatedResult::kSuccess) {
     simulate_disconnect_p2p_group_result_code_ = result_code;
   }
+}
+
+void FakeShillManagerClient::SetConfigureServiceHook(
+    base::RepeatingCallback<void(const base::DictValue&)>
+        configure_service_hook) {
+  configure_service_hook_ = configure_service_hook;
 }
 
 void FakeShillManagerClient::SetupDefaultEnvironment() {

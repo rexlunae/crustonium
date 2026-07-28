@@ -48,10 +48,18 @@ class TestWebUIControllerFactory : public content::WebUIControllerFactory {
 }  // namespace
 
 class ChromeHistogramsBrowserTest : public WebUIMochaBrowserTest {
+ protected:
+  void SetUpOnMainThread() override {
+    WebUIMochaBrowserTest::SetUpOnMainThread();
+    factory_registration_ =
+        std::make_unique<content::ScopedWebUIControllerFactoryRegistration>(
+            &factory_);
+  }
+
  private:
   TestWebUIControllerFactory factory_;
-  content::ScopedWebUIControllerFactoryRegistration factory_registration_{
-      &factory_};
+  std::unique_ptr<content::ScopedWebUIControllerFactoryRegistration>
+      factory_registration_;
 };
 
 // Tests for the chrome.histograms API in WebUIs.
@@ -74,10 +82,12 @@ IN_PROC_BROWSER_TEST_F(ChromeHistogramsBrowserTest, All) {
   // Verify that the histograms were recorded correctly.
   histogram_tester.ExpectUniqueSample("Test.Boolean", true, 1);
   histogram_tester.ExpectUniqueSample("Test.Percentage", 50, 1);
+  histogram_tester.ExpectUniqueSample("Test.PercentageFloat", 51, 1);
   histogram_tester.ExpectUniqueSample("Test.Counts100", 10, 1);
   histogram_tester.ExpectUniqueSample("Test.Counts10000", 100, 1);
   histogram_tester.ExpectUniqueSample("Test.Counts1M", 1000, 1);
   histogram_tester.ExpectUniqueSample("Test.Times", 100, 1);
+  histogram_tester.ExpectUniqueSample("Test.TimesFloat", 100, 1);
   histogram_tester.ExpectUniqueSample("Test.MediumTimes", 1000, 1);
   histogram_tester.ExpectUniqueSample("Test.LongTimes", 10000, 1);
   histogram_tester.ExpectUniqueSample("Test.CustomCounts", 10, 1);

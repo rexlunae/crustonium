@@ -4,6 +4,8 @@
 
 #include "services/webnn/ort/graph_impl_ort.h"
 
+#include <vector>
+
 #include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
@@ -29,34 +31,13 @@
 
 namespace webnn::ort {
 
-namespace {
-
-std::optional<uint32_t> GetBatchedMatMulKDimensionLimit(
-    const OrtEpDevice* first_selected_device) {
-  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
-
-  const char* ep_name = ort_api->EpDevice_EpName(first_selected_device);
-  const auto iter = kKnownEPs.find(UNSAFE_BUFFERS(base::cstring_view(ep_name)));
-  if (iter == kKnownEPs.end()) {
-    return std::nullopt;
-  }
-
-  OrtHardwareDeviceType hardware_device_type = ort_api->HardwareDevice_Type(
-      ort_api->EpDevice_Device(first_selected_device));
-  if (hardware_device_type != OrtHardwareDeviceType_NPU) {
-    return std::nullopt;
-  }
-
-  return iter->second.workarounds.npu_batched_matmul_k_dimension_limit;
-}
-
-}  // namespace
-
 // Represents the collection of resources associated with a particular graph.
 // These resources may outlive their associated `GraphImplOrt` instance while
 // executing the graph.
 class GraphImplOrt::ComputeResources {
  public:
+  // Session created from model. ExternalWeightsManager keeps weights alive
+  // since they are referenced by the session.
   ComputeResources(
       scoped_refptr<Environment> env,
       std::unique_ptr<ExternalWeightsManager> external_weights_manager,
@@ -71,6 +52,21 @@ class GraphImplOrt::ComputeResources {
             std::move(operand_output_name_to_onnx_output_name)),
         env_(std::move(env)),
         external_weights_manager_(std::move(external_weights_manager)),
+        session_(std::move(session)) {}
+
+  // Session created from compiled model bytes, weights are embedded so
+  // ExternalWeightsManager is not needed.
+  ComputeResources(scoped_refptr<Environment> env,
+                   ScopedOrtSession session,
+                   base::flat_map<std::string, std::string>
+                       operand_input_name_to_onnx_input_name,
+                   base::flat_map<std::string, std::string>
+                       operand_output_name_to_onnx_output_name)
+      : operand_input_name_to_onnx_input_name_(
+            std::move(operand_input_name_to_onnx_input_name)),
+        operand_output_name_to_onnx_output_name_(
+            std::move(operand_output_name_to_onnx_output_name)),
+        env_(std::move(env)),
         session_(std::move(session)) {}
 
   ~ComputeResources() = default;
@@ -124,34 +120,32 @@ class GraphImplOrt::ComputeResources {
   scoped_refptr<Environment> env_;
   // `external_weights_manager_` should be prior to `session_` since it will be
   // called by ORT to release the external weights during `session_`
-  // destruction.
+  // destruction. Only used when the session is created from a model (not from
+  // compiled bytes).
   std::unique_ptr<ExternalWeightsManager> external_weights_manager_;
   ScopedOrtSession session_;
 };
 
 // static
 void GraphImplOrt::CreateAndBuild(
-    mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
     mojom::GraphInfoPtr graph_info,
     ComputeResourceInfo compute_resource_info,
     base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
         constant_operands,
-    base::flat_map<OperandId, WebNNTensorImpl*> constant_tensor_operands,
-    ContextImplOrt* context,
+    ContextImplOrt& context,
     WebNNContextImpl::CreateGraphImplCallback callback) {
   ScopedTrace scoped_trace("GraphImplOrt::CreateAndBuild");
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE,
-      {base::TaskPriority::BEST_EFFORT,
-       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN, base::MayBlock()},
+  // Safe to use std::ref because the posted task and its reply will be canceled
+  // if the context is destroyed.
+  context.cancelable_task_tracker().PostTaskAndReplyWithResult(
+      context.env()->graph_compilation_task_runner().get(), FROM_HERE,
       base::BindOnce(&GraphImplOrt::CreateAndBuildOnBackgroundThread,
-                     std::move(graph_info), context->session_options(),
-                     context->env(), context->properties(),
+                     std::move(graph_info), context.session_options(),
+                     context.env(), context.properties(),
                      std::move(constant_operands), std::move(scoped_trace)),
-      base::BindOnce(&GraphImplOrt::DidCreateAndBuild, std::move(receiver),
-                     context->AsWeakPtr(), std::move(compute_resource_info),
-                     std::move(callback)));
+      base::BindOnce(&GraphImplOrt::DidCreateAndBuild, std::ref(context),
+                     std::move(compute_resource_info), std::move(callback)));
 }
 
 // static
@@ -167,13 +161,11 @@ GraphImplOrt::CreateAndBuildOnBackgroundThread(
   SCOPED_UMA_HISTOGRAM_TIMER("WebNN.ORT.TimingMs.Compilation");
 
   scoped_trace.AddStep("Create model info");
-  std::optional<uint32_t> batched_matmul_k_dimension_limit =
-      GetBatchedMatMulKDimensionLimit(session_options->first_selected_device());
   ASSIGN_OR_RETURN(std::unique_ptr<ModelEditor::ModelInfo> model_info,
                    GraphBuilderOrt::CreateAndBuild(
                        *graph_info, std::move(context_properties),
                        std::move(constant_operands),
-                       std::move(batched_matmul_k_dimension_limit)));
+                       session_options->batched_matmul_k_dimension_limit()));
 
   scoped_trace.AddStep("Create session from model");
   ScopedOrtSession session;
@@ -196,16 +188,11 @@ GraphImplOrt::CreateAndBuildOnBackgroundThread(
 
 // static
 void GraphImplOrt::DidCreateAndBuild(
-    mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
-    base::WeakPtr<WebNNContextImpl> context,
+    WebNNContextImpl& context,
     ComputeResourceInfo compute_resource_info,
     WebNNContextImpl::CreateGraphImplCallback callback,
     base::expected<std::unique_ptr<GraphImplOrt::ComputeResources>,
                    mojom::ErrorPtr> result) {
-  if (!context) {
-    return;
-  }
-
   if (!result.has_value()) {
     std::move(callback).Run(base::unexpected(std::move(result.error())));
     return;
@@ -213,21 +200,51 @@ void GraphImplOrt::DidCreateAndBuild(
 
   // TODO(crbug.com/418031018): Get devices that will be used for dispatch.
   std::move(callback).Run(base::MakeRefCounted<GraphImplOrt>(
-      std::move(receiver), std::move(compute_resource_info),
-      std::move(result.value()), std::move(context),
+      std::move(compute_resource_info), std::move(result.value()), context,
       /*devices=*/std::vector<mojom::Device>()));
+}
+
+// static
+base::expected<scoped_refptr<WebNNGraphImpl>, mojom::ErrorPtr>
+GraphImplOrt::CreateSessionFromCompiledGraph(
+    WebNNContextImpl& context,
+    ComputeResourceInfo compute_resource_info,
+    scoped_refptr<SessionOptions> session_options,
+    scoped_refptr<Environment> env,
+    mojo_base::BigBuffer compiled_model_data,
+    base::flat_map<std::string, std::string>
+        operand_input_name_to_onnx_input_name,
+    base::flat_map<std::string, std::string>
+        operand_output_name_to_onnx_output_name) {
+  ScopedOrtSession session;
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+  if (ORT_CALL_FAILED(ort_api->CreateSessionFromArray(
+          env->get(), compiled_model_data.data(), compiled_model_data.size(),
+          session_options->get(), ScopedOrtSession::Receiver(session).get()))) {
+    return base::unexpected(
+        mojom::Error::New(mojom::Error::Code::kUnknownError,
+                          "Failed to create session from compiled model."));
+  }
+
+  auto compute_resources = base::WrapUnique(new GraphImplOrt::ComputeResources(
+      std::move(env), std::move(session),
+      std::move(operand_input_name_to_onnx_input_name),
+      std::move(operand_output_name_to_onnx_output_name)));
+
+  return base::MakeRefCounted<GraphImplOrt>(
+      std::move(compute_resource_info), std::move(compute_resources), context,
+      // TODO(crbug.com/418031018): Get devices that will be used for dispatch.
+      /*devices=*/std::vector<mojom::Device>());
 }
 
 GraphImplOrt::~GraphImplOrt() = default;
 
 GraphImplOrt::GraphImplOrt(
-    mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
     ComputeResourceInfo compute_resource_info,
     std::unique_ptr<GraphImplOrt::ComputeResources> compute_resources,
-    base::WeakPtr<WebNNContextImpl> context,
+    WebNNContextImpl& context,
     std::vector<mojom::Device> devices)
-    : WebNNGraphImpl(std::move(receiver),
-                     std::move(context),
+    : WebNNGraphImpl(context,
                      std::move(compute_resource_info),
                      std::move(devices)),
       compute_resources_(std::move(compute_resources)) {}
@@ -243,9 +260,9 @@ void GraphImplOrt::DispatchImpl(
   ScopedOrtStatus status = compute_resources_->OrtRunSync(
       std::move(named_input_tensors), std::move(named_output_tensors));
   if (status.is_valid()) {
-    static_cast<ContextImplOrt*>(context_.get())
-        ->HandleContextLostOrCrash("Failed to run session.",
-                                   ort_api->GetErrorCode(status.get()));
+    static_cast<ContextImplOrt&>(context_.get())
+        .HandleContextLostOrCrash("Failed to run session.",
+                                  ort_api->GetErrorCode(status.get()));
   }
 }
 

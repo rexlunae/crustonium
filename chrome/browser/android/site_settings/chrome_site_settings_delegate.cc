@@ -39,7 +39,7 @@ static jni_zero::ScopedJavaLocalRef<jobjectArray>
 JNI_ChromeSiteSettingsDelegate_GetFileSystemAccessGrants(
     JNIEnv* env,
     const jni_zero::JavaRef<jobject>& j_profile,
-    std::string& origin) {
+    const std::string& origin) {
   Profile* profile = Profile::FromJavaObject(j_profile);
   std::vector<std::string> paths;
   std::vector<std::string> display_names;
@@ -57,14 +57,18 @@ JNI_ChromeSiteSettingsDelegate_GetFileSystemAccessGrants(
       paths.push_back(grant.path.value());
       display_names.push_back(grant.display_name);
     }
+
+    std::ranges::sort(grants.file_write_grants);
     for (const content::PathInfo& grant : grants.file_read_grants) {
-      if (!std::ranges::contains(grants.file_write_grants, grant)) {
+      if (!std::ranges::binary_search(grants.file_write_grants, grant)) {
         paths.push_back(grant.path.value());
         display_names.push_back(grant.display_name);
       }
     }
+
+    std::ranges::sort(grants.directory_write_grants);
     for (const content::PathInfo& grant : grants.directory_read_grants) {
-      if (!std::ranges::contains(grants.directory_write_grants, grant)) {
+      if (!std::ranges::binary_search(grants.directory_write_grants, grant)) {
         paths.push_back(grant.path.value());
         display_names.push_back(grant.display_name);
       }
@@ -78,8 +82,8 @@ JNI_ChromeSiteSettingsDelegate_GetFileSystemAccessGrants(
 static void JNI_ChromeSiteSettingsDelegate_RevokeFileSystemAccessGrant(
     JNIEnv* env,
     const jni_zero::JavaRef<jobject>& j_profile,
-    std::string& origin,
-    std::string& file) {
+    const std::string& origin,
+    const std::string& file) {
   Profile* profile = Profile::FromJavaObject(j_profile);
   auto* context =
       FileSystemAccessPermissionContextFactory::GetForProfileIfExists(profile);

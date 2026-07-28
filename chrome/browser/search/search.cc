@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/check_deref.h"
-#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
@@ -17,7 +16,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "components/google/core/common/google_util.h"
 #include "components/search/ntp_features.h"
@@ -32,10 +30,14 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/flags/android/chrome_feature_list.h"
+#include "chrome/common/webui_url_constants.h"
+#else
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
@@ -50,8 +52,7 @@ const char kServiceWorkerFileName[] = "newtab-serviceworker.js";
 
 bool MatchesOrigin(const GURL& my_url, const GURL& other_url) {
   return my_url.scheme() == other_url.scheme() &&
-         my_url.host() == other_url.host() &&
-         my_url.GetPort() == other_url.GetPort();
+         my_url.host() == other_url.host() && my_url.port() == other_url.port();
 }
 
 }  // namespace
@@ -85,7 +86,7 @@ enum NewTabURLState {
   NEW_TAB_URL_INSECURE = 4,
 
   // URL should not be used because Suggest is disabled.
-  // Not used anymore, see crbug.com/340424.
+  // Not used anymore, see crbug.com/40350179.
   // NEW_TAB_URL_SUGGEST_OFF = 5,
 
   // URL should not be used because it is blocked for a supervised user.
@@ -119,12 +120,12 @@ bool IsMatchingServiceWorker(const GURL& my_url, const GURL& document_url) {
 
   // The paths up to the filenames should be the same.
   std::string my_path_without_filename = my_url.GetPath();
-  my_path_without_filename = my_path_without_filename.substr(
-      0, my_path_without_filename.length() - my_filename.length());
+  my_path_without_filename.erase(my_path_without_filename.length() -
+                                 my_filename.length());
   std::string document_filename = document_url.ExtractFileName();
   std::string document_path_without_filename = document_url.GetPath();
-  document_path_without_filename = document_path_without_filename.substr(
-      0, document_path_without_filename.length() - document_filename.length());
+  document_path_without_filename.erase(document_path_without_filename.length() -
+                                       document_filename.length());
 
   return my_path_without_filename == document_path_without_filename;
 }
@@ -175,8 +176,8 @@ struct NewTabURLDetails {
 #else
     const bool default_is_google = DefaultSearchProviderIsGoogle(profile);
     const GURL local_url(default_is_google
-                             ? chrome::kChromeUINewTabPageURL
-                             : chrome::kChromeUINewTabPageThirdPartyURL);
+                             ? chrome::ChromeUINewTabPageURLAsGURL()
+                             : GURL(chrome::kChromeUINewTabPageThirdPartyURL));
     if (default_is_google) {
       return NewTabURLDetails(local_url, NEW_TAB_URL_VALID);
     }
@@ -244,7 +245,7 @@ bool IsNTPOrRelatedURL(const GURL& url, Profile* profile) {
   }
 
   if (!IsInstantExtendedAPIEnabled()) {
-    return url == chrome::kChromeUINewTabURL;
+    return url == chrome::ChromeUINewTabURLAsGURL();
   }
 
   return profile && IsNTPOrRelatedURLHelper(url, profile);
@@ -256,7 +257,8 @@ bool IsNTPURL(const GURL& url) {
     return true;
   }
 #if BUILDFLAG(IS_ANDROID)
-  return false;
+  return (url.SchemeIs(chrome::kChromeNativeScheme) &&
+          url.host() == chrome::kChromeUINewTabHost);
 #else
   return NewTabPageUI::IsNewTabPageOrigin(url) ||
          NewTabPageThirdPartyUI::IsNewTabPageOrigin(url);
@@ -291,7 +293,7 @@ bool NavEntryIsInstantNTP(content::WebContents* contents,
 }
 
 bool IsInstantNTPURL(const GURL& url, Profile* profile) {
-  if (MatchesOrigin(url, GURL(chrome::kChromeUINewTabPageURL))) {
+  if (MatchesOrigin(url, chrome::ChromeUINewTabPageURLAsGURL())) {
     return true;
   }
 
@@ -301,6 +303,14 @@ bool IsInstantNTPURL(const GURL& url, Profile* profile) {
 
   GURL new_tab_url(GetNewTabPageURL(profile));
   return new_tab_url.is_valid() && MatchesOriginAndPath(url, new_tab_url);
+}
+
+bool IsWebUiNtpEnabled() {
+#if BUILDFLAG(IS_ANDROID)
+  return base::FeatureList::IsEnabled(chrome::android::kUseWebUiNtpAndroid);
+#else
+  return true;
+#endif
 }
 
 bool IsSplitViewNewTabPage(const GURL& url) {
@@ -323,10 +333,24 @@ bool ShouldAssignURLToInstantRenderer(const GURL& url, Profile* profile) {
          url.SchemeIs(chrome::kChromeSearchScheme);
 }
 
-bool ShouldUseProcessPerSiteForInstantSiteURL(const GURL& site_url,
-                                              Profile* profile) {
-  return ShouldAssignURLToInstantRenderer(site_url, profile) &&
-         site_url.host() == chrome::kChromeSearchRemoteNtpHost;
+bool ShouldAssignSecurityPrincipalToInstantRenderer(
+    const content::SecurityPrincipal& security_principal,
+    Profile* profile) {
+  if (!profile || !IsInstantExtendedAPIEnabled()) {
+    return false;
+  }
+  // No need to check IsNTPOrRelatedURLHelper here: security_principal
+  // contains the effective URL produced by GetEffectiveURLForInstant(),
+  // which always uses the chrome-search: scheme.
+  return security_principal.SchemeIs(chrome::kChromeSearchScheme);
+}
+
+bool ShouldUseProcessPerSiteForSecurityPrincipal(
+    const content::SecurityPrincipal& security_principal,
+    Profile* profile) {
+  return ShouldAssignSecurityPrincipalToInstantRenderer(security_principal,
+                                                        profile) &&
+         security_principal.GetHost() == chrome::kChromeSearchRemoteNtpHost;
 }
 
 std::optional<GURL> GetEffectiveURLForInstant(const GURL& url,
@@ -346,7 +370,7 @@ std::optional<GURL> GetEffectiveURLForInstant(const GURL& url,
 
   // If this is the URL for a server-provided NTP, replace the host with
   // "remote-ntp".
-  std::string remote_ntp_host(chrome::kChromeSearchRemoteNtpHost);
+  std::string_view remote_ntp_host = chrome::kChromeSearchRemoteNtpHost;
   NewTabURLDetails details = NewTabURLDetails::ForProfile(profile);
   if (details.state == NEW_TAB_URL_VALID &&
       (MatchesOriginAndPath(url, details.url) ||
@@ -364,7 +388,7 @@ bool HandleNewTabURLRewrite(GURL* url,
   }
 
   if (!(url->SchemeIs(content::kChromeUIScheme) &&
-        url->GetHost() == chrome::kChromeUINewTabHost)) {
+        url->host() == chrome::kChromeUINewTabHost)) {
     return false;
   }
 
@@ -393,7 +417,7 @@ bool HandleNewTabURLReverseRewrite(GURL* url,
   }
 
   if (IsInstantNTPURL(*url, profile)) {
-    *url = GURL(chrome::kChromeUINewTabURL);
+    *url = chrome::ChromeUINewTabURLAsGURL();
     return true;
   }
 
@@ -401,5 +425,7 @@ bool HandleNewTabURLReverseRewrite(GURL* url,
 }
 
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+const void* const kIsNTPProcessKey = &kIsNTPProcessKey;
 
 }  // namespace search

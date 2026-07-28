@@ -10,8 +10,10 @@
 #include "base/component_export.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/network/public/mojom/cache_encryption_provider.mojom.h"
 
@@ -30,7 +32,7 @@ class CacheEncryptionProviderImpl
 
   explicit CacheEncryptionProviderImpl(
       os_crypt_async::OSCryptAsync* os_crypt_async,
-      std::vector<uint8_t> encrypted_master_key,
+      std::vector<uint8_t> encrypted_primary_key,
       StoreKeyCallback store_key_callback);
   ~CacheEncryptionProviderImpl() override;
 
@@ -39,9 +41,8 @@ class CacheEncryptionProviderImpl
       delete;
 
   // mojom::CacheEncryptionProvider implementation.
-  void GetEncryptor(GetEncryptorCallback callback) override;
-
-  // Returns the encrypted cache encryption key from the profile preferences.
+  // Returns the encrypted cache encryption key from the profile preferences
+  // alongside the Encryptor.
   // Create one if it doesn't exist.
   void GetEncryptedCacheEncryptionKey(
       GetEncryptedCacheEncryptionKeyCallback callback) override;
@@ -52,13 +53,14 @@ class CacheEncryptionProviderImpl
   BindNewRemote();
 
  private:
-  void OnEncryptorReadyForKey(GetEncryptedCacheEncryptionKeyCallback callback,
-                              os_crypt_async::Encryptor encryptor);
+  void OnEncryptorReadyForKey(
+      GetEncryptedCacheEncryptionKeyCallback callback,
+      scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   mojo::ReceiverSet<network::mojom::CacheEncryptionProvider>
       receivers_;
   raw_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
-  std::vector<uint8_t> encrypted_master_key_;
+  std::vector<uint8_t> encrypted_primary_key_;
   StoreKeyCallback store_key_callback_;
   base::WeakPtrFactory<CacheEncryptionProviderImpl> weak_ptr_factory_{this};
 };

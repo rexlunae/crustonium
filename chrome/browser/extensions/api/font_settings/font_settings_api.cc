@@ -77,10 +77,11 @@ std::string GetFontNamePrefPath(fonts::GenericFamily generic_family_enum,
   result.push_back('.');
 
   const char* script = fonts::ToString(script_enum);
-  if (script[0] == 0)  // Empty string.
+  if (script[0] == 0) {  // Empty string.
     result.append(prefs::kWebKitCommonScript);
-  else
+  } else {
     result.append(script);
+  }
   return result;
 }
 
@@ -90,11 +91,13 @@ void MaybeUnlocalizeFontName(std::string* font_name) {
   // available.
   std::optional<std::string> localized_font_name =
       gfx::win::RetrieveLocalizedFontName(*font_name, "us-en");
-  if (!localized_font_name)
+  if (!localized_font_name) {
     localized_font_name = gfx::win::RetrieveLocalizedFontName(*font_name, "");
+  }
 
-  if (localized_font_name)
+  if (localized_font_name) {
     *font_name = std::move(localized_font_name.value());
+  }
 #endif  // BUILDFLAG(IS_WIN)
 }
 
@@ -262,8 +265,9 @@ FontSettingsAPI::GetFactoryInstance() {
 
 ExtensionFunction::ResponseAction FontSettingsClearFontFunction::Run() {
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  if (profile->IsOffTheRecord())
+  if (profile->IsOffTheRecord()) {
     return RespondNow(Error(kSetFromIncognitoError));
+  }
 
   std::optional<fonts::ClearFont::Params> params =
       fonts::ClearFont::Params::Create(args());
@@ -316,8 +320,9 @@ ExtensionFunction::ResponseAction FontSettingsGetFontFunction::Run() {
 
 ExtensionFunction::ResponseAction FontSettingsSetFontFunction::Run() {
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  if (profile->IsOffTheRecord())
+  if (profile->IsOffTheRecord()) {
     return RespondNow(Error(kSetFromIncognitoError));
+  }
 
   std::optional<fonts::SetFont::Params> params =
       fonts::SetFont::Params::Create(args());
@@ -337,15 +342,35 @@ ExtensionFunction::ResponseAction FontSettingsSetFontFunction::Run() {
 
 ExtensionFunction::ResponseAction FontSettingsGetFontListFunction::Run() {
 #if BUILDFLAG(IS_ANDROID)
-  // Android does not support a mechanism to get "all installed fonts" like
-  // Windows/Mac/Linux.
-  return RespondNow(WithArguments(base::ListValue()));
+  return RespondNow(WithArguments(GetAndroidFontFamilyList()));
 #else
   content::GetFontListAsync(
       BindOnce(&FontSettingsGetFontListFunction::FontListHasLoaded, this));
   return RespondLater();
 #endif
 }
+
+#if BUILDFLAG(IS_ANDROID)
+// static
+base::ListValue FontSettingsGetFontListFunction::GetAndroidFontFamilyList() {
+  // Android does not support a mechanism to get "all installed fonts" like
+  // Windows/Mac/Linux. However, for extension compatibility we must return some
+  // kind of font family list. Android documentation recommends using generic
+  // font families (e.g. "serif"), which the system will map internally to a
+  // specific family (e.g. "Noto Serif"). This approach is also compatible with
+  // the CSS/WebUI used by extensions.
+  base::ListValue result;
+  static constexpr std::string_view kFamilyNames[] = {"sans-serif", "serif",
+                                                      "monospace", "cursive"};
+  for (const auto& name : kFamilyNames) {
+    base::DictValue font_entry;
+    font_entry.Set(kFontIdKey, name);
+    font_entry.Set(kDisplayNameKey, name);
+    result.Append(std::move(font_entry));
+  }
+  return result;
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 void FontSettingsGetFontListFunction::FontListHasLoaded(base::ListValue list) {
   ExtensionFunction::ResponseValue response = CopyFontsToResult(list);
@@ -380,8 +405,9 @@ FontSettingsGetFontListFunction::CopyFontsToResult(
 
 ExtensionFunction::ResponseAction ClearFontPrefExtensionFunction::Run() {
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  if (profile->IsOffTheRecord())
+  if (profile->IsOffTheRecord()) {
     return RespondNow(Error(kSetFromIncognitoError));
+  }
 
   ExtensionPrefsHelper::Get(profile)->RemoveExtensionControlledPref(
       extension_id(), GetPrefName(), ChromeSettingScope::kRegular);
@@ -410,8 +436,9 @@ ExtensionFunction::ResponseAction GetFontPrefExtensionFunction::Run() {
 
 ExtensionFunction::ResponseAction SetFontPrefExtensionFunction::Run() {
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  if (profile->IsOffTheRecord())
+  if (profile->IsOffTheRecord()) {
     return RespondNow(Error(kSetFromIncognitoError));
+  }
 
   EXTENSION_FUNCTION_VALIDATE(args().size() >= 1);
   EXTENSION_FUNCTION_VALIDATE(args()[0].is_dict());

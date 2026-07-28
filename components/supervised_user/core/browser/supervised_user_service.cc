@@ -26,7 +26,6 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/family_link_url_filter.h"
-#include "components/supervised_user/core/browser/kids_chrome_management_url_checker_client.h"
 #include "components/supervised_user/core/browser/permission_request_creator_impl.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_service_observer.h"
@@ -199,13 +198,12 @@ void SupervisedUserService::OnFamilyLinkParentalControlsEnabled() {
   AddCustodianPrefChangeHandlers();
 
   if (!base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    // Add handler at the end to avoid multiple notifications (if the Url filter
-    // is still reading its configuration from the PrefService).
+    // Add handler at the end to avoid multiple notifications.
     AddURLFilterPrefChangeHandlers();
-  }
 
-  // Synchronize the filter.
-  UpdateURLFilter();
+    // Synchronize the filter.
+    UpdateURLFilter();
+  }
 }
 
 void SupervisedUserService::OnFamilyLinkParentalControlsDisabled() {
@@ -219,16 +217,18 @@ void SupervisedUserService::OnFamilyLinkParentalControlsDisabled() {
   remote_web_approvals_manager_.ClearApprovalRequestsCreators();
 
   if (!base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    // Add handler at the end to avoid multiple notifications (if the Url filter
-    // is still reading its configuration from the PrefService).
+    // Add handler at the end to avoid multiple notifications.
     AddURLFilterPrefChangeHandlers();
-  }
 
-  // Synchronize the filter.
-  UpdateURLFilter();
+    // Synchronize the filter.
+    UpdateURLFilter();
+  }
 }
 
 void SupervisedUserService::AddURLFilterPrefChangeHandlers() {
+  // TODO(crbug.com/465666528: remove this handler and registrar when cleaning
+  // up the flag.
+  CHECK(!base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService));
   url_filter_pref_change_registrar_.Init(&user_prefs_.get());
   for (const char* const pref : kUrlFilterSettingsPrefs) {
     url_filter_pref_change_registrar_.Add(

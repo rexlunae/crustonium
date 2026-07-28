@@ -23,6 +23,7 @@
 #import "base/task/thread_pool.h"
 #import "base/time/default_clock.h"
 #import "base/time/default_tick_clock.h"
+#import "build/blink_buildflags.h"
 #import "components/activity_reporter/activity_reporter.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/breadcrumbs/core/breadcrumbs_status.h"
@@ -34,6 +35,7 @@
 #import "components/gcm_driver/gcm_driver.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/keyed_service/core/service_access_type.h"
+#import "components/metrics/metrics_features.h"
 #import "components/metrics/metrics_service.h"
 #import "components/metrics_services_manager/metrics_services_manager.h"
 #import "components/net_log/net_export_file_writer.h"
@@ -76,7 +78,7 @@
 #import "ios/chrome/browser/shared/model/profile/incognito_session_tracker.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/signin/model/account_profile_mapper.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/update_client/model/ios_chrome_update_query_params_delegate.h"
 #import "ios/chrome/common/channel_info.h"
 #import "ios/components/security_interstitials/safe_browsing/safe_browsing_service_impl.h"
@@ -91,7 +93,6 @@
 #import "mojo/public/cpp/bindings/pending_receiver.h"
 #import "net/log/net_log.h"
 #import "net/log/net_log_capture_mode.h"
-#import "net/socket/client_socket_pool_manager.h"
 #import "net/url_request/url_request_context_getter.h"
 #import "services/metrics/public/cpp/ukm_recorder.h"
 #import "services/network/network_change_manager.h"
@@ -99,13 +100,23 @@
 #import "services/network/public/mojom/network_service.mojom.h"
 #import "ui/base/resource/resource_bundle.h"
 
+#if !BUILDFLAG(USE_BLINK)
+#import "base/memory/memory_pressure_listener_registry.h"
+#endif
+
 ApplicationContextImpl::ApplicationContextImpl(
     base::SequencedTaskRunner* local_state_task_runner,
     const base::CommandLine& command_line,
     const std::string& locale,
     const std::string& country)
     : application_locale_storage_(std::make_unique<ApplicationLocaleStorage>()),
-      local_state_task_runner_(local_state_task_runner) {
+      local_state_task_runner_(local_state_task_runner)
+#if !BUILDFLAG(USE_BLINK)
+      ,
+      memory_pressure_listener_registry_(
+          std::make_unique<base::MemoryPressureListenerRegistry>())
+#endif
+{
   DCHECK(!GetApplicationContext());
   SetApplicationContext(this);
 
@@ -131,7 +142,7 @@ void ApplicationContextImpl::PreCreateThreads() {
 }
 
 void ApplicationContextImpl::PostCreateThreads() {
-  // Delegate all encryption calls to OSCrypt.
+  // Initialize OSCryptAsync with a KeychainKeyProvider.
   auto key_provider = std::make_unique<os_crypt_async::KeychainKeyProvider>();
   std::vector<std::pair<size_t, std::unique_ptr<os_crypt_async::KeyProvider>>>
       key_providers;
@@ -454,7 +465,7 @@ ApplicationContextImpl::GetActivityReporter() {
             GetSharedURLLoaderFactory(),
             // Never send cookies for activity reports.
             base::BindRepeating([](const GURL& url) { return false; })),
-        base::DoNothing());
+        base::BindRepeating(&GetChannel), base::DoNothing(), true);
   }
   return activity_reporter_.get();
 }
@@ -648,13 +659,15 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
   if (metrics_services_manager_) {
     if (metrics::MetricsService* metrics_service =
             metrics_services_manager_->GetMetricsService()) {
+      bool enable_background_metrics_work = base::FeatureList::IsEnabled(
+          metrics::features::kIOSBackgroundMetrics);
       switch (app_state) {
         case AppState::kForeground:
           metrics_service->OnAppEnterForeground();
           break;
 
         case AppState::kBackgroundFromActive:
-          metrics_service->OnAppEnterBackground();
+          metrics_service->OnAppEnterBackground(enable_background_metrics_work);
           break;
         case AppState::kBackgroundProcessing:
           // Background processing should be tracked in metrcis, including
@@ -665,7 +678,7 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
           // When background processing is complete, this state should be
           // treated like normal backgrounding, including specifically the
           // clean exit beacon.
-          metrics_service->OnAppEnterBackground();
+          metrics_service->OnAppEnterBackground(enable_background_metrics_work);
           break;
       }
     }
@@ -762,12 +775,6 @@ void ApplicationContextImpl::CreateLocalState() {
   DCHECK(local_state_);
 
   sessions::SessionIdGenerator::GetInstance()->Init(local_state_.get());
-
-  net::ClientSocketPoolManager::set_max_sockets_per_proxy_chain(
-      net::HttpNetworkSession::NORMAL_SOCKET_POOL,
-      std::max(std::min<size_t>(net::kDefaultMaxSocketsPerProxyChain, 99u),
-               net::ClientSocketPoolManager::max_sockets_per_group(
-                   net::HttpNetworkSession::NORMAL_SOCKET_POOL)));
 
   // Cleanup obsolete preferences.
   MigrateObsoleteLocalStatePrefs(local_state_.get());

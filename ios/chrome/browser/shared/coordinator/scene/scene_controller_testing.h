@@ -7,17 +7,16 @@
 
 class Browser;
 struct UrlLoadParams;
-@class TabGridCoordinator;
-@class UserFeedbackData;
+@class SceneCoordinator;
 @class WrangledBrowser;
 
-using UserFeedbackDataCallback =
-    base::RepeatingCallback<void(UserFeedbackData*)>;
+// If `params` is for a Dino game URL, update transition type to allow opening.
+[[nodiscard]] UrlLoadParams UpdateParamsForDinoGame(UrlLoadParams params);
 
 // Methods exposed for testing. This is terrible and should be rewritten.
 @interface SceneController ()
 
-@property(nonatomic, strong) TabGridCoordinator* mainCoordinator;
+@property(nonatomic, strong) SceneCoordinator* mainCoordinator;
 
 - (void)addANewTabAndPresentBrowser:(Browser*)browser
                   withURLLoadParams:(const UrlLoadParams&)urlLoadParams;
@@ -28,13 +27,6 @@ using UserFeedbackDataCallback =
 // NO, then call `completion`.
 - (void)dismissModalDialogsWithCompletion:(ProceduralBlock)completion
                            dismissOmnibox:(BOOL)dismissOmnibox;
-
-// Presents the "Report an issue" screen within the given `timeout`.
-- (void)presentReportAnIssueViewController:(UIViewController*)baseViewController
-                                    sender:(UserFeedbackSender)sender
-                          userFeedbackData:(UserFeedbackData*)userFeedbackData
-                                   timeout:(base::TimeDelta)timeout
-                                completion:(UserFeedbackDataCallback)completion;
 
 - (WrangledBrowser*)currentInterface;
 

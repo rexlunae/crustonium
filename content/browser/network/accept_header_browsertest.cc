@@ -75,7 +75,7 @@ class AcceptHeaderTest : public ContentBrowserTest {
       result.append("image/jxl,");
     }
 #endif
-#if BUILDFLAG(ENABLE_AV1_DECODER)
+#if BUILDFLAG(ENABLE_DAV1D_DECODER)
     result.append("image/avif,");
 #endif
     return result;
@@ -152,12 +152,8 @@ IN_PROC_BROWSER_TEST_F(AcceptHeaderTest, Check) {
   // ResourceType::kWorker
   EXPECT_EQ("*/*", GetFor("/worker.js"));
 
-// Shared workers aren't implemented on Android.
-// https://bugs.chromium.org/p/chromium/issues/detail?id=154571
-#if !BUILDFLAG(IS_ANDROID)
   // ResourceType::kSharedWorker
   EXPECT_EQ("*/*", GetFor("/shared_worker.js"));
-#endif
 
   // ResourceType::kPrefetch
   EXPECT_EQ(expected_main_frame_accept_header, GetFor("/prefetch"));

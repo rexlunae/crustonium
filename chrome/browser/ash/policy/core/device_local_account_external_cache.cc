@@ -15,7 +15,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/ash/extensions/external_cache_impl.h"
-#include "chrome/browser/browser_process.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -23,11 +22,6 @@
 namespace chromeos {
 
 namespace {
-
-base::DictValue Merge(base::DictValue first, base::DictValue second) {
-  first.Merge(std::move(second));
-  return first;
-}
 
 std::set<std::string> GetKeys(const base::DictValue& dict) {
   std::set<std::string> keys;
@@ -51,14 +45,16 @@ base::DictValue FilterOnKeys(const base::DictValue& dict,
 }  // namespace
 
 DeviceLocalAccountExternalCache::DeviceLocalAccountExternalCache(
-    ExtensionListCallback ash_loader,
-    ExtensionListCallback lacros_loader,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    ExtensionListCallback loader,
     const std::string& user_id,
     const base::FilePath& cache_dir)
-    : user_id_(user_id),
+    : shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      user_id_(user_id),
       cache_dir_(cache_dir),
-      ash_loader_(ash_loader),
-      lacros_loader_(lacros_loader) {}
+      loader_(loader) {
+  CHECK(shared_url_loader_factory_);
+}
 
 DeviceLocalAccountExternalCache::~DeviceLocalAccountExternalCache() = default;
 
@@ -66,10 +62,8 @@ void DeviceLocalAccountExternalCache::StartCache(
     const scoped_refptr<base::SequencedTaskRunner>& cache_task_runner) {
   DCHECK(!external_cache_);
 
-  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory =
-      g_browser_process->shared_url_loader_factory();
   external_cache_ = std::make_unique<ExternalCacheImpl>(
-      cache_dir_, std::move(shared_url_loader_factory), cache_task_runner,
+      cache_dir_, shared_url_loader_factory_, cache_task_runner,
       /*delegate=*/this,
       /*always_check_updates=*/true,
       /*wait_for_cache_initialization=*/false,
@@ -77,14 +71,11 @@ void DeviceLocalAccountExternalCache::StartCache(
 }
 
 void DeviceLocalAccountExternalCache::UpdateExtensionsList(
-    base::DictValue ash_extensions,
-    base::DictValue lacros_extensions) {
-  ash_extension_keys_ = GetKeys(ash_extensions);
-  lacros_extension_keys_ = GetKeys(lacros_extensions);
+    base::DictValue extensions) {
+  extension_keys_ = GetKeys(extensions);
 
   if (external_cache_) {
-    external_cache_->UpdateExtensionsList(
-        Merge(std::move(ash_extensions), std::move(lacros_extensions)));
+    external_cache_->UpdateExtensionsList(std::move(extensions));
   }
 }
 
@@ -97,8 +88,7 @@ void DeviceLocalAccountExternalCache::StopCache(base::OnceClosure callback) {
   }
 
   base::DictValue empty_prefs;
-  ash_loader_.Run(user_id_, empty_prefs.Clone());
-  lacros_loader_.Run(user_id_, empty_prefs.Clone());
+  loader_.Run(user_id_, empty_prefs.Clone());
 }
 
 bool DeviceLocalAccountExternalCache::IsCacheRunning() const {
@@ -107,8 +97,7 @@ bool DeviceLocalAccountExternalCache::IsCacheRunning() const {
 
 void DeviceLocalAccountExternalCache::OnExtensionListsUpdated(
     const base::DictValue& prefs) {
-  lacros_loader_.Run(user_id_, FilterOnKeys(prefs, lacros_extension_keys_));
-  ash_loader_.Run(user_id_, FilterOnKeys(prefs, ash_extension_keys_));
+  loader_.Run(user_id_, FilterOnKeys(prefs, extension_keys_));
 }
 
 bool DeviceLocalAccountExternalCache::IsRollbackAllowed() const {

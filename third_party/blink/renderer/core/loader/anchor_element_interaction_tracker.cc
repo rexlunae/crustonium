@@ -15,6 +15,7 @@
 #include "third_party/blink/public/mojom/preloading/anchor_element_interaction_host.mojom-blink.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/web_network_state_notifier.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
@@ -22,11 +23,18 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/screen.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/anchor_element_metrics.h"
 #include "third_party/blink/renderer/core/html/anchor_element_metrics_sender.h"
 #include "third_party/blink/renderer/core/html/anchor_element_viewport_position_tracker.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/pointer_type_names.h"
+#include "third_party/blink/renderer/core/speculation_rules/document_speculation_rules.h"
+#include "third_party/blink/renderer/core/speculation_rules/speculation_rule_set.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -67,6 +75,44 @@ GetModerateViewportHeuristicConfigFromFeatureParams() {
       .distance_from_ptr_down_ratio_bounds = std::make_pair(low, high),
       .largest_anchor_threshold = std::max(kLargestAnchorThreshold.Get(), 0.0),
       .delay = kDelay.Get()};
+}
+
+// Minimum author-specifiable dwell time before the heuristic triggers. A
+// nonzero floor is enforced (per privacy review) so that authors cannot
+// configure the heuristic to fire essentially immediately.
+constexpr base::TimeDelta kMinModerateViewportHeuristicDelay =
+    base::Milliseconds(10);
+
+// Maximum author-specifiable dwell time before the heuristic triggers.
+constexpr base::TimeDelta kMaxModerateViewportHeuristicDelay = base::Seconds(5);
+
+// Applies author-specified "moderate_viewport_heuristics" overrides on top of
+// `config`, clamping each value to a safe range. Unspecified fields are left
+// unchanged.
+void ApplyAuthorModerateViewportHeuristicsOverrides(
+    ModerateViewportHeuristicConfig& config,
+    const ModerateViewportHeuristicsParams& params) {
+  double low = config.distance_from_ptr_down_ratio_bounds.first;
+  double high = config.distance_from_ptr_down_ratio_bounds.second;
+  if (params.distance_from_pointer_down_low.has_value()) {
+    low = std::clamp(*params.distance_from_pointer_down_low, -1.0, 1.0);
+  }
+  if (params.distance_from_pointer_down_high.has_value()) {
+    high = std::clamp(*params.distance_from_pointer_down_high, -1.0, 1.0);
+  }
+  high = std::max(low, high);
+  config.distance_from_ptr_down_ratio_bounds =
+      std::make_pair(static_cast<float>(low), static_cast<float>(high));
+
+  if (params.largest_anchor_threshold.has_value()) {
+    config.largest_anchor_threshold =
+        std::max(*params.largest_anchor_threshold, 0.0);
+  }
+
+  if (params.delay.has_value()) {
+    config.delay = std::clamp(*params.delay, kMinModerateViewportHeuristicDelay,
+                              kMaxModerateViewportHeuristicDelay);
+  }
 }
 
 ModerateViewportHeuristicConfig* g_config_for_testing = nullptr;
@@ -367,6 +413,32 @@ void AnchorElementInteractionTracker::OnPointerEvent(
     sender->MaybeReportAnchorElementPointerEvent(*anchor, pointer_event);
   }
 
+  if (event_type == event_type_names::kPointerdown) {
+    if (!pointer_event.IsLinkClickButton()) {
+      return;
+    }
+    // With renderer-side heuristics on, the renderer owns speculation candidate
+    // selection and enactment.
+    if (base::FeatureList::IsEnabled(
+            features::kSpeculationRulesRendererSideHeuristics)) {
+      if (auto* rules =
+              DocumentSpeculationRules::FromIfExists(*GetDocument())) {
+        rules->OnPointerDownHeuristic(url);
+      }
+    }
+    // Notify the browser regardless: it still owns the generic pointerdown side
+    // effects (HTTP disk cache and service worker prewarm) that don't depend on
+    // speculation-rule candidate selection.
+    //
+    // interaction_host_ can be unbound: Android's low-memory detector calls
+    // NotifyContextDestroyed, unbinding pipes for pages that can still
+    // navigate.
+    if (interaction_host_.is_bound()) {
+      interaction_host_->OnPointerDown(url);
+    }
+    return;
+  }
+
   // interaction_host_ might become unbound: Android's low memory detector
   // sometimes call NotifyContextDestroyed to save memory. This unbinds mojo
   // pipes using that ExecutionContext even if those pages can still navigate.
@@ -374,15 +446,7 @@ void AnchorElementInteractionTracker::OnPointerEvent(
     return;
   }
 
-  if (event_type == event_type_names::kPointerdown) {
-    if (!pointer_event.IsLinkClickButton()) {
-      return;
-    }
-    interaction_host_->OnPointerDown(url);
-    return;
-  }
-
-  if (event_type == event_type_names::kPointerover) {
+  if (event_type == event_type_names::kPointerover && IsPreloadingEligible()) {
     if (base::FeatureList::IsEnabled(
             blink::features::kPreloadingEagerHoverHeuristics)) {
       // TODO(https://crbug.com/40287486): guard this to only be on desktop, and
@@ -543,7 +607,7 @@ AnchorElementInteractionTracker::FirstAnchorElementIncludingSelf(Node* node) {
 KURL AnchorElementInteractionTracker::GetHrefEligibleForPreloading(
     const HTMLAnchorElementBase& anchor) {
   KURL url = anchor.Href();
-  if (!url.ProtocolIsInHTTPFamily()) {
+  if (!url.ProtocolIsInHttpFamily()) {
     return KURL();
   }
   if (base::FeatureList::IsEnabled(
@@ -562,6 +626,14 @@ void AnchorElementInteractionTracker::ViewportIntersectionUpdate(
     const HeapVector<Member<const HTMLAnchorElementBase>>& left_viewport) {
   if (!base::FeatureList::IsEnabled(
           blink::features::kPreloadingEagerViewportHeuristics)) {
+    return;
+  }
+  // TODO(https://crbug.com/505056924): The state of IsPreloadingEligible may be
+  // dynamically changed in the future changes, make sure the state is reflected
+  // correctly at the point.
+  if (!IsPreloadingEligible()) {
+    eager_viewport_heuristics_candidates_.clear();
+    eager_viewport_heuristic_timer_.Stop();
     return;
   }
   Vector<KURL> to_be_removed;
@@ -602,7 +674,37 @@ void AnchorElementInteractionTracker::AnchorPositionsUpdated(
           blink::features::kPreloadingModerateViewportHeuristics)) {
     return;
   }
-  const ModerateViewportHeuristicConfig& config = GetViewportHeuristicConfig();
+  // TODO(https://crbug.com/505056924): The state of IsPreloadingEligible may be
+  // dynamically changed in the future changes, make sure the state is reflected
+  // correctly at the point.
+  if (!IsPreloadingEligible()) {
+    largest_anchor_element_in_viewport_ = nullptr;
+    moderate_viewport_heuristic_timer_.Stop();
+    return;
+  }
+  ModerateViewportHeuristicConfig config = GetViewportHeuristicConfig();
+
+  // Layer author-specified overrides (from a ruleset-level
+  // "moderate_viewport_heuristics" object) on top of the default config when
+  // the SpeculationRulesModerateViewportHeuristicsControl origin trial is
+  // enabled for this document.
+  if (RuntimeEnabledFeatures::
+          SpeculationRulesModerateViewportHeuristicsControlEnabled(
+              GetDocument()->GetExecutionContext())) {
+    if (auto* document_rules =
+            DocumentSpeculationRules::FromIfExists(*GetDocument())) {
+      if (auto params = document_rules->GetModerateViewportHeuristicsParams()) {
+        ApplyAuthorModerateViewportHeuristicsOverrides(config, *params);
+        // Counted here (rather than at parse time) so the metric reflects rules
+        // whose params actually take effect under the origin trial, and isn't
+        // missed when a third-party trial token is registered only after the
+        // rules were parsed.
+        UseCounter::Count(
+            GetDocument()->GetExecutionContext(),
+            WebFeature::kSpeculationRulesModerateViewportHeuristicsControl);
+      }
+    }
+  }
 
   // Reset the delay timer (if active); this could happen if a programmatic
   // scroll happened after the timer started.
@@ -653,6 +755,22 @@ void AnchorElementInteractionTracker::AnchorPositionsUpdated(
   moderate_viewport_heuristic_timer_.StartOneShot(config.delay, FROM_HERE);
 }
 
+bool AnchorElementInteractionTracker::IsPreloadingEligible() {
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kPreloadingEligibilityCheckOnRenderer)) {
+    return true;
+  }
+
+  bool data_saver = blink::WebNetworkStateNotifier::SaveDataEnabled();
+  bool battery_saver =
+      GetDocument() && GetDocument()->GetPage() &&
+      GetDocument()->GetPage()->GetSettings().GetBatterySaverEnabled();
+  bool preloading_disabled =
+      GetDocument() && GetDocument()->GetPage() &&
+      GetDocument()->GetPage()->GetSettings().GetPreloadingDisabled();
+  return !(data_saver || battery_saver || preloading_disabled);
+}
+
 void AnchorElementInteractionTracker::ModerateViewportHeuristicTimerFired(
     TimerBase* timer) {
   CHECK(base::FeatureList::IsEnabled(
@@ -668,8 +786,10 @@ void AnchorElementInteractionTracker::ModerateViewportHeuristicTimerFired(
     return;
   }
 
-  interaction_host_->OnModerateViewportHeuristicTriggered(
-      largest_anchor_element_in_viewport_->Url());
+  if (IsPreloadingEligible()) {
+    interaction_host_->OnModerateViewportHeuristicTriggered(
+        largest_anchor_element_in_viewport_->Url());
+  }
 }
 
 void AnchorElementInteractionTracker::EagerViewportHeuristicTimerFired(
@@ -696,7 +816,7 @@ void AnchorElementInteractionTracker::EagerViewportHeuristicTimerFired(
     return;
   }
 
-  if (!fired_candidates.empty()) {
+  if (!fired_candidates.empty() && IsPreloadingEligible()) {
     interaction_host_->OnEagerViewportHeuristicTriggered(fired_candidates);
   }
   RemoveAll(eager_viewport_heuristics_candidates_, fired_candidates);

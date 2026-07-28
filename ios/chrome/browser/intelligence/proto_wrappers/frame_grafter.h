@@ -6,6 +6,7 @@
 #define IOS_CHROME_BROWSER_INTELLIGENCE_PROTO_WRAPPERS_FRAME_GRAFTER_H_
 
 #import <map>
+#import <vector>
 
 #import "base/functional/callback_forward.h"
 #import "base/memory/raw_ptr.h"
@@ -32,6 +33,11 @@
 // See "Keeping the iframes’ tree hierarchy" in http://shortn/_YOb7kQCI0i.
 class FrameGrafter {
  public:
+  struct FrameContent {
+    optimization_guide::proto::ContentNode content;
+    optimization_guide::proto::FrameData frame_data;
+  };
+
   FrameGrafter();
   ~FrameGrafter();
 
@@ -48,8 +54,7 @@ class FrameGrafter {
   // be declared nor handled more than once. The returned pointer is owned by
   // the FrameGrafter and remains valid until ResolveUnregisteredContent() is
   // called.
-  optimization_guide::proto::ContentNode* DeclareContent(
-      autofill::LocalFrameToken token);
+  FrameContent* DeclareContent(autofill::LocalFrameToken token);
 
   // Returns the remote frame tokens for all registered placeholders.
   std::vector<autofill::RemoteFrameToken> GetRemoteFrames() const;
@@ -57,19 +62,21 @@ class FrameGrafter {
   // Resolves all unregistered content by using `mapping_lookup` to map
   // placeholders to their content (RemoteFrameToken => LocalFrameToken
   // mapping). The `placer` is used to complete grafting of content that doesn't
-  // match a placeholder. Call this function when it is determined that (1) all
-  // the frames were processed, (2) their content extracted, and (3) frame
-  // registration was completed.
+  // match a placeholder. The `unresolved_placeholder_handler` is called for
+  // each placeholder that could not be mapped to any frame content. Call this
+  // function when it is determined that (1) all the frames were processed, (2)
+  // their content extracted, and (3) frame registration was completed.
   void ResolveUnregisteredContent(
       base::RepeatingCallback<std::optional<autofill::LocalFrameToken>(
           autofill::RemoteFrameToken)> mapping_lookup,
+      base::RepeatingCallback<void(FrameContent unregistered)> placer,
       base::RepeatingCallback<
-          void(optimization_guide::proto::ContentNode unregistered)> placer);
+          void(optimization_guide::proto::ContentNode* unresolved)>
+          unresolved_placeholder_handler);
 
  private:
   // Frame content that wasn't claimed yet (unregistered).
-  std::map<autofill::LocalFrameToken, optimization_guide::proto::ContentNode>
-      unregistered_content_;
+  std::map<autofill::LocalFrameToken, FrameContent> unregistered_content_;
   // Placeholders waiting for content.
   std::map<autofill::RemoteFrameToken,
            raw_ptr<optimization_guide::proto::ContentNode>>

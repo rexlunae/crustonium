@@ -7,7 +7,6 @@
 #import <Foundation/Foundation.h>
 
 #include "base/strings/sys_string_conversions.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "net/base/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -239,7 +238,6 @@ TEST_F(URLConversionTest, TestNSURLWithGURLCanBeNil) {
 }
 
 TEST_F(URLConversionTest, TestGURLWithNSURLFeatureEnabled) {
-  base::HistogramTester histogram_tester;
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndEnableFeature(
       features::kUseNSURLDataForGURLConversion);
@@ -247,22 +245,22 @@ TEST_F(URLConversionTest, TestGURLWithNSURLFeatureEnabled) {
   NSURL* url = [NSURL URLWithString:@"about:blank#hash"];
   GURL gurl = GURLWithNSURL(url);
   EXPECT_EQ("about:blank#hash", gurl.spec());
-  histogram_tester.ExpectUniqueSample("Net.Apple.NSURL.DataMismatch", true, 1);
 }
 
 TEST_F(URLConversionTest, TestGURLWithNSURLFeatureDisabled) {
-  base::HistogramTester histogram_tester;
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kUseNSURLDataForGURLConversion);
 
   NSURL* url = [NSURL URLWithString:@"about:blank#hash"];
   GURL gurl = GURLWithNSURL(url);
-  // If this test fails, it means Apple has fixed the bug in NSURL's
-  // absoluteString, and the kUseNSURLDataForGURLConversion workaround can be
-  // removed.
-  EXPECT_EQ("about:blank%23hash", gurl.spec());
-  histogram_tester.ExpectTotalCount("Net.Apple.NSURL.DataMismatch", 0);
+
+  if (@available(anyAppleOS 27.0, *)) {
+    // If this test fails, it means Apple has broken the bug fix in iOS 27+.
+    EXPECT_EQ("about:blank#hash", gurl.spec());
+  } else {
+    EXPECT_EQ("about:blank%23hash", gurl.spec());
+  }
 }
 
 }  // namespace

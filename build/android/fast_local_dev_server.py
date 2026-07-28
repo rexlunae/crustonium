@@ -40,6 +40,17 @@ FIRST_LOG_LINE = """\
 BUILD_ID_RE = re.compile(r'^#### Start of log for build: (?P<build_id>.+)')
 
 
+def _safe_write(obj: IO[str], data: str):
+  try:
+    obj.write(data)
+    obj.flush()
+  except BrokenPipeError:
+    pass
+  except OSError as e:
+    if e.errno != 5:
+      raise
+
+
 def server_log(msg: str):
   if OptionsManager.is_quiet():
     return
@@ -383,9 +394,21 @@ class BuildManager:
       with cls._lock:
         if build.cwd is None:
           build.cwd = cwd
-        else:
-          assert pathlib.Path(cwd).samefile(
-              build.cwd), f'{repr(cwd)} != {repr(build.cwd)}'
+        elif cwd != build.cwd:
+          # When Siso path virtualization is enabled (e.g., via
+          # SISO_USE_VIRTUAL_BUILD_PATH=1), build actions run in an ephemeral
+          # mount namespace where CWD is virtualized (e.g.,
+          # /tmp/siso_virtual_build_path/out/AL).
+          # The persistent dev server daemon running in a different namespace
+          # cannot resolve these virtual paths, causing samefile() to throw
+          # FileNotFoundError. If the paths are string-identical, we can skip
+          # samefile verification.
+          try:
+            if not pathlib.Path(cwd).samefile(build.cwd):
+              raise AssertionError(f'{repr(cwd)} != {repr(build.cwd)}')
+          except FileNotFoundError as e:
+            raise AssertionError(
+                f'{repr(cwd)} != {repr(build.cwd)} (paths do not exist)') from e
         build.ensure_logfile()
 
   @classmethod
@@ -428,11 +451,7 @@ class BuildManager:
       builds = list(cls._builds_by_id.values())
     if OptionsManager.should_remote_print():
       for tty, _unused in ttys:
-        try:
-          tty.write(msg + '\n')
-          tty.flush()
-        except BrokenPipeError:
-          pass
+        _safe_write(tty, msg + '\n')
     for build in builds:
       build.log(msg)
     # Write to the current terminal if we have not written to it yet.
@@ -456,11 +475,7 @@ class BuildManager:
       ttys = list(cls._cached_ttys.values())
     for tty, isatty in ttys:
       if isatty:
-        try:
-          tty.write(f'\033]2;{new_title}\007')
-          tty.flush()
-        except BrokenPipeError:
-          pass
+        _safe_write(tty, f'\033]2;{new_title}\007')
 
   @classmethod
   def has_active_builds(cls):
@@ -689,8 +704,7 @@ class Task:
         remote_message = '\n'.join(preamble + [stdout])
         # Add a new line at start of message to clearly delineate from previous
         # output/text already on the remote tty we are printing to.
-        self.build.stdout.write(f'\n{remote_message}')
-        self.build.stdout.flush()
+        _safe_write(self.build.stdout, f'\n{remote_message}')
     if delete_stamp and self.stamp_file:
       # Force siso to consider failed targets as dirty.
       try:

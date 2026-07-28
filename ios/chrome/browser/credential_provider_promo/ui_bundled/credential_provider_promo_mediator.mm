@@ -13,7 +13,6 @@
 #import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/credential_provider_promo/ui_bundled/credential_provider_promo_consumer.h"
 #import "ios/chrome/browser/promos_manager/model/constants.h"
-#import "ios/chrome/browser/promos_manager/model/features.h"
 #import "ios/chrome/browser/promos_manager/model/promos_manager.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
@@ -30,32 +29,14 @@ NSString* const kLearnMoreAnimation = @"CPE_promo_animation_edu_how_to_enable";
 
 // Returns the title string to use when the promo context is `kFirstStep`.
 NSString* GetFirstStepTitleString() {
-  if (@available(iOS 18.0, *)) {
-    return l10n_util::GetNSString(
-        IDS_IOS_CREDENTIAL_PROVIDER_PROMO_TITLE_IOS18);
-  } else {
-    return l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_TITLE);
-  }
-}
-
-// Returns the subtitle string to use when the promo context is `kFirstStep`.
-NSString* GetFirstStepSubtitleString() {
-  if (@available(iOS 18.0, *)) {
-    return nil;
-  } else {
-    return l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_SUBTITLE);
-  }
+  return l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_TITLE);
 }
 
 // Returns the primary action string to use when the promo context is
 // `kFirstStep`.
 NSString* GetFirstStepPrimaryActionString() {
-  if (@available(iOS 18.0, *)) {
-    return l10n_util::GetNSString(
-        IDS_IOS_CREDENTIAL_PROVIDER_SETTINGS_TURN_ON_AUTOFILL);
-  } else {
-    return l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_LEARN_HOW);
-  }
+  return l10n_util::GetNSString(
+      IDS_IOS_CREDENTIAL_PROVIDER_SETTINGS_TURN_ON_AUTOFILL);
 }
 
 // Returns the subtitle string to use when the promo context is `kLearnMore`.
@@ -139,7 +120,7 @@ NSString* GetLearnMoreSubtitleString() {
       break;
   }
 
-  [self setTextAndImageWithSource:source];
+  [self updateConsumerWithSource:source];
 
   // Set the promo source in the Prefs. Skip for 'RemindMeLater' triggers as
   // source is already present.
@@ -177,41 +158,45 @@ NSString* GetLearnMoreSubtitleString() {
 // or 'learn more' animation name is set.
 - (void)setAnimation {
   DCHECK(self.consumer);
-  NSString* animationName;
-  if (self.promoContext == CredentialProviderPromoContext::kFirstStep) {
-    animationName = kFirstStepAnimation;
-  } else {
-    animationName = kLearnMoreAnimation;
-  }
+  NSString* animationName =
+      (self.promoContext == CredentialProviderPromoContext::kFirstStep)
+          ? kFirstStepAnimation
+          : kLearnMoreAnimation;
   [self.consumer setAnimation:animationName];
 }
 
-// Sets the text and image to the consumer. The text set depends on the value of
-// promoContext. When `source` is kPasswordCopied, no image is set.
-- (void)setTextAndImageWithSource:(IOSCredentialProviderPromoSource)source {
+// Configures the consumer depending on the promo's source and context.
+- (void)updateConsumerWithSource:(IOSCredentialProviderPromoSource)source {
   DCHECK(self.consumer);
+
   NSString* titleString;
   NSString* subtitleString;
   NSString* primaryActionString;
   UIImage* image;
-  NSString* secondaryActionString =
-      l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_NO_THANKS);
   NSString* tertiaryActionString =
       l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_REMIND_ME_LATER);
 
-  if (self.promoContext == CredentialProviderPromoContext::kFirstStep) {
-    titleString = GetFirstStepTitleString();
-    subtitleString = GetFirstStepSubtitleString();
-    primaryActionString = GetFirstStepPrimaryActionString();
-    image = ios::provider::GetBrandedImage(
-        ios::provider::BrandedImage::kPasswordSuggestionKey);
-  } else {
-    titleString = l10n_util::GetNSString(
-        IDS_IOS_CREDENTIAL_PROVIDER_PROMO_LEARN_MORE_TITLE);
-    subtitleString = GetLearnMoreSubtitleString();
-    primaryActionString = l10n_util::GetNSString(
-        IDS_IOS_CREDENTIAL_PROVIDER_PROMO_GO_TO_SETTINGS);
+  switch (self.promoContext) {
+    case CredentialProviderPromoContext::kFirstStep:
+      titleString = GetFirstStepTitleString();
+      primaryActionString = GetFirstStepPrimaryActionString();
+      image = ios::provider::GetBrandedImage(
+          ios::provider::BrandedImage::kPasswordSuggestionKey);
+      break;
+    case CredentialProviderPromoContext::kLearnMore:
+      titleString = l10n_util::GetNSString(
+          IDS_IOS_CREDENTIAL_PROVIDER_PROMO_LEARN_MORE_TITLE);
+      subtitleString = GetLearnMoreSubtitleString();
+      primaryActionString = l10n_util::GetNSString(
+          IDS_IOS_CREDENTIAL_PROVIDER_PROMO_GO_TO_SETTINGS);
+      break;
   }
+
+  // No secondary action button for the kTipsNotification source.
+  NSString* secondaryActionString =
+      (source == IOSCredentialProviderPromoSource::kTipsNotification)
+          ? nil
+          : l10n_util::GetNSString(IDS_IOS_CREDENTIAL_PROVIDER_PROMO_NO_THANKS);
 
   [self.consumer setTitleString:titleString
                  subtitleString:subtitleString

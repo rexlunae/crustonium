@@ -18,6 +18,9 @@
 #import "ios/web/public/web_state_observer.h"
 
 namespace {
+// Limit the lengh of sanitized url used as filename to prevent error from
+// filename being too long.
+NSUInteger kUrlLengthLimit = 50;
 
 // Self-deleting observer that waits for a page to finish loading.
 class SelfDestructivePageLoadObserver : public web::WebStateObserver {
@@ -125,10 +128,20 @@ SavePageContextResult& SavePageContextResult::operator=(
 
 PageContextWrapper* CreatePageContextWrapper(
     web::WebState* web_state,
+    bool rich_extraction,
     base::OnceCallback<void(PageContextWrapperCallbackResponse)>
         completion_callback) {
+  PageContextWrapperConfigBuilder builder;
+  if (rich_extraction) {
+    builder.SetUseRichExtraction(true)
+        .SetUseRefactoredExtractor(true)
+        .SetGraftCrossOriginFrameContent(true)
+        .SetExtractPaidContent(true);
+  }
+  PageContextWrapperConfig config = builder.Build();
   PageContextWrapper* page_context_wrapper = [[PageContextWrapper alloc]
         initWithWebState:web_state
+                  config:config
       completionCallback:std::move(completion_callback)];
   [page_context_wrapper setShouldGetAnnotatedPageContent:YES];
   [page_context_wrapper setShouldGetSnapshot:YES];
@@ -187,6 +200,9 @@ SavePageContextResult SaveSerializedPageContextToDisk(
 std::string FileNameForPageContext(
     const optimization_guide::proto::PageContext& page_context) {
   NSString* urlString = base::SysUTF8ToNSString(page_context.url());
+  if ([urlString length] > kUrlLengthLimit) {
+    urlString = [urlString substringToIndex:kUrlLengthLimit];
+  }
   NSString* fileName =
       [SanitizeUrl(urlString) stringByAppendingString:@".txtpb"];
   return base::SysNSStringToUTF8(fileName);

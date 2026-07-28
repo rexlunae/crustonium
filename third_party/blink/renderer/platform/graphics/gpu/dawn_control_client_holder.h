@@ -12,11 +12,12 @@
 #include "base/memory/weak_ptr.h"
 #include "gpu/command_buffer/client/webgpu_interface.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_cpp.h"
-#include "third_party/blink/renderer/platform/graphics/gpu/webgpu_resource_provider_cache.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/webgpu_shared_image_wrapper_cache.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace base {
 
@@ -59,8 +60,12 @@ class PLATFORM_EXPORT DawnControlClientHolder
   wgpu::Instance GetWGPUInstance() const;
   void MarkContextLost();
   bool IsContextLost() const;
-  std::unique_ptr<RecyclableCanvasResource> GetOrCreateCanvasResource(
-      const SkImageInfo& info);
+  std::unique_ptr<WebGpuSharedImageWrapperLease> LeaseWebGpuSharedImageWrapper(
+      viz::SharedImageFormat format,
+      gfx::Size size,
+      const gfx::ColorSpace& color_space,
+      const gfx::HDRMetadata& hdr_metadata,
+      SkAlphaType alpha_type);
 
   // Flush commands on this client immediately.
   void Flush();
@@ -78,7 +83,7 @@ class PLATFORM_EXPORT DawnControlClientHolder
   std::unique_ptr<WebGraphicsContext3DProviderWrapper> context_provider_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   scoped_refptr<gpu::webgpu::APIChannel> api_channel_;
-  WebGPURecyclableResourceCache recyclable_resource_cache_;
+  WebGpuSharedImageWrapperCache shared_image_wrapper_cache_;
   Vector<base::WeakPtr<WebGPUMailboxTexture>> mailbox_textures_;
 
   base::WeakPtrFactory<DawnControlClientHolder> weak_ptr_factory_{this};

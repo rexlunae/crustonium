@@ -29,8 +29,6 @@ namespace web_app {
 class AbstractWebAppDatabaseFactory;
 class ExternallyManagedAppManager;
 class FileUtilsWrapper;
-class IsolatedWebAppDevInstallManager;
-class IsolatedWebAppUpdateManager;
 class OsIntegrationManager;
 class PreinstalledWebAppManager;
 class WebAppCommandManager;
@@ -60,6 +58,9 @@ class WebAppRunOnOsLoginManager;
 // * All access to `WebContents` is redirected to the `FakeWebContentsManager`
 //   (accessible via `GetFakeWebContentsManager()`), which stores & returns
 //   results for any interaction here.
+// * Integration with the Extensions system is intercepted by
+//   `FakeExtensionsManager` to prevent hangs waiting for the real global
+//   system.
 //
 // Other features & notes:
 // * FakeWebAppProvider is used by default in unit tests, as the
@@ -150,11 +151,6 @@ class FakeWebAppProvider : public WebAppProvider {
   void SetWebAppUiManager(std::unique_ptr<WebAppUiManager> ui_manager);
   void SetWebAppPolicyManager(
       std::unique_ptr<WebAppPolicyManager> web_app_policy_manager);
-  void SetIsolatedWebAppDevInstallManager(
-      std::unique_ptr<IsolatedWebAppDevInstallManager>
-          isolated_web_app_dev_install_manager);
-  void SetIsolatedWebAppUpdateManager(
-      std::unique_ptr<IsolatedWebAppUpdateManager> iwa_update_manager);
 #if BUILDFLAG(IS_CHROMEOS)
   void SetWebAppRunOnOsLoginManager(std::unique_ptr<WebAppRunOnOsLoginManager>
                                         web_app_run_on_os_login_manager);

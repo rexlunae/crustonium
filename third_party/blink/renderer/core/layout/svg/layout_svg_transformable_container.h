@@ -28,7 +28,7 @@ namespace blink {
 
 class SVGGraphicsElement;
 
-class LayoutSVGTransformableContainer final : public LayoutSVGContainer {
+class LayoutSVGTransformableContainer : public LayoutSVGContainer {
  public:
   explicit LayoutSVGTransformableContainer(SVGGraphicsElement*);
 
@@ -42,18 +42,23 @@ class LayoutSVGTransformableContainer final : public LayoutSVGContainer {
     NOT_DESTROYED();
     return additional_translation_;
   }
+  AffineTransform LocalSVGTransform() const override {
+    NOT_DESTROYED();
+    return local_transform_;
+  }
 
- private:
+  virtual bool HasAdditionalTransform() const {
+    NOT_DESTROYED();
+    return !additional_translation_.IsZero();
+  }
+
+ protected:
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
                       const StyleChangeContext&) override;
   void WillBeDestroyed() override;
   SVGTransformChange UpdateLocalTransform(
       const gfx::RectF& reference_box) override;
-  AffineTransform LocalSVGTransform() const override {
-    NOT_DESTROYED();
-    return local_transform_;
-  }
 
   AffineTransform local_transform_;
   gfx::Vector2dF additional_translation_;

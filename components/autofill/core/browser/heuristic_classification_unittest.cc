@@ -154,9 +154,8 @@
 #include "components/autofill/core/common/autofill_test_utils.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/language_code.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
-#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/variations/variations_switches.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -576,16 +575,16 @@ void HeuristicClassificationTests::SetUp() {
     optimization_guide::proto::ModelInfo model_metadata;
     ASSERT_TRUE(model_metadata.ParseFromString(proto_content));
 
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        optimization_guide::TestModelInfoBuilder()
-            .SetModelMetadata(/*any_metadata*/ model_metadata.model_metadata())
-            .SetModelFilePath(model_path.AppendASCII("model.tflite"))
-            .Build();
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path = model_path.AppendASCII("model.tflite"),
+        .version = 123,
+        .model_metadata = model_metadata.model_metadata(),
+    };
 
     ml_predictions_handler_.OnModelUpdated(
         optimization_guide::proto::
             OPTIMIZATION_TARGET_AUTOFILL_FIELD_CLASSIFICATION,
-        *model_info);
+        model_info);
   }
 }
 
@@ -596,17 +595,13 @@ std::vector<std::pair<base::test::FeatureRef, bool>> GetWipFeatures(
   std::vector<std::pair<base::test::FeatureRef, bool>> features = {
       // Support for new field types.
       {features::kAutofillUseINAddressModel, true},
-      {features::kAutofillSupportPhoneticNameForJP, true},
       {features::kAutofillEnableExpirationDateImprovements, true},
-      {features::kAutofillSupportLastNamePrefix, true},
+      {features::kAutofillSupportCombinedZipAndCityFR, true},
       {features::kAutofillSupportSplitZipCode, true},
       // Other improvements.
-      {features::kAutofillEnableSupportForParsingWithSharedLabels, true},
       {features::kAutofillUseNegativePatternForAllAttributes, true},
       {features::kAutofillDisallowMoreHyphenLikeLabels, true},
       {features::kAutofillFixStateCountryMisclassification, true},
-      {features::kAutofillFixCivilStateMisclassificationForESPT, true},
-      {features::kAutofillAddressImproveBuildingNumberRegex, true},
       // TODO(crbug.com/320965828): Understand the changes to the expectations
       // caused by this feature.
       {features::kAutofillBetterLocalHeuristicPlaceholderSupport, false},
@@ -667,7 +662,6 @@ TEST_P(HeuristicClassificationTests, EndToEnd) {
 
   base::test::ScopedFeatureList ml_scoped_feature_list;
   if (EnableMLClassification()) {
-    ASSERT_TRUE(BUILDFLAG(BUILD_WITH_TFLITE_LIB));
     ASSERT_TRUE(base::CommandLine::ForCurrentProcess()->HasSwitch(
         "optimization-guide-model-override"))
         << "No model specified.";

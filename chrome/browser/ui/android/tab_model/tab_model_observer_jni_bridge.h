@@ -13,8 +13,8 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
+#include "chrome/browser/tab_list/tab_list_interface_observer.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
-#include "chrome/browser/ui/tabs/tab_list_interface_observer.h"
 
 class TabAndroid;
 class TabModel;
@@ -58,7 +58,7 @@ class TabModelObserverJniBridge {
 
   void WillAddTab(JNIEnv* env, TabAndroid* tab, int type);
 
-  void DidAddTab(JNIEnv* env, TabAndroid* tab, int type);
+  void DidAddTab(JNIEnv* env, TabAndroid* tab, int type, int index);
 
   void DidMoveTab(JNIEnv* env, TabAndroid* tab, int new_index, int cur_index);
 
@@ -66,13 +66,19 @@ class TabModelObserverJniBridge {
                          const std::vector<TabAndroid*>& tabs,
                          int source);
 
-  void TabClosureUndone(JNIEnv* env, TabAndroid* tab);
+  void TabClosureUndone(JNIEnv* env, TabAndroid* tab, int index);
 
-  void OnTabCloseUndone(JNIEnv* env, const std::vector<TabAndroid*>& tabs);
+  void OnTabCloseUndone(JNIEnv* env,
+                        const std::vector<TabAndroid*>& tabs,
+                        const std::vector<int>& indices);
+
+  void OnTabsSelectionChanged(JNIEnv* env);
 
   void TabClosureCommitted(JNIEnv* env, TabAndroid* tab);
 
   void AllTabsClosureCommitted(JNIEnv* env);
+
+  void AllTabsAreClosing(JNIEnv* env);
 
   void TabRemoved(JNIEnv* env, TabAndroid* tab);
 

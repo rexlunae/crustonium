@@ -25,7 +25,6 @@
 #include "build/branding_buildflags.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
@@ -196,7 +195,7 @@ void ComponentExtensionIMEManagerDelegateImpl::Load(
   auto* copied_file_path = new base::FilePath(file_path);
   base::ThreadPool::PostTaskAndReplyWithResult(
       // USER_BLOCKING because it is on the critical path of displaying the
-      // virtual keyboard. See https://crbug.com/976542
+      // virtual keyboard. See https://crbug.com/137685106
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(&CheckFilePath, base::Unretained(copied_file_path)),
       base::BindOnce(&OnFilePathChecked, base::Unretained(context),

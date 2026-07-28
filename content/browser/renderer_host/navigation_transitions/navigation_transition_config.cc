@@ -4,8 +4,11 @@
 
 #include "content/browser/renderer_host/navigation_transitions/navigation_transition_config.h"
 
-#include "base/android/jni_callback.h"
+#include "base/android/callback_android.h"
 #include "base/auto_reset.h"
+#include "base/byte_size.h"
+#include "base/debug/crash_logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
@@ -42,13 +45,14 @@ size_t GetMaxCacheSizeInBytes() {
 // static
 bool NavigationTransitionConfig::SupportsBackForwardTransitions(
     base::PassKey<ContentBrowserClient>) {
-  return base::SysInfo::AmountOfPhysicalMemory().InMiB() >=
-         g_min_required_physical_ram_mb;
+  return base::SysInfo::AmountOfTotalPhysicalMemory() >=
+         base::MiBU(
+             base::checked_cast<uint64_t>(g_min_required_physical_ram_mb));
 }
 
 // static
 size_t NavigationTransitionConfig::ComputeCacheSizeInBytes() {
-  // TODO(crbug.com/429140103): Convert the return type to ByteCount.
+  // TODO(crbug.com/429140103): Convert the return type to ByteSize.
 
   // Assume 4 bytes per pixel. This value estimates the max number of bytes of
   // the physical screen's uncompressed bitmap.
@@ -66,7 +70,7 @@ size_t NavigationTransitionConfig::ComputeCacheSizeInBytes() {
       display_size_in_bytes * kMaxScreenshotCount;
 
   size_t physical_memory_budget =
-      (base::SysInfo::AmountOfPhysicalMemory().InBytes() *
+      (base::SysInfo::AmountOfTotalPhysicalMemory().InBytes() *
        kPercentageOfRamToUse) /
       100;
   physical_memory_budget =
@@ -77,6 +81,16 @@ size_t NavigationTransitionConfig::ComputeCacheSizeInBytes() {
   // We should at least be able to cache one uncompressed screenshot.
   physical_memory_budget =
       std::max(display_size_in_bytes, physical_memory_budget);
+
+  static auto* const display_size_key = base::debug::AllocateCrashKeyString(
+      "dnt_display_size_bytes", base::debug::CrashKeySize::Size32);
+  static auto* const budget_key = base::debug::AllocateCrashKeyString(
+      "dnt_budget_bytes", base::debug::CrashKeySize::Size32);
+
+  base::debug::SetCrashKeyString(display_size_key,
+                                 base::NumberToString(display_size_in_bytes));
+  base::debug::SetCrashKeyString(budget_key,
+                                 base::NumberToString(physical_memory_budget));
 
   return physical_memory_budget;
 }

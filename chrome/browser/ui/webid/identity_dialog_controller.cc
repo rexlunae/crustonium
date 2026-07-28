@@ -17,7 +17,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/segmentation_platform/segmentation_platform_service_factory.h"
 #include "chrome/browser/ui/webid/account_selection_view.h"
-#include "chrome/browser/webid/federated_actor_login_request.h"
 #include "chrome/browser/webid/identity_provider_permission_request.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_driver.h"
@@ -27,7 +26,9 @@
 #include "components/segmentation_platform/public/result.h"
 #include "components/segmentation_platform/public/segmentation_platform_service.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom-shared.h"
+#include "content/public/browser/webid/federated_embedder_login_request.h"
+#include "content/public/browser/webid/identity_credential_source.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom-shared.h"
 
 // We add nognchecks on these includes so that Android bots do not fail
 // dependency checks.
@@ -36,6 +37,8 @@
 #include "chrome/browser/ui/views/webid/fedcm_account_selection_view_desktop.h"  // nogncheck
 #include "components/tabs/public/tab_interface.h"  // nogncheck
 #endif
+
+using content::webid::FederatedLoginResult;
 
 IdentityDialogController::IdentityDialogController(
     content::WebContents* rp_web_contents,
@@ -52,13 +55,20 @@ IdentityDialogController::IdentityDialogController(
     actor_task_state_subscription_ = actor_service->AddTaskStateChangedCallback(
         base::BindRepeating(&IdentityDialogController::OnActorTaskStateChanged,
                             weak_ptr_factory_.GetWeakPtr()));
+    const actor::ActorTask* acting_task =
+        actor_service->GetActingActorTaskForWebContents(rp_web_contents_);
+    if (acting_task) {
+      acting_task_id_ = acting_task->id();
+    }
   }
 
   if (!base::FeatureList::IsEnabled(
           segmentation_platform::features::kSegmentationPlatformFedCmUser)) {
+    passive_dialog_volume_ = PassiveDialogVolume::kDefault;
     return;
   }
   if (profile->IsOffTheRecord()) {
+    passive_dialog_volume_ = PassiveDialogVolume::kDefault;
     return;
   }
 
@@ -75,13 +85,23 @@ IdentityDialogController::IdentityDialogController(
     optimization_guide_decider_->RegisterOptimizationTypes(
         {optimization_guide::proto::OptimizationType::FEDCM_CLICKTHROUGH_RATE});
   }
+
+  if (segmentation_platform_service_) {
+    RequestUiVolumeRecommendation(
+        base::BindOnce(&IdentityDialogController::
+                           OnRequestUiVolumeRecommendationResultReceived,
+                       weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    passive_dialog_volume_ = PassiveDialogVolume::kDefault;
+  }
 }
 
 IdentityDialogController::~IdentityDialogController() = default;
 
-void IdentityDialogController::OnActorTaskStateChanged(
-    actor::TaskId task_id,
-    actor::ActorTask::State state) {
+void IdentityDialogController::OnActorTaskStateChanged(actor::ActorTask& task) {
+  const actor::TaskId task_id = task.id();
+  const actor::ActorTask::State state = task.GetState();
+
   actor::ActorKeyedService* actor_service =
       actor::ActorKeyedService::Get(rp_web_contents_->GetBrowserContext());
   CHECK(actor_service);
@@ -92,10 +112,9 @@ void IdentityDialogController::OnActorTaskStateChanged(
     return;
   }
 
-  actor::ActorTask* task = actor_service->GetTask(task_id);
   tabs::TabInterface* tab =
       tabs::TabInterface::MaybeGetFromContents(rp_web_contents_);
-  if (!tab || !task || !task->IsActingOnTab(tab->GetHandle())) {
+  if (!tab || !task.IsActingOnTab(tab->GetHandle())) {
     if (acting_task_id_ == task_id) {
       // The task we thought was acting on this tab is no longer active, so we
       // clear the task ID.
@@ -103,16 +122,22 @@ void IdentityDialogController::OnActorTaskStateChanged(
     }
     return;
   }
-  UpdateTaskId(task->IsUnderActorControl() ? task_id : actor::TaskId());
+  UpdateTaskId(task.IsUnderActorControl() ? task_id : actor::TaskId());
 }
 
 void IdentityDialogController::UpdateTaskId(actor::TaskId task_id) {
   acting_task_id_ = task_id;
   if (account_view_) {
-    account_view_->SetCanShowWidget(acting_task_id_.is_null());
+    account_view_->SetCanShowUi(acting_task_id_.is_null());
     if (acting_task_id_.is_null() && did_invoke_show_ui_) {
       did_show_ui_ = true;
     }
+  }
+  // If there is no longer an active task (e.g. user takes over the task) and we
+  // previously invoked active mode UI, dismiss the current API call.
+  if (acting_task_id_.is_null() && rp_mode_ == blink::mojom::RpMode::kActive &&
+      on_dismiss_) {
+    std::move(on_dismiss_).Run(DismissReason::kOther);
   }
 }
 
@@ -126,25 +151,26 @@ int IdentityDialogController::GetBrandIconIdealSize(
   return AccountSelectionView::GetBrandIconIdealSize(rp_mode);
 }
 
-void IdentityDialogController::ShouldShowAccountsPassiveDialog(
-    ShouldShowAccountsPassiveDialogCallback cb) {
-  // If widget mode and segmentation platform feature flag is enabled, make the
-  // call to segmentation platform service for a UI volume recommendation.
-  if (base::FeatureList::IsEnabled(
-          segmentation_platform::features::kSegmentationPlatformFedCmUser)) {
-    RequestUiVolumeRecommendation(
-        base::BindOnce(&IdentityDialogController::
-                           OnRequestUiVolumeRecommendationResultReceived,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(cb)));
+void IdentityDialogController::GetPassiveDialogVolume(
+    GetPassiveDialogVolumeCallback cb) {
+  if (passive_dialog_volume_.has_value()) {
+    std::move(cb).Run(*passive_dialog_volume_);
     return;
   }
-  std::move(cb).Run(true);
+  CHECK(!passive_dialog_volume_callback_);
+  passive_dialog_volume_callback_ = std::move(cb);
+}
+
+content::IdentityRequestDialogController::PassiveDialogVolume
+IdentityDialogController::GetPassiveDialogVolume() const {
+  return passive_dialog_volume_.value_or(PassiveDialogVolume::kDefault);
 }
 
 bool IdentityDialogController::ShowAccountsDialog(
     content::RelyingPartyData rp_data,
     const std::vector<IdentityProviderDataPtr>& identity_provider_data,
     const std::vector<IdentityRequestAccountPtr>& accounts,
+    const std::vector<IdentityRequestAccountPtr>& filtered_accounts,
     blink::mojom::RpMode rp_mode,
     AccountSelectionCallback on_selected,
     LoginToIdPCallback on_add_account,
@@ -159,11 +185,11 @@ bool IdentityDialogController::ShowAccountsDialog(
   // If there is an actor login request, we will not show the accounts
   // dialog. Pretend that we did for the caller and automatically select the
   // account.
-  FederatedActorLoginRequest* actor_login_request =
-      FederatedActorLoginRequest::Get(rp_web_contents_->GetPrimaryPage());
-  if (actor_login_request) {
-    url::Origin idp_origin = actor_login_request->idp_origin();
-    std::string account_id = actor_login_request->account_id();
+  content::webid::FederatedEmbedderLoginRequest* embedder_login_request =
+      content::webid::FederatedEmbedderLoginRequest::Get(rp_web_contents_);
+  if (embedder_login_request) {
+    url::Origin idp_origin = embedder_login_request->idp_origin();
+    std::string account_id = embedder_login_request->account_id();
     for (const auto& account : accounts) {
       if (account->id != account_id ||
           url::Origin::Create(
@@ -184,17 +210,43 @@ bool IdentityDialogController::ShowAccountsDialog(
         // explicitly requested an account to be automatically selected. This
         // could happen if the account was revoked between being shown to the
         // user and the actor login request being sent.
-        std::move(actor_login_request->on_federated_token_received_callback())
-            .Run(/*token_received=*/false);
+        NotifyEmbedderOfResult(FederatedLoginResult::kAccountIsSignUp);
         return false;
       }
     }
-    std::move(actor_login_request->on_federated_token_received_callback())
-        .Run(/*token_received=*/false);
+
+    // If the account is not available in the accounts list, check the
+    // filtered_accounts list. The current FedCM flow could have filtered out
+    // the account despite it being displayed in the initial account chooser
+    // from the actor.
+    for (const auto& account : filtered_accounts) {
+      if (account->id == account_id &&
+          url::Origin::Create(
+              account->identity_provider->idp_metadata.config_url) ==
+              idp_origin) {
+        NotifyEmbedderOfResult(FederatedLoginResult::kAccountNotAvailable);
+        return false;
+      }
+    }
+
+    // The selected account was not found in the list of accounts fetched from
+    // the IdP.
+    NotifyEmbedderOfResult(FederatedLoginResult::kAccountNotLoggedIn);
+    return false;
+  }
+  // If the dialog is triggered in active mode and the FedCM UI should not be
+  // shown but there was no embedder request, we consider the flow to failed
+  // without trying to show any UI and reject the FedCM API call accordingly.
+  // Note that actor initiated login is already handled in the above if
+  // statement. This is a case where the user has not yet selected an account so
+  // account autoselection is not possible, but somehow the API call is
+  // triggered. Since we cannot autoselect an account nor show UI, reject.
+  if (rp_mode_ == blink::mojom::RpMode::kActive && !ShouldShowFedCmUi()) {
     return false;
   }
 
   if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
     return false;
   }
   favicon::FaviconDriver* favicon_driver =
@@ -229,13 +281,36 @@ bool IdentityDialogController::ShowFailureDialog(
     blink::mojom::RpContext rp_context,
     blink::mojom::RpMode rp_mode,
     const content::IdentityProviderMetadata& idp_metadata,
+    const std::vector<IdentityRequestAccountPtr>& filtered_accounts,
     DismissCallback dismiss_callback,
     LoginToIdPCallback login_callback) {
   const GURL rp_url = rp_web_contents_->GetLastCommittedURL();
   on_dismiss_ = std::move(dismiss_callback);
   on_login_ = std::move(login_callback);
+  rp_mode_ = rp_mode;
+
+  // If there is an actor login request, check if the account is filtered.
+  content::webid::FederatedEmbedderLoginRequest* embedder_login_request =
+      content::webid::FederatedEmbedderLoginRequest::Get(rp_web_contents_);
+  if (embedder_login_request) {
+    url::Origin idp_origin = embedder_login_request->idp_origin();
+    std::string account_id = embedder_login_request->account_id();
+    // There were no available accounts, but the selected account may have been
+    // filtered out, in which case we want to send the correct message to the
+    // actor.
+    for (const auto& account : filtered_accounts) {
+      if (account->id == account_id &&
+          url::Origin::Create(
+              account->identity_provider->idp_metadata.config_url) ==
+              idp_origin) {
+        NotifyEmbedderOfResult(FederatedLoginResult::kAccountNotAvailable);
+        return false;
+      }
+    }
+  }
 
   if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
     return false;
   }
   // Else:
@@ -247,6 +322,7 @@ bool IdentityDialogController::ShowFailureDialog(
   if (account_view_->ShowFailureDialog(rp_data, idp_for_display, rp_context,
                                        rp_mode, idp_metadata)) {
     DidInvokeShowUi();
+    NotifyEmbedderOfResult(FederatedLoginResult::kAccountNotLoggedIn);
     return true;
   }
   return false;
@@ -263,8 +339,15 @@ bool IdentityDialogController::ShowErrorDialog(
     MoreDetailsCallback more_details_callback) {
   on_dismiss_ = std::move(dismiss_callback);
   on_more_details_ = std::move(more_details_callback);
+  rp_mode_ = rp_mode;
+
+  if (rp_mode == blink::mojom::RpMode::kActive && !ShouldShowFedCmUi()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kIdpReturnedError);
+    return false;
+  }
 
   if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
     return false;
   }
 
@@ -273,6 +356,7 @@ bool IdentityDialogController::ShowErrorDialog(
   if (account_view_->ShowErrorDialog(rp_data, idp_for_display, rp_context,
                                      rp_mode, idp_metadata, error)) {
     DidInvokeShowUi();
+    NotifyEmbedderOfResult(FederatedLoginResult::kIdpReturnedError);
     return true;
   }
   return false;
@@ -285,7 +369,16 @@ bool IdentityDialogController::ShowLoadingDialog(
     blink::mojom::RpMode rp_mode,
     DismissCallback dismiss_callback) {
   on_dismiss_ = std::move(dismiss_callback);
+  rp_mode_ = rp_mode;
+
+  // If the dialog is triggered in active mode and the FedCM UI should not be
+  // shown, early return as if successful so the flow continues.
+  if (rp_mode == blink::mojom::RpMode::kActive && !ShouldShowFedCmUi()) {
+    return true;
+  }
+
   if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
     return false;
   }
   // Because the loading dialog is not interactable, we do not count it for
@@ -305,7 +398,14 @@ bool IdentityDialogController::ShowVerifyingDialog(
   on_accounts_displayed_ = std::move(accounts_displayed_callback);
   rp_mode_ = rp_mode;
 
+  // If the dialog is triggered in active mode and the FedCM UI should not be
+  // shown, early return as if successful so the flow continues.
+  if (rp_mode == blink::mojom::RpMode::kActive && !ShouldShowFedCmUi()) {
+    return true;
+  }
+
   if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
     return false;
   }
   // Do not modify any member variables if the verifying dialog is not shown
@@ -332,20 +432,6 @@ void IdentityDialogController::OnMoreDetails() {
 void IdentityDialogController::OnAccountsDisplayed() {
   CHECK(on_accounts_displayed_);
   std::move(on_accounts_displayed_).Run();
-}
-
-void IdentityDialogController::OnFlowCompleted(bool success) {
-  // OnFlowCompleted() may be invoked while the WebContents is being destroyed,
-  // so be careful when trying to access the Page.
-  if (rp_web_contents_->IsBeingDestroyed()) {
-    return;
-  }
-  FederatedActorLoginRequest* actor_login_request =
-      FederatedActorLoginRequest::Get(rp_web_contents_->GetPrimaryPage());
-  if (actor_login_request) {
-    std::move(actor_login_request->on_federated_token_received_callback())
-        .Run(success);
-  }
 }
 
 void IdentityDialogController::OnAccountSelected(
@@ -425,16 +511,22 @@ void IdentityDialogController::ShowUrl(LinkType type, const GURL& url) {
 content::WebContents* IdentityDialogController::ShowModalDialog(
     const GURL& url,
     blink::mojom::RpMode rp_mode,
-    DismissCallback dismiss_callback) {
+    DismissCallback dismiss_callback,
+    content::IdentityRequestDialogController::ShownModalAsyncCallback
+        on_shown_async) {
   on_dismiss_ = std::move(dismiss_callback);
+  rp_mode_ = rp_mode;
   if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
     return nullptr;
   }
 
   did_invoke_show_ui_ = true;
   did_show_ui_ = true;
+  NotifyEmbedderOfResult(FederatedLoginResult::kContinuation);
   // Show the modal dialog even if FedCM UI is not being shown.
-  return account_view_->ShowModalDialog(url, rp_mode);
+  return account_view_->ShowModalDialog(url, rp_mode,
+                                        std::move(on_shown_async));
 }
 
 void IdentityDialogController::CloseModalDialog() {
@@ -473,13 +565,14 @@ void IdentityDialogController::RequestIdPRegistrationPermision(
                                                           std::move(callback)));
 }
 
-bool IdentityDialogController::DidShowUi() const {
-  return did_show_ui_;
-}
-
 void IdentityDialogController::SetAccountSelectionViewForTesting(
     std::unique_ptr<AccountSelectionView> account_view) {
   account_view_ = std::move(account_view);
+}
+
+void IdentityDialogController::SetActingTaskIdForTesting(
+    actor::TaskId task_id) {
+  UpdateTaskId(task_id);
 }
 
 bool IdentityDialogController::TrySetAccountView() {
@@ -499,8 +592,8 @@ bool IdentityDialogController::TrySetAccountView() {
     return false;
   }
   account_view_ = std::make_unique<webid::FedCmAccountSelectionView>(this, tab);
-  account_view_->SetCanShowWidget(ShouldShowFedCmUi());
 #endif
+  account_view_->SetCanShowUi(ShouldShowFedCmUi());
   return true;
 }
 
@@ -553,7 +646,6 @@ void IdentityDialogController::RequestUiVolumeRecommendation(
 }
 
 void IdentityDialogController::OnRequestUiVolumeRecommendationResultReceived(
-    ShouldShowAccountsPassiveDialogCallback cb,
     const segmentation_platform::ClassificationResult&
         ui_volume_recommendation) {
   training_request_id_ = ui_volume_recommendation.request_id;
@@ -561,14 +653,16 @@ void IdentityDialogController::OnRequestUiVolumeRecommendationResultReceived(
   // Default to showing loud UI if the prediction fails for any reason.
   if (ui_volume_recommendation.status !=
           segmentation_platform::PredictionStatus::kSucceeded ||
+      ui_volume_recommendation.ordered_labels.empty() ||
       ui_volume_recommendation.ordered_labels[0] == "FedCmUserLoud") {
-    std::move(cb).Run(true);
-    return;
+    passive_dialog_volume_ = PassiveDialogVolume::kDefault;
+  } else {
+    passive_dialog_volume_ = PassiveDialogVolume::kAmbient;
   }
 
-  // TODO(crbug.com/380416872): Integrate with quiet UI. Until then, dismiss the
-  // UI.
-  std::move(cb).Run(false);
+  if (passive_dialog_volume_callback_) {
+    std::move(passive_dialog_volume_callback_).Run(*passive_dialog_volume_);
+  }
 }
 
 void IdentityDialogController::CollectTrainingData(UserAction user_action) {
@@ -631,4 +725,13 @@ bool IdentityDialogController::ShouldShowFedCmUi() {
 void IdentityDialogController::DidInvokeShowUi() {
   did_invoke_show_ui_ = true;
   did_show_ui_ |= ShouldShowFedCmUi();
+}
+
+void IdentityDialogController::NotifyEmbedderOfResult(
+    FederatedLoginResult result) {
+  content::webid::FederatedEmbedderLoginRequest* embedder_login_request =
+      content::webid::FederatedEmbedderLoginRequest::Get(rp_web_contents_);
+  if (embedder_login_request) {
+    embedder_login_request->OnFederatedResultReceived(result);
+  }
 }

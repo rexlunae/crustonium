@@ -15,11 +15,11 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/policy/value_provider/policy_value_provider.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/policy/core/browser/webui/policy_status_provider.h"
+#include "components/policy/resources/webui/mojom/policy.mojom-forward.h"
 #include "extensions/buildflags/buildflags.h"
 
 class Profile;
@@ -58,6 +58,10 @@ class PolicyValueAndStatusAggregator : public PolicyValueProvider::Observer,
   // Returns the dictionary containing the policy metadata available for the
   // platform.
   base::DictValue GetAggregatedPolicyStatus();
+  // TODO: crbug.com/40897784 - replace non-mojo version once all status
+  // providers implement the mojo version of `GetStatus`.
+  base::flat_map<std::string, policy::mojom::StatusPtr>
+  GetAggregatedPolicyStatusMojo();
 
   // Returns the dictionary containing policy names.
   base::DictValue GetAggregatedPolicyNames();

@@ -36,7 +36,6 @@
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_event.h"
-#include "ui/accessibility/ax_language_detection.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_node_position.h"
@@ -889,30 +888,14 @@ std::unique_ptr<AXNode> ExtraAnnouncementNodes::CreateNode(
 }
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 
-AXTree::AXTree() {
-  // TODO(chrishall): should language_detection_manager be a member or pointer?
-  // TODO(chrishall): do we want to initialize all the time, on demand, or only
-  //                  when feature flag is set?
-  DCHECK(!language_detection_manager);
-  language_detection_manager =
-      std::make_unique<AXLanguageDetectionManager>(this);
-}
+AXTree::AXTree() = default;
 
 AXTree::AXTree(const AXTreeUpdate& initial_state) {
   CHECK(Unserialize(initial_state)) << error();
-  DCHECK(!language_detection_manager);
-  language_detection_manager =
-      std::make_unique<AXLanguageDetectionManager>(this);
 }
 
 AXTree::~AXTree() {
   Destroy();
-
-  // Language detection manager will detach from AXTree observer list in its
-  // destructor. But because of variable order, when destroying AXTree, the
-  // observer list will already be destroyed. To avoid that problem, free
-  // language detection manager before.
-  language_detection_manager.reset();
 
   CHECK(observers_.empty());
 }
@@ -1195,8 +1178,9 @@ std::set<AXNodeID> AXTree::GetNodeIdsForChildTreeId(
 
 const std::set<AXTreeID> AXTree::GetAllChildTreeIds() const {
   std::set<AXTreeID> result;
-  for (auto entry : child_tree_id_reverse_map_)
-    result.insert(entry.first);
+  for (const auto& [child_tree_id, _] : child_tree_id_reverse_map_) {
+    result.insert(child_tree_id);
+  }
   return result;
 }
 
@@ -1706,7 +1690,7 @@ AXNode* AXTree::CreateNode(AXNode* parent,
   [[maybe_unused]] bool inserted =
       id_map_.try_emplace(id, std::move(node)).second;
   // There should not have been a node already in the map with the same id.
-  DCHECK(inserted);
+  CHECK(inserted);
   return node_raw;
 }
 
@@ -1769,8 +1753,10 @@ bool AXTree::ComputePendingChanges(const AXTreeUpdate& update,
   // on the tree during the update.
   int number_of_inline_textboxes = 0;
   for (const AXNodeData& new_data : update_state->pending_tree_update->nodes) {
-    if (new_data.id == kInvalidAXNodeID)
-      continue;
+    if (new_data.id == kInvalidAXNodeID) {
+      RecordError(*update_state, "Node ID is invalid.");
+      return false;
+    }
     bool is_new_root =
         update_state->root_will_be_created && new_data.id == update.root_id;
     if (!ComputePendingChangesToNode(new_data, is_new_root, update_state)) {
@@ -1804,6 +1790,10 @@ bool AXTree::ComputePendingChangesToNode(const AXNodeData& new_data,
   // unignored index in parent.
   size_t j = 0;
   for (auto child_id : new_data.child_ids) {
+    if (child_id == kInvalidAXNodeID) {
+      RecordError(*update_state, "Child ID is invalid.");
+      return false;
+    }
     if (const AXNode* node = GetFromId(child_id);
         node && node->GetIndexInParent() != j) {
       update_state->InvalidateParentNodeUnignoredCacheValues(node->id());
@@ -2037,6 +2027,18 @@ bool AXTree::UpdateNode(const AXNodeData& src,
     node = CreateNode(nullptr, src.id, 0, update_state);
     UpdateReverseRelations(node, src, /*is_new_node*/ true);
     node->SetData(src);
+  }
+
+  // The browser must not trust the renderer to correctly supply the
+  // kClipsChildren attribute for rootWebArea nodes. A compromised renderer
+  // could omit it to supply out-of-bounds coordinates that bypass clipping,
+  // allowing spoofed accessibility focus rings and synthesized taps at
+  // arbitrary screen locations. Enforce the attribute unconditionally.
+  if (src.role == ax::mojom::Role::kRootWebArea) {
+    AXNodeData enforced_data = node->data();
+    enforced_data.AddBoolAttribute(ax::mojom::BoolAttribute::kClipsChildren,
+                                   true);
+    node->SetData(enforced_data);
   }
 
   // If we come across a page breaking object, mark the tree as a paginated root
@@ -2872,8 +2874,8 @@ void AXTree::ComputeSetSizePosInSetAndCache(const AXNode& node,
   // Iterate over all items from OrderedSetItemsMap to compute and cache each
   // ordered set item's PosInSet and SetSize and corresponding ordered set
   // container's SetSize.
-  for (auto& element : items_map_to_be_populated.items_map_) {
-    for (const OrderedSetContent& ordered_set_content : element.second) {
+  for (const auto& [_, sets_list] : items_map_to_be_populated.items_map_) {
+    for (const OrderedSetContent& ordered_set_content : sets_list) {
       ComputeSetSizePosInSetAndCacheHelper(ordered_set_content);
     }
   }
@@ -3067,6 +3069,20 @@ std::optional<int> AXTree::GetSetSize(const AXNode& node) {
       node_set_size_pos_in_set_info_map_[node.id()].set_size =
           controlled_item_set_size;
       return controlled_item_set_size;
+    }
+
+    // We want screen readers to announce buttons that pop up a menulist as
+    // pop up buttons. That means exposing their role to kPopUpButton. But
+    // for elements with the kPopUpButton role that aren't linked
+    // to their popups (via aria-controls), the set size calculation returns 0.
+    // <menulist>s aren't linked to their invoker buttons, and we don't want the
+    // invoker buttons to have a setsize anyway, so just return null here,
+    // making the <menulist>-invoking buttons have a setsize property at all.
+    // Unlinked explicit popup buttons get caught here too, but exposing no
+    // setsize for <button aria-haspopup="menu">button</button> seems fine.
+    if (node.GetRole() == ax::mojom::Role::kPopUpButton) {
+      node_set_size_pos_in_set_info_map_[node.id()].set_size = std::nullopt;
+      return std::nullopt;
     }
   }
 

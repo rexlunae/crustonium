@@ -5,7 +5,6 @@
 #include "chrome/browser/web_applications/commands/uninstall_all_user_installed_web_apps_command.h"
 
 #include "base/check.h"
-#include "base/containers/enum_set.h"
 #include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -31,7 +30,7 @@ std::string TypesToString(const WebAppManagementTypes& types) {
 }
 std::optional<std::string> ConstructErrorMessage(
     const std::vector<std::string>& errors) {
-  std::optional<std::string> error_message = std::nullopt;
+  std::optional<std::string> error_message;
   if (!errors.empty()) {
     error_message = base::JoinString(errors, "\n");
   }

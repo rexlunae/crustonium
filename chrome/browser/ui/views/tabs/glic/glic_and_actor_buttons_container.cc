@@ -6,8 +6,7 @@
 
 #include "base/feature_list.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/views/tabs/glic/glic_button.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/views/tabs/glic/tab_strip_glic_button.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -46,13 +45,6 @@ GlicAndActorButtonsContainer::GlicAndActorButtonsContainer() {
 
   SetCollapseMargins(true);
   SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
-  if (!base::FeatureList::IsEnabled(
-          features::kGlicActorUiGlobalTaskIndicator)) {
-    // Remove background for global task indicator.
-    SetBackground(views::CreateRoundedRectBackground(
-        kColorNewTabButtonCRBackgroundFrameActive, gfx::RoundedCornersF(12),
-        gfx::Insets::VH(4, 8)));
-  }
 }
 
 GlicAndActorButtonsContainer::~GlicAndActorButtonsContainer() = default;
@@ -71,12 +63,6 @@ void GlicAndActorButtonsContainer::Layout(PassKey) {
   gfx::Rect bounds = GetLocalBounds();
   bounds.Inset(gfx::Insets::VH(4, 8));
   ink_drop_container_view_->SetBoundsRect(bounds);
-}
-
-glic::GlicButton* GlicAndActorButtonsContainer::InsertGlicButton(
-    glic::GlicButton* glic_button) {
-  // Insert after ink drop container.
-  return AddChildViewAt(glic_button, 1ul);
 }
 
 void GlicAndActorButtonsContainer::SetHighlighted(bool highlighted) {

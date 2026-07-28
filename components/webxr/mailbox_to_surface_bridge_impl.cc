@@ -115,6 +115,15 @@ void MailboxToSurfaceBridgeImpl::GenSyncToken(gpu::SyncToken* out_sync_token) {
   gl_->GenSyncTokenCHROMIUM(out_sync_token->GetData());
 }
 
+void MailboxToSurfaceBridgeImpl::VerifySyncToken(
+    gpu::SyncToken& out_sync_token) {
+  TRACE_EVENT0("gpu", "VerifySyncToken");
+  DCHECK(IsConnected());
+
+  auto* sync_token_data = out_sync_token.GetData();
+  gl_->VerifySyncTokensCHROMIUM(&sync_token_data, 1);
+}
+
 void MailboxToSurfaceBridgeImpl::WaitSyncToken(
     const gpu::SyncToken& sync_token) {
   TRACE_EVENT0("gpu", "WaitSyncToken");
@@ -132,11 +141,10 @@ void MailboxToSurfaceBridgeImpl::WaitForClientGpuFence(
 }
 
 void MailboxToSurfaceBridgeImpl::CreateGpuFence(
-    const gpu::SyncToken& sync_token,
     base::OnceCallback<void(std::unique_ptr<gfx::GpuFence>)> callback) {
   TRACE_EVENT0("gpu", "CreateGpuFence");
   DCHECK(IsConnected());
-  gl_->WaitSyncTokenCHROMIUM(sync_token.GetConstData());
+
   GLuint id = gl_->CreateGpuFenceCHROMIUM();
   context_support_->GetGpuFence(id, std::move(callback));
   gl_->DestroyGpuFenceCHROMIUM(id);
@@ -148,6 +156,7 @@ MailboxToSurfaceBridgeImpl::CreateSharedImage(
     viz::SharedImageFormat format,
     const gfx::Size& size,
     const gfx::ColorSpace& color_space,
+    GrSurfaceOrigin surface_origin,
     gpu::SharedImageUsageSet usage,
     gpu::SyncToken& sync_token) {
   TRACE_EVENT0("gpu", "CreateSharedImage");
@@ -158,10 +167,12 @@ MailboxToSurfaceBridgeImpl::CreateSharedImage(
 
   CHECK_EQ(format, viz::SinglePlaneFormat::kRGBA_8888);
   auto client_shared_image = sii->CreateSharedImage(
-      {format, size, color_space, usage, "WebXrMailboxToSurfaceBridge"},
+      {format, size, color_space, surface_origin, kPremul_SkAlphaType, usage,
+       "WebXrMailboxToSurfaceBridge"},
       std::move(buffer_handle));
   CHECK(client_shared_image);
-  sync_token = sii->GenVerifiedSyncToken();
+  sync_token = client_shared_image->creation_sync_token();
+  sii->VerifySyncToken(sync_token);
   DCHECK(client_shared_image->GetTextureTarget() == GL_TEXTURE_2D);
   return client_shared_image;
 }
@@ -174,6 +185,10 @@ void MailboxToSurfaceBridgeImpl::DestroySharedImage(
   DCHECK(shared_image);
 
   shared_image->UpdateDestructionSyncToken(sync_token);
+}
+
+viz::ContextProvider* MailboxToSurfaceBridgeImpl::GetContextProvider() {
+  return context_provider_.get();
 }
 
 std::unique_ptr<device::MailboxToSurfaceBridge>

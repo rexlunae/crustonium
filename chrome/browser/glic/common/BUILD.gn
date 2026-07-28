@@ -5,15 +5,17 @@
 source_set("common") {
   sources = [
     "future_browser_features.h",
+    "glic_navigation.cc",
+    "glic_navigation.h",
     "glic_tab_observer.cc",
     "glic_tab_observer.h",
   ]
 
   deps = [
     "//base",
-    "//chrome/browser/ui",
-    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/navigator",
     "//components/tabs:public",
   ]
 
@@ -23,6 +25,7 @@ source_set("common") {
       "glic_tab_observer_android.h",
     ]
     deps += [
+      "//chrome/browser/android:tabs_public",
       "//chrome/browser/tab",
       "//chrome/browser/ui/android/tab_model",
       "//chrome/browser/ui/tabs:tabs_public",
@@ -50,9 +53,11 @@ source_set("browser_tests") {
     ":common",
     "//base",
     "//chrome/browser",
+    "//chrome/browser/glic",
+    "//chrome/browser/glic/test_support",
+    "//chrome/browser/tab_list",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/browser_window:create_browser_window",
-    "//chrome/browser/ui/tabs:tab_list_interface",
     "//chrome/test:test_support",
     "//components/tabs:public",
     "//content/test:test_support",

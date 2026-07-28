@@ -172,9 +172,6 @@ class AXPlatformNodeWinBrowserTest : public AccessibilityContentBrowserTest {
     }
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kEnableAccessibilityAriaVirtualContent};
 };
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
@@ -215,10 +212,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
   ASSERT_EQ(iframe_screen_bounds.y(), bounds.y());
 }
 
-class AXPlatformNodeWinUIABrowserTest : public AXPlatformNodeWinBrowserTest {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
-};
+class AXPlatformNodeWinUIABrowserTest : public AXPlatformNodeWinBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
                        UIAGetPropertyValueFlowsFromNone) {
@@ -700,34 +694,6 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
   EXPECT_UIA_INT_EQ(empty_lang_node_com_win, UIA_CulturePropertyId, en_us_lcid);
 }
 
-IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
-                       UIAGetPropertyValueVirtualContent) {
-  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
-      <!DOCTYPE html>
-      <html>
-        <body>
-          <div role="group" aria-virtualcontent="block-end"
-               aria-label="vc">Hello World</div>
-        </body>
-      </html>
-  )HTML"));
-
-  ui::BrowserAccessibility* root_node = GetRootAndAssertNonNull();
-  ui::BrowserAccessibility* body_node = root_node->PlatformGetFirstChild();
-  ASSERT_NE(nullptr, body_node);
-
-  ui::BrowserAccessibility* node = FindNode(ax::mojom::Role::kGroup, "vc");
-  ASSERT_NE(nullptr, node);
-  ui::BrowserAccessibilityComWin* node_com_win =
-      ToBrowserAccessibilityWin(node)->GetCOM();
-  ASSERT_NE(nullptr, node_com_win);
-
-  EXPECT_UIA_BSTR_EQ(
-      node_com_win,
-      ui::UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
-      L"block-end");
-}
-
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
                        HitTestOnAncestorOfWebRoot) {
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
@@ -899,8 +865,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest, IFrameTraversal) {
 class AXPlatformNodeWinMathMLBrowserTest : public AXPlatformNodeWinBrowserTest {
  public:
   AXPlatformNodeWinMathMLBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {::features::kUiaProvider, ::features::kUiaMathMlSupport}, {});
+    scoped_feature_list_.InitAndEnableFeature(::features::kUiaMathMlSupport);
   }
 
  private:

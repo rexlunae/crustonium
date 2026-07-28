@@ -10,6 +10,7 @@
 #include "base/auto_reset.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/trace_event/trace_event.h"
@@ -38,6 +39,10 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "services/network/public/cpp/features.h"
 #include "url/gurl.h"
+
+#if !BUILDFLAG(IS_IOS)
+#include "services/device/public/cpp/device_features.h"
+#endif  // !BUILDFLAG(IS_IOS)
 
 namespace content_settings {
 
@@ -188,6 +193,7 @@ DefaultProvider::DefaultProvider(PrefService* prefs,
   MigrateGeolocationDefaultValue();
 #if !BUILDFLAG(IS_IOS)
   MigrateLocalNetworkAccessDefaultValue();
+  MigrateSensorsDefaultValue();
 #endif  // !BUILDFLAG(IS_IOS)
 
   if (should_record_metrics)
@@ -209,7 +215,7 @@ bool DefaultProvider::SetWebsiteSetting(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
-    base::Value&& in_value,
+    const base::Value& in_value,
     const ContentSettingConstraints& constraints) {
   DCHECK(CalledOnValidThread());
   DCHECK(prefs_);
@@ -219,10 +225,6 @@ bool DefaultProvider::SetWebsiteSetting(
       secondary_pattern != ContentSettingsPattern::Wildcard()) {
     return false;
   }
-
-  // Move |in_value| to ensure that it gets cleaned up properly even if we don't
-  // pass on the ownership.
-  base::Value value(std::move(in_value));
 
   // The default settings may not be directly modified for OTR sessions.
   // Instead, they are synced to the main profile's setting.
@@ -237,9 +239,9 @@ bool DefaultProvider::SetWebsiteSetting(
     // whose callbacks may try to reacquire the lock on the same thread.
     {
       base::AutoLock lock(lock_);
-      ChangeSetting(content_type, value.Clone());
+      ChangeSetting(content_type, in_value.Clone());
     }
-    WriteToPref(content_type, value);
+    WriteToPref(content_type, in_value);
   }
 
   NotifyObservers(ContentSettingsPattern::Wildcard(),
@@ -476,12 +478,10 @@ void DefaultProvider::MigrateLocalNetworkAccessDefaultValue() {
     return;
   }
 
-  // Migrate when the feature gets enabled the first time.
+  // Migrate only once, if the pref is not set yet.
   // Only the default for LOCAL_NETWORK is changed, as the old prompt language
   // was biased towards that.
-  if (base::FeatureList::IsEnabled(
-          network::features::kLocalNetworkAccessChecksSplitPermissions) &&
-      !prefs_->GetBoolean(kLocalNetworkAccessMigrateDefaultValuePref)) {
+  if (!prefs_->GetBoolean(kLocalNetworkAccessMigrateDefaultValuePref)) {
     ChangeSetting(ContentSettingsType::LOCAL_NETWORK,
                   std::move(default_settings_.at(
                       ContentSettingsType::LOCAL_NETWORK_ACCESS)));
@@ -491,15 +491,28 @@ void DefaultProvider::MigrateLocalNetworkAccessDefaultValue() {
         ContentSettingToValue(ContentSetting::CONTENT_SETTING_DEFAULT));
     prefs_->SetBoolean(kLocalNetworkAccessMigrateDefaultValuePref, true);
   }
+}
 
-  // If the feature is turned off, then don't attempt to migrate back, as we'd
-  // be unsure of how to reconcile the differences. But make sure to unset the
-  // migration pref so that when the feature gets turned back on we'll migrate
-  // again.
+void DefaultProvider::MigrateSensorsDefaultValue() {
+  if (is_off_the_record_) {
+    return;
+  }
+
+  const auto it_setting = default_settings_.find(ContentSettingsType::SENSORS);
+  if (it_setting == default_settings_.end()) {
+    return;
+  }
+
+  // Forwards migration is not necessary as we are just adding one more allowed
+  // option. But if the feature flag for the allow/ask/block model is disabled,
+  // migrate back `ask` to `block`.
+  ContentSetting current_setting = ValueToContentSetting(it_setting->second);
   if (!base::FeatureList::IsEnabled(
-          network::features::kLocalNetworkAccessChecksSplitPermissions) &&
-      prefs_->GetBoolean(kLocalNetworkAccessMigrateDefaultValuePref)) {
-    prefs_->SetBoolean(kLocalNetworkAccessMigrateDefaultValuePref, false);
+          ::features::kSensorsAllowAskBlockPermissionModel)) {
+    if (current_setting == CONTENT_SETTING_ASK) {
+      ChangeSetting(ContentSettingsType::SENSORS,
+                    ContentSettingToValue(CONTENT_SETTING_BLOCK));
+    }
   }
 }
 #endif  // !BUILDFLAG(IS_IOS)
@@ -607,6 +620,11 @@ void DefaultProvider::RecordHistogramMetrics() {
       "ContentSettings.RegularProfile.DefaultJavaScriptOptimizationSetting",
       IntToContentSetting(prefs_->GetInteger(
           GetPrefName(ContentSettingsType::JAVASCRIPT_OPTIMIZER))),
+      CONTENT_SETTING_NUM_SETTINGS);
+  base::UmaHistogramEnumeration(
+      "ContentSettings.RegularProfile.DefaultSensorsSetting",
+      IntToContentSetting(
+          prefs_->GetInteger(GetPrefName(ContentSettingsType::SENSORS))),
       CONTENT_SETTING_NUM_SETTINGS);
 #endif
 

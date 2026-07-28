@@ -367,7 +367,7 @@ bool StyledMarkupSerializer<Strategy>::DetermineParentTagAndUpdateLastClosed(
   last_closed_ =
       StyledMarkupTraverser<Strategy>().Traverse(first_node, past_end);
   if (last_closed_ && last_closed_->IsTextNode() &&
-      IsPresentationalHTMLElement(last_closed_->parentNode())) {
+      IsPresentationalHtmlElement(last_closed_->parentNode())) {
     last_closed_ = last_closed_->parentElement();
     return true;
   }
@@ -530,6 +530,16 @@ Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
     }
   }
 
+  // If traversal stopped exactly at past_end, any ancestors that were opened
+  // and never revisited remain in ancestors_to_close. Close them to keep markup
+  // balanced for partial selections (e.g. nested MathML containers).
+  while (!ancestors_to_close.empty()) {
+    ContainerNode* ancestor = ancestors_to_close.back();
+    AppendEndMarkup(*ancestor);
+    last_closed = ancestor;
+    ancestors_to_close.pop_back();
+  }
+
   return last_closed;
 }
 
@@ -549,7 +559,7 @@ void StyledMarkupTraverser<Strategy>::WrapWithNode(ContainerNode& node,
     return;
   StringBuilder markup;
   if (auto* document = DynamicTo<Document>(node)) {
-    MarkupFormatter::AppendXMLDeclaration(markup, *document);
+    MarkupFormatter::AppendXmlDeclaration(*document, markup);
     accumulator_->PushMarkup(markup.ToString());
     return;
   }
@@ -557,9 +567,9 @@ void StyledMarkupTraverser<Strategy>::WrapWithNode(ContainerNode& node,
   if (!element)
     return;
   if (ShouldApplyWrappingStyle(*element) || NeedsInlineStyle(*element))
-    accumulator_->AppendElementWithInlineStyle(markup, *element, style);
+    accumulator_->AppendElementWithInlineStyle(*element, style, markup);
   else
-    accumulator_->AppendElement(markup, *element);
+    accumulator_->AppendElement(*element, markup);
   accumulator_->PushMarkup(markup.ToString());
   accumulator_->AppendEndTag(*element);
 }

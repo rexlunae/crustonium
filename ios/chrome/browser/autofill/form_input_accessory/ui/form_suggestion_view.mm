@@ -13,6 +13,7 @@
 #import "components/autofill/core/browser/filling/filling_product.h"
 #import "components/autofill/core/browser/suggestions/suggestion_type.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
+#import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/ui/form_suggestion_label.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_client.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_constants.h"
@@ -23,6 +24,8 @@
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/elements/form_input_accessory_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
+#import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/l10n/l10n_util.h"
 
 using autofill::FillingProduct;
 using autofill::SuggestionType;
@@ -74,6 +77,30 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
                      index);
 }
 
+// Returns the display description for a suggestion. If `username` is not nil,
+// it is appended to the description for duplicate webauthn credentials.
+NSString* DisplayDescriptionForSuggestion(FormSuggestion* suggestion,
+                                          BOOL showRPId,
+                                          NSString* username) {
+  if (suggestion.type == autofill::SuggestionType::kWebauthnCredential) {
+    NSString* passkeyLabel =
+        l10n_util::GetNSString(IDS_IOS_PASSKEY_SUGGESTION_LABEL);
+    if (username.length > 0) {
+      if (showRPId) {
+        return [NSString stringWithFormat:@"%@ • %@ • %@", passkeyLabel,
+                                          username, suggestion.minorValue];
+      }
+      return [NSString stringWithFormat:@"%@ • %@", passkeyLabel, username];
+    }
+    if (showRPId) {
+      return [NSString
+          stringWithFormat:@"%@ • %@", passkeyLabel, suggestion.minorValue];
+    }
+    return passkeyLabel;
+  }
+  return suggestion.displayDescription;
+}
+
 }  // namespace
 
 @interface FormSuggestionView () <FormSuggestionLabelDelegate>
@@ -87,6 +114,13 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
 // The view containing accessory buttons at the trailing end,
 // after the form suggestion view.
 @property(nonatomic, weak) UIView* accessoryTrailingView;
+
+// The activity indicator shown when the view is loading.
+@property(nonatomic, weak) UIActivityIndicatorView* activityIndicatorView;
+
+// The precomputed display descriptions for suggestions.
+@property(nonatomic, strong)
+    NSMapTable<FormSuggestion*, NSString*>* displayDescriptions;
 
 @end
 
@@ -104,6 +138,29 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
   return self;
 }
 
+- (void)setSuggestions:(NSArray<FormSuggestion*>*)suggestions {
+  if (_suggestions != suggestions) {
+    _suggestions = [suggestions copy];
+    [self precomputeDisplayDescriptions];
+  }
+}
+
+- (void)precomputeDisplayDescriptions {
+  self.displayDescriptions = [NSMapTable strongToStrongObjectsMapTable];
+  if (!self.suggestions.count) {
+    return;
+  }
+
+  NSMutableDictionary<NSString*, NSNumber*>* descriptionCounts =
+      [self precomputeDefaultDescriptions];
+  for (FormSuggestion* suggestion in self.suggestions) {
+    if ([self hasDuplicateDescription:suggestion
+                    descriptionCounts:descriptionCounts]) {
+      [self setDisplayDescriptionForSuggestion:suggestion appendUsername:YES];
+    }
+  }
+}
+
 - (void)updateSuggestions:(NSArray<FormSuggestion*>*)suggestions
            showScrollHint:(BOOL)showScrollHint
     accessoryTrailingView:(UIView*)accessoryTrailingView
@@ -114,7 +171,7 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
     }
     return;
   }
-  self.suggestions = [suggestions copy];
+  self.suggestions = suggestions;
 
   if (!self.stackView) {
     if (completion) {
@@ -159,6 +216,18 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
                    }];
 }
 
+- (void)setActivityIndicatorEnabled:(BOOL)enabled {
+  if (enabled) {
+    [self.activityIndicatorView startAnimating];
+    self.userInteractionEnabled = NO;
+    self.stackView.alpha = 0.5;
+  } else {
+    [self.activityIndicatorView stopAnimating];
+    self.userInteractionEnabled = YES;
+    self.stackView.alpha = 1.0;
+  }
+}
+
 #pragma mark - UIView
 
 - (void)willMoveToSuperview:(UIView*)newSuperview {
@@ -182,6 +251,23 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
   [self.formSuggestionViewDelegate formSuggestionView:self
                                   didAcceptSuggestion:suggestion
                                               atIndex:index];
+}
+
+- (NSString*)displayDescriptionForSuggestion:(FormSuggestion*)suggestion {
+  return [self.displayDescriptions objectForKey:suggestion];
+}
+
+- (void)openSettingsForSuggestion:(FormSuggestion*)suggestion {
+  [self.formSuggestionViewDelegate openSettingsForSuggestion:suggestion];
+}
+
+- (void)openEditForSuggestion:(FormSuggestion*)suggestion {
+  [self.formSuggestionViewDelegate openEditForSuggestion:suggestion];
+}
+
+- (BOOL)isPersonalContextSuggestion:(FormSuggestion*)suggestion {
+  return
+      [self.formSuggestionViewDelegate isPersonalContextSuggestion:suggestion];
 }
 
 #pragma mark - Helper methods
@@ -220,6 +306,21 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
   [self createAndInsertArrangedSubviews];
 
   self.accessibilityIdentifier = kFormSuggestionsViewAccessibilityIdentifier;
+
+  UIActivityIndicatorView* activityIndicatorView =
+      [[UIActivityIndicatorView alloc]
+          initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+  activityIndicatorView.translatesAutoresizingMaskIntoConstraints = NO;
+  activityIndicatorView.hidesWhenStopped = YES;
+  [self addSubview:activityIndicatorView];
+  self.activityIndicatorView = activityIndicatorView;
+
+  [NSLayoutConstraint activateConstraints:@[
+    [activityIndicatorView.centerXAnchor
+        constraintEqualToAnchor:self.frameLayoutGuide.centerXAnchor],
+    [activityIndicatorView.centerYAnchor
+        constraintEqualToAnchor:self.frameLayoutGuide.centerYAnchor],
+  ]];
 }
 
 // Creates a tiny vertical separator.
@@ -351,6 +452,64 @@ void LogSelectedSuggestionIndexMetric(SuggestionType suggestion_type,
       kSuggestionVerticalMargin,
       kSuggestionHorizontalMargin + (_isCompact ? 0.0 : kLeadingOffset),
       kSuggestionVerticalMargin, kSuggestionEndHorizontalMargin);
+}
+
+// Returns YES if the suggestion label with the given RP ID should show its RP
+// ID.
+- (BOOL)shouldShowRPId:(NSString*)rpId {
+  return [self.formSuggestionViewDelegate formSuggestionView:self
+                                              shouldShowRPId:rpId];
+}
+
+// Returns a key to identify duplicate suggestions by suggestion value and
+// description.
+- (NSString*)duplicateKeyForSuggestion:(FormSuggestion*)suggestion {
+  NSString* description = [self.displayDescriptions objectForKey:suggestion];
+  return [NSString stringWithFormat:@"%@|%@", suggestion.value, description];
+}
+
+// Returns YES if the suggestion has a duplicate description.
+- (BOOL)hasDuplicateDescription:(FormSuggestion*)suggestion
+              descriptionCounts:
+                  (NSDictionary<NSString*, NSNumber*>*)descriptionCounts {
+  if (suggestion.type != autofill::SuggestionType::kWebauthnCredential) {
+    return NO;
+  }
+  NSString* duplicateKey = [self duplicateKeyForSuggestion:suggestion];
+  NSNumber* count = descriptionCounts[duplicateKey];
+  return count && count.intValue > 1;
+}
+
+// Precomputes and sets the display description for `suggestion`. Fetches the
+// username from the delegate when `appendUsername` is YES.
+- (void)setDisplayDescriptionForSuggestion:(FormSuggestion*)suggestion
+                            appendUsername:(BOOL)appendUsername {
+  NSString* username = nil;
+  if (appendUsername) {
+    username = [self.formSuggestionViewDelegate formSuggestionView:self
+                                             usernameForSuggestion:suggestion];
+  }
+  BOOL showRPId = [self shouldShowRPId:suggestion.minorValue];
+  NSString* description =
+      DisplayDescriptionForSuggestion(suggestion, showRPId, username);
+  [self.displayDescriptions setObject:description forKey:suggestion];
+}
+
+// Precomputes default descriptions for suggestions.
+// Returns duplicate counts.
+- (NSMutableDictionary<NSString*, NSNumber*>*)precomputeDefaultDescriptions {
+  NSMutableDictionary<NSString*, NSNumber*>* descriptionCounts =
+      [NSMutableDictionary dictionary];
+  for (FormSuggestion* suggestion in self.suggestions) {
+    [self setDisplayDescriptionForSuggestion:suggestion appendUsername:NO];
+
+    if (suggestion.type == autofill::SuggestionType::kWebauthnCredential) {
+      NSString* duplicateKey = [self duplicateKeyForSuggestion:suggestion];
+      NSNumber* count = descriptionCounts[duplicateKey];
+      descriptionCounts[duplicateKey] = @(count ? count.intValue + 1 : 1);
+    }
+  }
+  return descriptionCounts;
 }
 
 #pragma mark - Setters

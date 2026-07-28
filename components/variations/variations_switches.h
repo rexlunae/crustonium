@@ -7,8 +7,7 @@
 
 #include "base/component_export.h"
 
-namespace variations {
-namespace switches {
+namespace variations::switches {
 
 // Alphabetical list of switches specific to the variations component. Document
 // each in the .cc file.
@@ -21,8 +20,6 @@ COMPONENT_EXPORT(VARIATIONS)
 extern const char kDisableVariationsSeedFetch[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kDisableVariationsSeedFetchThrottling[];
-COMPONENT_EXPORT(VARIATIONS)
-extern const char kEnableBenchmarking[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kEnableBenchmarkingApi[];
 COMPONENT_EXPORT(VARIATIONS)
@@ -56,7 +53,6 @@ extern const char kAcceptEmptySeedSignatureForTesting[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kVariationsStateFile[];
 
-}  // namespace switches
-}  // namespace variations
+}  // namespace variations::switches
 
 #endif  // COMPONENTS_VARIATIONS_VARIATIONS_SWITCHES_H_

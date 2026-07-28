@@ -64,8 +64,7 @@ class MEDIA_GPU_EXPORT D3D12VideoEncodeDelegate {
   // Do video processing if the input frame format or resolution is not
   // expected and then call |EncodeImpl()|.
   virtual EncoderStatus::Or<EncodeResult> Encode(
-      Microsoft::WRL::ComPtr<ID3D12Resource> input_frame,
-      UINT input_frame_subresource,
+      D3D12PictureBuffer picture_buffer,
       const gfx::ColorSpace& input_frame_color_space,
       const BitstreamBuffer& bitstream_buffer,
       const VideoEncoder::EncodeOptions& options);
@@ -191,10 +190,10 @@ class MEDIA_GPU_EXPORT D3D12VideoEncodeDelegate {
       video_processor_wrapper_factory_ = base::BindRepeating(
           &std::make_unique<D3D12VideoProcessorWrapper,
                             Microsoft::WRL::ComPtr<ID3D12VideoDevice>>);
+  Microsoft::WRL::ComPtr<ID3D12Resource> processed_input_frame_;
   // The video processor used for possible resolution, format, or color space
   // conversion.
   std::unique_ptr<D3D12VideoProcessorWrapper> video_processor_wrapper_;
-  Microsoft::WRL::ComPtr<ID3D12Resource> processed_input_frame_;
 };
 
 // A class to manage the decoded picture buffers for D3D12 video encode and

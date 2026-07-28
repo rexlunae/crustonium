@@ -25,11 +25,10 @@ namespace commerce {
 
 namespace {
 
-typedef std::unordered_map<
+using CountryLocaleMap = absl::flat_hash_map<
     const base::Feature*,
     absl::flat_hash_map<std::string_view,
-                        absl::flat_hash_set<std::string_view>>>
-    CountryLocaleMap;
+                        absl::flat_hash_set<std::string_view>>>;
 
 // Get a map of enabled countries to the set of allowed locales for that
 // country on a per-feature basis. Just because a locale is enabled for one
@@ -47,13 +46,16 @@ const CountryLocaleMap& GetAllowedCountryToLocaleMap() {
     map[&kPriceAnnotations] = {{"us", {"en-us"}}};
 #endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(IS_IOS)
+    map[&kTabResumptionShopCard] = {{"us", {"en-us"}}};
+#endif  // BUILDFLAG(IS_IOS)
+
 #if !BUILDFLAG(IS_IOS)
     map[&kEnableDiscountInfoApi] = {{"us", {"en-us"}}};
 #endif  // !BUILDFLAG(IS_IOS)
 
     map[&ntp_features::kNtpChromeCartModule] = {{"us", {"en-us"}}};
     map[&kPriceInsights] = {{"us", {"en-us"}}};
-    map[&kProductSpecifications] = {};
     map[&kShoppingList] = {{"us", {"en-us"}}};
     map[&kShoppingPageTypes] = {{"us", {"en-us"}}};
     map[&kShoppingPDPMetrics] = {{"us", {"en-us"}}};
@@ -155,18 +157,6 @@ BASE_FEATURE(kDiscountAutofill, base::FEATURE_DISABLED_BY_DEFAULT);
 // Shopping variations to Tab resumption.
 BASE_FEATURE(kTabResumptionShopCard, base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Impression limits on ShopCards
-BASE_FEATURE(kShopCardImpressionLimits, base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kProductSpecifications, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Kill switch for unsupported fields becoming supported in the event of a
-// browser upgrade.
-BASE_FEATURE(kProductSpecificationsClearMetadataOnNewlySupportedFields,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kProductSpecificationsCache, base::FEATURE_ENABLED_BY_DEFAULT);
-
 // Discount on navigation
 BASE_FEATURE(kEnableDiscountInfoApi, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -229,12 +219,11 @@ BASE_FEATURE(kShoppingList, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kPriceTrackingSubscriptionServiceLocaleKey,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kPriceTrackingSubscriptionServiceProductVersion,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kShoppingPDPMetrics, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSubscriptionsApi, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kInStockNotification, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kShoppingPageTypes, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -243,36 +232,6 @@ BASE_FEATURE(kRetailCoupons, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kCommerceDeveloper, base::FEATURE_DISABLED_BY_DEFAULT);
 
 const char kRetailCouponsWithCodeParam[] = "RetailCouponsWithCodeParam";
-
-extern const char kShopCardArm1[] = "arm_1";
-extern const char kShopCardArm3[] = "arm_3";
-extern const char kShopCardArm4[] = "arm_4";
-// Regular Tab Resumption with same impression limits as ShopCard
-// (max 3 impressions). So ShopCard variations of Tab Resumption can
-// be conclusively benchmarked against regular Tab Resumption.
-extern const char kShopCardArm5[] = "arm_5";
-// Similar to arm 3, but price drop and product image data acquisition
-// occurs after the card is rendered and is updated if applicable.
-extern const char kShopCardArm6[] = "arm_6";
-extern const char kShopCardFrontPosition[] = "shop_card_front";
-extern const char kShopCardMaxImpressions[] = "max_impressions";
-
-const char kProductSpecificationsSetValidForClusteringTimeParam[] =
-    "set-valid-for-clustering-time";
-const base::FeatureParam<base::TimeDelta>
-    kProductSpecificationsSetValidForClusteringTime{
-        &commerce::kProductSpecifications,
-        kProductSpecificationsSetValidForClusteringTimeParam, base::Days(14)};
-const char kProductSpecificationsUseServerClusteringParam[] =
-    "use-server-clustering";
-const base::FeatureParam<bool> kProductSpecificationsUseServerClustering{
-    &commerce::kProductSpecifications,
-    kProductSpecificationsUseServerClusteringParam, true};
-const char kProductSpecificationsEnableQualityLoggingParam[] =
-    "enable-quality-logging";
-const base::FeatureParam<bool> kProductSpecificationsEnableQualityLogging{
-    &commerce::kProductSpecifications,
-    kProductSpecificationsEnableQualityLoggingParam, true};
 
 const char kRevertIconOnFailureParam[] =
     "shopping-list-revert-page-action-icon-on-failure";

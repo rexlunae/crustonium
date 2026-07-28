@@ -7,6 +7,7 @@
 
 #include <jni.h>
 
+#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -74,7 +75,9 @@ class CONTENT_EXPORT NavigationControllerAndroid {
       const base::android::JavaRef<jobject>& j_additional_navigation_params,
       int64_t input_start,
       int64_t navigation_ui_data_ptr,
-      bool is_pdf);
+      bool is_pdf,
+      bool remove_extra_headers_on_cross_origin_redirect,
+      const base::android::JavaRef<jstring>& internal_scroll_to_text_fragment);
   void ClearSslPreferences(JNIEnv* env);
   bool GetUseDesktopUserAgent(JNIEnv* env);
   void SetUseDesktopUserAgent(JNIEnv* env,
@@ -115,7 +118,11 @@ class CONTENT_EXPORT NavigationControllerAndroid {
                                       bool skip_on_initial_navigation);
 
   raw_ptr<NavigationControllerImpl> navigation_controller_;
-  base::android::ScopedJavaGlobalRef<jobject> obj_;
+  // A weak reference to the Java object. The Java object is kept alive by a
+  // static map in the Java code. ScopedJavaGlobalRef would scale poorly with a
+  // large number of WebContents as it consumes an entry in the finite global
+  // ref table.
+  JavaObjectWeakGlobalRef obj_;
   base::WeakPtrFactory<NavigationControllerAndroid> weak_factory_{this};
 };
 

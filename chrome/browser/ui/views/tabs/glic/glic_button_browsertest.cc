@@ -2,32 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/tabs/glic/glic_button.h"
-
 #include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/glic/fre/glic_fre_controller.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
+#include "chrome/browser/glic/suggestions/contextual_cueing_features.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
+#include "chrome/browser/private_ai/private_ai_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/glic/glic_button_interface.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
+#include "chrome/browser/ui/views/tabs/glic/tab_strip_glic_button.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_action_container.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
+#include "components/private_ai/features.h"
+#include "components/private_ai/private_ai_service.h"
+#include "components/private_ai/proto/private_ai.pb.h"
+#include "components/private_ai/testing/mock_private_ai_client.h"
 #include "content/public/test/browser_test.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/menu_source_type.mojom-shared.h"
 #include "ui/events/event_constants.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/view_utils.h"
 
 namespace glic {
 namespace {
@@ -41,26 +50,19 @@ class GlicButtonTest : public InProcessBrowserTest {
   }
 
  protected:
-  glic::GlicButton* glic_button() {
-    return BrowserElementsViews::From(browser())->GetViewAs<glic::GlicButton>(
-        kGlicButtonElementId);
+  glic::TabStripGlicButton* glic_button() {
+    return views::AsViewClass<glic::TabStripGlicButton>(
+        glic::GlicButtonInterface::FromBrowser(browser()));
   }
 
   GlicKeyedService* glic_service() {
-    return GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  }
-
-  void WaitForFreShownAndInitialized() {
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return glic_service()
-          ->fre_controller()
-          .IsShowingDialogAndStateInitialized();
-    })) << "FRE dialog should have been shown";
+    return GlicKeyedServiceFactory::GetGlicKeyedService(
+        browser()->GetProfile());
   }
 
   void WaitForGlicPanelShow() {
     ASSERT_TRUE(base::test::RunUntil([&]() {
-      return glic_service()->IsWindowShowing();
+      return glic_service()->instance_coordinator().IsAnyPanelShowing();
     })) << "Glic panel should have been shown";
   }
 
@@ -69,7 +71,7 @@ class GlicButtonTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(GlicButtonTest, ContextMenuPinned) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       glic::prefs::kGlicPinnedToTabstrip, true);
 
   glic_button()->ShowContextMenuForViewImpl(glic_button(), gfx::Point(),
@@ -78,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(GlicButtonTest, ContextMenuPinned) {
 }
 
 IN_PROC_BROWSER_TEST_F(GlicButtonTest, ContextMenuUnpinned) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       glic::prefs::kGlicPinnedToTabstrip, false);
 
   glic_button()->ShowContextMenuForViewImpl(glic_button(), gfx::Point(),
@@ -87,7 +89,7 @@ IN_PROC_BROWSER_TEST_F(GlicButtonTest, ContextMenuUnpinned) {
 }
 
 IN_PROC_BROWSER_TEST_F(GlicButtonTest, UnpinCommand) {
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   profile_prefs->SetBoolean(glic::prefs::kGlicPinnedToTabstrip, true);
 
   glic_button()->ExecuteCommand(IDC_GLIC_TOGGLE_PIN, ui::EF_NONE);
@@ -95,26 +97,9 @@ IN_PROC_BROWSER_TEST_F(GlicButtonTest, UnpinCommand) {
 }
 
 IN_PROC_BROWSER_TEST_F(GlicButtonTest, TooltipAndA11yTextForOpening) {
-  EXPECT_FALSE(glic_service()->IsWindowOrFreShowing());
+  EXPECT_FALSE(glic_service()->instance_coordinator().IsAnyPanelShowing());
   EXPECT_EQ(glic_button()->GetViewAccessibility().GetCachedName(),
             l10n_util::GetStringUTF16(IDS_GLIC_TAB_STRIP_BUTTON_TOOLTIP));
-}
-
-IN_PROC_BROWSER_TEST_F(GlicButtonTest, TooltipAndA11yTextWhileGlicFreOpen) {
-  // Toggle to open the FRE dialog.
-  if (base::FeatureList::IsEnabled(features::kGlicTrustFirstOnboarding)) {
-    // Disable for kTrustFirstOnboarding.
-    GTEST_SKIP() << "Skipping for kTrustFirstOnboarding";
-  }
-  SetFRECompletion(browser()->profile(), prefs::FreStatus::kNotStarted);
-  glic_service()->ToggleUI(browser(), false,
-                           mojom::InvocationSource::kTopChromeButton);
-  WaitForFreShownAndInitialized();
-
-  EXPECT_EQ(glic_button()->GetViewAccessibility().GetCachedName(),
-            l10n_util::GetStringUTF16(IDS_GLIC_TAB_STRIP_BUTTON_TOOLTIP_CLOSE));
-  EXPECT_EQ(glic_button()->GetTooltipText(),
-            l10n_util::GetStringUTF16(IDS_GLIC_TAB_STRIP_BUTTON_TOOLTIP_CLOSE));
 }
 
 // Tests using programmatic window activation are flaky on Linux.
@@ -142,5 +127,128 @@ IN_PROC_BROWSER_TEST_F(GlicButtonTest,
   EXPECT_EQ(glic_button()->GetTooltipText(),
             l10n_util::GetStringUTF16(IDS_GLIC_TAB_STRIP_BUTTON_TOOLTIP_CLOSE));
 }
+
+class GlicButtonPrewarmDelayedTest : public GlicButtonTest {
+ public:
+  GlicButtonPrewarmDelayedTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{private_ai::kPrivateAi, {{"api-key", "xxxxx"}}},
+         {glic::kZeroStateSuggestionsUsePrivateAi,
+          {{"ZSSPrivateAiPrewarmDelay", "0ms"}}}},
+        {});
+  }
+
+ protected:
+  void SetUpOnMainThread() override {
+    GlicButtonTest::SetUpOnMainThread();
+    auto mock_client = std::make_unique<
+        testing::StrictMock<private_ai::MockPrivateAiClient>>();
+    mock_client_ptr_ = mock_client.get();
+    private_ai::PrivateAiService* service =
+        private_ai::PrivateAiServiceFactory::GetForProfile(
+            browser()->GetProfile());
+    ASSERT_TRUE(service);
+    service->SetClientForTesting(std::move(mock_client));
+  }
+
+  void TearDownOnMainThread() override {
+    mock_client_ptr_ = nullptr;
+    private_ai::PrivateAiService* service =
+        private_ai::PrivateAiServiceFactory::GetForProfile(
+            browser()->GetProfile());
+    if (service) {
+      service->SetClientForTesting(nullptr);
+    }
+    GlicButtonTest::TearDownOnMainThread();
+  }
+
+  raw_ptr<testing::StrictMock<private_ai::MockPrivateAiClient>>
+      mock_client_ptr_ = nullptr;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(GlicButtonPrewarmDelayedTest, PrewarmDelayedOnHover) {
+  base::RunLoop run_loop;
+  bool connection_established = false;
+  EXPECT_CALL(*mock_client_ptr_,
+              EstablishConnection(
+                  private_ai::proto::FEATURE_NAME_CHROME_ZERO_STATE_SUGGESTION))
+      .WillOnce([&]() {
+        connection_established = true;
+        run_loop.Quit();
+      });
+
+  // Transition GlicButton to STATE_HOVERED.
+  glic_button()->SetState(views::Button::ButtonState::STATE_HOVERED);
+
+  // Connection should not be established immediately (still requires pumping
+  // the loop).
+  EXPECT_FALSE(connection_established);
+
+  // Run the loop until the timer fires and the callback quits the loop.
+  run_loop.Run();
+
+  EXPECT_TRUE(connection_established);
+}
+
+class GlicButtonPrewarmCancelledTest : public GlicButtonTest {
+ public:
+  GlicButtonPrewarmCancelledTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{private_ai::kPrivateAi, {{"api-key", "xxxxx"}}},
+         {glic::kZeroStateSuggestionsUsePrivateAi,
+          {{"ZSSPrivateAiPrewarmDelay", "10s"}}}},
+        {});
+  }
+
+ protected:
+  void SetUpOnMainThread() override {
+    GlicButtonTest::SetUpOnMainThread();
+    auto mock_client = std::make_unique<
+        testing::StrictMock<private_ai::MockPrivateAiClient>>();
+    mock_client_ptr_ = mock_client.get();
+    private_ai::PrivateAiService* service =
+        private_ai::PrivateAiServiceFactory::GetForProfile(
+            browser()->GetProfile());
+    ASSERT_TRUE(service);
+    service->SetClientForTesting(std::move(mock_client));
+  }
+
+  void TearDownOnMainThread() override {
+    mock_client_ptr_ = nullptr;
+    private_ai::PrivateAiService* service =
+        private_ai::PrivateAiServiceFactory::GetForProfile(
+            browser()->GetProfile());
+    if (service) {
+      service->SetClientForTesting(nullptr);
+    }
+    GlicButtonTest::TearDownOnMainThread();
+  }
+
+  raw_ptr<testing::StrictMock<private_ai::MockPrivateAiClient>>
+      mock_client_ptr_ = nullptr;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(GlicButtonPrewarmCancelledTest,
+                       PrewarmCancelledOnHoverExit) {
+  EXPECT_CALL(*mock_client_ptr_,
+              EstablishConnection(
+                  private_ai::proto::FEATURE_NAME_CHROME_ZERO_STATE_SUGGESTION))
+      .Times(0);
+
+  // Transition to STATE_HOVERED. Starts the prewarm timer.
+  glic_button()->SetState(views::Button::ButtonState::STATE_HOVERED);
+  EXPECT_TRUE(glic_button()->IsPrewarmTimerRunningForTesting());
+
+  // Transition back to STATE_NORMAL immediately, stopping the timer.
+  glic_button()->SetState(views::Button::ButtonState::STATE_NORMAL);
+  EXPECT_FALSE(glic_button()->IsPrewarmTimerRunningForTesting());
+}
+
 }  // namespace
 }  // namespace glic

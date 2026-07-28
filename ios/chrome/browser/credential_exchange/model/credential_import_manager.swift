@@ -13,6 +13,9 @@ import Foundation
     passkeys: [CredentialExchangePasskey],
     exporterDisplayName: NSString,
     stats: ImportStats)
+
+  /// Called when the import failed with an error.
+  @objc func onImportError()
 }
 
 /// Handles importing user credentials through ASCredentialImportManager.
@@ -52,7 +55,7 @@ import Foundation
           stats: translatedData.stats
         )
       } catch {
-        // TODO(crbug.com/445889307): Handle errors.
+        delegate?.onImportError()
       }
     }
   }
@@ -93,7 +96,8 @@ import Foundation
                 url: optionalUrl,
                 username: basicAuth.userName?.value ?? "",
                 password: basicAuth.password?.value ?? "",
-                note: note
+                note: note,
+                creationDate: nil
               ))
           case .passkey(let passkey):
             stats.passkeyCount += 1
@@ -104,7 +108,8 @@ import Foundation
                 userName: passkey.userName,
                 userDisplayName: passkey.userDisplayName,
                 userId: passkey.userHandle,
-                privateKey: passkey.key))
+                privateKey: passkey.key,
+                creationDate: nil))
           case .address:
             stats.addressCount += 1
           case .apiKey:

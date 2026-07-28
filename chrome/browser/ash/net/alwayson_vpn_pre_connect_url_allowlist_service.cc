@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/net/alwayson_vpn_pre_connect_url_allowlist_service.h"
 
+#include "base/check.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/net/always_on_vpn_manager.h"
@@ -20,6 +21,10 @@ AlwaysOnVpnPreConnectUrlAllowlistService::
         PolicyBlocklistService* policy_blocklist_service)
     : pref_service_(pref_service),
       policy_blocklist_service_(policy_blocklist_service) {
+  // TODO(crbug.com/501330749): Remove this once the root cause is identified.
+  DUMP_WILL_BE_CHECK(ash::NetworkHandler::HasEverBeenInitialized());
+  DUMP_WILL_BE_CHECK(ash::NetworkHandler::IsInitialized());
+
   network_state_handler_observer_.Observe(
       ash::NetworkHandler::Get()->network_state_handler());
 

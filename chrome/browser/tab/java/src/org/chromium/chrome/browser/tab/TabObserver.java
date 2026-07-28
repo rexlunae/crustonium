@@ -12,7 +12,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
-import org.chromium.chrome.browser.tab.Tab.MediaState;
 import org.chromium.components.find_in_page.FindMatchRectsDetails;
 import org.chromium.components.find_in_page.FindNotificationDetails;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -410,7 +409,7 @@ public interface TabObserver {
     // TODO(crbug.com/41497290): deprecate RootId once TabGroupId has finished replacing it.
     /**
      * Broadcast that root identifier on a {@link Tab} has changed. This method will be functionally
-     * replaced by onTabGroupIdChanged as part of https://crbug.com/1523745.
+     * replaced by onTabGroupIdChanged as part of https://crbug.com/41496693.
      *
      * @param tab {@link Tab} root identifier has changed on
      * @param newRootId new value of new root id

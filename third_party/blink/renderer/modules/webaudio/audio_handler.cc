@@ -19,6 +19,8 @@
 #include <stdio.h>
 #endif
 
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+
 namespace blink {
 
 AudioHandler::AudioHandler(NodeType node_type,
@@ -50,7 +52,7 @@ AudioHandler::AudioHandler(NodeType node_type,
 #endif
   node.context()->WarnIfContextClosed(this);
   uma_reporter_ = std::make_unique<AudioHandlerUmaReporter>(
-      std::string(NodeTypeName().Utf8()), sample_rate);
+      std::string(NodeTypeName()), sample_rate);
 }
 
 AudioHandler::~AudioHandler() {
@@ -100,7 +102,7 @@ BaseAudioContext* AudioHandler::Context() const {
   return context_.Get();
 }
 
-String AudioHandler::NodeTypeName() const {
+const char* AudioHandler::NodeTypeName() const {
   switch (node_type_) {
     case NodeType::kNodeTypeDestination:
       return "AudioDestinationNode";
@@ -210,7 +212,8 @@ void AudioHandler::SetInternalChannelInterpretation(
 void AudioHandler::SetChannelCount(unsigned channel_count,
                                    ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  DeferredTaskHandler::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(
+      Context()->GetDeferredTaskHandler());
 
   if (channel_count > 0 &&
       channel_count <= BaseAudioContext::MaxNumberOfChannels()) {
@@ -241,7 +244,8 @@ V8ChannelCountMode::Enum AudioHandler::GetChannelCountMode() const {
 void AudioHandler::SetChannelCountMode(V8ChannelCountMode::Enum mode,
                                        ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  DeferredTaskHandler::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(
+      Context()->GetDeferredTaskHandler());
 
   new_channel_count_mode_ = mode;
   if (new_channel_count_mode_ != channel_count_mode_) {
@@ -266,7 +270,8 @@ void AudioHandler::SetChannelInterpretation(
     V8ChannelInterpretation::Enum interpretation,
     ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  DeferredTaskHandler::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(
+      Context()->GetDeferredTaskHandler());
 
   AudioBus::ChannelInterpretation old_mode = channel_interpretation_;
 
@@ -298,8 +303,7 @@ void AudioHandler::ProcessIfNecessary(uint32_t frames_to_process) {
 
   TRACE_EVENT2(TRACE_DISABLED_BY_DEFAULT("webaudio.audionode"),
                "AudioHandler::ProcessIfNecessary", "this",
-               reinterpret_cast<void*>(this), "node type",
-               NodeTypeName().Ascii());
+               reinterpret_cast<void*>(this), "node type", NodeTypeName());
 
   // Ensure that we only process once per rendering quantum.
   // This handles the "fanout" problem where an output is connected to multiple
@@ -398,6 +402,31 @@ void AudioHandler::UnsilenceOutputs() {
   }
 }
 
+void AudioHandler::EnableOutputsInternal(
+    Vector<scoped_refptr<AudioHandler>>& worklist) {
+  is_disabled_ = false;
+  for (auto& output : outputs_) {
+    output->EnableAndEnqueue(worklist);
+  }
+}
+
+void AudioHandler::EnableOutputs() {
+  Vector<scoped_refptr<AudioHandler>> worklist;
+  EnableOutputsInternal(worklist);
+
+  while (!worklist.empty()) {
+    scoped_refptr<AudioHandler> handler = std::move(worklist.back());
+    worklist.pop_back();
+
+    handler->Context()->GetDeferredTaskHandler().RemoveTailProcessingHandler(
+        handler.get(), false);
+
+    if (handler->is_disabled_ && handler->connection_ref_count_ > 0) {
+      handler->EnableOutputsInternal(worklist);
+    }
+  }
+}
+
 void AudioHandler::EnableOutputsIfNecessary() {
   DCHECK(IsMainThread());
   deferred_task_handler_->AssertGraphOwner();
@@ -416,10 +445,7 @@ void AudioHandler::EnableOutputsIfNecessary() {
 #endif
 
   if (is_disabled_ && connection_ref_count_ > 0) {
-    is_disabled_ = false;
-    for (auto& output : outputs_) {
-      output->Enable();
-    }
+    EnableOutputs();
   }
 }
 
@@ -465,10 +491,35 @@ void AudioHandler::DisableOutputsIfNecessary() {
   }
 }
 
-void AudioHandler::DisableOutputs() {
+void AudioHandler::DisableOutputsInternal(
+    Vector<scoped_refptr<AudioHandler>>& worklist) {
   is_disabled_ = true;
   for (auto& output : outputs_) {
-    output->Disable();
+    output->DisableAndEnqueue(worklist);
+  }
+}
+
+void AudioHandler::DisableOutputs() {
+  Vector<scoped_refptr<AudioHandler>> worklist;
+  DisableOutputsInternal(worklist);
+
+  while (!worklist.empty()) {
+    scoped_refptr<AudioHandler> handler = std::move(worklist.back());
+    worklist.pop_back();
+
+    if (!handler->is_disabled_ && handler->connection_ref_count_ <= 1) {
+      // If a node requires tail processing, we defer the disabling of
+      // the outputs so that the tail for the node can be output.
+      // Otherwise, we can disable the outputs right away.
+      if (handler->RequiresTailProcessing()) {
+        if (handler->GetDeferredTaskHandler().AcceptsTailProcessing()) {
+          handler->GetDeferredTaskHandler().AddTailProcessingHandler(
+              std::move(handler));
+        }
+      } else {
+        handler->DisableOutputsInternal(worklist);
+      }
+    }
   }
 }
 
@@ -530,10 +581,10 @@ void AudioHandler::PrintNodeCounts() {
 #endif  // DEBUG_AUDIONODE_REFERENCES
 
 #if DEBUG_AUDIONODE_REFERENCES > 1
-void AudioHandler::TailProcessingDebug(const char* note, bool flag) {
-  UNSAFE_TODO(fprintf(stderr, "[%16p]: %16p: %2d: %s %d @%.15g flag=%d",
-                      Context(), this, GetNodeType(), note,
-                      connection_ref_count_, Context()->currentTime(), flag));
+void AudioHandler::TailProcessingDebug(String note, bool flag) {
+  fprintf(stderr, "[%16p]: %16p: %2d: %s %d @%.15g flag=%d", Context(), this,
+          GetNodeType(), note.Utf8().c_str(), connection_ref_count_,
+          Context()->currentTime(), flag);
 
   // If we're on the audio thread, we can print out the tail and
   // latency times (because these methods can only be called from the
@@ -564,13 +615,13 @@ void AudioHandler::UpdateChannelInterpretation() {
   channel_interpretation_ = new_channel_interpretation_;
 }
 
-void AudioHandler::SendLogMessage(const char* const function_name,
+void AudioHandler::SendLogMessage(const String& function_name,
                                   const String& message) {
   WebRtcLogMessage(
-      UNSAFE_TODO(String::Format("[WA]AH::%s %s [type=%s, this=0x%" PRIXPTR "]",
-                                 function_name, message.Utf8().c_str(),
-                                 NodeTypeName().Utf8().c_str(),
-                                 reinterpret_cast<uintptr_t>(this)))
+      StrCat({"[WA]AH::", function_name, " ", message,
+              " [type=", NodeTypeName(), ", this=0x",
+              String::Format("%" PRIXPTR, reinterpret_cast<uintptr_t>(this)),
+              "]"})
           .Utf8());
 }
 

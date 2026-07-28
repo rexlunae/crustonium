@@ -29,6 +29,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/views/widget/widget.h"
 
 namespace tab_groups {
 
@@ -66,7 +67,7 @@ struct DialogText {
   const std::u16string title;
   const std::u16string body;
   const std::u16string ok_text;
-  const std::optional<std::u16string> cancel_text = std::nullopt;
+  const std::optional<std::u16string> cancel_text;
 };
 
 // Returns the list of strings that are needed for a given dialog type.
@@ -381,8 +382,7 @@ bool DeletionDialogController::IsShowingDialog() const {
 void DeletionDialogController::CreateDialogFromBrowser(
     BrowserWindowInterface* browser,
     std::unique_ptr<ui::DialogModel> dialog_model) {
-  widget_ = chrome::ShowBrowserModal(browser->GetBrowserForMigrationOnly(),
-                                     std::move(dialog_model));
+  widget_ = chrome::ShowBrowserModal(browser, std::move(dialog_model));
 }
 
 bool DeletionDialogController::MaybeShowDialog(

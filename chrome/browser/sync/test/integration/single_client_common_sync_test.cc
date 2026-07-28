@@ -7,12 +7,14 @@
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/path_service.h"
 #include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -29,7 +31,9 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/themes_helper.h"
+#include "chrome/common/chrome_paths.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
@@ -70,19 +74,16 @@ namespace {
 std::unique_ptr<syncer::LoopbackServerEntity> CreateTombstone(
     syncer::DataType data_type,
     std::string_view client_tag) {
-  const std::string client_tag_hash =
-      syncer::ClientTagHash::FromUnhashed(data_type, client_tag).value();
-
-  // For all data types except bookmarks, the server ID is built based on the
-  // client tag *hash*. For bookmarks, the non-hashed client tag (aka UUID) is
-  // used.
-  return syncer::PersistentTombstoneEntity::CreateNew(
-      syncer::LoopbackServerEntity::CreateId(
-          data_type, (data_type == syncer::BOOKMARKS) ? std::string(client_tag)
-                                                      : client_tag_hash),
-      client_tag_hash);
+  return syncer::PersistentTombstoneEntity::CreateNewForTest(
+      data_type, std::string(client_tag));
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+base::FilePath GetTestFilePathForCacheGuid() {
+  base::FilePath user_data_path;
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_path);
+  return user_data_path.AppendASCII("SyncTestTmpCacheGuid");
+}
 
 // Collects all the updated data types and used GetUpdates origins.
 class GetUpdatesObserver : public FakeServer::Observer {
@@ -135,6 +136,11 @@ class SingleClientCommonSyncTest
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitAndEnableFeature(
           syncer::kReplaceSyncPromosWithSignInPromos);
+    } else {
+      // Skip sync-to-signin migration for sync-the-feature tests. This is to
+      // avoid the sync state changing between the PRE_ tests.
+      scoped_feature_list_.InitAndDisableFeature(
+          switches::kMigrateSyncingUserToSignedIn);
     }
   }
   ~SingleClientCommonSyncTest() override = default;
@@ -155,7 +161,7 @@ INSTANTIATE_TEST_SUITE_P(,
                          GetSyncTestModes(),
                          testing::PrintToStringParamName());
 
-// Android doesn't currently support PRE_ tests, see crbug.com/1117345.
+// Android doesn't currently support PRE_ tests, see crbug.com/40145099.
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
                        PRE_ShouldNotIssueGetUpdatesOnBrowserRestart) {
@@ -280,6 +286,72 @@ IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
+// Regression test for crbug.com/40624424 that verifies the cache GUID is not
+// reset upon restart of the browser.
+IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest, PRE_ReusesSameCacheGuid) {
+  if (GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTheFeature) {
+    GTEST_SKIP() << "This test applies to transport mode only.";
+  }
+  ASSERT_TRUE(SignIn());
+
+  ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
+            GetSyncService(0)->GetTransportState());
+
+  // On ChromeOS, IsInitialSyncFeatureSetupComplete() is always true.
+#if !BUILDFLAG(IS_CHROMEOS)
+  ASSERT_FALSE(GetSyncService(0)
+                   ->GetUserSettings()
+                   ->IsInitialSyncFeatureSetupComplete());
+  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+  syncer::SyncTransportDataPrefs transport_data_prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
+  const std::string cache_guid = transport_data_prefs.GetCacheGuid();
+  ASSERT_FALSE(cache_guid.empty());
+
+  // Save the cache GUID to file to remember after restart, for test
+  // verification purposes only.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  ASSERT_TRUE(base::WriteFile(GetTestFilePathForCacheGuid(), cache_guid));
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest, ReusesSameCacheGuid) {
+  if (GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTheFeature) {
+    GTEST_SKIP() << "This test applies to transport mode only.";
+  }
+
+  ASSERT_TRUE(SetupClients());
+  ASSERT_FALSE(GetSyncService(0)->HasDisableReason(
+      syncer::SyncService::DISABLE_REASON_NOT_SIGNED_IN));
+  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+
+  ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
+            GetSyncService(0)->GetTransportState());
+
+  // On ChromeOS, IsInitialSyncFeatureSetupComplete() is always true.
+#if !BUILDFLAG(IS_CHROMEOS)
+  ASSERT_FALSE(GetSyncService(0)
+                   ->GetUserSettings()
+                   ->IsInitialSyncFeatureSetupComplete());
+  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+  syncer::SyncTransportDataPrefs transport_data_prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
+  ASSERT_FALSE(transport_data_prefs.GetCacheGuid().empty());
+
+  std::string old_cache_guid;
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  ASSERT_TRUE(
+      base::ReadFileToString(GetTestFilePathForCacheGuid(), &old_cache_guid));
+  ASSERT_FALSE(old_cache_guid.empty());
+
+  EXPECT_EQ(old_cache_guid, transport_data_prefs.GetCacheGuid());
+}
+
 IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
                        E2E_ENABLED(ShouldCrashAwaitQuiescenceForE2ETest)) {
   ASSERT_TRUE(SetupSync());
@@ -311,8 +383,16 @@ class SingleClientGetUnsyncedTypesTest : public SyncTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
+// TODO(crbug.com/505733920): Enable the test.
+#if BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER)
+#define MAYBE_ShouldGetTypesWithUnsyncedDataFromSyncService \
+  DISABLED_ShouldGetTypesWithUnsyncedDataFromSyncService
+#else
+#define MAYBE_ShouldGetTypesWithUnsyncedDataFromSyncService \
+  ShouldGetTypesWithUnsyncedDataFromSyncService
+#endif
 IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest,
-                       ShouldGetTypesWithUnsyncedDataFromSyncService) {
+                       MAYBE_ShouldGetTypesWithUnsyncedDataFromSyncService) {
   ASSERT_TRUE(SetupSync());
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -337,7 +417,8 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest,
                    .contains(syncer::BOOKMARKS));
 
   ASSERT_TRUE(bookmarks_helper::BookmarkModelMatchesFakeServerChecker(
-                  GetBookmarkModel(0), GetSyncService(0), GetFakeServer())
+                  GetBookmarkModel(0), GetSyncService(0), GetFakeServer(),
+                  bookmarks_helper::StoreType::kAccountStore)
                   .Wait());
 
   // Force bookmark saved to the account to be unsynced.
@@ -372,7 +453,6 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest,
 IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest, HttpError) {
   ASSERT_TRUE(SetupSync());
 
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   // THEMES has no unsynced data.
@@ -415,7 +495,6 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest, SignInPendingState) {
 
   ASSERT_TRUE(SetupSync());
 
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   // THEMES has no unsynced data.
@@ -455,7 +534,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest, SignInPendingState) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-// Android doesn't currently support PRE_ tests, see crbug.com/1117345.
+// Android doesn't currently support PRE_ tests, see crbug.com/40145099.
 #if !BUILDFLAG(IS_ANDROID)
 class SingleClientFeatureToTransportSyncTest : public SyncTest {
  public:
@@ -472,10 +551,9 @@ class SingleClientFeatureToTransportSyncTest : public SyncTest {
 
   ~SingleClientFeatureToTransportSyncTest() override = default;
 
-  void BeforeSetupClient(int index,
-                         const base::FilePath& profile_path) override {
+  void OnProfileCreationStarted(Profile* profile) override {
     if (!content::IsPreTest()) {
-      base::FilePath prefs_path = profile_path.AppendASCII("Preferences");
+      base::FilePath prefs_path = profile->GetPath().AppendASCII("Preferences");
       std::string prefs_string;
       ASSERT_TRUE(base::ReadFileToString(prefs_path, &prefs_string));
       std::optional<base::Value> prefs = base::JSONReader::Read(
@@ -489,6 +567,8 @@ class SingleClientFeatureToTransportSyncTest : public SyncTest {
       ASSERT_TRUE(updated_prefs_string);
       ASSERT_TRUE(base::WriteFile(prefs_path, *updated_prefs_string));
     }
+
+    SyncTest::OnProfileCreationStarted(profile);
   }
 
   bool SetupClients() override {
@@ -742,6 +822,12 @@ class SingleClientOldProgressMarkerSyncTest : public SyncTest {
       const SingleClientOldProgressMarkerSyncTest&) = delete;
   SingleClientOldProgressMarkerSyncTest& operator=(
       const SingleClientOldProgressMarkerSyncTest&) = delete;
+
+  // The value doesn't matter, since the tests use SetupSyncWithMode(..) to
+  // explicitly pick Sync-the-feature or Sync-the-transport.
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return SyncTest::SetupSyncMode::kSyncTransportOnly;
+  }
 
  private:
   base::test::ScopedFeatureList features_;

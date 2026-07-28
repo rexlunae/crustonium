@@ -37,6 +37,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -49,13 +50,22 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_parse_html_unsafe_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_sanitizer_config.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_set_html_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_set_html_unsafe_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizer_sanitizerconfig_sanitizerpresets.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerelementnamespace_string.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerelementnamespacewithattributes_string.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_string_trustedhtml.h"
 #include "third_party/blink/renderer/core/css/media_query_list_listener.h"
 #include "third_party/blink/renderer/core/css/media_query_matcher.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
+#include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/node_with_index.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/dom/scripted_animation_controller.h"
@@ -77,6 +87,7 @@
 #include "third_party/blink/renderer/core/html/html_link_element.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
+#include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/page/validation_message_client.h"
@@ -134,8 +145,7 @@ class DocumentTest : public PageTestBase {
       const UseCountedExpectation use_counted_expectation) {
     WebURL mocked_mainframe_url =
         url_test_helpers::RegisterMockedURLLoadFromBase(
-            base_url, test::CoreTestDataPath(),
-            WebString::FromUTF8("foo.html"));
+            base_url, test::CoreTestDataPath(), WebString("foo.html"));
 
     frame_test_helpers::WebViewHelper web_view_helper;
     // Load a non-about:blank simple mainframe page.
@@ -181,6 +191,12 @@ class DocumentTest : public PageTestBase {
         mock_policy_container_host.BindNewEndpointAndPassDedicatedRemote());
     params->policy_container->policies.sandbox_flags =
         network::mojom::blink::WebSandboxFlags::kAll;
+    if ((params->policy_container->policies.sandbox_flags &
+         network::mojom::blink::WebSandboxFlags::kOrigin) !=
+        network::mojom::blink::WebSandboxFlags::kNone) {
+      params->origin_to_commit =
+          SecurityOrigin::Create(url)->DeriveNewOpaqueOrigin();
+    }
     GetFrame().Loader().CommitNavigation(std::move(params),
                                          /*extra_data=*/nullptr);
     test::RunPendingTasks();
@@ -190,7 +206,7 @@ class DocumentTest : public PageTestBase {
 
 void DocumentTest::SetHtmlInnerHTML(std::string_view html_content) {
   GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
-      String::FromUTF8(html_content));
+      String::FromUtf8(html_content));
   UpdateAllLifecyclePhasesForTest();
 }
 
@@ -666,7 +682,7 @@ TEST_F(DocumentTest, CanExecuteScriptsWithSandboxAndIsolatedWorld) {
   DOMWrapperWorld* world_with_csp =
       DOMWrapperWorld::EnsureIsolatedWorld(isolate, kIsolatedWorldWithCSPId);
   IsolatedWorldCSP::Get().SetContentSecurityPolicy(
-      kIsolatedWorldWithCSPId, String::FromUTF8("script-src *"),
+      kIsolatedWorldWithCSPId, "script-src *",
       SecurityOrigin::Create(KURL("chrome-extension://123")));
   ScriptState* isolated_world_with_csp_script_state =
       ToScriptState(frame, *world_with_csp);
@@ -814,11 +830,11 @@ TEST_F(DocumentTest, FindInPageUkmInFrame) {
   std::string base_url = "http://internal.test/";
 
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8("visible_iframe.html"));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString("visible_iframe.html"));
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8("single_iframe.html"));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString("single_iframe.html"));
 
   frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view_impl =
@@ -1801,96 +1817,6 @@ TEST_F(DocumentTest, DocumentDefiningElementWithMultipleBodies) {
   EXPECT_FALSE(body2->GetLayoutBox()->GetScrollableArea());
 }
 
-TEST_F(DocumentTest, LayoutReplacedUseCounterNoStyles) {
-  SetHtmlInnerHTML(R"HTML(
-    <img>
-  )HTML");
-
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
-TEST_F(DocumentTest, LayoutReplacedUseCounterExplicitlyHidden) {
-  SetHtmlInnerHTML(R"HTML(
-    <style> .tag { overflow: hidden } </style>
-    <img class=tag>
-  )HTML");
-
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
-TEST_F(DocumentTest, LayoutReplacedUseCounterExplicitlyVisible) {
-  SetHtmlInnerHTML(R"HTML(
-    <style> .tag { overflow: visible } </style>
-    <img class=tag>
-  )HTML");
-
-  EXPECT_TRUE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
-TEST_F(DocumentTest, LayoutReplacedUseCounterExplicitlyVisibleWithObjectFit) {
-  SetHtmlInnerHTML(R"HTML(
-    <style> .tag { overflow: visible; object-fit: cover; } </style>
-    <img class=tag>
-  )HTML");
-
-  EXPECT_TRUE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_TRUE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
-TEST_F(DocumentTest, LayoutReplacedUseCounterExplicitlyVisibleLaterHidden) {
-  SetHtmlInnerHTML(R"HTML(
-    <style>
-      img { overflow: visible; }
-      .tag { overflow: hidden; }
-    </style>
-    <img class=tag>
-  )HTML");
-
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
-TEST_F(DocumentTest, LayoutReplacedUseCounterIframe) {
-  SetHtmlInnerHTML(R"HTML(
-    <style>
-      iframe { overflow: visible; }
-    </style>
-    <iframe></iframe>
-  )HTML");
-
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
-TEST_F(DocumentTest, LayoutReplacedUseCounterSvg) {
-  SetHtmlInnerHTML(R"HTML(
-    <style>
-      svg { overflow: visible; }
-    </style>
-    <svg></svg>
-  )HTML");
-
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElement));
-  EXPECT_FALSE(GetDocument().IsUseCounted(
-      WebFeature::kExplicitOverflowVisibleOnReplacedElementWithObjectProp));
-}
-
 class DocumentURLCacheTest : public DocumentTest {
  public:
   DocumentURLCacheTest() {
@@ -2043,12 +1969,7 @@ TEST_F(DocumentTest, LifecycleState_DirtyStyle_NoBody) {
             DocumentLifecycle::kVisualUpdatePending);
 }
 
-class SyntheticSelectTest : public DocumentTest {
-  base::test::ScopedFeatureList feature_list_{
-      features::kAutofillEnableSyntheticSelectMetricsLogging};
-};
-
-TEST_F(SyntheticSelectTest,
+TEST_F(DocumentTest,
        MetricsAreReported_WhenPotentialSyntheticSelectIsInNestedForm) {
   SetHtmlInnerHTML(R"HTML(
     <form id="f1">
@@ -2067,7 +1988,7 @@ TEST_F(SyntheticSelectTest,
       blink::mojom::WebFeature::kAutofillSyntheticSelect));
 }
 
-TEST_F(SyntheticSelectTest,
+TEST_F(DocumentTest,
        MetricsAreReported_WhenSyntheticSelectIsInNestedForm) {
   SetHtmlInnerHTML(R"HTML(
     <form id="f1">
@@ -2094,7 +2015,7 @@ struct SyntheticSelectTestCase {
 };
 
 class ParametrizedSyntheticSelectTest
-    : public SyntheticSelectTest,
+    : public DocumentTest,
       public testing::WithParamInterface<SyntheticSelectTestCase> {};
 
 TEST_P(ParametrizedSyntheticSelectTest, MetricsAreReported_WhenSelectIsInForm) {
@@ -2340,5 +2261,265 @@ TEST_F(DocumentTest, PaymentLinkHandling_MultiplePaymentLink) {
       payments::facilitated::mojom::blink::PaymentLinkHandler::Name_, {});
 }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+TEST_F(DocumentTest, ParseHTMLSanitizerException) {
+  // This is a regression test for https://crbug.com/496524586.
+
+  // SanitizerConfig equivalent to: {elements: ["div"], removeElements: ["div"]}
+  SanitizerConfig* config = SanitizerConfig::Create();
+  config->setElements({MakeGarbageCollected<
+      V8UnionSanitizerElementNamespaceWithAttributesOrString>("div")});
+  config->setRemoveElements(
+      {MakeGarbageCollected<V8UnionSanitizerElementNamespaceOrString>("div")});
+
+  {
+    DummyExceptionStateForTesting exception_state;
+    SetHTMLOptions* options = MakeGarbageCollected<SetHTMLOptions>();
+    options->setSanitizer(
+        MakeGarbageCollected<
+            V8UnionSanitizerOrSanitizerConfigOrSanitizerPresets>(config));
+    Document* doc =
+        Document::parseHTML(GetDocument().GetExecutionContext(), "test string",
+                            options, exception_state);
+    EXPECT_EQ(doc, nullptr);
+    EXPECT_TRUE(exception_state.HadException());
+  }
+
+  {
+    DummyExceptionStateForTesting exception_state;
+    ParseHTMLUnsafeOptions* options =
+        MakeGarbageCollected<ParseHTMLUnsafeOptions>();
+    options->setSanitizer(
+        MakeGarbageCollected<
+            V8UnionSanitizerOrSanitizerConfigOrSanitizerPresets>(config));
+    Document* doc = Document::parseHTMLUnsafe(
+        GetDocument().GetExecutionContext(),
+        MakeGarbageCollected<V8UnionStringOrTrustedHTML>("test string"),
+        options, exception_state);
+    EXPECT_EQ(doc, nullptr);
+    EXPECT_TRUE(exception_state.HadException());
+  }
+}
+
+class DocumentFocusUseCounterTest : public DocumentSimTest {
+ protected:
+  void SetUpChildFrame(const char* allow_attribute) {
+    SetUpChildFrameWithHeader(allow_attribute, nullptr, nullptr);
+  }
+
+  void SetUpChildFrameWithHeader(
+      const char* allow_attribute,
+      const char* permissions_policy_header,
+      const char* report_only_permissions_policy_header = nullptr,
+      const char* child_origin = "https://example.com") {
+    std::string child_url = std::string(child_origin) + "/child.html";
+    std::string iframe_tag = "<iframe src=\"" + child_url + "\"";
+    if (allow_attribute) {
+      iframe_tag += " allow=\"";
+      iframe_tag += allow_attribute;
+      iframe_tag += "\"";
+    }
+    iframe_tag += "></iframe>";
+
+    SimRequest main_resource("https://example.com/test.html", "text/html");
+    SimRequestBase::Params child_params;
+    if (permissions_policy_header) {
+      child_params.response_http_headers.Set(String("Permissions-Policy"),
+                                             String(permissions_policy_header));
+    }
+    if (report_only_permissions_policy_header) {
+      child_params.response_http_headers.Set(
+          String("Permissions-Policy-Report-Only"),
+          String(report_only_permissions_policy_header));
+    }
+    SimRequest child_resource(child_url.c_str(), "text/html",
+                              std::move(child_params));
+    LoadURL("https://example.com/test.html");
+    main_resource.Complete(String("<!DOCTYPE html>") + iframe_tag.c_str());
+    child_resource.Complete(R"HTML(
+      <!DOCTYPE html>
+      <input id="target">
+    )HTML");
+    Compositor().BeginFrame();
+  }
+
+  LocalFrame* ChildFrame() {
+    return To<LocalFrame>(GetDocument().GetFrame()->FirstChild());
+  }
+
+  Document* ChildDocument() { return ChildFrame()->GetDocument(); }
+};
+
+TEST_F(DocumentFocusUseCounterTest, Blocked) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+
+  // Call IsFocusAllowed on the child document with the child frame as
+  // initiator. Since the main frame has focus (not a descendant of child)
+  // and policy is disabled, focus should be blocked.
+  EXPECT_FALSE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+}
+
+TEST_F(DocumentFocusUseCounterTest, AllowedByPolicy) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation");
+
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+
+  EXPECT_TRUE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+}
+
+TEST_F(DocumentFocusUseCounterTest, AllowedByDescendant) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+
+  // Set focus to the child frame so that the focused frame is the child,
+  // which is an inclusive descendant of the initiator (also the child).
+  ChildDocument()->GetPage()->GetFocusController().SetFocusedFrame(
+      ChildFrame());
+
+  EXPECT_TRUE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+}
+
+TEST_F(DocumentFocusUseCounterTest, NotFiredWithFeatureDisabled) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(false);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+
+  ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame());
+
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+}
+
+TEST_F(DocumentFocusUseCounterTest, PolicySetViaAllow) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationPolicySet));
+}
+
+TEST_F(DocumentFocusUseCounterTest, PolicySetViaAllowAllowed) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation");
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationPolicySet));
+}
+
+TEST_F(DocumentFocusUseCounterTest, PolicySetViaHeader) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrameWithHeader(nullptr, "focus-without-user-activation=()");
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationPolicySet));
+}
+
+TEST_F(DocumentFocusUseCounterTest, PolicySetViaReportOnlyHeader) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrameWithHeader(nullptr, nullptr,
+                            "focus-without-user-activation=()");
+
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationPolicySet));
+}
+
+TEST_F(DocumentFocusUseCounterTest, PolicyNotSet) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame(nullptr);
+
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationPolicySet));
+}
+
+TEST_F(DocumentFocusUseCounterTest, PolicySetNotFiredWithFeatureDisabled) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(false);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationPolicySet));
+}
+
+// Regression coverage for crbug.com/513330788:
+// `Document::IsFocusAllowed` used to short-circuit on the *target* frame
+// being a main frame, which let a restricted initiator (e.g. an iframe with
+// `allow="focus-without-user-activation 'none'"`) bypass the policy by
+// targeting the main frame.
+TEST_F(DocumentFocusUseCounterTest,
+       MainFrameTargetDoesNotBypassRestrictedInitiator) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+
+  // Call IsFocusAllowed on the *main* document with the restricted child
+  // frame as initiator. The main frame had focus from the load, so it is not
+  // a descendant of the initiator, and the initiator has no activation and a
+  // denied policy. Focus must be blocked.
+  EXPECT_FALSE(
+      GetDocument().IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+}
+
+// Regression coverage for the activated-target variant of crbug.com/513330788:
+// the target frame holds transient user activation but the policy-restricted
+// initiator does not.
+TEST_F(DocumentFocusUseCounterTest,
+       ActivatedMainFrameTargetDoesNotBypassCrossOriginInitiator) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrameWithHeader(
+      /*allow_attribute=*/"focus-without-user-activation 'none'",
+      /*permissions_policy_header=*/nullptr,
+      /*report_only_permissions_policy_header=*/nullptr,
+      /*child_origin=*/"https://other-origin.example");
+
+  // Activate only the main frame.
+  LocalFrame::NotifyUserActivation(
+      GetDocument().GetFrame(),
+      mojom::blink::UserActivationNotificationType::kTest);
+  ASSERT_TRUE(LocalFrame::HasTransientUserActivation(GetDocument().GetFrame()));
+  ASSERT_FALSE(LocalFrame::HasTransientUserActivation(ChildFrame()));
+
+  EXPECT_FALSE(
+      GetDocument().IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationBlocked));
+}
 
 }  // namespace blink

@@ -15,6 +15,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
@@ -23,7 +24,7 @@
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_test_helper.h"
 #include "components/autofill/core/common/autofill_features.h"
@@ -155,6 +156,7 @@ class AutofillAiImportUtilsTest : public testing::Test {
             autofill_client().GetSyncService(),
             webdata_helper_.autofill_webdata_service(),
             /*history_service=*/nullptr,
+            /*pcontext_manager=*/nullptr,
             /*strike_database=*/nullptr,
             /*variation_country_code=*/GeoIpCountryCode("US")));
     autofill_client().SetUpPrefsAndIdentityForAutofillAi();
@@ -316,6 +318,7 @@ TEST_F(AutofillAiImportUtilsTest, ImportFromNonDateSelect) {
                                FieldType::PASSPORT_NUMBER, "123"));
   fields.push_back(CreateSelect(Range(1, 3), {"Germany", "USA", "Vietnam"},
                                 FieldType::PASSPORT_ISSUING_COUNTRY, "2"));
+  fields.back()->set_selected_option_text(u"USA");
 
   // `CreateAttribute` requires that we use the country code.
   EXPECT_THAT(
@@ -402,6 +405,59 @@ TEST_F(AutofillAiImportUtilsTest, DoNotImportNationalIdCardInIndia) {
               IsEmpty());
 }
 
+// Tests that entities are not offered for import when blocked by enterprise
+// policy.
+TEST_F(AutofillAiImportUtilsTest, EnterprisePolicyBlocked) {
+  std::vector<std::unique_ptr<AutofillField>> fields;
+  fields.push_back(
+      CreateInput(FormControlType::kInputText, NATIONAL_ID_CARD_NUMBER, "123"));
+  EXPECT_THAT(GetPossibleEntitiesFromSubmittedForm(fields, autofill_client()),
+              Not(IsEmpty()));
+
+  autofill_client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kIdentityDocs, true);
+  EXPECT_THAT(GetPossibleEntitiesFromSubmittedForm(fields, autofill_client()),
+              IsEmpty());
+}
+
+// Tests that read-only entity is not offered for import even if its import
+// constraints are satisfied.
+TEST_F(AutofillAiImportUtilsTest, DoNotImportReadOnlyEntities) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kAutofillAiWithDataSchema,
+                            features::kAutofillAiOrder},
+      /*disabled_features=*/{});
+
+  // Verify that the hardcoded fields we use in this test still match the actual
+  // import constraints of Order in the schema, in case they change in the
+  // future.
+  EntityType order_type = EntityType(EntityTypeName::kOrder);
+  ASSERT_FALSE(order_type.import_constraints().empty());
+  EXPECT_THAT(order_type.import_constraints()[0],
+              UnorderedElementsAre(AttributeType(kOrderId),
+                                   AttributeType(kOrderMerchantName),
+                                   AttributeType(kOrderDate)));
+
+  std::vector<std::unique_ptr<AutofillField>> fields;
+  fields.push_back(
+      CreateInput(FormControlType::kInputText, ORDER_ID, "order_123"));
+  fields.push_back(
+      CreateInput(FormControlType::kInputText, ORDER_MERCHANT_NAME, "Amazon"));
+
+  // Order Date requires a format string to be parsed correctly, otherwise it
+  // is discarded and the import constraints are not met.
+  std::unique_ptr<AutofillField> date_field =
+      CreateInput(FormControlType::kInputText, ORDER_DATE, "2026-06-29");
+  date_field->set_format_string_unless_overruled(
+      AutofillFormatString(u"YYYY-MM-DD", FormatString_Type_DATE),
+      AutofillFormatStringSource::kServer);
+  fields.push_back(std::move(date_field));
+
+  EXPECT_THAT(GetPossibleEntitiesFromSubmittedForm(fields, autofill_client()),
+              IsEmpty());
+}
+
 TEST_F(AutofillAiImportUtilsTest, MaybeGetLocalizedDate) {
   using enum AttributeTypeName;
   base::test::ScopedRestoreICUDefaultLocale restore_default_locale;
@@ -417,7 +473,7 @@ TEST_F(AutofillAiImportUtilsTest, MaybeGetLocalizedDate) {
     base::i18n::SetICUDefaultLocale("en_GB");
     EXPECT_THAT(MaybeGetLocalizedDate(a), optional(u"30 Dec 2025"));
     base::i18n::SetICUDefaultLocale("de_DE");
-    EXPECT_THAT(MaybeGetLocalizedDate(a), optional(u"30. Dez. 2025"));
+    EXPECT_THAT(MaybeGetLocalizedDate(a), optional(u"30.12.2025"));
     base::i18n::SetICUDefaultLocale("fr_FR");
     EXPECT_THAT(MaybeGetLocalizedDate(a), optional(u"30 déc. 2025"));
   }

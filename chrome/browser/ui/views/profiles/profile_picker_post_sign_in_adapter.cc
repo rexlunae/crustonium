@@ -7,33 +7,38 @@
 #include <memory>
 #include <optional>
 
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_turn_sync_on_delegate.h"
+#include "chrome/browser/ui/webui/intro/intro_ui.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_ui.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin_helper.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
+#include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
 #include "chrome/browser/ui/webui/signin/signin_url_utils.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/browser/ui/webui/signin/sync_confirmation_ui.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/tribool.h"
 #include "components/sync/base/features.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/render_frame_host.h"
@@ -51,7 +56,7 @@ bool ShouldOpenUrlAfterBrowserCreation(const GURL& url) {
 
 // Opens a new tab with `url` in `browser`. Tabs opened using this function will
 // not replace existing tabs.
-void OpenNewTabInBrowser(const GURL& url, Browser* browser) {
+void OpenNewTabInBrowser(const GURL& url, BrowserWindowInterface* browser) {
   if (browser) {
     browser->OpenGURL(url, WindowOpenDisposition::SINGLETON_TAB);
   }
@@ -132,8 +137,7 @@ void ProfilePickerPostSignInAdapter::Init(
                   &ProfilePickerPostSignInAdapter::FinishAndOpenBrowser,
                   weak_ptr_factory_.GetWeakPtr(), PostHostClearedCallback())));
 
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     history_sync_optin_helper_ = HistorySyncOptinHelper::Create(
         identity_manager, profile_, account_info, /*delegate=*/this,
         HistorySyncOptinHelper::LaunchContext::kInProfilePicker,
@@ -186,8 +190,12 @@ void ProfilePickerPostSignInAdapter::ShowHistorySyncOptinScreen(
 
 void ProfilePickerPostSignInAdapter::ShowAccountManagementScreen(
     signin::SigninChoiceCallback on_account_management_screen_closed) {
+  ManagedUserProfileNoticeUI::ScreenType screen_type =
+      signin_access_point_ == signin_metrics::AccessPoint::kForYouFre
+          ? ManagedUserProfileNoticeUI::ScreenType::kFirstRun
+          : ManagedUserProfileNoticeUI::ScreenType::kProfilePicker;
   SwitchToManagedUserProfileNotice(
-      ManagedUserProfileNoticeUI::ScreenType::kProfilePicker,
+      screen_type,
       base::BindOnce(&OnManagementUserChoice,
                      std::move(on_account_management_screen_closed)));
 }
@@ -210,8 +218,9 @@ void ProfilePickerPostSignInAdapter::FinishAndOpenBrowser(
     std::vector<PostHostClearedCallback> callbacks;
     callbacks.push_back(std::move(open_url_callback));
     callbacks.push_back(std::move(callback));
-    callback = CombineCallbacks<PostHostClearedCallback, Browser*>(
-        std::move(callbacks));
+    callback =
+        CombineCallbacks<PostHostClearedCallback, BrowserWindowInterface*>(
+            std::move(callbacks));
   }
 
   FinishAndOpenBrowserInternal(std::move(callback), is_continue_callback);
@@ -239,8 +248,21 @@ void ProfilePickerPostSignInAdapter::SwitchToManagedUserProfileNotice(
   if (!step_switch_callback_->is_null()) {
     std::move(step_switch_callback_.value()).Run(true);
   }
-  host_->ShowScreen(contents(),
-                    GURL(chrome::kChromeUIManagedUserProfileNoticeUrl),
+
+  const bool is_in_search_engine_choice_region =
+      CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                      GetForProfile(profile_))
+          .IsInSearchEngineChoiceScreenRegion();
+  const bool use_refreshed_ui =
+      switches::IsFirstRunDesktopRefreshEnabled(
+          is_in_search_engine_choice_region);
+
+  GURL managed_user_profile_notice_url =
+      use_refreshed_ui
+          ? ManagedUserProfileNoticeUI::GetURLForType(type)
+          : GURL(chrome::kChromeUIManagedUserProfileNoticeUrl);
+
+  host_->ShowScreen(contents(), managed_user_profile_notice_url,
                     /*navigation_finished_closure=*/
                     base::BindOnce(&ProfilePickerPostSignInAdapter::
                                        SwitchToManagedUserProfileNoticeFinished,
@@ -248,6 +270,25 @@ void ProfilePickerPostSignInAdapter::SwitchToManagedUserProfileNotice(
                                    // called by the owner of this instance.
                                    base::Unretained(this), type,
                                    std::move(process_user_choice_callback)));
+}
+
+void ProfilePickerPostSignInAdapter::ShowSignInCelebration(
+    base::OnceClosure celebration_finished) {
+  host_->ShowScreen(
+      contents(),
+      GURL(chrome::kChromeUIIntroURL)
+          .Resolve(chrome::kChromeUIIntroSignInCelebrationSubPage),
+      base::BindOnce(
+          &ProfilePickerPostSignInAdapter::SwitchToSignInCelebrationFinished,
+          base::Unretained(this), std::move(celebration_finished)));
+}
+
+void ProfilePickerPostSignInAdapter::SwitchToSignInCelebrationFinished(
+    base::OnceClosure celebration_finished) {
+  IntroUI* intro_ui = contents()->GetWebUI()->GetController()->GetAs<IntroUI>();
+  CHECK(intro_ui);
+  intro_ui->SetSignInCelebrationFinishedCallback(
+      std::move(celebration_finished));
 }
 
 void ProfilePickerPostSignInAdapter::SwitchToProfileSwitch(

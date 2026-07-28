@@ -15,7 +15,6 @@
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_error_controller.h"
 #include "chrome/browser/extensions/external_install_manager.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
@@ -24,10 +23,10 @@
 #include "chrome/browser/extensions/installed_loader.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "components/crx_file/id_util.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -153,7 +152,7 @@ void ExternalProviderManager::OnAllExternalProvidersReady() {
   }
 
   // Uninstall all the unclaimed extensions.
-  ExtensionPrefs::ExtensionsInfo extensions_info =
+  ExtensionPrefs::InstallRecords extensions_info =
       extension_prefs_->GetInstalledExtensionsInfo();
   for (const auto& info : extensions_info) {
     if (Manifest::IsExternalLocation(info.extension_location)) {
@@ -361,7 +360,7 @@ bool ExternalProviderManager::OnExternalExtensionUpdateUrlFound(
 
       // Fetch the installation info from the prefs, and reload the extension
       // with a modified install location.
-      std::optional<ExtensionInfo> installed_extension(
+      std::optional<ExtensionPrefs::InstallRecord> installed_extension(
           extension_prefs_->GetInstalledExtensionInfo(info.extension_id));
       installed_extension->extension_location = info.download_location;
 

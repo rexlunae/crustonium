@@ -88,7 +88,8 @@ class SigninPromoViewMediatorTest : public PlatformTest {
     fake_system_identity_manager()->WaitForServiceCallbacksToComplete();
     if (mediator_) {
       [mediator_ disconnect];
-      EXPECT_EQ(SigninPromoViewState::kInvalid, mediator_.signinPromoViewState);
+      EXPECT_EQ(SigninPromoViewState::kDisconnected,
+                mediator_.signinPromoViewState);
       EXPECT_EQ(nil, mediator_.consumer);
       mediator_ = nil;
     }
@@ -167,11 +168,7 @@ class SigninPromoViewMediatorTest : public PlatformTest {
   void TestSigninPromoWithAccount(SigninPromoViewStyle style) {
     // Expect to receive an update to the consumer with a configurator.
     ExpectConfiguratorNotification(/*identity_changed=*/YES);
-    if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-      // With this feature configuration, AccountProfileMapper sends an extra
-      // "account changed" notification when adding an account to the device.
-      ExpectConfiguratorNotification(/*identity_changed=*/NO);
-    }
+
     AddDefaultIdentity();
     // Check the configurator received by the consumer.
     CheckSigninWithAccountConfigurator(configurator_, style);
@@ -432,10 +429,20 @@ TEST_F(SigninPromoViewMediatorTest, SigninWithAccountConfigureSigninPromoView) {
 }
 
 // Tests signin promo view and its configurator with an identity
-// without full name.
+// with given name as nil.
 TEST_F(SigninPromoViewMediatorTest,
-       SigninWithAccountConfigureSigninPromoViewWithoutName) {
+       SigninWithAccountConfigureSigninPromoViewWithMissingGivenName) {
   CreateMediator(signin_metrics::AccessPoint::kRecentTabs);
+  identity_ = [FakeSystemIdentity fakeIdentityWithMissingGivenName];
+  TestSigninPromoWithAccount(SigninPromoViewStyleStandard);
+}
+
+// Tests signin promo view and its configurator with an identity
+// with both names as nil.
+TEST_F(SigninPromoViewMediatorTest,
+       SigninWithAccountConfigureSigninPromoViewWithMissingNames) {
+  CreateMediator(signin_metrics::AccessPoint::kRecentTabs);
+  identity_ = [FakeSystemIdentity fakeIdentityWithMissingNames];
   TestSigninPromoWithAccount(SigninPromoViewStyleStandard);
 }
 
@@ -493,11 +500,12 @@ TEST_F(SigninPromoViewMediatorTest, ConfigureSigninPromoViewWithWarmAndCold) {
 TEST_F(SigninPromoViewMediatorTest, SigninPromoViewStateVisible) {
   CreateMediator(signin_metrics::AccessPoint::kRecentTabs);
   // Test initial state.
-  EXPECT_EQ(SigninPromoViewState::kNeverVisible,
+  EXPECT_EQ(SigninPromoViewState::kNotYetDisplayed,
             mediator_.signinPromoViewState);
   [mediator_ signinPromoViewIsVisible];
   // Test state once the sign-in promo view is visible.
-  EXPECT_EQ(SigninPromoViewState::kUnused, mediator_.signinPromoViewState);
+  EXPECT_EQ(SigninPromoViewState::kHadNoInteraction,
+            mediator_.signinPromoViewState);
 }
 
 // Tests the view state while signing in.
@@ -513,7 +521,7 @@ TEST_F(SigninPromoViewMediatorTest, SigninPromoViewStateSignedin) {
   ExpectConfiguratorNotification(/*identity_changed=*/NO);
   [mediator_ signinPromoViewDidTapSigninWithNewAccount:signin_promo_view_];
   EXPECT_TRUE(mediator_.showSpinner);
-  EXPECT_EQ(SigninPromoViewState::kUsedAtLeastOnce,
+  EXPECT_EQ(SigninPromoViewState::kUserInteracted,
             mediator_.signinPromoViewState);
   // Stop sign-in.
   OCMExpect([consumer_ promoProgressStateDidChange]);
@@ -521,7 +529,7 @@ TEST_F(SigninPromoViewMediatorTest, SigninPromoViewStateSignedin) {
 
   [mediator_ signinDidCompleteWithResult:SigninCoordinatorResultSuccess];
   EXPECT_FALSE(mediator_.showSpinner);
-  EXPECT_EQ(SigninPromoViewState::kUsedAtLeastOnce,
+  EXPECT_EQ(SigninPromoViewState::kUserInteracted,
             mediator_.signinPromoViewState);
 }
 
@@ -565,12 +573,12 @@ TEST_F(SigninPromoViewMediatorTest,
   // Starts sign-in with an identity.
   [mediator_
       signinPromoViewDidTapPrimaryButtonWithDefaultAccount:signin_promo_view_];
-  EXPECT_TRUE([mediator_
-      conformsToProtocol:@protocol(IdentityManagerObserverBridgeDelegate)]);
-  id<IdentityManagerObserverBridgeDelegate> identityManagerObserver =
-      (id<IdentityManagerObserverBridgeDelegate>)mediator_;
+  EXPECT_TRUE(
+      [mediator_ conformsToProtocol:@protocol(IdentityManagerObserving)]);
+  id<IdentityManagerObserving> identityManagerObserver =
+      (id<IdentityManagerObserving>)mediator_;
   // Simulates an identity update.
-  [identityManagerObserver onExtendedAccountInfoUpdated:AccountInfo()];
+  [identityManagerObserver extendedAccountInfoDidUpdate:AccountInfo()];
   // Spins the run loop to wait for the profile image update.
   fake_system_identity_manager()->WaitForServiceCallbacksToComplete();
   // Finishs the sign-in.
@@ -644,7 +652,8 @@ TEST_F(SigninPromoViewMediatorTest,
 
     // Remove the sign-in promo.
     [mediator_ disconnect];
-    EXPECT_EQ(SigninPromoViewState::kInvalid, mediator_.signinPromoViewState);
+    EXPECT_EQ(SigninPromoViewState::kDisconnected,
+              mediator_.signinPromoViewState);
     // Dealloc the mediator.
     mediator_ = nil;
     // Also clear all invocations from `consumer_` after verifying them, as the
@@ -680,7 +689,8 @@ TEST_F(SigninPromoViewMediatorTest, RemoveSigninPromoWhileSignedIn) {
 
   // Remove the sign-in promo.
   [mediator_ disconnect];
-  EXPECT_EQ(SigninPromoViewState::kInvalid, mediator_.signinPromoViewState);
+  EXPECT_EQ(SigninPromoViewState::kDisconnected,
+            mediator_.signinPromoViewState);
   // Set mediator_ to nil to avoid the TearDown doesn't call
   // -[mediator_ disconnect] again.
   mediator_ = nil;
@@ -722,7 +732,7 @@ TEST_F(SigninPromoViewMediatorTest,
   OCMExpect([account_settings_presenter_ showAccountSettings]);
   [mediator_
       signinPromoViewDidTapPrimaryButtonWithDefaultAccount:signin_promo_view_];
-  EXPECT_EQ(SigninPromoViewState::kUsedAtLeastOnce,
+  EXPECT_EQ(SigninPromoViewState::kUserInteracted,
             mediator_.signinPromoViewState);
 }
 

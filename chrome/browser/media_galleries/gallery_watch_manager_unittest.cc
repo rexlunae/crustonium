@@ -313,7 +313,7 @@ TEST_F(GalleryWatchManagerTest, RemoveAllWatches) {
   EXPECT_TRUE(manager()->GetWatchSet(profile(), extension()->id()).empty());
 }
 
-// Fails on ChromeOS: crbug.com/1207878
+// Fails on ChromeOS: crbug.com/40765782
 TEST_F(GalleryWatchManagerTest, DISABLED_DropWatchOnGalleryRemoved) {
   if (!GalleryWatchesSupported())
     return;
@@ -395,7 +395,7 @@ TEST_F(GalleryWatchManagerTest, TestWatchOperationAfterProfileShutdown) {
   ShutdownProfile();
 
   // Trigger a watch that should have been removed when the profile was
-  // destroyed to catch regressions. crbug.com/467627
+  // destroyed to catch regressions. crbug.com/40409733
   base::RunLoop run_loop;
   ASSERT_TRUE(
       base::WriteFile(temp_dir.GetPath().AppendASCII("fake file"), "blah"));
@@ -421,7 +421,7 @@ TEST_F(GalleryWatchManagerTest, TestStorageRemovedAfterProfileShutdown) {
   ShutdownProfile();
 
   // Trigger a removable storage event that should be ignored now that the
-  // profile has been destroyed to catch regressions. crbug.com/467627
+  // profile has been destroyed to catch regressions. crbug.com/40409733
   base::RunLoop run_loop;
   storage_monitor()->receiver()->ProcessDetach(storage_info.device_id());
   run_loop.RunUntilIdle();

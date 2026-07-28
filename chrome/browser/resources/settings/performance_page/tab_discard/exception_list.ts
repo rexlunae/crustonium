@@ -13,8 +13,9 @@ import './exception_edit_dialog.js';
 import './exception_entry.js';
 import './exception_tabbed_add_dialog.js';
 
-import type {PrefsMixinInterface} from '/shared/settings/prefs/prefs_mixin.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import {PrefService} from '/shared/settings/prefs2/pref_service.js';
+import type {PrefServiceObserverMixinInterface} from '/shared/settings/prefs2/pref_service_observer_mixin.js';
+import {PrefServiceObserverMixin} from '/shared/settings/prefs2/pref_service_observer_mixin.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import type {CrCollapseElement} from 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
@@ -53,9 +54,10 @@ export interface ExceptionListElement {
 
 type Constructor<T> = new (...args: any[]) => T;
 const ExceptionListElementBase =
-    TooltipMixin(ListPropertyUpdateMixin(PrefsMixin(PolymerElement))) as
+    TooltipMixin(
+        ListPropertyUpdateMixin(PrefServiceObserverMixin(PolymerElement))) as
     Constructor<TooltipMixinInterface&ListPropertyUpdateMixinInterface&
-                PrefsMixinInterface&PolymerElement>;
+                PrefServiceObserverMixinInterface&PolymerElement>;
 
 export class ExceptionListElement extends
     ExceptionListElementBase {
@@ -100,13 +102,6 @@ export class ExceptionListElement extends
     };
   }
 
-  static get observers() {
-    return [
-      `onPrefsChanged_(prefs.${TAB_DISCARD_EXCEPTIONS_PREF}.value.*,` +
-          `prefs.${TAB_DISCARD_EXCEPTIONS_MANAGED_PREF}.value.*)`,
-    ];
-  }
-
   declare private siteList_: ExceptionEntry[];
   declare private overflowSiteListExpanded: boolean;
   declare private selectedRule_: string;
@@ -116,6 +111,13 @@ export class ExceptionListElement extends
 
   private metricsProxy_: PerformanceMetricsProxy =
       PerformanceMetricsProxyImpl.getInstance();
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.addPrefObserver(TAB_DISCARD_EXCEPTIONS_PREF, () => this.updateList_());
+    this.addPrefObserver(
+        TAB_DISCARD_EXCEPTIONS_MANAGED_PREF, () => this.updateList_());
+  }
 
   private hasSites_(): boolean {
     return this.siteList_.length > 0;
@@ -154,7 +156,8 @@ export class ExceptionListElement extends
   }
 
   private onDeleteClick_() {
-    this.deletePrefDictEntry(TAB_DISCARD_EXCEPTIONS_PREF, this.selectedRule_);
+    PrefService.getInstance().deletePrefDictEntry(
+        TAB_DISCARD_EXCEPTIONS_PREF, this.selectedRule_);
     this.metricsProxy_.recordExceptionListAction(
         MemorySaverModeExceptionListAction.REMOVE);
     this.$.menu.get().close();
@@ -168,25 +171,31 @@ export class ExceptionListElement extends
     this.showEditDialog_ = false;
   }
 
-  private onPrefsChanged_() {
+  private updateList_() {
     const newSites: ExceptionEntry[] = [];
-    for (const pref
-             of [TAB_DISCARD_EXCEPTIONS_MANAGED_PREF,
-                 TAB_DISCARD_EXCEPTIONS_PREF]) {
-      // Annotate sites with their managed status and append them to newSites
-      // with managed sites first.
-      const prefObject = this.getPref(pref);
-      let sites = prefObject.value;
 
-      if (sites.constructor.name === 'Object') {
-        sites = Object.keys(sites);
-      }
-      const siteToExceptionEntry = (site: string) => ({
-        site,
-        managed: prefObject.enforcement ===
-            chrome.settingsPrivate.Enforcement.ENFORCED,
-      });
-      newSites.push(...sites.map(siteToExceptionEntry));
+    const siteToExceptionEntry =
+        (site: string, prefObject: chrome.settingsPrivate.PrefObject) => ({
+          site,
+          managed: prefObject.enforcement ===
+              chrome.settingsPrivate.Enforcement.ENFORCED,
+        });
+
+    {
+      const prefObject = PrefService.getInstance().getPref<string[]>(
+          TAB_DISCARD_EXCEPTIONS_MANAGED_PREF);
+      const sites: string[] = prefObject.value;
+      newSites.push(
+          ...sites.map(site => siteToExceptionEntry(site, prefObject)));
+    }
+
+    {
+      const prefObject =
+          PrefService.getInstance().getPref<Record<string, string>>(
+              TAB_DISCARD_EXCEPTIONS_PREF);
+      const sites: string[] = Object.keys(prefObject.value);
+      newSites.push(
+          ...sites.map(site => siteToExceptionEntry(site, prefObject)));
     }
 
     // Optimizes updates by keeping existing references and minimizes splices

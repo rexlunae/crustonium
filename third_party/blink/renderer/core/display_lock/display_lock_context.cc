@@ -21,8 +21,10 @@
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/highlight/highlight_registry.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_object_element.h"
@@ -511,8 +513,7 @@ void DisplayLockContext::UpgradeForcedScope(ForcedPhase old_phase,
 }
 
 void DisplayLockContext::ScheduleStateChangeEventIfNeeded() {
-  if (state_ == EContentVisibility::kAuto &&
-      !state_change_task_pending_) {
+  if (state_ == EContentVisibility::kAuto && !state_change_task_pending_) {
     document_->GetExecutionContext()
         ->GetTaskRunner(TaskType::kMiscPlatformAPI)
         ->PostTask(
@@ -610,6 +611,20 @@ void DisplayLockContext::Unlock() {
   MarkAncestorsForPrePaintIfNeeded();
   MarkNeedsRepaintAndPaintArtifactCompositorUpdate();
   MarkNeedsCullRectUpdate();
+
+  // Custom highlight markers are produced by walking ranges with
+  // TextIterator, which silently skips text inside display-locked subtrees.
+  // The HighlightRegistry validation cache is keyed on DOM and style
+  // versions only, so it does not know that ranges intersecting this subtree
+  // need to be revisited now that the subtree is visible. Force a fresh
+  // validation pass on the next lifecycle update.
+  if (LocalDOMWindow* window = document_->domWindow()) {
+    if (auto* registry =
+            Supplement<LocalDOMWindow>::From<HighlightRegistry>(*window);
+        registry && registry->size()) {
+      registry->ScheduleRepaint();
+    }
+  }
 }
 
 bool DisplayLockContext::CanDirtyStyle() const {
@@ -736,6 +751,13 @@ bool DisplayLockContext::MarkAncestorsForPrePaintIfNeeded() {
         layout_object->DescendantSoftNavigationContextChanged()) {
       layout_object->MarkSoftNavigationContextChanged();
     }
+    if (RuntimeEnabledFeatures::ContainerTimingPrepaintTraversalEnabled(
+            document_->GetExecutionContext()) &&
+        (needs_container_timing_context_update_ ||
+         layout_object->ContainerTimingChanged() ||
+         layout_object->DescendantContainerTimingChanged())) {
+      layout_object->MarkContainerTimingChanged();
+    }
     return true;
   }
   return compositing_dirtied || visual_overflow_dirtied;
@@ -830,7 +852,8 @@ bool DisplayLockContext::IsElementDirtyForPrePaint() const {
            needs_prepaint_subtree_walk_ ||
            needs_effective_allowed_touch_action_update_ ||
            needs_blocking_wheel_event_handler_update_ ||
-           needs_soft_navigation_context_update_;
+           needs_soft_navigation_context_update_ ||
+           needs_container_timing_context_update_;
   }
   return false;
 }
@@ -1070,7 +1093,7 @@ const char* DisplayLockContext::ShouldForceUnlock() const {
   if ((style->IsDisplayTableType() &&
        style->Display() != EDisplay::kTableCell) ||
       style->Display() == EDisplay::kRubyText ||
-      (style->IsDisplayInlineType() && !style->IsDisplayReplacedType())) {
+      style->IsNonAtomicInlineDisplayType()) {
     return rejection_names::kContainmentNotSatisfied;
   }
   return nullptr;
@@ -1142,12 +1165,12 @@ void DisplayLockContext::DetermineIfSubtreeHasTopLayerElement() {
   // have nested display locks that walk is more optimal.
   for (auto top_layer_element : document_->TopLayerElements()) {
     auto* ancestor = top_layer_element.Get();
-    while ((ancestor = FlatTreeTraversal::ParentElement(*ancestor))) {
+    do {
       if (ancestor == element_) {
         NotifyHasTopLayerElement();
         return;
       }
-    }
+    } while ((ancestor = FlatTreeTraversal::ParentElement(*ancestor)));
   }
 }
 
@@ -1235,7 +1258,7 @@ void DisplayLockContext::DetermineIfSubtreeHasSelection() {
 
   auto range = ToEphemeralRangeInFlatTree(document_->GetFrame()
                                               ->Selection()
-                                              .GetSelectionInDOMTree()
+                                              .GetSelectionInDomTree()
                                               .ComputeRange());
   bool subtree_has_selection = false;
   for (auto& node : range.Nodes()) {
@@ -1347,7 +1370,7 @@ bool DisplayLockContext::DescendantIsAnchorTargetFromOutsideDisplayLock() {
 void DisplayLockContext::Trace(Visitor* visitor) const {
   visitor->Trace(element_);
   visitor->Trace(document_);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 void DisplayLockContext::SetShouldUnlockAutoForPrint(bool flag) {

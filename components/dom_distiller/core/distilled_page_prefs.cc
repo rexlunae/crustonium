@@ -38,6 +38,10 @@ DistilledPagePrefs::DistilledPagePrefs(PrefService* pref_service)
       prefs::kFontScale,
       base::BindRepeating(&DistilledPagePrefs::NotifyOnChangeFontScaling,
                           weak_ptr_factory_.GetWeakPtr()));
+  pref_change_registrar_.Add(
+      prefs::kLinksEnabled,
+      base::BindRepeating(&DistilledPagePrefs::NotifyOnChangeLinksEnabled,
+                          weak_ptr_factory_.GetWeakPtr()));
 }
 
 DistilledPagePrefs::~DistilledPagePrefs() = default;
@@ -49,6 +53,7 @@ void DistilledPagePrefs::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(
       prefs::kFont, static_cast<int32_t>(mojom::FontFamily::kSansSerif));
   registry->RegisterDoublePref(prefs::kFontScale, kDefaultFontScale);
+  registry->RegisterBooleanPref(prefs::kLinksEnabled, true);
   registry->RegisterBooleanPref(prefs::kReaderForAccessibility, false);
 }
 
@@ -65,15 +70,8 @@ bool DistilledPagePrefs::IsUserPrefFontAvailable(
 #if !(BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS))
   return true;
 #else
-  bool new_fonts_enabled = false;
-#if BUILDFLAG(IS_ANDROID)
-  new_fonts_enabled =
-      base::FeatureList::IsEnabled(dom_distiller::kReaderModeDistillInApp) &&
+  bool new_fonts_enabled =
       base::FeatureList::IsEnabled(dom_distiller::kReaderModeSupportNewFonts);
-#else  // IS_IOS
-  new_fonts_enabled =
-      base::FeatureList::IsEnabled(dom_distiller::kReaderModeSupportNewFonts);
-#endif
   return new_fonts_enabled || font_family == mojom::FontFamily::kSansSerif ||
          font_family == mojom::FontFamily::kSerif ||
          font_family == mojom::FontFamily::kMonospace;
@@ -184,6 +182,14 @@ float DistilledPagePrefs::GetFontScaling() {
   return scaling;
 }
 
+void DistilledPagePrefs::SetLinksEnabled(bool enabled) {
+  pref_service_->SetBoolean(prefs::kLinksEnabled, enabled);
+}
+
+bool DistilledPagePrefs::GetLinksEnabled() {
+  return pref_service_->GetBoolean(prefs::kLinksEnabled);
+}
+
 void DistilledPagePrefs::AddObserver(Observer* obs) {
   observers_.AddObserver(obs);
 }
@@ -194,17 +200,9 @@ void DistilledPagePrefs::RemoveObserver(Observer* obs) {
 
 #if BUILDFLAG(IS_ANDROID)
 void DistilledPagePrefs::ClampDefaultFontScaling() {
-  float min_font_scale;
-  float max_font_scale;
-  if (base::FeatureList::IsEnabled(dom_distiller::kReaderModeDistillInApp)) {
-    min_font_scale = kMinFontScaleAndroidInApp;
-    max_font_scale = kMaxFontScaleAndroidInApp;
-  } else {
-    min_font_scale = kMinFontScaleAndroidCCT;
-    max_font_scale = kMaxFontScaleAndroidCCT;
-  }
   default_font_scaling_ =
-      std::clamp(default_font_scaling_, min_font_scale, max_font_scale);
+      std::clamp(default_font_scaling_, kMinFontScaleAndroidInApp,
+                 kMaxFontScaleAndroidInApp);
 }
 #endif
 
@@ -224,6 +222,13 @@ void DistilledPagePrefs::NotifyOnChangeFontScaling() {
   float scaling = GetFontScaling();
   for (Observer& observer : observers_)
     observer.OnChangeFontScaling(scaling);
+}
+
+void DistilledPagePrefs::NotifyOnChangeLinksEnabled() {
+  bool enabled = GetLinksEnabled();
+  for (Observer& observer : observers_) {
+    observer.OnChangeLinksEnabled(enabled);
+  }
 }
 
 }  // namespace dom_distiller

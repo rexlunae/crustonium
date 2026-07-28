@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/stringprintf.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -9,10 +10,10 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "chrome/common/extensions/api/tab_groups.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/tab_groups/tab_group_color.h"
@@ -27,13 +28,6 @@
 #include "extensions/browser/test_event_router_observer.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/test/extension_test_message_listener.h"
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/tabs/tab_group_model.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -118,6 +112,13 @@ IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, TestTabGroupsWorks) {
   ASSERT_TRUE(RunExtensionTest("tab_groups/basics")) << message_;
 }
 
+// Tests moving a tab group from one window to another using the JavaScript
+// API. Regression test for https://crbug.com/509581460, which was a problem
+// with ref-counting that only showed up in real JS tests.
+IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, MoveToWindow) {
+  ASSERT_TRUE(RunExtensionTest("tab_groups/move_to_window")) << message_;
+}
+
 // Tests that events are restricted to their respective browser contexts,
 // especially between on-the-record and off-the-record browsers.
 IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, TestTabGroupEventsAcrossProfiles) {
@@ -175,9 +176,6 @@ IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, TestTabGroupEventsAcrossProfiles) {
   EXPECT_EQ(incognito_event->restrict_to_browser_context, incognito_profile);
 }
 
-#if !BUILDFLAG(IS_ANDROID)
-// Not supported on Android because DetachTabGroup is not available in the
-// Android tab groups API.
 IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, TestGroupDetachedAndReInserted) {
   // Open 3 tabs.
   NavigateToURLInNewTab(GURL("about:blank"));
@@ -192,19 +190,31 @@ IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, TestGroupDetachedAndReInserted) {
   std::optional<tab_groups::TabGroupId> group = tab_list->CreateTabGroup(tabs);
   ASSERT_TRUE(group.has_value());
 
+  // Create a second browser.
+  BrowserWindowInterface* second_browser =
+      CreateBrowserWindowWithType(BrowserWindowInterface::TYPE_NORMAL);
+  ASSERT_TRUE(second_browser);
+  TabListInterface* destination_tab_list =
+      TabListInterface::From(second_browser);
+  ASSERT_TRUE(destination_tab_list);
+  destination_tab_list->OpenTab(GURL("about:blank"), /*index=*/-1);
+
   TestEventRouterObserver event_observer(EventRouter::Get(profile()));
 
-  std::unique_ptr<DetachedTabCollection> detached_group =
-      browser()->tab_strip_model()->DetachTabGroupForInsertion(*group);
+  // Android does not have separate methods to detach and insert a tab group,
+  // so we move the group from one window to another, generating events for
+  // both removed and created.
+  ASSERT_TRUE(tab_list->MoveTabGroupToWindow(*group,
+                                             second_browser->GetSessionID(),
+                                             /*destination_index=*/0));
 
+  // TODO(crbug.com/511186385): Android does not generate tab group removed
+  // notifications for tab moves across windows.
+#if !BUILDFLAG(IS_ANDROID)
   event_observer.WaitForEventWithName(api::tab_groups::OnRemoved::kEventName);
   EXPECT_TRUE(
       event_observer.events().contains(api::tab_groups::OnRemoved::kEventName));
-
-  event_observer.ClearEvents();
-
-  browser()->tab_strip_model()->InsertDetachedTabGroupAt(
-      std::move(detached_group), 1);
+#endif
 
   // Group added as well as the tab's group changed event should be sent.
   event_observer.WaitForEventWithName(api::tab_groups::OnCreated::kEventName);
@@ -215,7 +225,6 @@ IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, TestGroupDetachedAndReInserted) {
   EXPECT_TRUE(
       event_observer.events().contains(api::tab_groups::OnUpdated::kEventName));
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 IN_PROC_BROWSER_TEST_F(TabGroupsApiTest, SetGroupTitleToEmoji) {
   ASSERT_TRUE(RunExtensionTest("tab_groups/emoji",

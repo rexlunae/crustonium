@@ -17,6 +17,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -26,13 +27,12 @@
 #include "base/version.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
-#include "chrome/browser/extensions/cws_info_service.h"
+#include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/extensions/extension_management_constants.h"
 #include "chrome/browser/extensions/extension_management_internal.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
-#include "chrome/browser/extensions/managed_installation_mode.h"
 #include "chrome/browser/extensions/managed_toolbar_pin_mode.h"
 #include "chrome/browser/extensions/permissions_based_management_policy_provider.h"
 #include "chrome/browser/extensions/standard_management_policy_provider.h"
@@ -43,19 +43,22 @@
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "components/crx_file/id_util.h"
+#include "components/enterprise/browser/reporting/common_pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/common/content_switches.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/forced_extensions/install_stage_tracker.h"
+#include "extensions/browser/managed_installation_mode.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest_constants.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/permissions/api_permission_set.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/url_pattern.h"
@@ -116,14 +119,14 @@ ExtensionManagement::ExtensionManagement(Profile* profile)
   pref_change_registrar_.Add(pref_names::kAllowedTypes, pref_change_callback);
   pref_change_registrar_.Add(pref_names::kExtensionManagement,
                              pref_change_callback);
-  pref_change_registrar_.Add(prefs::kCloudExtensionRequestEnabled,
-                             pref_change_callback);
+  pref_change_registrar_.Add(
+      enterprise_reporting::kCloudExtensionRequestEnabled,
+      pref_change_callback);
 #if !BUILDFLAG(IS_CHROMEOS)
   pref_change_registrar_.Add(enterprise_reporting::kCloudReportingEnabled,
                              pref_change_callback);
 #endif
-  pref_change_registrar_.Add(pref_names::kManifestV2Availability,
-                             pref_change_callback);
+
   pref_change_registrar_.Add(pref_names::kExtensionUnpublishedAvailability,
                              pref_change_callback);
 
@@ -179,19 +182,13 @@ ManagedInstallationMode ExtensionManagement::GetInstallationMode(
 
 #if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 bool ExtensionManagement::ExtensionsEnabledForDesktopAndroid() const {
-  // If Finch has enabled extensions for corp, allow them.
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kEnableExtensionsForCorpDesktopAndroid)) {
-    return true;
-  }
-  // Disable extensions only for specific domains.
-  // This check keeps many tests from failing.
   std::string user_name = profile_->GetProfileUserName();
   // Crude check to avoid passing invalid strings to `ExtractDomainName`.
   if (user_name.contains("@")) {
     std::string domain = gaia::ExtractDomainName(user_name);
     if (domain == "google.com" || domain == "managedchrome.com") {
-      return false;
+      return base::FeatureList::IsEnabled(
+              extensions_features::kEnableExtensionsForCorpDesktopAndroid);
     }
   }
   return true;
@@ -235,7 +232,7 @@ base::DictValue ExtensionManagement::GetRecommendedInstallList() const {
 
 bool ExtensionManagement::HasAllowlistedExtension() {
   // TODO(rdevlin.cronin): investigate implementation correctness per
-  // https://crbug.com/1258180.
+  // https://crbug.com/40200962.
   if (default_settings_->installation_mode !=
           ManagedInstallationMode::kBlocked &&
       default_settings_->installation_mode !=
@@ -356,9 +353,10 @@ bool ExtensionManagement::IsAllowedManifestType(
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // If a managed theme has been set for the current profile, theme extension
   // installations are not allowed.
-  if (manifest_type == Manifest::Type::TYPE_THEME &&
-      ThemeServiceFactory::GetForProfile(profile_)->UsingPolicyTheme())
+  if (manifest_type == Manifest::Type::kTheme &&
+      ThemeServiceFactory::GetForProfile(profile_)->UsingPolicyTheme()) {
     return false;
+  }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   if (!global_settings_->allowed_types.has_value())
@@ -366,77 +364,6 @@ bool ExtensionManagement::IsAllowedManifestType(
   const std::vector<Manifest::Type>& allowed_types =
       *global_settings_->allowed_types;
   return std::ranges::contains(allowed_types, manifest_type);
-}
-
-bool ExtensionManagement::IsAllowedManifestVersion(
-    int manifest_version,
-    const std::string& extension_id,
-    Manifest::Type manifest_type) {
-  bool enabled_by_default =
-      !base::FeatureList::IsEnabled(
-          extensions_features::kExtensionsManifestV3Only) ||
-      manifest_version >= 3;
-
-  // Manifest version policy only supports normal extensions and Chrome OS login
-  // screen extension.
-  if (manifest_type != Manifest::Type::TYPE_EXTENSION &&
-      manifest_type != Manifest::Type::TYPE_LOGIN_SCREEN_EXTENSION) {
-    return enabled_by_default;
-  }
-  switch (global_settings_->manifest_v2_setting) {
-    case internal::GlobalSettings::ManifestV2Setting::kDefault:
-      return enabled_by_default;
-    case internal::GlobalSettings::ManifestV2Setting::kDisabled:
-      return manifest_version >= 3;
-    case internal::GlobalSettings::ManifestV2Setting::kEnabled:
-      return true;
-    case internal::GlobalSettings::ManifestV2Setting::kEnabledForForceInstalled:
-      auto installation_mode =
-          GetInstallationMode(extension_id, /*update_url=*/std::string());
-      return manifest_version >= 3 ||
-             installation_mode == ManagedInstallationMode::kForced ||
-             installation_mode == ManagedInstallationMode::kRecommended;
-  }
-}
-
-bool ExtensionManagement::IsAllowedManifestVersion(const Extension* extension) {
-  return IsAllowedManifestVersion(extension->manifest_version(),
-                                  extension->id(), extension->GetType());
-}
-
-bool ExtensionManagement::IsExemptFromMV2DeprecationByPolicy(
-    int manifest_version,
-    const std::string& extension_id,
-    Manifest::Type manifest_type) {
-  // This policy only affects MV2 extensions.
-  if (manifest_version != 2) {
-    return false;
-  }
-  if (manifest_type != Manifest::Type::TYPE_EXTENSION &&
-      manifest_type != Manifest::Type::TYPE_LOGIN_SCREEN_EXTENSION) {
-    return false;
-  }
-
-  switch (global_settings_->manifest_v2_setting) {
-    case internal::GlobalSettings::ManifestV2Setting::kDefault:
-      // Default browser behavior. Not exempt.
-      return false;
-    case internal::GlobalSettings::ManifestV2Setting::kDisabled:
-      // All MV2 extensions are disallowed. Not exempt.
-      return false;
-    case internal::GlobalSettings::ManifestV2Setting::kEnabled:
-      // All MV2 extensions are allowed. Exempt.
-      return true;
-    case internal::GlobalSettings::ManifestV2Setting::kEnabledForForceInstalled:
-      // Force-installed MV2 extensions are allowed. Exempt if it's a force-
-      // installed extension only.
-      auto installation_mode =
-          GetInstallationMode(extension_id, /*update_url=*/std::string());
-      return installation_mode == ManagedInstallationMode::kForced ||
-             installation_mode == ManagedInstallationMode::kRecommended;
-  }
-
-  return false;
 }
 
 bool ExtensionManagement::IsAllowedByUnpublishedAvailabilityPolicy(
@@ -450,7 +377,7 @@ bool ExtensionManagement::IsAllowedByUnpublishedAvailabilityPolicy(
     return true;
   }
   if (!cws_info_service_) {
-    cws_info_service_ = CWSInfoService::Get(profile_);
+    cws_info_service_ = CWSInfoServiceFactory::GetForProfile(profile_);
   }
   // Return the current published status of the extension in CWS if available.
   // Otherwise assume the extension is currently published and return true.
@@ -481,9 +408,8 @@ bool ExtensionManagement::IsAllowedByUnpackedDeveloperModePolicy(
   if (extension.location() != mojom::ManifestLocation::kUnpacked) {
     return true;
   }
-  // Allow extensions loaded from DevTools' "Extensions.loadUnpacked" command.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableUnsafeExtensionDebugging)) {
+
+  if (extension.creation_flags() & extensions::Extension::INSTALLED_VIA_CDP) {
     return true;
   }
 
@@ -680,10 +606,7 @@ bool ExtensionManagement::IsFileUrlNavigationAllowed(const ExtensionId& id) {
 extensions::ManagedToolbarPinMode ExtensionManagement::GetToolbarPinMode(
     const ExtensionId& extension_id) {
   auto* setting = GetSettingsForId(extension_id);
-  if (setting) {
-    return setting->toolbar_pin;
-  }
-  return extensions::ManagedToolbarPinMode::kDefaultUnpinned;
+  return setting ? setting->toolbar_pin : ManagedToolbarPinMode::kNotSet;
 }
 
 bool ExtensionManagement::CheckMinimumVersion(const Extension* extension,
@@ -718,12 +641,10 @@ void ExtensionManagement::Refresh() {
       LoadListPreference(pref_names::kAllowedTypes, true);
   const base::DictValue* dict_pref =
       LoadDictPreference(pref_names::kExtensionManagement, true);
-  const base::Value* extension_request_pref = LoadPreference(
-      prefs::kCloudExtensionRequestEnabled, false, base::Value::Type::BOOLEAN);
+  const base::Value* extension_request_pref =
+      LoadPreference(enterprise_reporting::kCloudExtensionRequestEnabled, false,
+                     base::Value::Type::BOOLEAN);
 
-  const base::Value* manifest_v2_pref =
-      LoadPreference(pref_names::kManifestV2Availability,
-                     /*force_managed=*/true, base::Value::Type::INTEGER);
   const base::Value* unpublished_availability_pref =
       LoadPreference(pref_names::kExtensionUnpublishedAvailability,
                      /*force_managed=*/true, base::Value::Type::INTEGER);
@@ -800,22 +721,17 @@ void ExtensionManagement::Refresh() {
     global_settings_->allowed_types.emplace();
     for (const auto& entry : *allowed_types_pref) {
       if (entry.is_int() && entry.GetInt() >= 0 &&
-          entry.GetInt() < Manifest::Type::NUM_LOAD_TYPES) {
+          entry.GetInt() < std::to_underlying(Manifest::Type::kNumLoadTypes)) {
         global_settings_->allowed_types->push_back(
             static_cast<Manifest::Type>(entry.GetInt()));
       } else if (entry.is_string()) {
         Manifest::Type manifest_type =
             schema_constants::GetManifestType(entry.GetString());
-        if (manifest_type != Manifest::TYPE_UNKNOWN)
+        if (manifest_type != Manifest::Type::kUnknown) {
           global_settings_->allowed_types->push_back(manifest_type);
+        }
       }
     }
-  }
-
-  if (manifest_v2_pref) {
-    global_settings_->manifest_v2_setting =
-        static_cast<internal::GlobalSettings::ManifestV2Setting>(
-            manifest_v2_pref->GetInt());
   }
 
   if (unpublished_availability_pref) {
@@ -1127,7 +1043,8 @@ ExtensionManagement* ExtensionManagementFactory::GetForBrowserContext(
 
 // static
 ExtensionManagementFactory* ExtensionManagementFactory::GetInstance() {
-  return base::Singleton<ExtensionManagementFactory>::get();
+  static base::NoDestructor<ExtensionManagementFactory> instance;
+  return instance.get();
 }
 
 ExtensionManagementFactory::ExtensionManagementFactory()

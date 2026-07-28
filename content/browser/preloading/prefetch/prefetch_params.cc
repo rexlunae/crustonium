@@ -6,7 +6,9 @@
 
 #include <string>
 
+#include "base/check.h"
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/no_destructor.h"
 #include "base/rand_util.h"
@@ -240,11 +242,11 @@ base::TimeDelta PrefetchBlockUntilHeadTimeout(
   return base::Milliseconds(timeout_in_milliseconds);
 }
 
-// These strings (including `embedder_histogram_suffix`) are persisted to logs.
+// These strings (including `histogram_suffix`) are persisted to logs.
 // LINT.IfChange(GetMetricsSuffixTriggerTypeAndEagerness)
 std::string GetMetricsSuffixTriggerTypeAndEagerness(
     const PrefetchType prefetch_type,
-    const std::optional<std::string>& embedder_histogram_suffix) {
+    const std::optional<std::string>& histogram_suffix) {
   switch (prefetch_type.trigger_type()) {
     case PreloadingTriggerType::kSpeculationRule:
       switch (prefetch_type.GetEagerness()) {
@@ -280,8 +282,8 @@ std::string GetMetricsSuffixTriggerTypeAndEagerness(
           return "SpeculationRuleFromAutoSpeculationRules_Conservative";
       }
     case PreloadingTriggerType::kEmbedder:
-      CHECK(!embedder_histogram_suffix.value().empty());
-      return base::StrCat({"Embedder_", embedder_histogram_suffix.value()});
+      CHECK(!histogram_suffix.value().empty());
+      return base::StrCat({"Embedder_", histogram_suffix.value()});
   }
 }
 // LINT.ThenChange(//tools/metrics/histograms/metadata/prefetch/histograms.xml:TriggerTypeAndEagerness)
@@ -292,16 +294,6 @@ bool PrefetchNIKScopeEnabled() {
 
 size_t GetPrefetchDataPipeTeeBodySizeLimit() {
   return static_cast<size_t>(features::kPrefetchReusableBodySizeLimit.Get());
-}
-
-bool UsePrefetchScheduler() {
-  return base::FeatureList::IsEnabled(features::kPrefetchScheduler) ||
-         features::kPrerender2FallbackPrefetchSchedulerPolicy.Get() !=
-             features::Prerender2FallbackPrefetchSchedulerPolicy::kNotUse ||
-         base::FeatureList::IsEnabled(
-             features::kWebViewPrefetchHighestPrefetchPriority) ||
-         base::FeatureList::IsEnabled(
-             features::kPrefetchMultipleActiveSetSizeLimitForBase);
 }
 
 }  // namespace content

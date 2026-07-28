@@ -4,8 +4,6 @@
 
 import("//chrome/common/features.gni")
 
-assert(enable_glic)
-
 source_set("media") {
   sources = [
     "glic_media_link_helper.cc",
@@ -13,6 +11,7 @@ source_set("media") {
   ]
   deps = [
     "//base",
+    "//chrome/browser/glic",
     "//chrome/browser/profiles:profile",
     "//content/public/browser",
     "//url",
@@ -30,6 +29,7 @@ source_set("media") {
       "media_transcript_provider_impl.h",
     ]
     deps += [
+      "//chrome/browser/accessibility/live_caption",
       "//chrome/browser/glic:mojo_bindings",
       "//chrome/browser/media/webrtc",
       "//chrome/browser/picture_in_picture",
@@ -56,14 +56,21 @@ if (!is_android) {
     deps = [
       ":media",
       "//base/test:test_support",
+      "//chrome/browser/accessibility/live_caption",
+      "//chrome/browser/glic",
       "//chrome/browser/glic/test_support",
       "//chrome/browser/prefs",
       "//chrome/test:test_support",
       "//components/live_caption",
       "//components/live_caption:constants",
       "//components/optimization_guide/content/browser",
+      "//components/optimization_guide/content/browser:test_support",
+      "//components/soda",
       "//testing/gmock",
       "//testing/gtest",
     ]
+    if (is_chromeos) {
+      deps += [ "//chrome/browser/ash/test:test_support" ]
+    }
   }
 }

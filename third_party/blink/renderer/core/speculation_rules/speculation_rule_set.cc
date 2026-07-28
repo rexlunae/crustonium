@@ -94,8 +94,9 @@ bool IsValidContextName(const String& name_or_keyword) {
   // an underscore are reserved for special keywords.)"
   if (name_or_keyword.empty())
     return false;
-  if (name_or_keyword.StartsWith("_"))
+  if (name_or_keyword.starts_with('_')) {
     return false;
+  }
   return true;
 }
 
@@ -105,23 +106,23 @@ bool IsValidBrowsingContextNameOrKeyword(const String& name_or_keyword) {
   // valid browsing context name or that is an ASCII case-insensitive match for
   // one of: _blank, _self, _parent, or _top."
   if (IsValidContextName(name_or_keyword) ||
-      EqualIgnoringASCIICase(name_or_keyword, "_blank") ||
-      EqualIgnoringASCIICase(name_or_keyword, "_self") ||
-      EqualIgnoringASCIICase(name_or_keyword, "_parent") ||
-      EqualIgnoringASCIICase(name_or_keyword, "_top")) {
+      EqualIgnoringAsciiCase(name_or_keyword, "_blank") ||
+      EqualIgnoringAsciiCase(name_or_keyword, "_self") ||
+      EqualIgnoringAsciiCase(name_or_keyword, "_parent") ||
+      EqualIgnoringAsciiCase(name_or_keyword, "_top")) {
     return true;
   }
   return false;
 }
 
 bool IsValidTag(const String& tag) {
-  if (!tag.ContainsOnlyASCIIOrEmpty()) {
+  if (!tag.ContainsOnlyAsciiOrEmpty()) {
     return false;
   }
 
   return VisitCharacters(tag, [](const auto& chars) {
     for (char ch : chars) {
-      if (!IsASCIIPrintable(ch)) {
+      if (!IsAsciiPrintable(ch)) {
         return false;
       }
     }
@@ -255,8 +256,9 @@ SpeculationRule* ParseSpeculationRule(JSONObject* input,
       // Let parsedURL be the result of parsing urlString with baseURL.
       // If parsedURL is failure, then continue.
       KURL parsed_url(base_url_to_parse, url_string);
-      if (!parsed_url.IsValid() || !parsed_url.ProtocolIsInHTTPFamily())
+      if (!parsed_url.IsValid() || !parsed_url.ProtocolIsInHttpFamily()) {
         continue;
+      }
 
       urls.push_back(std::move(parsed_url));
     }
@@ -609,7 +611,7 @@ void SpeculationRuleSet::SetTag(String tag) {
 
 void SpeculationRuleSet::AddWarnings(
     base::span<const String> warning_messages) {
-  warning_messages_.AppendSpan(warning_messages);
+  warning_messages_.append_range(warning_messages);
 }
 
 // static
@@ -683,6 +685,47 @@ SpeculationRuleSet* SpeculationRuleSet::Parse(Source* source,
       return result;
     }
     ruleset_tag = String(tag_str);
+  }
+
+  // Parse the ruleset-level "moderate_viewport_heuristics" object, which lets
+  // authors tune the mobile "moderate" eagerness viewport heuristic.
+  //
+  // This is parsed unconditionally, even when the
+  // SpeculationRulesModerateViewportHeuristicsControl origin trial is not (yet)
+  // enabled: whether the parsed params have any effect is gated separately, at
+  // the point the heuristic runs (see AnchorElementInteractionTracker). Gating
+  // here instead would be racy for third-party origin trials, where the token
+  // may be registered after the rules have already been parsed; parsing eagerly
+  // lets a later opt-in take effect on the next heuristic run without needing
+  // to re-parse. The use counter is likewise recorded where the params are
+  // applied.
+  //
+  // Per the design, unknown sub-keys and malformed values are ignored (they
+  // never cause the whole ruleset to fail).
+  if (JSONObject* mvh =
+          JSONObject::Cast(parsed->Get("moderate_viewport_heuristics"))) {
+    ModerateViewportHeuristicsParams params;
+    if (JSONArray* distance =
+            JSONArray::Cast(mvh->Get("distance_from_pointer_down"));
+        distance && distance->size() == 2) {
+      double low = 0.0;
+      double high = 0.0;
+      if (distance->at(0)->AsDouble(&low) && distance->at(1)->AsDouble(&high)) {
+        params.distance_from_pointer_down_low = low;
+        params.distance_from_pointer_down_high = high;
+      }
+    }
+    double threshold = 0.0;
+    if (JSONValue* threshold_value = mvh->Get("largest_anchor_threshold");
+        threshold_value && threshold_value->AsDouble(&threshold)) {
+      params.largest_anchor_threshold = threshold;
+    }
+    double delay_ms = 0.0;
+    if (JSONValue* delay_value = mvh->Get("delay");
+        delay_value && delay_value->AsDouble(&delay_ms)) {
+      params.delay = base::Milliseconds(delay_ms);
+    }
+    result->moderate_viewport_heuristics_params_ = std::move(params);
   }
 
   const auto parse_for_action =
@@ -768,7 +811,7 @@ SpeculationRuleSet* SpeculationRuleSet::Parse(Source* source,
 
           if (rule->predicate()) {
             result->has_document_rule_ = true;
-            result->selectors_.AppendVector(rule->predicate()->GetStyleRules());
+            result->selectors_.append_range(rule->predicate()->GetStyleRules());
           }
 
           if (rule->eagerness() !=
@@ -834,9 +877,9 @@ SpeculationRuleSet::SpeculationTargetHintFromString(
   // Currently only "_blank" and "_self" are supported.
   // TODO(https://crbug.com/1354049): Support more browsing context names and
   // keywords.
-  if (EqualIgnoringASCIICase(target_hint_str, "_blank")) {
+  if (EqualIgnoringAsciiCase(target_hint_str, "_blank")) {
     return mojom::blink::SpeculationTargetHint::kBlank;
-  } else if (EqualIgnoringASCIICase(target_hint_str, "_self")) {
+  } else if (EqualIgnoringAsciiCase(target_hint_str, "_self")) {
     return mojom::blink::SpeculationTargetHint::kSelf;
   } else {
     return mojom::blink::SpeculationTargetHint::kNoHint;

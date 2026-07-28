@@ -109,7 +109,15 @@ INSTANTIATE_TEST_SUITE_P(
         InvocationSourceParamTestCase{
             lens::LensOverlayInvocationSource::kNtpContextualQuery, "rb"},
         InvocationSourceParamTestCase{
-            lens::LensOverlayInvocationSource::kOmniboxContextualQuery,
-            "obic"}));
+            lens::LensOverlayInvocationSource::kOmniboxContextualQuery, "obic"},
+        InvocationSourceParamTestCase{
+            lens::LensOverlayInvocationSource::kCobrowseToolbarButton, "cct"},
+        InvocationSourceParamTestCase{
+            lens::LensOverlayInvocationSource::kCobrowsePinnedToolbarButton,
+            "ccpt"},
+        InvocationSourceParamTestCase{
+            lens::LensOverlayInvocationSource::kNtpActionChips, "ntpac"},
+        InvocationSourceParamTestCase{
+            lens::LensOverlayInvocationSource::kAppBarAimButton, "abab"}));
 
 }  // namespace lens

@@ -13,6 +13,7 @@
 #include "base/android/path_utils.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/singleton.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -225,21 +226,8 @@ void DownloadManagerService::OpenDownload(download::DownloadItem* download,
   Java_DownloadManagerService_openDownloadItem(env, java_ref_, j_item, source);
 }
 
-void DownloadManagerService::HandleOMADownload(download::DownloadItem* download,
-                                               int64_t system_download_id) {
-  if (java_ref_.is_null())
-    return;
-
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_item =
-      JNI_DownloadManagerService_CreateJavaDownloadItem(env, download);
-
-  Java_DownloadManagerService_handleOMADownload(env, java_ref_, j_item,
-                                                system_download_id);
-}
-
 void DownloadManagerService::OpenDownload(JNIEnv* env,
-                                          std::string& download_guid,
+                                          const std::string& download_guid,
                                           const JavaRef<jobject>& j_profile_key,
                                           int32_t source) {
   if (!is_manager_initialized_)
@@ -273,7 +261,7 @@ void DownloadManagerService::OpenDownloadsPage(
 
 void DownloadManagerService::ResumeDownload(
     JNIEnv* env,
-    std::string& download_guid,
+    const std::string& download_guid,
     const JavaRef<jobject>& j_profile_key) {
   ProfileKey* profile_key =
       ProfileKeyAndroid::FromProfileKeyAndroid(j_profile_key);
@@ -286,7 +274,7 @@ void DownloadManagerService::ResumeDownload(
 
 void DownloadManagerService::PauseDownload(
     JNIEnv* env,
-    std::string& download_guid,
+    const std::string& download_guid,
     const JavaRef<jobject>& j_profile_key) {
   ProfileKey* profile_key =
       ProfileKeyAndroid::FromProfileKeyAndroid(j_profile_key);
@@ -298,7 +286,7 @@ void DownloadManagerService::PauseDownload(
 
 void DownloadManagerService::RemoveDownload(
     JNIEnv* env,
-    std::string& download_guid,
+    const std::string& download_guid,
     const JavaRef<jobject>& j_profile_key) {
   ProfileKey* profile_key =
       ProfileKeyAndroid::FromProfileKeyAndroid(j_profile_key);
@@ -352,25 +340,9 @@ void DownloadManagerService::GetAllDownloadsInternal(ProfileKey* profile_key) {
       profile_key->GetProfileKeyAndroid()->GetJavaObject());
 }
 
-void DownloadManagerService::CheckForExternallyRemovedDownloads(
-    JNIEnv* env,
-    const JavaRef<jobject>& j_profile_key) {
-  // Once the DownloadManager is initlaized, DownloadHistory will check for the
-  // removal of history files. If the history query is not yet complete, ignore
-  // requests to check for externally removed downloads.
-  if (!is_manager_initialized_)
-    return;
-
-  content::DownloadManager* manager = GetDownloadManager(
-      ProfileKeyAndroid::FromProfileKeyAndroid(j_profile_key));
-  if (!manager)
-    return;
-  manager->CheckForHistoryFilesRemoval();
-}
-
 void DownloadManagerService::UpdateLastAccessTime(
     JNIEnv* env,
-    std::string& download_guid,
+    const std::string& download_guid,
     const JavaRef<jobject>& j_profile_key) {
   ProfileKey* profile_key =
       ProfileKeyAndroid::FromProfileKeyAndroid(j_profile_key);
@@ -381,7 +353,7 @@ void DownloadManagerService::UpdateLastAccessTime(
 
 void DownloadManagerService::CancelDownload(
     JNIEnv* env,
-    std::string& download_guid,
+    const std::string& download_guid,
     const JavaRef<jobject>& j_profile_key) {
   ProfileKey* profile_key =
       ProfileKeyAndroid::FromProfileKeyAndroid(j_profile_key);
@@ -395,11 +367,17 @@ void DownloadManagerService::OnDownloadsInitialized(
     download::SimpleDownloadManagerCoordinator* coordinator,
     bool active_downloads_only) {
   if (active_downloads_only) {
-    OnPendingDownloadsLoaded();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&DownloadManagerService::OnPendingDownloadsLoaded,
+                       base::Unretained(this)));
     return;
   }
   is_manager_initialized_ = true;
-  OnPendingDownloadsLoaded();
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&DownloadManagerService::OnPendingDownloadsLoaded,
+                     base::Unretained(this)));
   while (!profiles_with_pending_get_downloads_actions_.empty()) {
     ProfileKey* profile_key =
         profiles_with_pending_get_downloads_actions_.back();
@@ -562,9 +540,9 @@ void DownloadManagerService::OnPendingDownloadsLoaded() {
   auto result =
       std::ranges::find_if_not(coordinators_, &ProfileKey::IsOffTheRecord,
                                &Coordinators::value_type::first);
-  CHECK(result != coordinators_.end())
-      << "A non-OffTheRecord coordinator should exist when "
-         "OnPendingDownloadsLoaded is triggered.";
+  if (result == coordinators_.end()) {
+    return;
+  }
   ProfileKey* profile_key = result->first;
 
   // Kick-off the auto-resumption handler.
@@ -634,8 +612,8 @@ DownloadManagerService::GetCoordinator(ProfileKey* profile_key) {
 
 void DownloadManagerService::RenameDownload(
     JNIEnv* env,
-    std::string& download_guid,
-    std::string& target_name,
+    const std::string& download_guid,
+    const std::string& target_name,
     const JavaRef<jobject>& j_callback,
     const JavaRef<jobject>& j_profile_key) {
   ProfileKey* profile_key =
@@ -660,9 +638,9 @@ void DownloadManagerService::RenameDownload(
 
 void DownloadManagerService::CreateInterruptedDownloadForTest(
     JNIEnv* env,
-    std::string& url,
-    std::string& download_guid,
-    std::string& target_path_str) {
+    const std::string& url,
+    const std::string& download_guid,
+    const std::string& target_path_str) {
   download::InProgressDownloadManager* in_progress_manager =
       DownloadManagerUtils::GetInProgressDownloadManager(
           ProfileKeyStartupAccessor::GetInstance()->profile_key());
@@ -691,7 +669,7 @@ void DownloadManagerService::InitializeForProfile(ProfileKey* profile_key) {
 // static
 static bool JNI_DownloadManagerService_IsSupportedMimeType(
     JNIEnv* env,
-    std::string& mime_type) {
+    const std::string& mime_type) {
   return blink::IsSupportedMimeType(mime_type);
 }
 

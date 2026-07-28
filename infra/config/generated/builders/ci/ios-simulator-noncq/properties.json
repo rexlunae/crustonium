@@ -22,6 +22,7 @@
                 ],
                 "build_config": "Debug",
                 "config": "chromium",
+                "target_arch": "arm",
                 "target_bits": 64,
                 "target_platform": "ios"
               },
@@ -77,5 +78,5 @@
     "chromium",
     "ios"
   ],
-  "xcode_build_version": "17a400"
+  "xcode_build_version": "17f42"
 }

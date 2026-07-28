@@ -8,10 +8,12 @@
 #include "base/containers/to_vector.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace autofill::autofill_metrics {
 namespace {
@@ -42,9 +44,11 @@ class PerFillMetricsTest : public AutofillMetricsBaseTest,
         form_structure.GetFieldById(form.fields().front().global_id()));
     test_api(autofill_manager())
         .form_filler()
-        .FillOrPreviewForm(mojom::ActionPersistence::kFill, form,
-                           filling_payload, form_structure, autofill_field,
-                           AutofillTriggerSource::kPopup);
+        .FillOrPreviewForm(
+            mojom::ActionPersistence::kFill, filling_payload, form_structure,
+            autofill_field, AutofillTriggerSource::kPopup,
+            /*blocked_fields=*/{}, FillId::Create(),
+            /*forced_fill_values=*/{}, FormFiller::RefillOptions::NotRefill());
   }
 
   // Lets `BrowserAutofillManager` fill `form` with `filling_payload` and
@@ -86,16 +90,16 @@ TEST_F(PerFillMetricsTest, FillForm) {
                                                 {.role = CREDIT_CARD_NUMBER}}});
   SeeForm({form});
 
-  // Only the first three fields are actually filled.
+  // Only the first four fields are actually filled.
   EXPECT_CALL(autofill_driver(), ApplyFormAction)
-      .WillOnce(Return(base::ToVector(base::span(form.fields()).first(3u),
+      .WillOnce(Return(base::ToVector(base::span(form.fields()).first(4u),
                                       &FormFieldData::global_id)));
   FillForm(form, &autofill_profile);
 
-  histogram_tester.ExpectUniqueSample("Autofill.NumberOfFieldsPerAutofill", 3,
+  histogram_tester.ExpectUniqueSample("Autofill.NumberOfFieldsPerAutofill", 4,
                                       1);
   histogram_tester.ExpectUniqueSample(
-      "Autofill.NumberOfFieldsPerAutofill.AutofillProfile", 3, 1);
+      "Autofill.NumberOfFieldsPerAutofill.AutofillProfile", 4, 1);
 }
 
 // Test that for a form that changed its structure after being seen, second
@@ -113,7 +117,8 @@ TEST_F(PerFillMetricsTest, RefillTriggerReason_FormChanged) {
 
   base::HistogramTester histogram_tester;
   std::vector<FormFieldData> fields = form.ExtractFields();
-  fields.push_back(fields.back());
+  fields.push_back(
+      test::GetFormFieldData({.role = CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR}));
   form.set_fields(std::move(fields));
 
   SeeForm({form});
@@ -125,11 +130,12 @@ TEST_F(PerFillMetricsTest, RefillTriggerReason_FormChanged) {
 // Test that for a form that was seen and filled, OnSelectFieldOptionsDidChange
 // triggers a refill, RefillTriggerReason metric gets reported.
 TEST_F(PerFillMetricsTest, RefillTriggerReason_OnSelectFieldOptionsDidChange) {
-  FormData form =
-      test::GetFormData({.fields = {{.role = CREDIT_CARD_NAME_FULL},
-                                    {.role = CREDIT_CARD_NUMBER},
-                                    {.role = CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR,
-                                     .autocomplete_attribute = "cc-exp"}}});
+  FormData form = test::GetFormData(
+      {.fields = {{.role = CREDIT_CARD_NAME_FULL},
+                  {.role = CREDIT_CARD_NUMBER},
+                  {.role = CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR,
+                   .autocomplete_attribute = "cc-exp",
+                   .form_control_type = FormControlType::kSelectOne}}});
   SeeForm({form});
 
   CreditCard credit_card = test::GetCreditCard();
@@ -137,7 +143,8 @@ TEST_F(PerFillMetricsTest, RefillTriggerReason_OnSelectFieldOptionsDidChange) {
 
   base::HistogramTester histogram_tester;
   autofill_manager().OnSelectFieldOptionsDidChange(
-      form, form.fields().back().global_id());
+      form, form.fields().back().global_id(),
+      AutofillManagerTestApi::pass_key());
 
   histogram_tester.ExpectUniqueSample(
       "Autofill.RefillTriggerReason",
@@ -161,12 +168,15 @@ TEST_F(PerFillMetricsTest,
   // Simulate that JavaScript modifies the expiration date field incorrectly.
   FormData form_after_js_modification = form;
   test_api(form_after_js_modification).field(2).set_value(u"04 / 20");
-  test_api(form_after_js_modification).field(2).set_is_autofilled(true);
+  test_api(form_after_js_modification)
+      .field(2)
+      .set_is_autofilled_according_to_renderer(false);
 
   base::HistogramTester histogram_tester;
   autofill_manager().OnJavaScriptChangedAutofilledValue(
       form_after_js_modification,
-      form_after_js_modification.fields()[2].global_id(), u"04/2099");
+      form_after_js_modification.fields()[2].global_id(), u"04/2099",
+      AutofillManagerTestApi::pass_key());
 
   histogram_tester.ExpectUniqueSample(
       "Autofill.RefillTriggerReason",
@@ -185,7 +195,11 @@ TEST_F(PerFillMetricsTest, ModifiedFieldsCount) {
   form = FillFormAndGetFilledVersion(form, &credit_card);
 
   base::HistogramTester histogram_tester;
-  test_api(form).fields().emplace_back();
+  {
+    FormFieldData field;
+    field.set_origin(form.main_frame_origin());
+    test_api(form).Append(std::move(field));
+  }
 
   // Mock the router not blocking any field for filling.
   EXPECT_CALL(autofill_driver(), ApplyFormAction)
@@ -193,7 +207,7 @@ TEST_F(PerFillMetricsTest, ModifiedFieldsCount) {
                    mojom::ActionPersistence action_persistence,
                    base::span<const FormFieldData> data, const FillId& fill_id,
                    bool supports_refill, const url::Origin& triggered_origin,
-                   const base::flat_map<FieldGlobalId, FieldType>&,
+                   const absl::flat_hash_map<FieldGlobalId, FieldType>&,
                    const Section&) {
         return base::ToVector(data, &FormFieldData::global_id);
       });

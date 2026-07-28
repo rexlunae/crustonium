@@ -14,9 +14,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/rand_util.h"
 #include "base/time/time.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -24,7 +22,6 @@
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/copy_lchars_from_uchar_source.h"
-#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
@@ -38,32 +35,21 @@ namespace {
 // are serialized on disk.
 enum class StorageFormat : uint8_t { UTF16 = 0, Latin1 = 1 };
 
-// These methods are used to pack and unpack the page_url/storage_area_id into
-// source strings to/from the browser.
-String PackSource(const KURL& page_url, const String& storage_area_id) {
-  return StrCat({page_url.GetString(), "\n", storage_area_id});
-}
+// Default values used when a StorageAreaSource is null (e.g. browser-initiated
+// mutations like clearing browsing data).
+constexpr base::Token kNoSourceId;
 
-void UnpackSource(const String& source,
-                  KURL* page_url,
-                  String* storage_area_id) {
-  Vector<String> result;
-  source.Split("\n", true, result);
-  DCHECK_EQ(result.size(), 2u);
-  *page_url = KURL(result[0]);
-  *storage_area_id = result[1];
-}
-
-// Makes a callback which ignores the |success| result of some async operation
-// but which also holds onto a paused WebScopedVirtualTimePauser until invoked.
-base::OnceCallback<void(bool)> MakeSuccessCallback(
+// Makes a callback which holds onto a paused WebScopedVirtualTimePauser until
+// invoked, ensuring virtual time remains paused for the duration of the async
+// operation.
+base::OnceClosure MakeVirtualTimePauserCallback(
     CachedStorageArea::Source* source) {
   WebScopedVirtualTimePauser virtual_time_pauser =
       source->CreateWebScopedVirtualTimePauser(
           "CachedStorageArea",
           WebScopedVirtualTimePauser::VirtualTaskDuration::kNonInstant);
   virtual_time_pauser.PauseVirtualTime();
-  return BindOnce([](WebScopedVirtualTimePauser, bool) {},
+  return BindOnce([](WebScopedVirtualTimePauser) {},
                   std::move(virtual_time_pauser));
 }
 
@@ -106,17 +92,17 @@ bool CachedStorageArea::SetItem(const String& key,
   if (!old_value.IsNull() && should_send_old_value_on_mutations_)
     optional_old_value = StringToUint8Vector(old_value, value_format);
   KURL page_url = source->GetPageUrl();
-  String source_id = areas_->at(source);
-  String source_string = PackSource(page_url, source_id);
+  base::Token source_id = areas_->at(source);
 
   if (!is_session_storage_for_prerendering_) {
-    remote_area_->Put(StringToUint8Vector(key, GetKeyFormat()),
-                      StringToUint8Vector(value, value_format),
-                      optional_old_value, source_string,
-                      MakeSuccessCallback(source));
+    remote_area_->Put(
+        StringToUint8Vector(key, GetKeyFormat()),
+        StringToUint8Vector(value, value_format), optional_old_value,
+        mojom::blink::StorageAreaSource::New(page_url, source_id),
+        base::IgnoreArgs<bool>(MakeVirtualTimePauserCallback(source)));
   }
   if (!IsSessionStorage())
-    EnqueuePendingMutation(key, value, old_value, source_string);
+    EnqueuePendingMutation(key, value, old_value, source_id);
   else if (old_value != value)
     EnqueueStorageEvent(key, old_value, value, page_url, source_id);
   return true;
@@ -134,15 +120,15 @@ void CachedStorageArea::RemoveItem(const String& key, Source* source) {
   if (should_send_old_value_on_mutations_)
     optional_old_value = StringToUint8Vector(old_value, GetValueFormat());
   KURL page_url = source->GetPageUrl();
-  String source_id = areas_->at(source);
-  String source_string = PackSource(page_url, source_id);
+  base::Token source_id = areas_->at(source);
   if (!is_session_storage_for_prerendering_) {
-    remote_area_->Delete(StringToUint8Vector(key, GetKeyFormat()),
-                         optional_old_value, source_string,
-                         MakeSuccessCallback(source));
+    remote_area_->Delete(
+        StringToUint8Vector(key, GetKeyFormat()), optional_old_value,
+        mojom::blink::StorageAreaSource::New(page_url, source_id),
+        MakeVirtualTimePauserCallback(source));
   }
   if (!IsSessionStorage())
-    EnqueuePendingMutation(key, String(), old_value, source_string);
+    EnqueuePendingMutation(key, String(), old_value, source_id);
   else
     EnqueueStorageEvent(key, old_value, String(), page_url, source_id);
 }
@@ -173,20 +159,20 @@ void CachedStorageArea::Clear(Source* source) {
       mojom::blink::StorageArea::kPerStorageAreaQuota);
 
   KURL page_url = source->GetPageUrl();
-  String source_id = areas_->at(source);
-  String source_string = PackSource(page_url, source_id);
+  base::Token source_id = areas_->at(source);
   if (!is_session_storage_for_prerendering_) {
-    remote_area_->DeleteAll(source_string, std::move(new_observer),
-                            MakeSuccessCallback(source));
+    remote_area_->DeleteAll(
+        mojom::blink::StorageAreaSource::New(page_url, source_id),
+        std::move(new_observer), MakeVirtualTimePauserCallback(source));
   }
   if (!IsSessionStorage())
-    EnqueuePendingMutation(String(), String(), String(), source_string);
+    EnqueuePendingMutation(String(), String(), String(), source_id);
   else if (!already_empty)
     EnqueueStorageEvent(String(), String(), String(), page_url, source_id);
 }
 
-String CachedStorageArea::RegisterSource(Source* source) {
-  String id = String::Number(base::RandUint64());
+base::Token CachedStorageArea::RegisterSource(Source* source) {
+  base::Token id = base::Token::CreateRandom();
   areas_->insert(source, id);
   return id;
 }
@@ -202,8 +188,8 @@ CachedStorageArea::CachedStorageArea(
       storage_key_(storage_key),
       storage_namespace_(storage_namespace),
       is_session_storage_for_prerendering_(is_session_storage_for_prerendering),
-      areas_(
-          MakeGarbageCollected<GCedHeapHashMap<WeakMember<Source>, String>>()) {
+      areas_(MakeGarbageCollected<
+             GCedHeapHashMap<WeakMember<Source>, base::Token>>()) {
   BindStorageArea(std::move(storage_area), local_dom_window);
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       this, "DOMStorage",
@@ -316,7 +302,7 @@ void CachedStorageArea::ResetConnection(
     // deltas from the previously cached state.
     for (const auto& delta : deltas) {
       EnqueueStorageEvent(delta.key, delta.value.previously_cached_value,
-                          delta.value.restored_value, "", "");
+                          delta.value.restored_value, NullUrl(), kNoSourceId);
     }
     return;
   }
@@ -330,7 +316,7 @@ void CachedStorageArea::ResetConnection(
       remote_area_->Delete(
           StringToUint8Vector(delta.key, GetKeyFormat()),
           StringToUint8Vector(delta.value.restored_value, GetValueFormat()),
-          /*source=*/"\n", base::DoNothing());
+          /*source=*/nullptr, base::DoNothing());
     } else {
       const FormatOption value_format = GetValueFormat();
       remote_area_->Put(
@@ -338,7 +324,7 @@ void CachedStorageArea::ResetConnection(
           StringToUint8Vector(delta.value.previously_cached_value,
                               value_format),
           StringToUint8Vector(delta.value.restored_value, value_format),
-          /*source=*/"\n", base::DoNothing());
+          /*source=*/nullptr, base::DoNothing());
     }
   }
 }
@@ -347,8 +333,12 @@ void CachedStorageArea::KeyChanged(
     const Vector<uint8_t>& key,
     const Vector<uint8_t>& new_value,
     const std::optional<Vector<uint8_t>>& old_value,
-    const String& source) {
+    mojom::blink::StorageAreaSourcePtr source) {
   DCHECK(!IsSessionStorage());
+
+  const base::Token source_id =
+      source ? std::move(source->storage_area_id) : kNoSourceId;
+  const KURL source_page_url = source ? std::move(source->page_url) : NullUrl();
 
   String key_string =
       Uint8VectorToString(key, FormatOption::kLocalStorageDetectFormat);
@@ -360,7 +350,8 @@ void CachedStorageArea::KeyChanged(
         *old_value, FormatOption::kLocalStorageDetectFormat);
   }
 
-  std::unique_ptr<PendingMutation> local_mutation = PopPendingMutation(source);
+  std::unique_ptr<PendingMutation> local_mutation =
+      PopPendingMutation(source_id);
   if (map_ && !local_mutation)
     MaybeApplyNonLocalMutationForKey(key_string, new_value_string);
 
@@ -368,20 +359,23 @@ void CachedStorageArea::KeyChanged(
   // references.
   DCHECK(!local_mutation || local_mutation->key == key_string);
 
-  KURL page_url;
-  String storage_area_id;
-  UnpackSource(source, &page_url, &storage_area_id);
-  EnqueueStorageEvent(key_string, old_value_string, new_value_string, page_url,
-                      storage_area_id);
+  EnqueueStorageEvent(key_string, old_value_string, new_value_string,
+                      source_page_url, source_id);
 }
 
-void CachedStorageArea::KeyChangeFailed(const Vector<uint8_t>& key,
-                                        const String& source) {
+void CachedStorageArea::KeyChangeFailed(
+    const Vector<uint8_t>& key,
+    mojom::blink::StorageAreaSourcePtr source) {
   DCHECK(!IsSessionStorage());
+
+  const base::Token source_id =
+      source ? std::move(source->storage_area_id) : kNoSourceId;
+  const KURL source_page_url = source ? std::move(source->page_url) : NullUrl();
 
   String key_string =
       Uint8VectorToString(key, FormatOption::kLocalStorageDetectFormat);
-  std::unique_ptr<PendingMutation> local_mutation = PopPendingMutation(source);
+  std::unique_ptr<PendingMutation> local_mutation =
+      PopPendingMutation(source_id);
 
   // We don't care about failed changes from other clients.
   if (!local_mutation)
@@ -407,11 +401,8 @@ void CachedStorageArea::KeyChangeFailed(const Vector<uint8_t>& key,
     else
       map_->SetItemIgnoringQuota(key_string, old_value);
 
-    KURL page_url;
-    String storage_area_id;
-    UnpackSource(source, &page_url, &storage_area_id);
-    EnqueueStorageEvent(key_string, invalid_cached_value, old_value, page_url,
-                        storage_area_id);
+    EnqueueStorageEvent(key_string, invalid_cached_value, old_value,
+                        source_page_url, source_id);
     return;
   }
 
@@ -427,12 +418,17 @@ void CachedStorageArea::KeyChangeFailed(const Vector<uint8_t>& key,
 void CachedStorageArea::KeyDeleted(
     const Vector<uint8_t>& key,
     const std::optional<Vector<uint8_t>>& old_value,
-    const String& source) {
+    mojom::blink::StorageAreaSourcePtr source) {
   DCHECK(!IsSessionStorage());
+
+  const base::Token source_id =
+      source ? std::move(source->storage_area_id) : kNoSourceId;
+  const KURL source_page_url = source ? std::move(source->page_url) : NullUrl();
 
   String key_string =
       Uint8VectorToString(key, FormatOption::kLocalStorageDetectFormat);
-  std::unique_ptr<PendingMutation> local_mutation = PopPendingMutation(source);
+  std::unique_ptr<PendingMutation> local_mutation =
+      PopPendingMutation(source_id);
 
   if (map_ && !local_mutation)
     MaybeApplyNonLocalMutationForKey(key_string, String());
@@ -442,19 +438,22 @@ void CachedStorageArea::KeyDeleted(
   DCHECK(!local_mutation || local_mutation->key == key_string);
 
   if (old_value) {
-    KURL page_url;
-    String storage_area_id;
-    UnpackSource(source, &page_url, &storage_area_id);
     EnqueueStorageEvent(
         key_string,
         Uint8VectorToString(*old_value,
                             FormatOption::kLocalStorageDetectFormat),
-        String(), page_url, storage_area_id);
+        String(), source_page_url, source_id);
   }
 }
 
-void CachedStorageArea::AllDeleted(bool was_nonempty, const String& source) {
-  std::unique_ptr<PendingMutation> local_mutation = PopPendingMutation(source);
+void CachedStorageArea::AllDeleted(bool was_nonempty,
+                                   mojom::blink::StorageAreaSourcePtr source) {
+  const base::Token source_id =
+      source ? std::move(source->storage_area_id) : kNoSourceId;
+  const KURL source_page_url = source ? std::move(source->page_url) : NullUrl();
+
+  std::unique_ptr<PendingMutation> local_mutation =
+      PopPendingMutation(source_id);
 
   // Note that if this event was from a local source, we've already cleared the
   // cache when |Clear()| was called so there's nothing to do other than
@@ -489,11 +488,8 @@ void CachedStorageArea::AllDeleted(bool was_nonempty, const String& source) {
   DCHECK(!local_mutation || local_mutation->key.IsNull());
 
   if (was_nonempty) {
-    KURL page_url;
-    String storage_area_id;
-    UnpackSource(source, &page_url, &storage_area_id);
-    EnqueueStorageEvent(String(), String(), String(), page_url,
-                        storage_area_id);
+    EnqueueStorageEvent(String(), String(), String(), source_page_url,
+                        source_id);
   }
 }
 
@@ -521,7 +517,8 @@ bool CachedStorageArea::OnMemoryDump(
 void CachedStorageArea::EnqueuePendingMutation(const String& key,
                                                const String& new_value,
                                                const String& old_value,
-                                               const String& source) {
+                                               const base::Token& source_id) {
+  CHECK(!source_id.is_zero());
   // Track this pending mutation until we observe a corresponding event on
   // our StorageAreaObserver interface. As long as this operation is pending,
   // we will effectively ignore other observed mutations on this key. Note that
@@ -538,17 +535,17 @@ void CachedStorageArea::EnqueuePendingMutation(const String& key,
     pending_mutations_by_key_.insert(key, Deque<PendingMutation*>())
         .stored_value->value.push_back(mutation.get());
   }
-  pending_mutations_by_source_.insert(source, OwnedPendingMutationQueue())
-      .stored_value->value.push_back(std::move(mutation));
+  pending_mutations_by_source_[source_id].push_back(std::move(mutation));
 }
 
 std::unique_ptr<CachedStorageArea::PendingMutation>
-CachedStorageArea::PopPendingMutation(const String& source) {
-  auto source_queue_iter = pending_mutations_by_source_.find(source);
-  if (source_queue_iter == pending_mutations_by_source_.end())
+CachedStorageArea::PopPendingMutation(const base::Token& source_id) {
+  auto source_queue_iter = pending_mutations_by_source_.find(source_id);
+  if (source_queue_iter == pending_mutations_by_source_.end()) {
     return nullptr;
+  }
 
-  OwnedPendingMutationQueue& mutations_for_source = source_queue_iter->value;
+  OwnedPendingMutationQueue& mutations_for_source = source_queue_iter->second;
   DCHECK(!mutations_for_source.empty());
   std::unique_ptr<PendingMutation> mutation =
       std::move(mutations_for_source.front());
@@ -646,7 +643,7 @@ void CachedStorageArea::EnsureLoaded() {
   }
 
   base::TimeDelta time_to_prime = base::TimeTicks::Now() - before;
-  UMA_HISTOGRAM_TIMES("LocalStorage.MojoTimeToPrime", time_to_prime);
+  base::UmaHistogramTimes("LocalStorage.MojoTimeToPrime", time_to_prime);
 
   if (base::FeatureList::IsEnabled(kDomStorageAblation)) {
     base::TimeDelta delay =
@@ -663,19 +660,19 @@ void CachedStorageArea::EnsureLoaded() {
   // Track localStorage size, from 0-6MB. Note that the maximum size should be
   // 10MB, but we add some slop since we want to make sure the max size is
   // always above what we see in practice, since histograms can't change.
-  UMA_HISTOGRAM_CUSTOM_COUNTS(
+  base::UmaHistogramCustomCounts(
       "LocalStorage.MojoSizeInKB",
       base::saturated_cast<base::Histogram::Sample32>(local_storage_size_kb), 1,
       6 * 1024, 50);
   if (local_storage_size_kb < 100) {
-    UMA_HISTOGRAM_TIMES("LocalStorage.MojoTimeToPrimeForUnder100KB",
-                        time_to_prime);
+    base::UmaHistogramTimes("LocalStorage.MojoTimeToPrimeForUnder100KB",
+                            time_to_prime);
   } else if (local_storage_size_kb < 1000) {
-    UMA_HISTOGRAM_TIMES("LocalStorage.MojoTimeToPrimeFor100KBTo1MB",
-                        time_to_prime);
+    base::UmaHistogramTimes("LocalStorage.MojoTimeToPrimeFor100KBTo1MB",
+                            time_to_prime);
   } else {
-    UMA_HISTOGRAM_TIMES("LocalStorage.MojoTimeToPrimeFor1MBTo5MB",
-                        time_to_prime);
+    base::UmaHistogramTimes("LocalStorage.MojoTimeToPrimeFor1MBTo5MB",
+                            time_to_prime);
   }
 }
 
@@ -696,15 +693,15 @@ bool CachedStorageArea::IsSessionStorage() const {
 void CachedStorageArea::EnqueueStorageEvent(const String& key,
                                             const String& old_value,
                                             const String& new_value,
-                                            const String& url,
-                                            const String& storage_area_id) {
+                                            const KURL& url,
+                                            const base::Token& source_id) {
   // Ignore key-change events which aren't actually changing the value.
   if (!key.IsNull() && new_value == old_value)
     return;
 
   HeapVector<Member<Source>, 1> areas_to_remove_;
   for (const auto& area : *areas_) {
-    if (area.value != storage_area_id) {
+    if (area.value != source_id) {
       bool keep = area.key->EnqueueStorageEvent(key, old_value, new_value, url);
       if (!keep)
         areas_to_remove_.push_back(area.key);
@@ -739,7 +736,7 @@ String CachedStorageArea::Uint8VectorToString(const Vector<uint8_t>& input,
       // TODO(mek): When this lived in content it used to do a "lenient"
       // conversion, while this is a strict conversion. Figure out if that
       // difference actually matters in practice.
-      result = String::FromUTF8(input);
+      result = String::FromUtf8(input);
       if (result.IsNull()) {
         corrupt = true;
         break;
@@ -755,7 +752,8 @@ String CachedStorageArea::Uint8VectorToString(const Vector<uint8_t>& input,
             corrupt = true;
             break;
           }
-          StringBuffer<UChar> buffer(payload.size() / sizeof(UChar));
+          StringBuffer<UChar> buffer(
+              base::checked_cast<wtf_size_t>(payload.size() / sizeof(UChar)));
           base::as_writable_bytes(buffer.Span()).copy_from(payload);
           result = String::Adopt(buffer);
           break;
@@ -772,7 +770,6 @@ String CachedStorageArea::Uint8VectorToString(const Vector<uint8_t>& input,
   if (corrupt) {
     // TODO(mek): Better error recovery when corrupt (or otherwise invalid) data
     // is detected.
-    LOCAL_HISTOGRAM_BOOLEAN("LocalStorageCachedArea.CorruptData", true);
     LOG(ERROR) << "Corrupt data in domstorage";
     return g_empty_string;
   }
@@ -794,7 +791,7 @@ Vector<uint8_t> CachedStorageArea::StringToUint8Vector(
     }
     case FormatOption::kSessionStorageForceUTF8: {
       unsigned length = input.length();
-      if (input.Is8Bit() && input.ContainsOnlyASCIIOrEmpty()) {
+      if (input.Is8Bit() && input.ContainsOnlyAsciiOrEmpty()) {
         Vector<uint8_t> result(length);
         base::span(result).copy_from(input.Span8());
         return result;
@@ -820,7 +817,7 @@ Vector<uint8_t> CachedStorageArea::StringToUint8Vector(
       // TODO(dmurph): Figure out how to avoid a copy here.
       // TODO(dmurph): Handle invalid UTF16 better. https://crbug.com/873280.
       StringUtf8Adaptor utf8(input, Utf8ConversionMode::kStrictReplacingErrors);
-      Vector<uint8_t> result(utf8.size());
+      Vector<uint8_t> result(base::checked_cast<wtf_size_t>(utf8.size()));
       base::span(result).copy_from(base::as_byte_span(utf8));
       return result;
     }
@@ -837,7 +834,8 @@ Vector<uint8_t> CachedStorageArea::StringToUint8Vector(
         return result;
       }
       DCHECK(!input.Is8Bit());
-      Vector<uint8_t> result(input.CharactersSizeInBytes() + 1);
+      Vector<uint8_t> result(
+          base::checked_cast<wtf_size_t>(input.CharactersSizeInBytes() + 1));
       auto [format, payload] = base::span(result).split_at<1u>();
       format[0] = static_cast<uint8_t>(StorageFormat::UTF16);
       payload.copy_from(input.RawByteSpan());

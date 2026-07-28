@@ -158,6 +158,12 @@ config("ios_executable_flags") {
   if (xcode_version_int >= 2600) {
     framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
   }
+  if (xcode_version_int >= 2640 && use_lld) {
+    ldflags += [
+      "-Wl,--ignore-auto-link-option,UIUtilities",
+      "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+    ]
+  }
 }
 
 config("ios_extension_executable_flags") {
@@ -179,6 +185,12 @@ config("ios_extension_executable_flags") {
   # TODO(crbug.com/424634516): Remove once Apple fixes the issue.
   if (xcode_version_int >= 2600) {
     framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
+  }
+  if (xcode_version_int >= 2640 && use_lld) {
+    ldflags += [
+      "-Wl,--ignore-auto-link-option,UIUtilities",
+      "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+    ]
   }
 }
 
@@ -237,6 +249,12 @@ config("ios_shared_library_flags") {
   if (xcode_version_int >= 2600) {
     framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
   }
+  if (xcode_version_int >= 2640 && use_lld) {
+    ldflags += [
+      "-Wl,--ignore-auto-link-option,UIUtilities",
+      "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+    ]
+  }
 }
 
 config("xctest_config") {
@@ -265,6 +283,15 @@ config("xctest_config") {
   if (xcode_version_int >= 2600) {
     framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
   }
+  if (xcode_version_int >= 2640) {
+    if (use_lld) {
+      ldflags += [
+        "-Wl,--ignore-auto-link-option,UIUtilities",
+        "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+      ]
+    }
+    ldflags += [ "-Wl,-needed-lXCTestSwiftSupport,-lXCTestSwiftSupport" ]
+  }
 }
 
 if (enable_swift_cxx_interop) {
@@ -281,8 +308,8 @@ if (enable_swift_cxx_interop) {
     ]
 
     # TODO(crbug.com/451945291): Move the following compiler flags to
-    # build/config/compiler/BUILD.gn when Swift/C++ interop is enabled by default.
-    # The '-std=c++' flag is not allowed with 'Objective-C'.
+    # build/config/compiler/BUILD.gn when Swift/C++ interop is enabled by
+    # default. The '-std=c++' flag is not allowed with 'Objective-C'.
     if (use_cxx23) {
       swiftflags += [ "-Xcc=-std=c++23" ]
     } else {
@@ -356,14 +383,20 @@ action("xctest_runner_without_arm64e") {
   }
 }
 
-# Generates build flags to allow code to detect specific compilation contexts:
-# - Whether the target is an App Extension (which cannot access APIs like
-#   UIApplication.sharedApplication).
-# - Whether Swift/C++ interoperability is enabled.
+# Generates build flags to allow code to detect whether the target is an App
+# Extension (which cannot access APIs like UIApplication.sharedApplication).
 buildflag_header("buildflags") {
   header = "buildflags.h"
+  flags = [ "IOS_IS_APP_EXTENSION=$ios_is_app_extension" ]
+}
+
+# Generates build flags to allow code to detect specific compilation contexts:
+# - Whether Swift/C++ interoperability is enabled.
+# - Whether Swift 6.3 (XCode 27.*) is supported.
+buildflag_header("swift_buildflags") {
+  header = "swift_buildflags.h"
   flags = [
     "ENABLE_SWIFT_CXX_INTEROP=$enable_swift_cxx_interop",
-    "IOS_IS_APP_EXTENSION=$ios_is_app_extension",
+    "HAS_SWIFT_6_3_SUPPORT=$has_swift_6_3_support",
   ]
 }

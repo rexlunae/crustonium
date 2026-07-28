@@ -30,13 +30,36 @@
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
+namespace {
+
+// Whether Choose From Drive is available.
+BOOL IsChooseFromDriveAvailable(Browser* browser,
+                                bool allowsDirectorySelection) {
+  if (!browser || allowsDirectorySelection) {
+    return NO;
+  }
+  web::WebState* activeWebState =
+      browser->GetWebStateList()->GetActiveWebState();
+  ProfileIOS* profile = browser->GetProfile();
+  CHECK(profile);
+  signin::IdentityManager* identityManager =
+      IdentityManagerFactory::GetInstance()->GetForProfile(profile);
+  drive::DriveService* driveService =
+      drive::DriveServiceFactory::GetForProfile(profile);
+  return drive::IsChooseFromDriveAvailable(
+      activeWebState, profile->IsOffTheRecord(), identityManager, driveService,
+      profile->GetPrefs());
+}
+
+}  // namespace
+
 @interface FileUploadPanelCoordinator () <
-    UIContextMenuInteractionDelegate,
-    UINavigationControllerDelegate,
-    UIDocumentPickerDelegate,
     PHPickerViewControllerDelegate,
+    UIAdaptivePresentationControllerDelegate,
+    UIContextMenuInteractionDelegate,
+    UIDocumentPickerDelegate,
     UIImagePickerControllerDelegate,
-    UIAdaptivePresentationControllerDelegate>
+    UINavigationControllerDelegate>
 
 // Actions to present in the context menu. Will be nil if the action is
 // unavailable in the current context. Lazily created.
@@ -53,7 +76,6 @@
   UIImagePickerController* _cameraPicker;
   UIDocumentPickerViewController* _filePicker;
   PHPickerViewController* _photoPicker;
-  BOOL _isChooseFromDriveAvailable;
 }
 
 @synthesize filePickerAction = _filePickerAction;
@@ -79,18 +101,6 @@
   _mediator.fileUploadPanelHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), FileUploadPanelCommands);
 
-  if (!_mediator.allowsDirectorySelection) {
-    ProfileIOS* profile = self.browser->GetProfile();
-    CHECK(profile);
-    signin::IdentityManager* identityManager =
-        IdentityManagerFactory::GetInstance()->GetForProfile(profile);
-    drive::DriveService* driveService =
-        drive::DriveServiceFactory::GetForProfile(profile);
-    _isChooseFromDriveAvailable = drive::IsChooseFromDriveAvailable(
-        activeWebState, profile->IsOffTheRecord(), identityManager,
-        driveService, profile->GetPrefs());
-  }
-
   if (_mediator.shouldShowCamera) {
     base::UmaHistogramEnumeration("IOS.FileUploadPanel.EntryPointVariant",
                                   FileUploadPanelEntryPointVariant::kCamera);
@@ -100,7 +110,9 @@
   }
 
   if (_mediator.allowsDirectorySelection ||
-      (!_isChooseFromDriveAvailable && !_mediator.allowsMediaSelection)) {
+      (!IsChooseFromDriveAvailable(self.browser,
+                                   _mediator.allowsDirectorySelection) &&
+       !_mediator.allowsMediaSelection)) {
     base::UmaHistogramEnumeration(
         "IOS.FileUploadPanel.EntryPointVariant",
         FileUploadPanelEntryPointVariant::kFilePicker);
@@ -249,7 +261,7 @@
     __weak __typeof(self) weakSelf = self;
     _filePickerAction = [UIAction
         actionWithTitle:[self filePickerActionLabel]
-                  image:DefaultSymbolWithConfiguration(kFolderSymbol, nil)
+                  image:SymbolWithConfiguration(SymbolFolder, nil)
              identifier:@"chromium.uploadfile.choosefile"
                 handler:^(UIAction* action) {
                   [weakSelf
@@ -332,8 +344,7 @@
     __weak __typeof(self) weakSelf = self;
     _photoPickerAction = [UIAction
         actionWithTitle:[self photoPickerActionLabel]
-                  image:DefaultSymbolWithConfiguration(kPhotoOnRectangleSymbol,
-                                                       nil)
+                  image:SymbolWithConfiguration(SymbolPhotoOnRectangle, nil)
              identifier:@"chromium.uploadfile.choosephoto"
                 handler:^(UIAction* action) {
                   [weakSelf showPickerForContextMenuActionVariant:
@@ -422,7 +433,7 @@
     __weak __typeof(self) weakSelf = self;
     _cameraAction = [UIAction
         actionWithTitle:[self cameraActionLabel]
-                  image:DefaultSymbolWithConfiguration(kSystemCameraSymbol, nil)
+                  image:SymbolWithConfiguration(SymbolSystemCamera, nil)
              identifier:@"chromium.uploadfile.choosecamera"
                 handler:^(UIAction* action) {
                   [weakSelf
@@ -478,7 +489,8 @@
 }
 
 - (UIAction*)driveFilePickerAction {
-  if (!_isChooseFromDriveAvailable) {
+  if (!IsChooseFromDriveAvailable(self.browser,
+                                  _mediator.allowsDirectorySelection)) {
     return nil;
   }
   if (!_driveFilePickerAction) {
@@ -490,8 +502,8 @@
         configurationWithPointSize:font.pointSize
                             weight:UIImageSymbolWeightLight
                              scale:UIImageSymbolScaleMedium];
-    driveSymbol = CustomSymbolWithConfiguration(kGoogleDriveSymbol,
-                                                driveSymbolConfiguration);
+    driveSymbol =
+        SymbolWithConfiguration(SymbolGoogleDrive, driveSymbolConfiguration);
 #endif
     _driveFilePickerAction = [UIAction
         actionWithTitle:[self driveFilePickerActionLabel]
@@ -507,6 +519,12 @@
 }
 
 - (void)showDriveFilePicker {
+  if (!IsChooseFromDriveAvailable(self.browser,
+                                  _mediator.allowsDirectorySelection)) {
+    //  If the user gets signed-out, the feature may become unavailable during
+    // usage.
+    return;
+  }
   id<DriveFilePickerCommands> driveFilePickerCommands = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), DriveFilePickerCommands);
   [driveFilePickerCommands showDriveFilePicker];

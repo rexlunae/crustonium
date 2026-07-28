@@ -14,17 +14,13 @@
 #include "chrome/browser/keyboard_accessory/android/accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
-#include "chrome/browser/keyboard_accessory/android/affiliated_plus_profiles_cache.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_address_accessory_controller.h"
+#include "chrome/browser/keyboard_accessory/test_utils/android/mock_at_memory_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_password_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_payment_method_accessory_controller.h"
-#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
-#include "components/plus_addresses/core/browser/fake_plus_address_service.h"
-#include "components/plus_addresses/core/browser/plus_address_types.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,7 +32,6 @@ using autofill::AccessoryTabType;
 using autofill::TestAutofillClientInjector;
 using autofill::TestContentAutofillClient;
 using autofill::mojom::FocusedFieldType;
-using plus_addresses::FakePlusAddressService;
 using testing::_;
 using testing::AnyNumber;
 using testing::AtLeast;
@@ -51,8 +46,7 @@ using IsCredentialFieldOrHasAutofillSuggestions =
     ManualFillingViewInterface::IsCredentialFieldOrHasAutofillSuggestions;
 
 AccessorySheetData filled_passwords_sheet() {
-  return AccessorySheetData::Builder(AccessoryTabType::PASSWORDS, u"Pwds",
-                                     /*plus_address_title=*/std::u16string())
+  return AccessorySheetData::Builder(AccessoryTabType::PASSWORDS, u"Pwds")
       .AddUserInfo("example.com", autofill::UserInfo::IsExactMatch(true))
       .AppendField(AccessorySuggestionType::kCredentialUsername, u"Ben", u"Ben",
                    false, true)
@@ -63,48 +57,34 @@ AccessorySheetData filled_passwords_sheet() {
 
 AccessorySheetData populate_sheet(AccessoryTabType type) {
   constexpr char16_t kTitle[] = u"Suggestions available!";
-  return AccessorySheetData::Builder(type, kTitle,
-                                     /*plus_address_title=*/std::u16string())
-      .AddUserInfo()
-      .Build();
+  return AccessorySheetData::Builder(type, kTitle).AddUserInfo().Build();
 }
 
 std::vector<uint8_t> test_passkey_id() {
   return {23, 24, 25, 26, 27};
 }
 
-std::unique_ptr<KeyedService> BuildFakePlusAddressService(
-    content::BrowserContext* context) {
-  return std::make_unique<FakePlusAddressService>();
-}
-
 constexpr autofill::FieldRendererId kFocusedFieldId(123);
-
-}  // namespace
 
 // Fixture that tests the manual filling experience with the most recent version
 // of the keyboard accessory and all its fallback sheets.
 class ManualFillingControllerTest : public ChromeRenderViewHostTestHarness {
  public:
-
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 
-    PlusAddressServiceFactory::GetInstance()->SetTestingFactory(
-        GetBrowserContext(), base::BindRepeating(&BuildFakePlusAddressService));
-
     EXPECT_CALL(mock_pwd_controller_, RegisterFillingSourceObserver)
         .WillOnce(SaveArg<0>(&pwd_source_observer_));
-    EXPECT_CALL(mock_pwd_controller_, RegisterPlusProfilesProvider);
+
     EXPECT_CALL(mock_payment_method_controller_, RegisterFillingSourceObserver)
         .WillOnce(SaveArg<0>(&cc_source_observer_));
     EXPECT_CALL(mock_address_controller_, RegisterFillingSourceObserver)
         .WillOnce(SaveArg<0>(&address_source_observer_));
-    EXPECT_CALL(mock_address_controller_, RegisterPlusProfilesProvider);
     ManualFillingControllerImpl::CreateForWebContentsForTesting(
         web_contents(), mock_pwd_controller_.AsWeakPtr(),
         mock_address_controller_.AsWeakPtr(),
         mock_payment_method_controller_.AsWeakPtr(),
+        mock_at_memory_controller_.AsWeakPtr(),
         std::make_unique<NiceMock<MockManualFillingView>>());
   }
 
@@ -137,18 +117,17 @@ class ManualFillingControllerTest : public ChromeRenderViewHostTestHarness {
   }
 
  protected:
-  base::test::ScopedFeatureList features_{
-      plus_addresses::features::kPlusAddressesEnabled};
   NiceMock<MockPasswordAccessoryController> mock_pwd_controller_;
   NiceMock<MockAddressAccessoryController> mock_address_controller_;
   NiceMock<MockPaymentMethodAccessoryController>
       mock_payment_method_controller_;
+  NiceMock<MockAtMemoryAccessoryController> mock_at_memory_controller_;
 
   AccessoryController::FillingSourceObserver pwd_source_observer_;
   AccessoryController::FillingSourceObserver cc_source_observer_;
   AccessoryController::FillingSourceObserver address_source_observer_;
 
-  TestAutofillClientInjector<TestContentAutofillClient>
+  TestAutofillClientInjector<autofill::TestContentAutofillClient>
       autofill_client_injector_;
 };
 
@@ -294,31 +273,6 @@ TEST_F(ManualFillingControllerTest, HidesAccessoryWithoutAvailableSources) {
   EXPECT_CALL(*view(), Hide());
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
                                          /*has_suggestions=*/false);
-}
-
-TEST_F(ManualFillingControllerTest, FetchesAffiliatedPlusProfilesWhenShown) {
-  FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
-
-  // Not plus profiles should be fetched before the first call to `Show()`.
-  EXPECT_TRUE(controller()->plus_profiles_cache());
-  EXPECT_EQ(
-      controller()->plus_profiles_cache()->GetAffiliatedPlusProfiles().size(),
-      0u);
-
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(false)));
-  controller()->UpdateSourceAvailability(FillingSource::ADDRESS_FALLBACKS,
-                                         /*has_suggestions=*/true);
-  EXPECT_EQ(
-      controller()->plus_profiles_cache()->GetAffiliatedPlusProfiles().size(),
-      1u);
-
-  EXPECT_CALL(*view(), Hide());
-  controller()->UpdateSourceAvailability(FillingSource::ADDRESS_FALLBACKS,
-                                         /*has_suggestions=*/false);
-  EXPECT_EQ(
-      controller()->plus_profiles_cache()->GetAffiliatedPlusProfiles().size(),
-      0u);
 }
 
 TEST_F(ManualFillingControllerTest, ForwardsCredManActionToPasswordController) {
@@ -503,3 +457,5 @@ TEST_F(ManualFillingControllerTest, LogsHistogramOnOptionSelected) {
       "AccessoryActionSelected2",
       AccessoryAction::MANAGE_CREDIT_CARDS, 3);
 }
+
+}  // namespace

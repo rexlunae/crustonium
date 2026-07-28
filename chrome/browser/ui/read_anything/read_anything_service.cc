@@ -11,14 +11,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/read_anything/read_anything_prefs.h"
 #include "chrome/browser/ui/read_anything/read_anything_service_factory.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "extensions/browser/extension_system.h"
@@ -55,11 +49,6 @@ ReadAnythingService::ReadAnythingService(Profile* profile) : profile_(profile) {
         base::BindRepeating(
             &ReadAnythingService::OnLocalReadingModeSwitchDelayTimeout,
             weak_ptr_factory_.GetWeakPtr()));
-  }
-  if (features::IsDataCollectionModeForScreen2xEnabled() &&
-      profile_->AllowsBrowserWindows()) {
-    browser_collection_observer_.Observe(
-        ProfileBrowserCollection::GetForProfile(profile_));
   }
 }
 
@@ -103,8 +92,7 @@ void ReadAnythingService::SetupDesktopEngine() {
 
   // Install the TTS extension via the component updater if the
   // component updater flag is enabled.
-  if (features::IsReadAnythingReadAloudEnabled() &&
-      !features::IsWasmTtsEngineAutoInstallDisabled()) {
+  if (!features::IsWasmTtsEngineAutoInstallDisabled()) {
     // Trigger an on-demand update of the engine to ensure the TTS extension
     // is available to provide natural voices as soon as reading mode is opened.
     component_updater::WasmTtsEngineComponentInstallerPolicy::
@@ -171,24 +159,6 @@ void ReadAnythingService::OnLocalReadingModeSwitchDelayTimeout() {
   }
 
   RemoveGDocsHelperExtension();
-}
-
-void ReadAnythingService::OnBrowserActivated(BrowserWindowInterface* browser) {
-  if (!features::IsDataCollectionModeForScreen2xEnabled()) {
-    return;
-  }
-
-  // This code is called as part of a screen2x data generation workflow, where
-  // the browser is opened by a CLI and the read-anything side panel is
-  // automatically opened. Therefore we force the UI to show right away, as in
-  // tests.
-  // TODO(https://crbug.com/358191922): Remove this code.
-  auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
-  if (!side_panel_ui->IsSidePanelEntryShowing(
-          SidePanelEntryKey(SidePanelEntryId::kReadAnything))) {
-    side_panel_ui->SetNoDelaysForTesting(true);  // IN-TEST
-    side_panel_ui->Show(SidePanelEntryId::kReadAnything);
-  }
 }
 
 void ReadAnythingService::RemoveTtsDownloadExtension() {

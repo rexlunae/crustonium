@@ -11,6 +11,7 @@
 #include "cc/base/switches.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/prefs/in_memory_pref_store.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -61,8 +62,6 @@ class VariationServiceClient : public variations::VariationsServiceClient {
   bool OverridesRestrictParameter(std::string*) final { return false; }
   base::FilePath GetVariationsSeedFileDir() final { return user_data_dir_; }
   bool IsEnterprise() final { return false; }
-  // Profiles aren't supported, so nothing to do here.
-  void RemoveGoogleGroupsFromPrefsForDeletedProfiles(PrefService*) final {}
 
  private:
   base::FilePath user_data_dir_;
@@ -140,9 +139,6 @@ void SetupFieldTrials() {
   variations::SafeSeedManager safe_seed_manager(pref_service.get());
 
   const std::vector<std::string> variation_ids;  // Empty for tests.
-  const std::string command_line_variation_ids =
-      command_line->GetSwitchValueASCII(
-          variations::switches::kForceVariationIds);
   auto feature_list = std::make_unique<base::FeatureList>();
 
   variations::test::ScopedVariationsIdsProvider scoped_ids_provider(
@@ -154,9 +150,8 @@ void SetupFieldTrials() {
   // not needed, and thus are set to null or empty values.
   // TODO(crbug.com/40790318): Consider passing a low entropy source.
   field_trial_creator.SetUpFieldTrials(
-      variation_ids, command_line_variation_ids, feature_overrides,
-      std::move(feature_list), metrics_state_manager.get(),
-      &platform_field_trials, &safe_seed_manager,
+      variation_ids, feature_overrides, std::move(feature_list),
+      metrics_state_manager.get(), &platform_field_trials, &safe_seed_manager,
       /*add_entropy_source_to_variations_ids=*/false,
       *metrics_state_manager->CreateEntropyProviders(
           /*enable_limited_entropy_mode=*/false));

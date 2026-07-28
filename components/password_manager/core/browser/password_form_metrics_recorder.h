@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/clock.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
@@ -25,6 +26,10 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 
 class PrefService;
+
+namespace metrics {
+class ProfileMetricsService;
+}
 
 namespace autofill {
 class FormData;
@@ -52,9 +57,11 @@ class PasswordFormMetricsRecorder
  public:
   // Records UKM metrics and reports them on destruction. The |source_id| is
   // the ID of the WebContents document that the forms belong to.
-  PasswordFormMetricsRecorder(bool is_main_frame_secure,
-                              ukm::SourceId source_id,
-                              PrefService* pref_service);
+  PasswordFormMetricsRecorder(
+      bool is_main_frame_secure,
+      ukm::SourceId source_id,
+      PrefService* pref_service,
+      metrics::ProfileMetricsService* profile_metrics_service);
 
   PasswordFormMetricsRecorder(const PasswordFormMetricsRecorder&) = delete;
   PasswordFormMetricsRecorder& operator=(const PasswordFormMetricsRecorder&) =
@@ -458,12 +465,12 @@ class PasswordFormMetricsRecorder
 
   void RecordFirstFillingResult(int32_t result);
   void RecordFirstWaitForUsernameReason(WaitForUsernameReason reason);
-  void RecordMatchedFormType(const PasswordForm& form);
+  void RecordMatchedFormType(const StoredCredential& form);
   void RecordPotentialPreferredMatch(std::optional<MatchedFormType> form_type);
 
   // Records whether there was at least one grouped match in fill suggestions.
   void RecordFillSuggestionHasGroupedMatch(
-      base::span<const PasswordForm> best_matches);
+      base::span<const StoredCredential> best_matches);
 
   // Calculates FillingAssistance metrics for |submitted_form|.
   void CalculateFillingAssistanceMetric(
@@ -516,11 +523,6 @@ class PasswordFormMetricsRecorder
       metrics_util::SubmittedFormFrame submitted_form_frame) {
     submitted_form_frame_ = submitted_form_frame;
   }
-#if BUILDFLAG(IS_ANDROID)
-  void set_form_submission_reached(bool value) {
-    form_submission_reached_ = value;
-  }
-#endif
 
  private:
   friend class base::RefCounted<PasswordFormMetricsRecorder>;
@@ -616,6 +618,8 @@ class PasswordFormMetricsRecorder
 
   const raw_ptr<PrefService> pref_service_;
 
+  const raw_ref<metrics::ProfileMetricsService> profile_metrics_service_;
+
   // Counter for DetailedUserActions observed during the lifetime of a
   // PasswordFormManager. Reported upon destruction.
   std::map<DetailedUserAction, int64_t> detailed_user_actions_counts_;
@@ -670,12 +674,6 @@ class PasswordFormMetricsRecorder
   // form that are filled by Chrome. This value includes all fields in the
   // form (not only username and passwords).
   std::optional<float> automation_rate_;
-
-#if BUILDFLAG(IS_ANDROID)
-  // Set to true when the form submission step is reached. Used to record
-  // form submission and avoid duplicate samples.
-  bool form_submission_reached_ = false;
-#endif
 
   // Record if the form parsing result can be confirmed or disproven by user
   // actions.

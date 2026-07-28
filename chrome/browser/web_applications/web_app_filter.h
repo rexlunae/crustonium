@@ -5,7 +5,12 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_FILTER_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_FILTER_H_
 
+#include <memory>
 #include <optional>
+#include <variant>
+
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 
 namespace web_app {
 
@@ -19,13 +24,15 @@ class WebAppFilter {
   // Only consider web apps whose effective display mode is a dedicated window
   // (essentially any display mode other than a browser tab).
   static WebAppFilter OpensInDedicatedWindow();
-  // Only consider web apps that capture links in scope.
-  static WebAppFilter CapturesLinksInScope();
+  // Only consider web apps that were installed by the user.
+  static WebAppFilter InstalledByUser();
+  // Only consider web apps that were preinstalled by the device.
+  static WebAppFilter InstalledByDefaultManagement();
   // Only consider isolated web apps, that are not scheduled for uninstallation,
   // like stub ones. To also consider stub apps, use
   // `IsIsolatedWebAppIncludingUninstalling()` instead.
   static WebAppFilter IsIsolatedApp();
-  // Only Consider sub apps of isolated web apps (connected via parent_app_id).
+  // Only consider sub apps of isolated web apps (connected via parent_app_id).
   static WebAppFilter IsIsolatedSubApp();
   // Only consider isolated web apps installed in developer mode, that are not
   // scheduled for uninstallation, like stub ones.
@@ -39,8 +46,6 @@ class WebAppFilter {
   static WebAppFilter IsIsolatedWebAppWithOnlyUserManagement();
   // Only consider crafted web apps (not DIY apps).
   static WebAppFilter IsCraftedApp();
-  // Only consider crafted web apps that are set to open in a dedicated window.
-  static WebAppFilter IsCraftedAppAndOpensInDedicatedWindow();
   // Only consider apps that are not installed on this device, but are suggested
   // from other devices.
   static WebAppFilter IsSuggestedApp();
@@ -69,12 +74,11 @@ class WebAppFilter {
   static WebAppFilter LaunchableFromInstallApi();
 
   // Only consider web apps that have been installed in Chrome by trusted
-  // sources, like admin or preinstalled apps.
+  // sources, like admin or preinstalled apps. Useful in a variety of cases,
+  // like to skip showing of the manifest update dialog. Extending this logic
+  // to cover more use-cases could have security complications, please
+  // consult a web_applications/ OWNER if in doubt.
   static WebAppFilter IsTrusted();
-
-  // Consider any isolated web apps, even ones that are stubs and have
-  // `is_uninstalling` set to true.
-  static WebAppFilter IsIsolatedWebAppIncludingUninstalling();
 
   // Only consider web apps that are in the middle of an app migration, and will
   // be treated rightfully so.
@@ -85,55 +89,104 @@ class WebAppFilter {
   // migration are not included here.
   static WebAppFilter IsAppSurfaceableToUser();
 
+  // Only consider web apps that can store pending migration metadata to
+  // identify if it should be migrated to a different app or not. This can
+  // usually include all apps installed with OS integration, just not
+  // isolated ones.
+  static WebAppFilter CanAppInstallTargetMigrationApp();
+
   // Only consider web apps that are valid sources to be migrated to a different
   // app. This mainly includes apps that have valid OS integration and are not
   // installed by policy.
   static WebAppFilter IsAppValidMigrationSource();
 
+  // Only consider web apps that are eligible for manifest updates. This
+  // includes apps in all states (including suggested from migration and
+  // suggested from sync) as long as they are not marked for uninstallation.
+  static WebAppFilter IsAppEligibleForManifestUpdate();
+
+  // Only consider web apps that are eligible for exposing window capture
+  // handle. This includes IWAs and standalone PWAs.
+  static WebAppFilter IsWindowCaptureHandleAllowed();
+
   WebAppFilter(const WebAppFilter&);
-  WebAppFilter& operator=(const WebAppFilter&) = default;
-  ~WebAppFilter() = default;
+  WebAppFilter(WebAppFilter&&) noexcept;
+  WebAppFilter& operator=(WebAppFilter&&) noexcept;
+  ~WebAppFilter();
+
+  friend WebAppFilter operator&(WebAppFilter lhs, WebAppFilter rhs);
+  friend WebAppFilter operator|(WebAppFilter lhs, WebAppFilter rhs);
+
+  // Logical exclusion. This operator returns a filter that matches all apps
+  // that are eligible for manifest updates (i.e., not stubs or uninstalling),
+  // EXCEPT for those that match the provided `filter`.
+  //
+  // Example:
+  // If the registrar contains apps {A, B, C, D} and `filter` matches {A, B},
+  // then `!filter` will match {C, D}.
+  friend WebAppFilter operator!(WebAppFilter filter);
 
  private:
   friend class WebAppRegistrar;
 
-  WebAppFilter();
-
-  struct IsolatedWebAppFilter {
-    bool must_be_in_dev_mode = false;
-    bool must_be_user_installed = false;
-    bool must_have_no_external_management = false;
-    bool must_be_policy_installed = false;
-    bool is_sub_app = false;
+  enum class SimpleCondition {
+    kIsDiy,
+    kWasInstalledByUser,
+    kInstalledByTrustedSource,
+    kIsolatedApp,
+    kIsolatedAppDevMode,
+    kIsolatedSubApp,
+    kOpensInDedicatedWindow,
+    kIsPlaceholder
   };
 
-  bool opens_in_browser_tab_ = false;
-  bool opens_in_dedicated_window_ = false;
+  using InstallStateSet = base::EnumSet<proto::InstallState,
+                                        proto::InstallState_MIN,
+                                        proto::InstallState_MAX>;
 
-// ChromeOS stores the per-app capturing setting in PreferredAppsImpl, not here.
-#if !defined(IS_CHROMEOS)
-  bool captures_links_in_scope_ = false;
-#endif
+  struct ManagementRequirement {
+    enum class Type { kHasAny, kHasAll } type;
+    WebAppManagementTypes sources;
+  };
 
-  std::optional<IsolatedWebAppFilter> isolated_app_filter_;
-  bool is_crafted_app_ = false;
-  bool is_suggested_app_ = false;
-  bool displays_badge_on_os_ = false;
-  bool supports_os_notifications_ = false;
-  bool installed_in_chrome_ = false;
-  bool installed_in_os_ = false;
-  bool is_diy_with_os_shortcut_ = false;
-  bool launchable_from_install_api_ = false;
-  // Having is_crafted_app_ and opens_in_dedicated_window_ set to true
-  // separately would result in matching any app for which either filter is
-  // true. So use a separate field for the combination of the two. In the
-  // future we might want to have a more generic "and" mechanism for filters.
-  bool is_crafted_app_and_opens_in_dedicated_window_ = false;
-  bool is_app_trusted_ = false;
-  bool is_isolated_apps_including_uninstalling_ = false;
-  bool is_app_suggested_from_migration_ = false;
-  bool is_app_surfaceable_to_user_ = false;
-  bool is_valid_migration_source_ = false;
+  using LeafFilter =
+      std::variant<ManagementRequirement, InstallStateSet, SimpleCondition>;
+
+  static WebAppFilter HasSource(WebAppManagement::Type source);
+  static WebAppFilter HasAnySource(WebAppManagementTypes sources);
+  static WebAppFilter HasAllSources(WebAppManagementTypes sources);
+
+  static WebAppFilter InstallStateIs(proto::InstallState state);
+  static WebAppFilter InstallStateIsAnyOf(InstallStateSet states);
+
+  static WebAppFilter IsInRegistrar();
+
+  static WebAppFilter IsTrue(SimpleCondition condition);
+
+  struct BinaryOp {
+    enum class Op {
+      kAnd,
+      kOr,
+      // Matches `left`, excluding matches for `right`.
+      kExclude
+    };
+    BinaryOp(std::unique_ptr<WebAppFilter> left,
+             std::unique_ptr<WebAppFilter> right,
+             Op op);
+    ~BinaryOp();
+    BinaryOp(const BinaryOp&);
+    BinaryOp(BinaryOp&&) noexcept;
+    BinaryOp& operator=(BinaryOp&&) noexcept;
+
+    std::unique_ptr<WebAppFilter> left;
+    std::unique_ptr<WebAppFilter> right;
+    Op op;
+  };
+
+  explicit WebAppFilter(LeafFilter leaf);
+  WebAppFilter(WebAppFilter left, WebAppFilter right, BinaryOp::Op op);
+
+  std::variant<LeafFilter, BinaryOp> data_;
 };
 
 }  // namespace web_app

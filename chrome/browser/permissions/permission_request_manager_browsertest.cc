@@ -7,13 +7,17 @@
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/run_loop.h"
 #include "base/test/mock_callback.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/values_test_util.h"
 #include "build/build_config.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/download/download_permission_request.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
@@ -31,6 +35,7 @@
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
 #include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/features.h"
@@ -63,6 +68,8 @@
 #include "content/public/test/test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
@@ -110,6 +117,15 @@ class PermissionRequestManagerBrowserTestBase : public InProcessBrowserTest {
   content::PermissionResult RequestPermissionFromDocumentSync(
       content::RenderFrameHost* rfh,
       blink::mojom::PermissionDescriptorPtr permission_descriptor) {
+    return RequestPermissionFromDocumentSync(
+        rfh,
+        content::PermissionRequestDescription(std::move(permission_descriptor),
+                                              /*user_gesture=*/true));
+  }
+
+  content::PermissionResult RequestPermissionFromDocumentSync(
+      content::RenderFrameHost* rfh,
+      content::PermissionRequestDescription request_description) {
     base::RunLoop run_loop;
     base::MockOnceCallback<void(content::PermissionResult)> callback;
     content::PermissionResult result;
@@ -118,14 +134,10 @@ class PermissionRequestManagerBrowserTestBase : public InProcessBrowserTest {
     }));
 
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetPermissionController()
         ->RequestPermissionFromCurrentDocument(
-            rfh,
-            content::PermissionRequestDescription(
-                std::move(permission_descriptor),
-                /*user_gesture=*/true),
-            callback.Get());
+            rfh, std::move(request_description), callback.Get());
 
     run_loop.Run();
     return result;
@@ -135,10 +147,8 @@ class PermissionRequestManagerBrowserTestBase : public InProcessBrowserTest {
 class PermissionRequestManagerBrowserTest
     : public PermissionRequestManagerBrowserTestBase {
  public:
-  PermissionRequestManagerBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {}, {permissions::features::kBackForwardCacheUnblockPermissionRequest});
-  }
+  PermissionRequestManagerBrowserTest()
+      : PermissionRequestManagerBrowserTest({}, {}) {}
 
   PermissionRequestManagerBrowserTest(
       const PermissionRequestManagerBrowserTest&) = delete;
@@ -147,6 +157,19 @@ class PermissionRequestManagerBrowserTest
 
   ~PermissionRequestManagerBrowserTest() override = default;
 
+ protected:
+  PermissionRequestManagerBrowserTest(
+      const std::vector<base::test::FeatureRef>& enabled_features,
+      const std::vector<base::test::FeatureRef>& disabled_features) {
+    std::vector<base::test::FeatureRef> all_disabled_features =
+        disabled_features;
+    all_disabled_features.push_back(
+        permissions::features::kBackForwardCacheUnblockPermissionRequest);
+    scoped_feature_list_.InitWithFeatures(enabled_features,
+                                          all_disabled_features);
+  }
+
+ public:
   void SetUpOnMainThread() override {
     PermissionRequestManagerBrowserTestBase::SetUpOnMainThread();
     permissions::PermissionRequestManager* manager =
@@ -308,7 +331,7 @@ class PermissionRequestManagerWithBackForwardCacheUnblockBrowserTest
 };
 
 // Requests before the load event should be bundled into one bubble.
-// http://crbug.com/512849 flaky
+// http://crbug.com/41190115 flaky
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        DISABLED_RequestsBeforeLoad) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -321,6 +344,62 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
 
   EXPECT_EQ(1, bubble_factory()->show_count());
   EXPECT_EQ(2, bubble_factory()->TotalRequestCount());
+}
+
+// Verifies that when a background tab is discarded (e.g. by memory saver) and
+// subsequently reloads in the background, requesting permissions inside it does
+// not pop up permission prompt bubbles while another tab is active.
+IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
+                       TestSplitViewDiscardInitializationRace) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // Open tab 0 (title1.html) and tab 1 (title2.html in foreground).
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+
+  EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), embedded_test_server()->GetURL("/title2.html"),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+
+  // Discard background tab 0, replacing its WebContents with a new hidden one.
+  content::WebContents::CreateParams params(browser()->GetProfile());
+  params.initially_hidden = true;
+  std::unique_ptr<content::WebContents> new_contents =
+      content::WebContents::Create(params);
+  content::WebContents* raw_new_contents = new_contents.get();
+  browser()->tab_strip_model()->DiscardWebContentsAt(0,
+                                                     std::move(new_contents));
+
+  permissions::PermissionRequestManager* manager =
+      permissions::PermissionRequestManager::FromWebContents(raw_new_contents);
+
+  // Reload discarded tab 0 while tab 1 remains the active foreground tab.
+  raw_new_contents->GetController().LoadURL(
+      embedded_test_server()->GetURL("/title1.html"), content::Referrer(),
+      ui::PAGE_TRANSITION_LINK, std::string());
+
+  EXPECT_TRUE(content::WaitForLoadStop(raw_new_contents));
+
+  EXPECT_EQ(1, browser()->tab_strip_model()->active_index());
+
+  permissions::MockPermissionPromptFactory mock_factory(manager);
+
+  // Issue a notifications permission request in background tab 0.
+  ExecuteScriptAsync(raw_new_contents, "Notification.requestPermission();");
+
+  // Wait for the request to reach tab 0's manager, then verify no prompt bubble
+  // is shown on screen because tab 0 is inactive in the tab strip.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return !manager->Requests().empty(); }));
+
+  EXPECT_EQ(0, mock_factory.TotalRequestCount());
+
+  // After the discarded tab is revived by activating it, the pending request's
+  // prompt must appear.
+  browser()->tab_strip_model()->ActivateTabAt(0);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return mock_factory.TotalRequestCount() == 1; }));
 }
 
 // Requests before the load should not be bundled with a request after the
@@ -341,7 +420,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
 }
 
 // Navigating twice to the same URL should be equivalent to refresh. This
-// means showing the bubbles twice. http://crbug.com/512849 flaky
+// means showing the bubbles twice. http://crbug.com/41190115 flaky
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest, DISABLED_NavTwice) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -362,7 +441,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest, DISABLED_NavTwice) {
 }
 
 // Navigating twice to the same URL with a hash should be navigation within
-// the page. This means the bubble is only shown once. http://crbug.com/512849
+// the page. This means the bubble is only shown once. http://crbug.com/41190115
 // flaky
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        DISABLED_NavTwiceWithHash) {
@@ -685,7 +764,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
   EXPECT_EQ(1, bubble_factory()->TotalRequestCount());
 }
 
-// Regression test for crbug.com/900997.
+// Regression test for crbug.com/40600616.
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        CrossOriginPromptCooldown) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -727,7 +806,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
   EXPECT_EQ(0, bubble_factory()->TotalRequestCount());
 }
 
-// Regression test for crbug.com/900997.
+// Regression test for crbug.com/40600616.
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        CooldownEndsOnUserInitiatedReload) {
   TriggerAndExpectPromptCooldownToBeStillActiveAfterNavigationAction(
@@ -740,7 +819,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
       false /* expect_cooldown */);
 }
 
-// Regression test for crbug.com/900997.
+// Regression test for crbug.com/40600616.
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        CooldownEndsOnBrowserInitiateNavigation) {
   TriggerAndExpectPromptCooldownToBeStillActiveAfterNavigationAction(
@@ -750,7 +829,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
       false /* expect_cooldown */);
 }
 
-// Regression test for crbug.com/900997.
+// Regression test for crbug.com/40600616.
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        CooldownEndsOnRendererInitiateNavigationWithGesture) {
   TriggerAndExpectPromptCooldownToBeStillActiveAfterNavigationAction(
@@ -763,7 +842,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
       false /* expect_cooldown */);
 }
 
-// Regression test for crbug.com/900997.
+// Regression test for crbug.com/40600616.
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
                        CooldownOutlastsRendererInitiatedReload) {
   TriggerAndExpectPromptCooldownToBeStillActiveAfterNavigationAction(
@@ -776,7 +855,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
       true /* expect_cooldown */);
 }
 
-// Regression test for crbug.com/900997.
+// Regression test for crbug.com/40600616.
 IN_PROC_BROWSER_TEST_F(
     PermissionRequestManagerBrowserTest,
     CooldownOutlastsRendererInitiateNavigationWithoutGesture) {
@@ -897,10 +976,11 @@ class PermissionRequestManagerPostPromptBrowserTest
 class PermissionRequestManagerQuietUiBrowserTest
     : public PermissionRequestManagerBrowserTest {
  public:
-  PermissionRequestManagerQuietUiBrowserTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kQuietNotificationPrompts);
-  }
+  PermissionRequestManagerQuietUiBrowserTest()
+      : PermissionRequestManagerBrowserTest(
+            /*enabled_features=*/{},
+            /*disabled_features=*/
+            {permissions::features::kPermissionsGestureGatedPrompts}) {}
 
  protected:
   using UiDecision = permissions::PermissionUiSelector::Decision;
@@ -915,9 +995,6 @@ class PermissionRequestManagerQuietUiBrowserTest
         std::move(selector));
     return selector_ptr;
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Re-enable when 1016233 is fixed.
@@ -2183,6 +2260,14 @@ IN_PROC_BROWSER_TEST_F(
 class PermissionRequestManagerApproximateLocationBrowserTest
     : public PermissionRequestManagerBrowserTestBase {
  public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    PermissionRequestManagerBrowserTestBase::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII(
+        "enable-blink-features",
+        "ApproximateGeolocationPermissionAPI,"
+        "ApproximateGeolocationPermissionAccuracyMode");
+  }
+
   void SetUpOnMainThread() override {
     PermissionRequestManagerBrowserTestBase::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -2197,6 +2282,12 @@ class PermissionRequestManagerApproximateLocationBrowserTest
       blink::mojom::PermissionDescriptorPtr permission_descriptor) {
     return RequestPermissionFromDocumentSync(GetActiveMainFrame(),
                                              std::move(permission_descriptor));
+  }
+
+  content::PermissionResult RequestPermissionFromCurrentDocumentSync(
+      content::PermissionRequestDescription description) {
+    return RequestPermissionFromDocumentSync(GetActiveMainFrame(),
+                                             std::move(description));
   }
 
  private:
@@ -2225,7 +2316,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
   permissions::PermissionRequestManager* request_manager =
       GetPermissionRequestManager();
   content::PermissionController* permission_controller =
-      browser()->profile()->GetPermissionController();
+      browser()->GetProfile()->GetPermissionController();
 
   {
     base::HistogramTester histograms;
@@ -2239,7 +2330,9 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
               approx_only_permission_result);
     histograms.ExpectUniqueSample(
         permissions::PermissionUmaUtil::kPermissionsPromptShown,
-        permissions::RequestTypeForUma::PERMISSION_GEOLOCATION, 1);
+        permissions::RequestTypeForUma::
+            PERMISSION_GEOLOCATION_APPROXIMATE_OR_PRECISE,
+        1);
   }
 
   // Now request the permission again. This should not trigger another prompt
@@ -2279,7 +2372,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
-                       RequestApproximateGeolocation) {
+                       RequestApproximateAndPreciseGeolocation) {
   content::PermissionResult approx_only_permission_result(
       blink::mojom::PermissionStatus::GRANTED,
       content::PermissionStatusSource::UNSPECIFIED,
@@ -2289,7 +2382,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
   permissions::PermissionRequestManager* request_manager =
       GetPermissionRequestManager();
   content::PermissionController* permission_controller =
-      browser()->profile()->GetPermissionController();
+      browser()->GetProfile()->GetPermissionController();
 
   {
     base::HistogramTester histograms;
@@ -2303,7 +2396,7 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
               approx_only_permission_result);
     histograms.ExpectUniqueSample(
         permissions::PermissionUmaUtil::kPermissionsPromptShown,
-        permissions::RequestTypeForUma::PERMISSION_GEOLOCATION, 1);
+        permissions::RequestTypeForUma::PERMISSION_GEOLOCATION_APPROXIMATE, 1);
   }
 
   EXPECT_EQ(permission_controller->GetPermissionResultForCurrentDocument(
@@ -2331,6 +2424,12 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
                 IsEmpty());
   }
 
+  content::PermissionResult precise_permission_result(
+      blink::mojom::PermissionStatus::GRANTED,
+      content::PermissionStatusSource::UNSPECIFIED,
+      GeolocationSetting({.approximate = PermissionOption::kAllowed,
+                          .precise = PermissionOption::kAllowed}));
+
   // Now request precise geolocation permission. This should trigger a prompt.
   {
     base::HistogramTester histograms;
@@ -2339,18 +2438,287 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
     request_manager->set_auto_response_prompt_options_for_test(
         GeolocationPromptOptions{.selected_accuracy =
                                      GeolocationAccuracy::kPrecise});
-    content::PermissionResult precise_permission_result(
-        blink::mojom::PermissionStatus::GRANTED,
-        content::PermissionStatusSource::UNSPECIFIED,
-        GeolocationSetting({.approximate = PermissionOption::kAllowed,
-                            .precise = PermissionOption::kAllowed}));
     EXPECT_EQ(RequestPermissionFromCurrentDocumentSync(
                   kPreciseGeolocationDescriptor.Clone()),
               precise_permission_result);
     histograms.ExpectUniqueSample(
         permissions::PermissionUmaUtil::kPermissionsPromptShown,
-        permissions::RequestTypeForUma::PERMISSION_GEOLOCATION, 1);
+        permissions::RequestTypeForUma::PERMISSION_GEOLOCATION_UPGRADE, 1);
   }
+
+  // Now request approximate permission. This should not trigger another prompt.
+  {
+    base::HistogramTester histograms;
+    request_manager->set_auto_response_for_test(
+        permissions::PermissionRequestManager::AutoResponseType::NONE);
+    EXPECT_EQ(RequestPermissionFromCurrentDocumentSync(
+                  kApproximateGeolocationDescriptor.Clone()),
+              precise_permission_result);
+    EXPECT_THAT(histograms.GetAllSamples(
+                    permissions::PermissionUmaUtil::kPermissionsPromptShown),
+                IsEmpty());
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PermissionRequestManagerApproximateLocationBrowserTest,
+    RequestApproximateGeolocationTriggersApproximateOnlyPrompt) {
+  content::PermissionResult approx_only_permission_result(
+      blink::mojom::PermissionStatus::GRANTED,
+      content::PermissionStatusSource::UNSPECIFIED,
+      GeolocationSetting({.approximate = PermissionOption::kAllowed,
+                          .precise = PermissionOption::kAsk}));
+
+  permissions::PermissionRequestManager* request_manager =
+      GetPermissionRequestManager();
+  content::PermissionController* permission_controller =
+      browser()->GetProfile()->GetPermissionController();
+
+  base::HistogramTester histograms;
+  request_manager->set_auto_response_for_test(
+      permissions::PermissionRequestManager::AutoResponseType::ACCEPT_ALL);
+  request_manager->set_auto_response_prompt_options_for_test(
+      GeolocationPromptOptions{.selected_accuracy =
+                                   GeolocationAccuracy::kApproximate});
+
+  content::PermissionRequestDescription description(
+      kApproximateGeolocationDescriptor.Clone(),
+      /*user_gesture=*/true);
+  EXPECT_EQ(RequestPermissionFromCurrentDocumentSync(std::move(description)),
+            approx_only_permission_result);
+  histograms.ExpectUniqueSample(
+      permissions::PermissionUmaUtil::kPermissionsPromptShown,
+      permissions::RequestTypeForUma::PERMISSION_GEOLOCATION_APPROXIMATE, 1);
+
+  // Verify that precise location is not granted.
+  EXPECT_EQ(permission_controller->GetPermissionResultForCurrentDocument(
+                kPreciseGeolocationDescriptor.Clone(), GetActiveMainFrame()),
+            content::PermissionResult(
+                blink::mojom::PermissionStatus::ASK,
+                content::PermissionStatusSource::UNSPECIFIED,
+                GeolocationSetting({.approximate = PermissionOption::kAllowed,
+                                    .precise = PermissionOption::kAsk})));
+
+  // Verify that approximate location is granted.
+  EXPECT_EQ(
+      permission_controller->GetPermissionResultForCurrentDocument(
+          kApproximateGeolocationDescriptor.Clone(), GetActiveMainFrame()),
+      approx_only_permission_result);
+}
+
+IN_PROC_BROWSER_TEST_F(PermissionRequestManagerApproximateLocationBrowserTest,
+                       PermissionAPI) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  const char kQueryPermission[] = R"(
+      (async () => {
+        const status = await navigator.permissions.query({name: 'geolocation'});
+        return {name: status.name, state: status.state,
+                toString: status.toString(), accuracyMode: status.accuracyMode};
+      })();
+    )";
+
+  const char kQueryApproximatePermission[] = R"(
+      (async () => {
+        const status = await navigator.permissions.query(
+            {name: 'geolocation-approximate'});
+        return {name: status.name, state: status.state,
+                toString: status.toString()};
+      })();
+    )";
+
+  const char kSubscribeToPermissionChanges[] = R"(
+        var statuses = [];
+        var approximateStatuses = [];
+        navigator.permissions.query({name: 'geolocation'}).then(status => {
+          status.onchange = () =>
+              statuses.push({state: status.state,
+                accuracyMode: status.accuracyMode});
+        });
+        navigator.permissions.query(
+            {name: 'geolocation-approximate'}).then(status => {
+          status.onchange = () =>
+              approximateStatuses.push(status.state);
+        });
+    )";
+
+  EXPECT_TRUE(content::ExecJs(web_contents, kSubscribeToPermissionChanges));
+
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryPermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation",
+     "state": "prompt",
+     "toString": "[object GeolocationPermissionStatus]",
+     "accuracyMode": null
+  })")));
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryApproximatePermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation-approximate",
+     "state": "prompt",
+     "toString": "[object PermissionStatus]",
+  })")));
+
+  HostContentSettingsMap* hcsm = HostContentSettingsMapFactory::GetForProfile(
+      Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+  GURL permission_origin = embedded_test_server()->GetURL("/");
+
+  hcsm->SetPermissionSettingDefaultScope(
+      permission_origin, GURL(), ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                         .precise = PermissionOption::kAsk});
+
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryPermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation",
+     "state": "prompt",
+     "toString": "[object GeolocationPermissionStatus]",
+     "accuracyMode": null
+  })")));
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryApproximatePermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation-approximate",
+     "state": "granted",
+     "toString": "[object PermissionStatus]",
+  })")));
+
+  hcsm->SetPermissionSettingDefaultScope(
+      permission_origin, GURL(), ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                         .precise = PermissionOption::kDenied});
+
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryPermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation",
+     "state": "granted",
+     "toString": "[object GeolocationPermissionStatus]",
+     "accuracyMode": "approximate"
+  })")));
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryApproximatePermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation-approximate",
+     "state": "granted",
+     "toString": "[object PermissionStatus]",
+  })")));
+
+  hcsm->SetPermissionSettingDefaultScope(
+      permission_origin, GURL(), ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{.approximate = PermissionOption::kAllowed,
+                         .precise = PermissionOption::kAllowed});
+
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryPermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation",
+     "state": "granted",
+     "toString": "[object GeolocationPermissionStatus]",
+     "accuracyMode": "precise"
+  })")));
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryApproximatePermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation-approximate",
+     "state": "granted",
+     "toString": "[object PermissionStatus]",
+  })")));
+
+  hcsm->SetPermissionSettingDefaultScope(
+      permission_origin, GURL(), ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{.approximate = PermissionOption::kDenied,
+                         .precise = PermissionOption::kDenied});
+
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryPermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation",
+     "state": "denied",
+     "toString": "[object GeolocationPermissionStatus]",
+     "accuracyMode": null
+  })")));
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryApproximatePermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation-approximate",
+     "state": "denied",
+     "toString": "[object PermissionStatus]",
+  })")));
+
+  hcsm->SetPermissionSettingDefaultScope(
+      permission_origin, GURL(), ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{.approximate = PermissionOption::kAsk,
+                         .precise = PermissionOption::kDenied});
+
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryPermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation",
+     "state": "prompt",
+     "toString": "[object GeolocationPermissionStatus]",
+     "accuracyMode": null
+  })")));
+  EXPECT_THAT(content::EvalJs(web_contents, kQueryApproximatePermission),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"({
+     "name": "geolocation-approximate",
+     "state": "prompt",
+     "toString": "[object PermissionStatus]",
+  })")));
+
+  // onchange events should only be delivered when there is an actual,
+  // observable change.
+  EXPECT_THAT(content::EvalJs(web_contents, "statuses"),
+              content::EvalJsResult::IsOkAndHolds(base::test::IsJson(
+                  R"([
+    { "state": "granted", "accuracyMode": "approximate" },
+    { "state": "granted", "accuracyMode": "precise" },
+    { "state": "denied", "accuracyMode": null },
+    { "state": "prompt", "accuracyMode": null },
+  ])")));
+  EXPECT_THAT(content::EvalJs(web_contents, "approximateStatuses"),
+              content::EvalJsResult::IsOkAndHolds(
+                  base::test::IsJson(R"(["granted", "denied", "prompt"])")));
+}
+
+IN_PROC_BROWSER_TEST_F(PermissionRequestManagerBrowserTest,
+                       PermissionRequestInSandboxedTopLevelFrame) {
+  embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
+      [](const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        if (request.relative_url == "/sandbox_csp") {
+          auto response =
+              std::make_unique<net::test_server::BasicHttpResponse>();
+          response->set_code(net::HTTP_OK);
+          response->set_content("<html><body>Sandboxed Page</body></html>");
+          response->set_content_type("text/html");
+          response->AddCustomHeader("Content-Security-Policy",
+                                    "sandbox allow-scripts");
+          return response;
+        }
+        return nullptr;
+      }));
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  GURL target = embedded_test_server()->GetURL("/sandbox_csp");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), target));
+
+  bubble_factory()->set_response_type(
+      permissions::PermissionRequestManager::AutoResponseType::ACCEPT_ALL);
+
+  EXPECT_EQ(
+      RequestPermissionFromDocumentSync(
+          GetActiveMainFrame(), content::PermissionDescriptorUtil::
+                                    CreatePermissionDescriptorForPermissionType(
+                                        blink::PermissionType::GEOLOCATION))
+          .status,
+      blink::mojom::PermissionStatus::GRANTED);
 }
 
 }  // anonymous namespace

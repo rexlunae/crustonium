@@ -8,9 +8,9 @@
 #include <memory>
 #include <tuple>
 
+#include "components/services/storage/dom_storage/db_status.h"
+#include "components/services/storage/dom_storage/sqlite_status_helper.h"
 #include "sql/database.h"
-#include "storage/common/database/db_status.h"
-#include "storage/common/database/sqlite_status_helper.h"
 
 namespace sql {
 class MetaTable;
@@ -29,7 +29,8 @@ OpenDatabase(const base::FilePath& database_path,
              sql::Database::Tag database_tag,
              int current_schema_version,
              int compatible_schema_version,
-             CreateSchemaCallback create_schema_callback);
+             CreateSchemaCallback create_schema_callback,
+             sql::Database::ErrorCallback error_callback);
 
 // Deletes the SQLite database file identified by `database_path`.
 DbStatus DestroyDatabase(const base::FilePath& database_path);

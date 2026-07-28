@@ -6,6 +6,7 @@
 
 #include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_move_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
@@ -14,16 +15,21 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/password_manager/password_change/annotated_page_content_capturer.h"
+#include "chrome/browser/password_manager/password_change/fake_annotated_page_content_capturer.h"
 #include "chrome/browser/password_manager/password_change/model_quality_logs_uploader.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 
 using ::base::test::RunOnceCallback;
+using testing::_;
+using testing::Field;
 using testing::InSequence;
 using testing::WithArg;
 using QualityStatus = ::optimization_guide::proto::
@@ -110,6 +116,14 @@ class LoginStateCheckerTest : public ChromeRenderViewHostTestHarness {
             profile(), base::BindRepeating(&CreateOptimizationService));
     logs_uploader_ =
         std::make_unique<ModelQualityLogsUploader>(web_contents(), GURL());
+    AnnotatedPageContentCapturer::SetFactoryForTesting(base::BindRepeating(
+        [](content::WebContents* web_contents,
+           blink::mojom::AIPageContentOptionsPtr options,
+           optimization_guide::OnAIPageContentDone callback)
+            -> std::unique_ptr<AnnotatedPageContentCapturer> {
+          return std::make_unique<FakeAnnotatedPageContentCapturer>(
+              std::move(callback));
+        }));
   }
 
   void TearDown() override {
@@ -118,9 +132,12 @@ class LoginStateCheckerTest : public ChromeRenderViewHostTestHarness {
   }
 
   std::unique_ptr<LoginStateChecker> CreateChecker(
-      LoginStateChecker::LoginStateResultCallback callback) {
+      LoginStateChecker::LoginStateResultCallback callback,
+      optimization_guide::ModelExecutionServiceType service_type =
+          optimization_guide::ModelExecutionServiceType::kDefault) {
     return std::make_unique<LoginStateChecker>(
-        web_contents(), logs_uploader_.get(), nullptr, std::move(callback));
+        web_contents(), logs_uploader_.get(), &stub_client_, service_type,
+        std::move(callback));
   }
 
   const std::unique_ptr<ModelQualityLogsUploader>& logs_uploader() {
@@ -134,6 +151,7 @@ class LoginStateCheckerTest : public ChromeRenderViewHostTestHarness {
 
  private:
   std::unique_ptr<ModelQualityLogsUploader> logs_uploader_;
+  password_manager::StubPasswordManagerClient stub_client_;
 };
 
 TEST_F(LoginStateCheckerTest, UserIsLoggedInOnFirstAttempt) {
@@ -144,8 +162,8 @@ TEST_F(LoginStateCheckerTest, UserIsLoggedInOnFirstAttempt) {
   std::unique_ptr<LoginStateChecker> checker =
       CreateChecker(future.GetRepeatingCallback());
   ASSERT_TRUE(checker->capturer());
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedIn);
   VerifyQualityFields(
       logs_uploader()->GetFinalLog(),
@@ -167,16 +185,16 @@ TEST_F(LoginStateCheckerTest, UserIsLoggedInOnSecondAttempt) {
   std::unique_ptr<LoginStateChecker> checker =
       CreateChecker(future.GetRepeatingCallback());
   // First model call should be negative, the user is not logged in.
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedOut);
 
   // Simulate finishing a navigation in the main frame.
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
   // Second model call should be positive, the user is logged in.
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedIn);
   VerifyQualityFields(
       logs_uploader()->GetFinalLog(),
@@ -193,8 +211,8 @@ TEST_F(LoginStateCheckerTest, FailsAfterUnexpectedResponse) {
   std::unique_ptr<LoginStateChecker> checker =
       CreateChecker(future.GetRepeatingCallback());
   ASSERT_TRUE(checker->capturer());
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kError);
   VerifyQualityFields(
       logs_uploader()->GetFinalLog(),
@@ -215,15 +233,15 @@ TEST_F(LoginStateCheckerTest, UnexpectedResponseOnSecondAttempt) {
 
   std::unique_ptr<LoginStateChecker> checker =
       CreateChecker(future.GetRepeatingCallback());
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedOut);
   // Simulate finishing a navigation in the main frame to trigger the next
   // check.
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kError);
   VerifyQualityFields(
       logs_uploader()->GetFinalLog(),
@@ -242,8 +260,8 @@ TEST_F(LoginStateCheckerTest, ExceedsMaxLoginChecksAndFails) {
       CreateChecker(future.GetRepeatingCallback());
   for (int i = 0; i < LoginStateChecker::kMaxLoginChecks; ++i) {
     ASSERT_TRUE(checker->capturer());
-    checker->capturer()->ReplyWithContent(
-        optimization_guide::AIPageContentResult());
+    static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+        ->SimulateResponse(optimization_guide::AIPageContentResult());
     EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedOut);
 
     if (i < LoginStateChecker::kMaxLoginChecks - 1) {
@@ -278,8 +296,8 @@ TEST_F(LoginStateCheckerTest, CachesPageContentIfRequestInFlight) {
       first_optimization_guide_callback;
   EXPECT_CALL(*optimization_service(), ExecuteModel)
       .WillOnce(MoveArg<3>(&first_optimization_guide_callback));
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   ASSERT_TRUE(first_optimization_guide_callback);
 
   // Trigger second request while first is in flight. This should be cached.
@@ -287,8 +305,8 @@ TEST_F(LoginStateCheckerTest, CachesPageContentIfRequestInFlight) {
   EXPECT_CALL(*optimization_service(), ExecuteModel).Times(0);
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
 
   // First request finishes with a failure.
   optimization_guide::OptimizationGuideModelExecutionResultCallback
@@ -320,20 +338,20 @@ TEST_F(LoginStateCheckerTest, CachesOnlyLastPageContent) {
       CreateChecker(future.GetRepeatingCallback());
   EXPECT_CALL(*optimization_service(), ExecuteModel)
       .WillOnce(MoveArg<3>(&initial_optimization_guide_callback));
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   ASSERT_TRUE(initial_optimization_guide_callback);
 
   // These two replies should come while the first request is in flight.
   // Only the second one should be processed.
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
 
   // Only the last cache is used, resulting into a single call to
   // `ExecuteModel`.
@@ -369,16 +387,16 @@ TEST_F(LoginStateCheckerTest, NoRequestWithEmptyCachedPageContent) {
       CreateChecker(future.GetRepeatingCallback());
   EXPECT_CALL(*optimization_service(), ExecuteModel)
       .WillOnce(MoveArg<3>(&optimization_guide_callback_1));
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   ASSERT_TRUE(optimization_guide_callback_1);
 
   // A new content is capture while the first request is in
   // flight. This is cached.
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
 
   // Model replies that the user is not logged in.
   // This triggers the cached request.
@@ -404,8 +422,8 @@ TEST_F(LoginStateCheckerTest, NoRequestWithEmptyCachedPageContent) {
   static_cast<content::WebContentsObserver*>(checker.get())
       ->DidFinishNavigation(nullptr);
   // New content is captured and the login check succeeds with it.
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   ASSERT_TRUE(optimization_guide_callback_1);
   PostResponse<ResponseType::kSuccess>(
       std::move(optimization_guide_callback_1));
@@ -419,8 +437,6 @@ TEST_F(LoginStateCheckerTest, NoRequestWithEmptyCachedPageContent) {
 }
 
 TEST_F(LoginStateCheckerTest, FailsAfterErrorInTheResponse) {
-  base::test::ScopedFeatureList feature_list(
-      password_manager::features::kStopLoginCheckOnFailedLogin);
   base::test::TestFuture<LoginCheckResult> future;
   EXPECT_CALL(*optimization_service(), ExecuteModel)
       .WillOnce(WithArg<3>(&PostResponse<ResponseType::kUnexpected>));
@@ -428,8 +444,8 @@ TEST_F(LoginStateCheckerTest, FailsAfterErrorInTheResponse) {
   std::unique_ptr<LoginStateChecker> checker =
       CreateChecker(future.GetRepeatingCallback());
   ASSERT_TRUE(checker->capturer());
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kError);
   VerifyQualityFields(
       logs_uploader()->GetFinalLog(),
@@ -451,19 +467,59 @@ TEST_F(LoginStateCheckerTest, RetryLoginCheck) {
   std::unique_ptr<LoginStateChecker> checker =
       CreateChecker(future.GetRepeatingCallback());
   // First model call should be negative, the user is not logged in.
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedOut);
 
   // Trigger a retry.
   checker->RetryLoginCheck();
   // Second model call should be positive, the user is logged in.
-  checker->capturer()->ReplyWithContent(
-      optimization_guide::AIPageContentResult());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
   EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedIn);
   VerifyQualityFields(
       logs_uploader()->GetFinalLog(),
       QualityStatus::
           PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
       /* expected_retry_count=*/1);
+}
+
+TEST_F(LoginStateCheckerTest, EmitsHistogramOnCaptureFailure) {
+  base::HistogramTester histogram_tester;
+  base::test::TestFuture<LoginCheckResult> future;
+
+  std::unique_ptr<LoginStateChecker> checker =
+      CreateChecker(future.GetRepeatingCallback());
+  ASSERT_TRUE(checker->capturer());
+
+  EXPECT_CALL(*optimization_service(), ExecuteModel).Times(0);
+
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(base::unexpected("Capture failed"));
+
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.PasswordChange.FailedCapturingPageContent",
+      password_manager::metrics_util::PasswordChangeFlowStep::kLoginCheckStep,
+      1);
+}
+
+TEST_F(LoginStateCheckerTest, UsesPrivateAiServiceType) {
+  base::test::TestFuture<LoginCheckResult> future;
+  EXPECT_CALL(
+      *optimization_service(),
+      ExecuteModel(
+          _, _,
+          Field(&optimization_guide::ModelExecutionOptions::service_type,
+                optimization_guide::ModelExecutionServiceType::kPrivateAi),
+          _))
+      .WillOnce(WithArg<3>(&PostResponse<ResponseType::kSuccess>));
+
+  std::unique_ptr<LoginStateChecker> checker =
+      CreateChecker(future.GetRepeatingCallback(),
+                    optimization_guide::ModelExecutionServiceType::kPrivateAi);
+
+  ASSERT_TRUE(checker->capturer());
+  static_cast<FakeAnnotatedPageContentCapturer*>(checker->capturer())
+      ->SimulateResponse(optimization_guide::AIPageContentResult());
+  EXPECT_EQ(future.Take(), LoginCheckResult::kLoggedIn);
 }

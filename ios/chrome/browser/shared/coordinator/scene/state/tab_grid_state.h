@@ -9,8 +9,11 @@
 
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_paging.h"
 
+class TabGroup;
+@class TabGridState;
+
 // Protocol for observers of the tab grid state.
-@protocol TabGridStateObserver <NSObject>
+@protocol TabGridStateObserving <NSObject>
 
 @optional
 
@@ -23,23 +26,43 @@
 // Called right before the tab grid is changing its page.
 - (void)willChangePageTo:(TabGridPage)page;
 
+// Called right before a `group` is shown.
+- (void)willShowTabGroup:(const TabGroup*)group;
+
+// Called right before a group is hidden.
+- (void)willHideTabGroup;
+
+// Called when the tab grid mode changes.
+- (void)tabGridStateModeDidChange:(TabGridState*)tabGridState;
+
 @end
 
 // Object containing the state of the tab grid.
 @interface TabGridState : NSObject
 
+// The mode of the TabGrid. Updating this property only notifies the observers.
+// It doesn't impact the state of the TabGrid.
+@property(nonatomic, assign) TabGridMode mode;
+
 // The page currently displayed on the TabGrid. Updating this property only
 // notify the observers. It doesn't impact the state of the TabGrid.
 @property(nonatomic, assign) TabGridPage currentPage;
+
+// The page that was used to enter the TabGrid (incognito or regular).
+@property(nonatomic, assign) TabGridPage originPage;
 
 // Whether the TabGrid is currently visible. Updating this property only
 // notify the observers. It doesn't impact the state of the TabGrid.
 @property(nonatomic, assign) BOOL tabGridVisible;
 
+// The tab group currently shown in the tab grid. `nullptr` if no tab group is
+// visible.
+@property(nonatomic, assign) const TabGroup* visibleTabGroup;
+
 // Adds observer.
-- (void)addObserver:(id<TabGridStateObserver>)observer;
+- (void)addObserver:(id<TabGridStateObserving>)observer;
 // Removes observer.
-- (void)removeObserver:(id<TabGridStateObserver>)observer;
+- (void)removeObserver:(id<TabGridStateObserving>)observer;
 
 @end
 

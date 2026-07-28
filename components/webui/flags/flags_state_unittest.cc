@@ -54,6 +54,10 @@ const char kFlags12[] = "flag12";
 const char kFlags13[] = "flag13";
 const char kFlags14[] = "flag14";
 
+// Matches an entry of kRenamedFlags to test rename migration.
+const char kOldFlagName[] = "prompt-api-for-gemini-nano";
+const char kNewFlagName[] = "prompt-api";
+
 const char kSwitch1[] = "switch";
 const char kSwitch2[] = "switch2";
 const char kSwitch3[] = "switch3";
@@ -93,13 +97,13 @@ const FeatureEntry::FeatureParam kTestVariationOther3[] = {
 };
 
 const FeatureEntry::FeatureVariation kTestVariations1[] = {
-    {"dummy description 1", kTestVariationOther1, 1, nullptr}};
+    {"dummy description 1", kTestVariationOther1, nullptr}};
 const FeatureEntry::FeatureVariation kTestVariations2[] = {
-    {"dummy description 2", kTestVariationOther2, 1, nullptr}};
+    {"dummy description 2", kTestVariationOther2, nullptr}};
 const FeatureEntry::FeatureVariation kTestVariations3[] = {
-    {"dummy description 1", kTestVariationOther1, 1, nullptr},
-    {"dummy description 2", kTestVariationOther2, 1, nullptr},
-    {"dummy description 3", kTestVariationOther3, 2, "t123456"}};
+    {"dummy description 1", kTestVariationOther1, nullptr},
+    {"dummy description 2", kTestVariationOther2, nullptr},
+    {"dummy description 3", kTestVariationOther3, "t123456"}};
 
 const char kTestVariation3Cmdline[] =
     "FeatureName3:param1/value/param%3A%2F3/value";
@@ -215,6 +219,9 @@ auto kEntries = std::to_array<FeatureEntry>({
     {kFlags14, kDummyName, kDummyDescription,
      0,  // Ends up being mapped to the current platform.
      MULTI_VALUE_TYPE(kMultiChoicesWithEnableDisableFeatures2)},
+    {kNewFlagName, kDummyName, kDummyDescription,
+     0,  // Ends up being mapped to the current platform.
+     SINGLE_VALUE_TYPE(kSwitch1)},
 });
 
 class FlagsStateTest : public ::testing::Test,
@@ -274,6 +281,14 @@ TEST_F(FlagsStateTest, ChangeNeedsRestart) {
   EXPECT_FALSE(flags_state_->IsRestartNeededToCommitChanges());
   flags_state_->SetFeatureEntryEnabled(&flags_storage_, kFlags1, true);
   EXPECT_TRUE(flags_state_->IsRestartNeededToCommitChanges());
+}
+
+TEST_F(FlagsStateTest, RenamedFlagMigration) {
+  flags_storage_.SetFlags({kOldFlagName});
+  std::set<std::string> enabled_flags;
+  flags_state_->GetSanitizedEnabledFlags(&flags_storage_, &enabled_flags);
+  EXPECT_THAT(enabled_flags, ::testing::ElementsAre(kNewFlagName));
+  EXPECT_THAT(flags_storage_.GetFlags(), ::testing::ElementsAre(kNewFlagName));
 }
 
 // Tests that disabling a default enabled entry requires a restart.
@@ -411,11 +426,6 @@ TEST_F(FlagsStateTest, ConvertFlagsToSwitches) {
   EXPECT_TRUE(command_line3.HasSwitch(kEnableFeatures));
   EXPECT_EQ(command_line3.GetSwitchValueASCII(kEnableFeatures),
             kTestVariation3Cmdline);
-  EXPECT_TRUE(
-      command_line3.HasSwitch(variations::switches::kForceVariationIds));
-  EXPECT_EQ(command_line3.GetSwitchValueASCII(
-                variations::switches::kForceVariationIds),
-            "t123456");
 }
 
 TEST_F(FlagsStateTest, RegisterAllFeatureVariationParameters) {
@@ -479,6 +489,26 @@ TEST_F(FlagsStateTest, RegisterAllFeatureVariationParametersNonDefault) {
   // The value should be associated also via the name of the feature.
   EXPECT_EQ(kTestParamValue,
             base::GetFieldTrialParamValueByFeature(kTestFeature1, kTestParam1));
+}
+
+// Verifies that variation IDs are still correctly collected and returned by
+// RegisterAllFeatureVariationParameters().
+TEST_F(FlagsStateTest, RegisterAllFeatureVariationParametersVariationIds) {
+  const FeatureEntry& entry = kEntries[11];
+  ASSERT_EQ(kFlags12, entry.internal_name);
+  std::unique_ptr<base::FeatureList> feature_list =
+      std::make_unique<base::FeatureList>();
+
+  // Select the 3rd variation (@4).
+  flags_state_->SetFeatureEntryEnabled(
+      &flags_storage_, std::string(kFlags12).append("@4"), true);
+
+  std::vector<std::string> variation_ids =
+      flags_state_->RegisterAllFeatureVariationParameters(&flags_storage_,
+                                                          feature_list.get());
+
+  ASSERT_EQ(1u, variation_ids.size());
+  EXPECT_EQ("t123456", variation_ids[0]);
 }
 
 TEST_F(FlagsStateTest, RegisterAllFeatureVariationParametersWithDefaultTrials) {
@@ -973,7 +1003,7 @@ TEST_F(FlagsStateTest, GetFlagFeatureEntries) {
   // All |kEntries| except for |kFlags3| should be supported.
   auto supported_count = supported_entries.size();
   auto unsupported_count = unsupported_entries.size();
-  EXPECT_EQ(13u, supported_count);
+  EXPECT_EQ(14u, supported_count);
   EXPECT_EQ(1u, unsupported_count);
   EXPECT_EQ(std::size(kEntries), supported_count + unsupported_count);
 }

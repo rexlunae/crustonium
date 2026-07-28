@@ -6,11 +6,11 @@
 
 #include <memory>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/power_monitor_test.h"
-#include "base/test/test_trace_processor.h"
+#include "base/test/tracing/test_trace_processor.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
@@ -33,7 +33,6 @@ using content::RenderFrameHost;
 using content::RenderFrameHostTester;
 using LargestContentTextOrImage =
     page_load_metrics::ContentfulPaintTimingInfo::LargestContentTextOrImage;
-using UserInteractionLatency = page_load_metrics::mojom::UserInteractionLatency;
 
 namespace {
 
@@ -543,7 +542,7 @@ TEST_P(UmaPageLoadMetricsObserverTest, Reload) {
   tester()->SimulateTimingUpdate(timing);
 
   auto resources =
-      GetSampleResourceDataUpdateForTesting(/*resource_size=*/base::KiB(10));
+      GetSampleResourceDataUpdateForTesting(/*resource_size=*/base::KiBU(10));
   tester()->SimulateResourceDataUseUpdate(resources);
 
   tester()->NavigateToUntrackedUrl();
@@ -587,7 +586,7 @@ TEST_P(UmaPageLoadMetricsObserverTest, ForwardBack) {
   tester()->SimulateTimingUpdate(timing);
 
   auto resources =
-      GetSampleResourceDataUpdateForTesting(/*resource_size=*/base::KiB(10));
+      GetSampleResourceDataUpdateForTesting(/*resource_size=*/base::KiBU(10));
   tester()->SimulateResourceDataUseUpdate(resources);
 
   tester()->NavigateToUntrackedUrl();
@@ -653,7 +652,7 @@ TEST_P(UmaPageLoadMetricsObserverTest, NewNavigation) {
   tester()->SimulateTimingUpdate(timing);
 
   auto resources =
-      GetSampleResourceDataUpdateForTesting(/*resource_size=*/base::KiB(10));
+      GetSampleResourceDataUpdateForTesting(/*resource_size=*/base::KiBU(10));
   tester()->SimulateResourceDataUseUpdate(resources);
 
   tester()->NavigateToUntrackedUrl();
@@ -1136,17 +1135,19 @@ TEST_P(UmaPageLoadMetricsObserverTest,
 }
 
 TEST_P(UmaPageLoadMetricsObserverTest, NormalizedResponsivenessMetrics) {
-  page_load_metrics::mojom::InputTiming input_timing;
-  auto& user_interaction_latencies = input_timing.user_interaction_latencies;
+  std::vector<page_load_metrics::mojom::EventTimingPtr> event_timings;
   base::TimeTicks current_time = base::TimeTicks::Now();
-  user_interaction_latencies.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(50), 0, current_time + base::Milliseconds(1000)));
-  user_interaction_latencies.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(100), 1, current_time + base::Milliseconds(2000)));
-  user_interaction_latencies.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(150), 2, current_time + base::Milliseconds(3000)));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(50), 1, current_time + base::Milliseconds(1000),
+      current_time + base::Milliseconds(1050)));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(100), 2, current_time + base::Milliseconds(2000),
+      current_time + base::Milliseconds(2050)));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(150), 3, current_time + base::Milliseconds(3000),
+      current_time + base::Milliseconds(3050)));
   NavigateAndCommit(GURL(kDefaultTestUrl));
-  tester()->SimulateInputTimingUpdate(input_timing);
+  tester()->SimulateEventTimingUpdate(event_timings);
   // Navigate again to force histogram recording.
   NavigateAndCommit(GURL(kDefaultTestUrl2));
 
@@ -1157,7 +1158,7 @@ TEST_P(UmaPageLoadMetricsObserverTest, NormalizedResponsivenessMetrics) {
           internal::
               kHistogramUserInteractionLatencyHighPercentile2MaxEventDuration,
           146),
-      std::make_pair(internal::kHistogramInpOffset, 2),
+      std::make_pair(internal::kHistogramInpOffset, 3),
       std::make_pair(internal::kHistogramNumInteractions, 3)};
 
   for (auto& metric : uma_list) {
@@ -1420,6 +1421,7 @@ TEST_F(UmaPageLoadMetricsObserverTest, TestTracingLargestContentfulPaint) {
   timing.paint_timing->largest_contentful_paint->largest_text_paint =
       base::Milliseconds(990);
   timing.paint_timing->largest_contentful_paint->largest_text_paint_size = 100;
+  timing.parse_timing->parse_start = base::Milliseconds(100);
   PopulateRequiredTimingFields(&timing);
 
   GURL url(kDefaultTestUrl);
@@ -1432,6 +1434,51 @@ TEST_F(UmaPageLoadMetricsObserverTest, TestTracingLargestContentfulPaint) {
 
   absl::Status status = ttp.StopAndParseTrace();
   ASSERT_TRUE(status.ok()) << status.message();
+  std::string query = R"(
+    SELECT
+      EXTRACT_ARG(arg_set_id, 'page_load.navigation_id')
+        AS navigation_id
+    FROM slice
+    WHERE name = 'PageLoadMetrics.NavigationToLargestContentfulPaint'
+  )";
+  auto result = ttp.RunQuery(query);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_THAT(result.value(),
+              ::testing::ElementsAre(std::vector<std::string>{"navigation_id"},
+                                     std::vector<std::string>{
+                                         base::NumberToString(navigation_id)}));
+}
+
+TEST_F(UmaPageLoadMetricsObserverTest,
+       TestTracingLargestContentfulPaintActionable) {
+  base::test::TestTraceProcessor ttp;
+  ttp.StartTrace("loading,interactions");
+
+  page_load_metrics::mojom::PageLoadTiming timing;
+  page_load_metrics::InitPageLoadTimingForTest(&timing);
+  timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  timing.paint_timing->first_contentful_paint = base::Milliseconds(200);
+  timing.paint_timing->largest_contentful_paint->largest_image_paint =
+      base::Milliseconds(4780);
+  timing.paint_timing->largest_contentful_paint->largest_image_paint_size = 100;
+  timing.parse_timing->parse_start = base::Milliseconds(100);
+  PopulateRequiredTimingFields(&timing);
+
+  GURL url(kDefaultTestUrl);
+  NavigateAndCommit(url);
+  tester()->SimulateTimingUpdate(timing);
+  int64_t navigation_id = last_navigation_id_;
+
+  // Now simulate an input update that should close the LCP slice.
+  timing.paint_timing->first_input_or_scroll_notified_timestamp =
+      base::Milliseconds(5000);
+  tester()->SimulateTimingUpdate(timing);
+
+  // Stop tracing and parse before navigating away!
+  absl::Status status = ttp.StopAndParseTrace();
+  ASSERT_TRUE(status.ok()) << status.message();
+
+  // Check for the LCP slice.
   std::string query = R"(
     SELECT
       EXTRACT_ARG(arg_set_id, 'page_load.navigation_id')

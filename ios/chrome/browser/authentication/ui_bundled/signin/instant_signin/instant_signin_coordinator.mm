@@ -6,6 +6,7 @@
 
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow.h"
@@ -17,6 +18,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator+protected.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
+#import "ios/chrome/browser/metrics/model/ios_profile_metrics_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/animated_coordinator.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
@@ -94,8 +96,13 @@
       IdentityManagerFactory::GetForProfile(self.profile->GetOriginalProfile());
   CHECK(!identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin),
         base::NotFatalUntil::M148);
-  _signinLogger = [[UserSigninLogger alloc] initWithAccessPoint:self.accessPoint
-                                                    promoAction:_promoAction];
+  metrics::ProfileMetricsService* profileMetricsService =
+      IOSProfileMetricsServiceFactory::GetForProfile(
+          self.profile->GetOriginalProfile());
+  _signinLogger =
+      [[UserSigninLogger alloc] initWithAccessPoint:self.accessPoint
+                                        promoAction:_promoAction
+                              profileMetricsService:profileMetricsService];
   [_signinLogger logSigninStarted];
   AuthenticationService* authenticationService =
       AuthenticationServiceFactory::GetForProfile(
@@ -235,11 +242,17 @@
       break;
     }
     case signin_ui::CancelationReason::kUserCanceled:
+    case signin_ui::CancelationReason::kAgeMismatchCanceled:
+    case signin_ui::CancelationReason::kAgeMismatchCanceledStaySignedOut:
       [self runCompletionWithSigninResult:SigninCoordinatorResultCanceledByUser
                        completionIdentity:nil];
       break;
     case signin_ui::CancelationReason::kFailed:
       [self runCompletionWithSigninResult:SigninCoordinatorResultInterrupted
+                       completionIdentity:nil];
+      break;
+    case signin_ui::CancelationReason::kSignInNotAllowed:
+      [self runCompletionWithSigninResult:SigninCoordinatorResultDisabled
                        completionIdentity:nil];
       break;
   }

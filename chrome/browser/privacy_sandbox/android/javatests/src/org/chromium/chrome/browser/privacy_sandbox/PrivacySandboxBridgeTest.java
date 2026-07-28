@@ -6,15 +6,12 @@ package org.chromium.chrome.browser.privacy_sandbox;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
 
 import androidx.annotation.Nullable;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
-import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -25,8 +22,8 @@ import org.chromium.base.test.util.PayloadCallbackHelper;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
 import java.util.List;
 
@@ -38,31 +35,15 @@ import java.util.List;
 })
 @Batch(Batch.PER_CLASS)
 public class PrivacySandboxBridgeTest {
-    @ClassRule
-    public static final ChromeBrowserTestRule sBrowserTestRule = new ChromeBrowserTestRule();
-
     private PrivacySandboxBridge mPrivacySandboxBridge;
     private UserActionTester mUserActionTester;
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         mPrivacySandboxBridge =
                 ThreadUtils.runOnUiThreadBlocking(
                         () -> new PrivacySandboxBridge(ProfileManager.getLastUsedRegularProfile()));
-    }
-
-    @Test
-    @SmallTest
-    public void testNoDialogWhenFreDisabled() {
-        // Check that when ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE is present, the bridge
-        // returns that no dialog is shown. This is important to prevent tests that rely on using
-        // that flag to get a blank activity with no dialogs from breaking.
-        ThreadUtils.runOnUiThreadBlocking(
-                () ->
-                        assertEquals(
-                                "Returned dialog type",
-                                PromptType.NONE,
-                                mPrivacySandboxBridge.getRequiredPromptType(SurfaceType.BR_APP)));
     }
 
     @Test
@@ -163,22 +144,6 @@ public class PrivacySandboxBridgeTest {
                     assertThat(
                             mPrivacySandboxBridge.getBlockedFledgeJoiningTopFramesForDisplay(),
                             contains(site1, site3));
-                });
-    }
-
-    @Test
-    @SmallTest
-    public void testPromptActionOccuredRecordsUserAction() {
-        mUserActionTester = new UserActionTester();
-
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mPrivacySandboxBridge.promptActionOccurred(
-                            PromptAction.CONSENT_SHOWN, SurfaceType.BR_APP);
-                    assertTrue(
-                            mUserActionTester
-                                    .getActions()
-                                    .contains("Settings.PrivacySandbox.Consent.Shown"));
                 });
     }
 }

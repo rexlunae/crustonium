@@ -14,6 +14,7 @@
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
@@ -49,6 +50,19 @@ namespace fusebox {
 namespace {
 
 Server* g_server_instance = nullptr;
+
+std::string& GetFuseBoxMediaPathOverride() {
+  static base::NoDestructor<std::string> path;
+  return *path;
+}
+
+std::string GetFuseBoxMediaSlashPath() {
+  const std::string& override_path = GetFuseBoxMediaPathOverride();
+  if (!override_path.empty()) {
+    return override_path;
+  }
+  return file_manager::util::kFuseBoxMediaSlashPath;
+}
 
 bool UseTempFile(std::string_view fs_url_as_string) {
   // MTP (the protocol) does not support incremental writes. When creating an
@@ -157,10 +171,9 @@ base::expected<Parsed, ParseError> ParseFileSystemURL(
   if (slash == std::string_view::npos) {
     encoded = std::string(fs_url_as_string);
   } else {
-    url::RawCanonOutputT<char> canon_output;
-    url::EncodeURIComponent(fs_url_as_string.substr(slash + 1), &canon_output);
     encoded = base::StrCat(
-        {fs_url_as_string.substr(0, slash + 1), canon_output.view()});
+        {fs_url_as_string.substr(0, slash + 1),
+         url::UriComponentEncoder(fs_url_as_string.substr(slash + 1)).view()});
   }
 
   storage::FileSystemURL fs_url;
@@ -804,16 +817,29 @@ void Server::UnregisterFSURLPrefix(const std::string& subdir) {
   }
 }
 
+// static
+void Server::OverrideFuseBoxMediaPathForTesting(std::string_view path) {
+  std::string& override_path = GetFuseBoxMediaPathOverride();
+  if (path.empty()) {
+    override_path.clear();
+  } else {
+    override_path = std::string(path);
+    if (override_path.back() != '/') {
+      override_path.push_back('/');
+    }
+  }
+}
+
 storage::FileSystemURL Server::ResolveFilename(Profile* profile,
                                                std::string_view filename) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!base::StartsWith(filename, file_manager::util::kFuseBoxMediaSlashPath)) {
+  const std::string prefix = GetFuseBoxMediaSlashPath();
+  if (!base::StartsWith(filename, prefix)) {
     return storage::FileSystemURL();
   }
-  auto resolved = ResolvePrefixMap(
-      prefix_map_,
-      filename.substr(strlen(file_manager::util::kFuseBoxMediaSlashPath)));
+  auto resolved =
+      ResolvePrefixMap(prefix_map_, filename.substr(prefix.length()));
   if (resolved.first.empty()) {
     return storage::FileSystemURL();
   }
@@ -844,8 +870,7 @@ base::FilePath Server::InverseResolveFSURL(
         base::UnescapeRule::SPACES |
             base::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS);
     return storage::StringToFilePath(
-        base::StrCat({file_manager::util::kFuseBoxMediaSlashPath, best_subdir,
-                      relative_path}));
+        base::StrCat({GetFuseBoxMediaSlashPath(), best_subdir, relative_path}));
   }
 
   return base::FilePath();
@@ -1084,7 +1109,19 @@ void Server::Read2(const Read2RequestProto& request_proto,
     response_proto.set_posix_error_code(ENOENT);
     std::move(callback).Run(response_proto);
     return;
+  } else if (int64_t length =
+                 request_proto.has_length() ? request_proto.length() : 0;
+             (length < 0) ||
+             // The protobuf-over-D-Bus protocol speaks an int64_t length but,
+             // for historical reasons, Chrome's storage::FileStreamReader::Read
+             // API only speaks an int length.
+             (length > INT_MAX)) {
+    Read2ResponseProto response_proto;
+    response_proto.set_posix_error_code(EINVAL);
+    std::move(callback).Run(response_proto);
+    return;
   }
+
   if (!iter->second.readable_) {
     Read2ResponseProto response_proto;
     response_proto.set_posix_error_code(EACCES);
@@ -1492,7 +1529,7 @@ void Server::ReplyToMakeTempDir(base::ScopedTempDir scoped_temp_dir,
   const std::string mount_name =
       base::StrCat({file_manager::util::kFuseBoxMountNamePrefix, subdir});
   const std::string fusebox_file_path =
-      base::StrCat({file_manager::util::kFuseBoxMediaSlashPath, subdir});
+      base::StrCat({GetFuseBoxMediaSlashPath(), subdir});
   const base::FilePath underlying_file_path = scoped_temp_dir.GetPath();
 
   storage::ExternalMountPoints* const mount_points =

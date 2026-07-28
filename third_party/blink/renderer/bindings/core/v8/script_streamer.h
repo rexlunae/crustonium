@@ -30,6 +30,10 @@ namespace mojo {
 class SimpleWatcher;
 }
 
+namespace v8 {
+class WasmModuleCompilation;
+}  // namespace v8
+
 namespace blink {
 
 namespace v8_compile_hints {
@@ -37,6 +41,7 @@ class CompileHintsForStreaming;
 class V8LocalCompileHintsConsumer;
 }  // namespace v8_compile_hints
 
+class SegmentedBuffer;
 class ScriptResource;
 class SourceStream;
 class ResponseBodyLoaderClient;
@@ -96,6 +101,9 @@ class CORE_EXPORT ScriptStreamer : public GarbageCollected<ScriptStreamer> {
   virtual bool IsStreamingSuppressed() const = 0;
   virtual NotStreamingReason StreamingSuppressedReason() const = 0;
   virtual v8::ScriptType GetScriptType() const = 0;
+  virtual v8::WasmModuleCompilation* GetWasmModuleCompilation() const {
+    return nullptr;
+  }
   virtual void Trace(Visitor*) const {}
 
   static void RecordStreamingHistogram(ScriptSchedulingType type,
@@ -173,6 +181,7 @@ class CORE_EXPORT ResourceScriptStreamer final : public ScriptStreamer {
 
   v8_compile_hints::V8LocalCompileHintsConsumer*
   GetV8LocalCompileHintsConsumerForTest() const;
+  SegmentedBuffer TakeRawDataForTest();
 
  private:
   friend class SourceStream;
@@ -255,6 +264,11 @@ class CORE_EXPORT ResourceScriptStreamer final : public ScriptStreamer {
   Member<ResponseBodyLoaderClient> response_body_loader_client_;
 
   ScriptDecoderWithClientPtr script_decoder_;
+
+  // Only set when kDecodeScriptsInBlink is enabled
+  std::unique_ptr<TextResourceDecoder> decoder_;
+  // Only set when kDecodeScriptsInBlink is enabled
+  scoped_refptr<base::SingleThreadTaskRunner> loading_task_runner_;
 
   // Fields active during asynchronous (non-streaming) reads.
   mojo::ScopedDataPipeConsumerHandle data_pipe_;
@@ -368,16 +382,18 @@ class CORE_EXPORT InlineScriptStreamer final : public ScriptStreamer {
 // thread.
 class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
  public:
+  class BackgroundProcessor;
+
   // This is an utility structure to hold the decoded data and the streamed
   // source or consume code cache task which are passed from the background
   // thread to the main thread.
   class CORE_EXPORT Result {
    public:
     Result(String decoded_data,
-           std::unique_ptr<ParkableStringImpl::SecureDigest> digest,
+           std::unique_ptr<SecureStringDigest> digest,
            std::unique_ptr<v8::ScriptCompiler::StreamedSource> streamed_source);
     Result(String decoded_data,
-           std::unique_ptr<ParkableStringImpl::SecureDigest> digest,
+           std::unique_ptr<SecureStringDigest> digest,
            std::unique_ptr<v8::ScriptCompiler::ConsumeCodeCacheTask>
                consume_code_cache_task);
     ~Result() = default;
@@ -389,7 +405,7 @@ class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
     Result& operator=(Result&&) = default;
 
     String decoded_data;
-    std::unique_ptr<ParkableStringImpl::SecureDigest> digest;
+    std::unique_ptr<SecureStringDigest> digest;
     std::unique_ptr<v8::ScriptCompiler::StreamedSource> streamed_source;
     std::unique_ptr<v8::ScriptCompiler::ConsumeCodeCacheTask>
         consume_code_cache_task;
@@ -427,8 +443,16 @@ class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
   std::unique_ptr<v8::ScriptCompiler::ConsumeCodeCacheTask>
   TakeConsumeCodeCacheTask();
 
+  v8::WasmModuleCompilation* GetWasmModuleCompilation() const override {
+    return wasm_module_compilation_.get();
+  }
+
+  void SetWasmModuleCompilation(
+      std::unique_ptr<v8::WasmModuleCompilation> compilation) {
+    wasm_module_compilation_ = std::move(compilation);
+  }
+
  private:
-  class BackgroundProcessor;
   class BackgroundProcessorFactory;
 
   void OnResult(std::unique_ptr<Result> result,
@@ -438,6 +462,8 @@ class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
   const v8::ScriptType script_type_;
 
   std::unique_ptr<Result> result_;
+  std::unique_ptr<v8::WasmModuleCompilation> wasm_module_compilation_;
+
   // The reason that streaming is disabled
   NotStreamingReason suppressed_reason_ = NotStreamingReason::kInvalid;
 };

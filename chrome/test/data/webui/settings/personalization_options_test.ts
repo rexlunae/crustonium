@@ -11,6 +11,9 @@ import type {SettingsPrefsElement} from 'chrome://settings/settings.js';
 import {CrSettingsPrefs, loadTimeData, PrivacyPageBrowserProxyImpl, resetPageVisibilityForTesting, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
 import {assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
+// <if expr="_google_chrome and is_chromeos">
+import {isChildVisible} from 'chrome://webui-test/test_util.js';
+// </if>
 // <if expr="_google_chrome or not is_chromeos">
 import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 // </if>
@@ -37,6 +40,7 @@ suite('AllBuilds', function() {
     loadTimeData.overrideValues({
       signinAvailable: true,
       changePriceEmailNotificationsEnabled: true,
+      shouldUseMetricsConsentRestructure: true,
     });
     settingsPrefs = document.createElement('settings-prefs');
     return CrSettingsPrefs.initialized;
@@ -163,7 +167,7 @@ suite('AllBuilds', function() {
         assertTrue(testElement.$.chromeSigninUserChoiceToast.open);
       });
 
-  test('signinAllowedToggle', function() {
+  test('signinAllowedToggle', async function() {
     const toggle = testElement.$.signinAllowedToggle;
     assertTrue(isVisible(toggle));
 
@@ -173,21 +177,24 @@ suite('AllBuilds', function() {
     };
     // Check initial setup.
     assertTrue(toggle.checked);
-    assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
-    assertFalse(!!testElement.$.toast.open);
+    assertTrue(
+        testElement.getPref<boolean>('signin.allowed_on_next_startup').value);
+    assertFalse(testElement.$.toast.open);
 
     // When the user is signed out, clicking the toggle should work
     // normally and the restart toast should be opened.
     toggle.click();
     assertFalse(toggle.checked);
-    assertFalse(testElement.prefs.signin.allowed_on_next_startup.value);
+    assertFalse(
+        testElement.getPref<boolean>('signin.allowed_on_next_startup').value);
     assertTrue(testElement.$.toast.open);
 
     // Clicking it again, turns the toggle back on. The toast remains
     // open.
     toggle.click();
     assertTrue(toggle.checked);
-    assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
+    assertTrue(
+        testElement.getPref<boolean>('signin.allowed_on_next_startup').value);
     assertTrue(testElement.$.toast.open);
 
     // Reset toast.
@@ -211,63 +218,59 @@ suite('AllBuilds', function() {
     assertFalse(
         !!testElement.shadowRoot!.querySelector('settings-signout-dialog'));
     toggle.click();
-    return eventToPromise('cr-dialog-open', testElement)
-        .then(function() {
-          flush();
-          // The toggle remains on.
-          assertTrue(toggle.checked);
-          assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
-          assertFalse(testElement.$.toast.open);
 
-          const signoutDialog =
-              testElement.shadowRoot!.querySelector('settings-signout-dialog');
-          assertTrue(!!signoutDialog);
-          assertTrue(signoutDialog.$.dialog.open);
+    await eventToPromise('cr-dialog-open', testElement);
+    flush();
+    // The toggle remains on.
+    assertTrue(toggle.checked);
+    assertTrue(
+        testElement.getPref<boolean>('signin.allowed_on_next_startup').value);
+    assertFalse(testElement.$.toast.open);
 
-          // The user clicks cancel.
-          const cancel = signoutDialog.shadowRoot!.querySelector<HTMLElement>(
-              '#disconnectCancel')!;
-          cancel.click();
+    let signoutDialog =
+        testElement.shadowRoot!.querySelector('settings-signout-dialog');
+    assertTrue(!!signoutDialog);
+    assertTrue(signoutDialog.$.dialog.open);
 
-          return eventToPromise('close', signoutDialog);
-        })
-        .then(function() {
-          flush();
-          assertFalse(!!testElement.shadowRoot!.querySelector(
-              'settings-signout-dialog'));
+    // The user clicks cancel.
+    const cancel = signoutDialog.shadowRoot!.querySelector<HTMLElement>(
+        '#disconnectCancel')!;
+    cancel.click();
 
-          // After the dialog is closed, the toggle remains turned on.
-          assertTrue(toggle.checked);
-          assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
-          assertFalse(testElement.$.toast.open);
+    await eventToPromise('close', signoutDialog);
+    flush();
+    assertFalse(
+        !!testElement.shadowRoot!.querySelector('settings-signout-dialog'));
 
-          // The user clicks the toggle again.
-          toggle.click();
-          return eventToPromise('cr-dialog-open', testElement);
-        })
-        .then(function() {
-          flush();
-          const signoutDialog =
-              testElement.shadowRoot!.querySelector('settings-signout-dialog');
-          assertTrue(!!signoutDialog);
-          assertTrue(signoutDialog.$.dialog.open);
+    // After the dialog is closed, the toggle remains turned on.
+    assertTrue(toggle.checked);
+    assertTrue(
+        testElement.getPref<boolean>('signin.allowed_on_next_startup').value);
+    assertFalse(testElement.$.toast.open);
 
-          // The user clicks confirm, which signs them out.
-          const disconnectConfirm =
-              signoutDialog.shadowRoot!.querySelector<HTMLElement>(
-                  '#disconnectConfirm')!;
-          disconnectConfirm.click();
+    // The user clicks the toggle again.
+    toggle.click();
+    await eventToPromise('cr-dialog-open', testElement);
+    flush();
+    signoutDialog =
+        testElement.shadowRoot!.querySelector('settings-signout-dialog');
+    assertTrue(!!signoutDialog);
+    assertTrue(signoutDialog.$.dialog.open);
 
-          return eventToPromise('close', signoutDialog);
-        })
-        .then(function() {
-          flush();
-          // After the dialog is closed, the toggle is turned off and the
-          // toast is shown.
-          assertFalse(toggle.checked);
-          assertFalse(testElement.prefs.signin.allowed_on_next_startup.value);
-          assertTrue(testElement.$.toast.open);
-        });
+    // The user clicks confirm, which signs them out.
+    const disconnectConfirm =
+        signoutDialog.shadowRoot!.querySelector<HTMLElement>(
+            '#disconnectConfirm')!;
+    disconnectConfirm.click();
+
+    await eventToPromise('close', signoutDialog);
+    flush();
+    // After the dialog is closed, the toggle is turned off and the
+    // toast is shown.
+    assertFalse(toggle.checked);
+    assertFalse(
+        testElement.getPref<boolean>('signin.allowed_on_next_startup').value);
+    assertTrue(testElement.$.toast.open);
   });
 
   // Tests that the "Allow sign-in" toggle is hidden when signin is not
@@ -415,12 +418,25 @@ suite('OfficialBuild', function() {
   let testBrowserProxy: TestPrivacyPageBrowserProxy;
   let testElement: SettingsPersonalizationOptionsElement;
 
-  setup(function() {
-    testBrowserProxy = new TestPrivacyPageBrowserProxy();
-    PrivacyPageBrowserProxyImpl.setInstance(testBrowserProxy);
+  suiteSetup(function() {
+    loadTimeData.overrideValues({
+      signinAvailable: true,
+      changePriceEmailNotificationsEnabled: true,
+      shouldUseMetricsConsentRestructure: true,
+    });
+  });
+
+  function buildTestElement() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     testElement = document.createElement('settings-personalization-options');
     document.body.appendChild(testElement);
+    flush();
+  }
+
+  setup(function() {
+    testBrowserProxy = new TestPrivacyPageBrowserProxy();
+    PrivacyPageBrowserProxyImpl.setInstance(testBrowserProxy);
+    buildTestElement();
   });
 
   teardown(function() {
@@ -469,7 +485,8 @@ suite('OfficialBuild', function() {
     };
     flush();
     shadowRoot.querySelector<HTMLElement>('#spellCheckControl')!.click();
-    assertTrue(testElement.prefs.spellcheck.use_spelling_service.value);
+    assertTrue(
+        testElement.getPref<boolean>('spellcheck.use_spelling_service').value);
   });
   // </if>
 
@@ -499,16 +516,26 @@ suite('OfficialBuild', function() {
     assertTrue(
         shadowRoot.querySelector<HTMLElement>('#spellCheckLink')!.hidden);
   });
-  // </if>
 
-  // <if expr="is_chromeos">
+  test(
+      'Metrics row hidden when metrics consent restructure is enabled',
+      function() {
+        assertFalse(isChildVisible(testElement, '#metricsReportingLink'));
+      });
+
   test('Metrics row links to OS Settings Privacy Hub subpage', function() {
+    loadTimeData.overrideValues({shouldUseMetricsConsentRestructure: false});
+    buildTestElement();
+
+    assertTrue(isChildVisible(testElement, '#metricsReportingLink'));
+
     let targetUrl: string = '';
     testElement['navigateTo_'] = (url: string) => {
       targetUrl = url;
     };
 
-    testElement.$.metricsReportingLink.click();
+    testElement.shadowRoot!.querySelector<HTMLElement>(
+                               '#metricsReportingLink')!.click();
     const expectedUrl =
         loadTimeData.getString('osSettingsPrivacyHubSubpageUrl');
     assertEquals(expectedUrl, targetUrl);

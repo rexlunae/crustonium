@@ -59,18 +59,14 @@ LensComposeboxController::~LensComposeboxController() = default;
 
 void LensComposeboxController::BindComposebox(
     mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-    mojo::PendingRemote<composebox::mojom::Page> pending_page,
     mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
     mojo::PendingReceiver<searchbox::mojom::PageHandler>
         pending_searchbox_handler) {
   composebox_handler_.reset();
   composebox_handler_ = std::make_unique<LensComposeboxHandler>(
       this, profile_, lens_search_controller_->GetTabInterface()->GetContents(),
-      std::move(pending_handler), std::move(pending_page),
-      std::move(pending_searchbox_handler));
-
-  // TODO(crbug.com/435288212): Move searchbox mojom to use factory pattern.
-  composebox_handler_->SetPage(std::move(pending_searchbox_page));
+      std::move(pending_handler), std::move(pending_searchbox_handler),
+      std::move(pending_searchbox_page));
 
   // Set the visual selection context if it was already made before the
   // composebox was bound.
@@ -90,7 +86,8 @@ void LensComposeboxController::BindComposebox(
 
 void LensComposeboxController::IssueComposeboxQuery(
     const std::string& query_text,
-    const std::map<std::string, std::string>& additional_query_params) {
+    const std::map<std::string, std::string>& additional_query_params,
+    bool is_voice_search) {
   if (!lens::IsAimM3Enabled(profile_)) {
     return;
   }
@@ -105,12 +102,13 @@ void LensComposeboxController::IssueComposeboxQuery(
     // Store the query and issue it again once the handshake completes.
     pending_query_text_ = query_text;
     pending_additional_query_params_ = additional_query_params;
+    pending_is_voice_search_ = is_voice_search;
     return;
   }
 
   // TODO(crbug.com/436318377): Reupload page content if needed.
-  lens::ClientToAimMessage submit_query_message =
-      BuildSubmitQueryMessage(query_text, additional_query_params);
+  lens::ClientToAimMessage submit_query_message = BuildSubmitQueryMessage(
+      query_text, additional_query_params, is_voice_search);
 
   // Convert Proto to bytes to send over the API channel.
   const size_t size = submit_query_message.ByteSizeLong();
@@ -145,6 +143,12 @@ void LensComposeboxController::OnFocusChanged(bool focused) {
 
   // Ignore if recontextualization on focus is disabled.
   if (!lens::features::GetShouldComposeboxContextualizeOnFocus()) {
+    return;
+  }
+
+  // Ignore if contextualization is not active.
+  if (!lens_search_controller_->lens_search_contextualization_controller()
+           ->IsActive()) {
     return;
   }
 
@@ -196,9 +200,11 @@ void LensComposeboxController::OnAimMessage(
     // complete.
     if (pending_query_text_.has_value()) {
       IssueComposeboxQuery(pending_query_text_.value(),
-                           pending_additional_query_params_);
+                           pending_additional_query_params_,
+                           pending_is_voice_search_);
       pending_query_text_.reset();
       pending_additional_query_params_.clear();
+      pending_is_voice_search_ = false;
     }
   }
 }
@@ -232,14 +238,13 @@ void LensComposeboxController::AddVisualSelectionContext(
 }
 
 void LensComposeboxController::ClearVisualSelectionContext() {
-  // If there is existing visual selection context, mark it as expired. There
+  // If there is existing visual selection context, mark it as replaced. There
   // should only be one visual selection context at a time. The UI should
   // appropriately remove the existing thumbnail.
   if (vsc_image_data_ && composebox_handler_) {
     composebox_handler_->OnContextualInputStatusChanged(
         vsc_image_data_->id,
-        composebox_query::mojom::FileUploadStatus::kUploadExpired,
-        std::nullopt);
+        contextual_search::ContextUploadStatus::kUploadReplaced, std::nullopt);
   }
   vsc_image_data_.reset();
 }
@@ -294,7 +299,8 @@ LensComposeboxController::GetLensSuggestInputs() const {
 
 lens::ClientToAimMessage LensComposeboxController::BuildSubmitQueryMessage(
     const std::string& query_text,
-    const std::map<std::string, std::string>& additional_query_params) {
+    const std::map<std::string, std::string>& additional_query_params,
+    bool is_voice_search) {
   lens::ClientToAimMessage client_to_aim_message;
   lens::SubmitQuery* submit_query_message =
       client_to_aim_message.mutable_submit_query();
@@ -302,10 +308,14 @@ lens::ClientToAimMessage LensComposeboxController::BuildSubmitQueryMessage(
   // Set the query text and source.
   submit_query_message->mutable_payload()->set_query_text(query_text);
   submit_query_message->mutable_payload()->set_query_text_source(
-      lens::QueryPayload::QUERY_TEXT_SOURCE_KEYBOARD_INPUT);
-  submit_query_message->mutable_payload()
-      ->mutable_additional_cgi_params()
-      ->insert(additional_query_params.begin(), additional_query_params.end());
+      is_voice_search ? lens::QueryPayload::QUERY_TEXT_SOURCE_VOICE_INPUT
+                      : lens::QueryPayload::QUERY_TEXT_SOURCE_KEYBOARD_INPUT);
+  submit_query_message->mutable_payload()->mutable_cgi_params()->insert(
+      additional_query_params.begin(), additional_query_params.end());
+  if (is_voice_search) {
+    (*submit_query_message->mutable_payload()->mutable_cgi_params())["gs_ivs"] =
+        "1";
+  }
 
   // Populate the Lens related data from the active query flow.
   lens::LensImageQueryData* lens_image_query_data =

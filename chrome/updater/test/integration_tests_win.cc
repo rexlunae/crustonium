@@ -21,6 +21,7 @@
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
+#include "base/containers/to_vector.h"
 #include "base/file_version_info.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -38,7 +39,6 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
@@ -93,6 +93,7 @@
 #include "components/crx_file/crx_verifier.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/gurl.h"
 
 namespace updater::test {
@@ -475,13 +476,9 @@ void CallDispatchMethod(
     Microsoft::WRL::ComPtr<IDispatch> dispatch,
     const std::wstring& method_name,
     const std::vector<base::win::ScopedVariant>& variant_params) {
-  std::vector<VARIANT> params;
-  params.reserve(variant_params.size());
-
   // IDispatch::Invoke() expects the parameters in reverse order.
-  std::ranges::transform(base::Reversed(variant_params),
-                         std::back_inserter(params),
-                         &base::win::ScopedVariant::Copy);
+  std::vector<VARIANT> params = base::ToVector(base::Reversed(variant_params),
+                                               &base::win::ScopedVariant::Copy);
 
   DISPPARAMS dp = {};
   if (!params.empty()) {
@@ -529,7 +526,7 @@ bool BuildTestAppInstaller(const base::FilePath& installer_script,
   }
   const base::FilePath installer_dir = exe_path.Append(L"test_installer");
 #if defined(ADDRESS_SANITIZER)
-  static const char kAsanRuntime[] = "clang_rt.asan_dynamic-x86_64.dll";
+  static constexpr char kAsanRuntime[] = "clang_rt.asan_dynamic-x86_64.dll";
   const base::FilePath asan_runtime = exe_path.AppendUTF8(kAsanRuntime);
   EXPECT_TRUE(base::CopyFile(
       asan_runtime, output_installer.DirName().AppendUTF8(kAsanRuntime)));
@@ -627,7 +624,7 @@ void RunOfflineInstallWithManifest(UpdaterScope scope,
 
     std::vector<std::string> commands;
     for (const auto& reg_item : reg_items) {
-      commands.push_back(base::StringPrintf(
+      commands.push_back(absl::StrFormat(
           "REG.exe ADD \"%s\\%s\" /v %s /t %s /d %s /f /reg:32",
           reg_hive.c_str(), reg_item.subkey.c_str(), reg_item.value_name,
           reg_item.type,
@@ -666,7 +663,7 @@ void RunOfflineInstallWithManifest(UpdaterScope scope,
     </data>
   </app>
 </response>)";
-  const std::string manifest = base::StringPrintf(
+  const std::string manifest = absl::StrFormat(
       kManifestFormat, platform.c_str(), kTestAppID, /*pv=*/"",
       kAppInstallerName, app_installer_size.value(), kAppInstallerName);
   EXPECT_TRUE(base::WriteFile(manifest_path, manifest));
@@ -1329,7 +1326,7 @@ HRESULT DoUpdate(UpdaterScope scope,
         state->get_totalBytesToDownload(&total_bytes_to_download);
         LONG download_time_remaining_ms = 0;
         state->get_downloadTimeRemainingMs(&download_time_remaining_ms);
-        extra_data = base::UTF8ToWide(base::StringPrintf(
+        extra_data = base::UTF8ToWide(absl::StrFormat(
             "[Bytes downloaded: %lu][Bytes total: %lu][Time remaining: %ld]",
             bytes_downloaded, total_bytes_to_download,
             download_time_remaining_ms));
@@ -1351,8 +1348,8 @@ HRESULT DoUpdate(UpdaterScope scope,
         ULONG total_bytes_to_download = 0;
         state->get_totalBytesToDownload(&total_bytes_to_download);
         extra_data = base::UTF8ToWide(
-            base::StringPrintf("[Bytes downloaded: %lu][Bytes total: %lu]",
-                               bytes_downloaded, total_bytes_to_download));
+            absl::StrFormat("[Bytes downloaded: %lu][Bytes total: %lu]",
+                            bytes_downloaded, total_bytes_to_download));
         EXPECT_HRESULT_SUCCEEDED(bundle->install());
         break;
       }
@@ -1365,8 +1362,8 @@ HRESULT DoUpdate(UpdaterScope scope,
         LONG install_time_remaining_ms = 0;
         state->get_installTimeRemainingMs(&install_time_remaining_ms);
         extra_data = base::UTF8ToWide(
-            base::StringPrintf("[Install Progress: %ld][Time remaining: %ld]",
-                               install_progress, install_time_remaining_ms));
+            absl::StrFormat("[Install Progress: %ld][Time remaining: %ld]",
+                            install_progress, install_time_remaining_ms));
         break;
       }
 
@@ -1390,7 +1387,7 @@ HRESULT DoUpdate(UpdaterScope scope,
         LONG installer_result_code = 0;
         EXPECT_HRESULT_SUCCEEDED(
             state->get_installerResultCode(&installer_result_code));
-        extra_data = base::UTF8ToWide(base::StringPrintf(
+        extra_data = base::UTF8ToWide(absl::StrFormat(
             "[errorCode: %ld][completionMessage: %ls][installerResultCode: "
             "%ld]",
             error_code, completion_message.Get(), installer_result_code));
@@ -1536,7 +1533,10 @@ void ExpectProcessLauncherLaunchCmdLineSucceeds(UpdaterScope scope) {
   if (!IsSystemInstall(scope)) {
     return;
   }
-  ASSIGN_OR_RETURN(const DWORD explorer_pid, GetExplorerPid(), [] {});
+  const base::ProcessId explorer_pid = base::win::GetExplorerPid();
+  if (!explorer_pid) {
+    return;
+  }
 
   Microsoft::WRL::ComPtr<IUnknown> unknown;
   ASSERT_HRESULT_SUCCEEDED(
@@ -1562,7 +1562,7 @@ void ExpectLegacyAppCommandWebSucceeds(UpdaterScope scope,
                                        const std::string& command_id,
                                        const base::ListValue& parameters,
                                        int expected_exit_code) {
-  const size_t kMaxParameters = 9;
+  constexpr size_t kMaxParameters = 9;
   ASSERT_LE(parameters.size(), kMaxParameters);
 
   base::ScopedTempDir temp_dir;
@@ -1596,13 +1596,11 @@ void ExpectLegacyAppCommandWebSucceeds(UpdaterScope scope,
                              : __uuidof(IAppCommandWebUser),
       IID_PPV_ARGS_Helper(&app_command_web)));
 
-  std::vector<base::win::ScopedVariant> variant_params;
-  variant_params.reserve(kMaxParameters);
-  std::ranges::transform(parameters, std::back_inserter(variant_params),
-                         [](const auto& param) {
-                           return base::win::ScopedVariant(
-                               base::UTF8ToWide(param.GetString()).c_str());
-                         });
+  std::vector<base::win::ScopedVariant> variant_params =
+      base::ToVector(parameters, [](const auto& param) {
+        return base::win::ScopedVariant(
+            base::UTF8ToWide(param.GetString()).c_str());
+      });
   for (size_t i = parameters.size(); i < kMaxParameters; ++i) {
     variant_params.emplace_back(base::win::ScopedVariant::kEmptyVariant);
   }
@@ -1769,10 +1767,8 @@ std::vector<TestUpdaterVersion> GetRealUpdaterLowerVersions(
 #endif
   path_suffix = path_suffix.Append(FILE_PATH_LITERAL("UpdaterSetup_test.exe"));
 
-  std::vector<TestUpdaterVersion> updater_versions;
-  std::ranges::transform(
-      supported_archs, std::back_inserter(updater_versions),
-      [&](const std::string& arch) -> TestUpdaterVersion {
+  return base::ToVector(
+      supported_archs, [&](const std::string& arch) -> TestUpdaterVersion {
         const base::FilePath updater_setup_path =
             old_updater_path.AppendUTF8(base::StrCat({arch, arch_suffix}))
                 .Append(path_suffix);
@@ -1781,7 +1777,6 @@ std::vector<TestUpdaterVersion> GetRealUpdaterLowerVersions(
                     FileVersionInfo::CreateFileVersionInfo(updater_setup_path)
                         ->file_version()))};
       });
-  return updater_versions;
 }
 
 void RunUninstallCmdLine(UpdaterScope scope) {
@@ -2190,7 +2185,7 @@ void RunMockOfflineMetaInstall(UpdaterScope scope,
   const base::FilePath manifest_path =
       temp_dir.GetPath().Append(L"OfflineManifest.gup");
   ASSERT_TRUE(base::WriteFile(
-      manifest_path, base::StringPrintf(
+      manifest_path, absl::StrFormat(
                          R"(<?xml version="1.0" encoding="UTF-8"?>
 <response protocol="3.0">
   <systemrequirements platform="%s"/>
@@ -2242,8 +2237,8 @@ void SetPlatformPolicies(const base::DictValue& values) {
   for (const auto [app_id, policies] : values) {
     ASSERT_TRUE(policies.is_dict());
     for (const auto [name, value] : policies.GetDict()) {
-      const std::wstring& key = base::UTF8ToWide(
-          base::StringPrintf("%s%s", name.c_str(), app_id.c_str()));
+      const std::wstring& key =
+          base::UTF8ToWide(absl::StrFormat("%s%s", name, app_id));
       if (value.is_string()) {
         policy_key.WriteValue(key.c_str(),
                               base::UTF8ToWide(value.GetString()).c_str());

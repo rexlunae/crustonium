@@ -14,11 +14,13 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time_delta_from_string.h"
 #include "base/values.h"
 #include "mapped_host_resolver.h"
@@ -27,6 +29,7 @@
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_change_notifier.h"
+#include "net/base/task/task_runner.h"
 #include "net/dns/context_host_resolver.h"
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_util.h"
@@ -105,6 +108,10 @@ class FailingRequestImpl : public HostResolver::ResolveHostRequest,
     return nullopt_result;
   }
 
+  std::optional<ResolutionDetails> GetResolutionDetails() const override {
+    return std::nullopt;
+  }
+
  private:
   const int error_;
 };
@@ -141,7 +148,11 @@ class FailingServiceEndpointRequestImpl
     return nullptr;
   }
 
-  bool IsStaleWhileRefresing() const override { return false; }
+  bool IsStaleWhileRefreshing() const override { return false; }
+
+  std::optional<ResolutionDetails> GetResolutionDetails() const override {
+    return std::nullopt;
+  }
 
   void ChangeRequestPriority(RequestPriority priority) override {}
 
@@ -238,6 +249,12 @@ const url::SchemeHostPort& HostResolver::Host::AsSchemeHostPort() const {
       std::get_if<url::SchemeHostPort>(&host_);
   DCHECK(scheme_host_port);
   return *scheme_host_port;
+}
+
+const HostPortPair& HostResolver::Host::AsHostPortPair() const {
+  const HostPortPair* host_port_pair = std::get_if<HostPortPair>(&host_);
+  DCHECK(host_port_pair);
+  return *host_port_pair;
 }
 
 HostResolver::HttpsSvcbOptions::HttpsSvcbOptions() = default;
@@ -594,6 +611,15 @@ bool HostResolver::MayUseNAT64ForIPv4Literal(HostResolverFlags flags,
   return !(flags & HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6) &&
          ip_address.IsValid() && ip_address.IsIPv4() &&
          (source != HostResolverSource::LOCAL_ONLY);
+}
+
+// static
+const scoped_refptr<base::SingleThreadTaskRunner>& HostResolver::GetTaskRunner(
+    RequestPriority priority) {
+  if (base::FeatureList::IsEnabled(features::kNetTaskSchedulerHostResolver)) {
+    return net::GetTaskRunner(priority);
+  }
+  return base::SingleThreadTaskRunner::GetCurrentDefault();
 }
 
 HostResolver::HostResolver() = default;

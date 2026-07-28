@@ -21,7 +21,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item_delegate.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_link_item.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -211,19 +210,16 @@ typedef NS_ENUM(NSInteger, ItemType) {
   [model addItem:self.expirationYearItem
       toSectionWithIdentifier:SectionIdentifierContent];
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling)) {
-    self.cardCvcItem =
-        [self textEditItemWithType:ItemTypeCardCvc
-                fieldNameLabelText:l10n_util::GetNSString(IDS_IOS_AUTOFILL_CVC)
-                    textFieldValue:self.cardCvc
-                  textFieldEnabled:self.supportsEditing];
-    self.cardCvcItem.keyboardType = UIKeyboardTypeNumberPad;
-    self.cardCvcItem.customTextfieldAccessibilityIdentifier =
-        kSaveCardModalCVCTextFieldIdentifier;
-    [model addItem:self.cardCvcItem
-        toSectionWithIdentifier:SectionIdentifierContent];
-  }
+  self.cardCvcItem =
+      [self textEditItemWithType:ItemTypeCardCvc
+              fieldNameLabelText:l10n_util::GetNSString(IDS_IOS_AUTOFILL_CVC)
+                  textFieldValue:self.cardCvc
+                textFieldEnabled:self.supportsEditing];
+  self.cardCvcItem.keyboardType = UIKeyboardTypeNumberPad;
+  self.cardCvcItem.customTextfieldAccessibilityIdentifier =
+      kSaveCardModalCVCTextFieldIdentifier;
+  [model addItem:self.cardCvcItem
+      toSectionWithIdentifier:SectionIdentifierContent];
 
   // Add a `TableViewTextLinkItem` for each legal message and add logo to the
   // last item.
@@ -272,6 +268,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
   self.supportsEditing = [prefs[kSupportsEditingPrefKey] boolValue];
   self.displayedTargetAccountEmail = prefs[kDisplayedTargetAccountEmailPrefKey];
   self.logoIcon = prefs[kLogoIconPrefKey];
+  self.logoIconDescription = prefs[kLogoIconDescriptionPrefKey];
   [self.tableView reloadData];
 
   [self updateSaveCardButtonState];
@@ -507,12 +504,12 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
 - (UIImage*)logoIconImage {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  return MakeSymbolMulticolor(CustomSymbolWithPointSize(
-      base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableWalletBranding)
-          ? kGoogleWalletSymbol
-          : kGooglePaySymbol,
-      kGoogleWalletLogoHeight));
+  Symbol symbol = base::FeatureList::IsEnabled(
+                      autofill::features::kAutofillEnableGradientGoogleLogos)
+                      ? SymbolGoogleWalletV2
+                      : SymbolGoogleWallet;
+  return MakeSymbolMulticolor(
+      SymbolWithPointSize(symbol, kGoogleWalletLogoHeight));
 #else
   return self.logoIcon;
 #endif

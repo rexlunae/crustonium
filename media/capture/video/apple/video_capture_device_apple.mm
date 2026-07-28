@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/capture/video/apple/video_capture_device_apple.h"
 
@@ -15,11 +11,11 @@
 #include <limits>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
-#import "base/task/single_thread_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -261,27 +257,50 @@ void VideoCaptureDeviceApple::ReceiveExternalGpuMemoryBufferFrame(
 
   client_->OnIncomingCapturedExternalBuffer(
       std::move(frame), base::TimeTicks::Now(), timestamp, capture_begin_time,
-      gfx::Rect(capture_format_.frame_size), GetVideoFrameMetadata());
+      gfx::Rect(capture_format_.frame_size), capture_format_.frame_size,
+      GetVideoFrameMetadata());
 }
 
 void VideoCaptureDeviceApple::OnPhotoTaken(const uint8_t* image_data,
                                            size_t image_length,
                                            const std::string& mime_type) {
-  DCHECK(photo_callback_);
-  if (!image_data || !image_length) {
-    OnPhotoError();
-    return;
+  // Note: While OnPhotoTaken() is called on an AVFoundation background queue by
+  // VideoCaptureDeviceAVFoundation, it is guaranteed that `this` is not deleted
+  // because VideoCaptureDeviceAVFoundation holds `_lock` while calling
+  // `_frameReceiver->OnPhotoTaken(...)`, and StopAndDeAllocate() acquires
+  // `_lock` when setting `_frameReceiver = nil` before destruction on the main
+  // thread. Therefore, accessing `task_runner_` here is safe.
+  mojom::BlobPtr blob;
+  if (image_data && image_length) {
+    blob = mojom::Blob::New();
+    blob->data.assign(image_data, UNSAFE_TODO(image_data + image_length));
+    blob->mime_type = mime_type;
   }
-
-  mojom::BlobPtr blob = mojom::Blob::New();
-  blob->data.assign(image_data, image_data + image_length);
-  blob->mime_type = mime_type;
-  std::move(photo_callback_).Run(std::move(blob));
+  task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&VideoCaptureDeviceApple::OnPhotoResultOnMainThread,
+                     weak_factory_.GetWeakPtr(), std::move(blob)));
 }
 
 void VideoCaptureDeviceApple::OnPhotoError() {
   VLOG(1) << __func__ << " error taking picture";
-  photo_callback_.Reset();
+  task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&VideoCaptureDeviceApple::OnPhotoResultOnMainThread,
+                     weak_factory_.GetWeakPtr(), nullptr));
+}
+
+void VideoCaptureDeviceApple::OnPhotoResultOnMainThread(mojom::BlobPtr blob) {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  if (!photo_callback_) {
+    return;
+  }
+  if (!blob) {
+    VLOG(1) << __func__ << " error taking picture";
+    photo_callback_.Reset();
+    return;
+  }
+  std::move(photo_callback_).Run(std::move(blob));
 }
 
 void VideoCaptureDeviceApple::ReceiveError(VideoCaptureError error,

@@ -11,19 +11,16 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/glic/browser_ui/glic_actor_task_icon_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/common/buildflags.h"
+#include "components/actor/core/task_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_observer.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/ui/tabs/glic_actor_task_icon_manager.h"
-#endif
 
 // Controller that handles the visibility and display of the
 // ActorTaskListBubble.
@@ -36,10 +33,8 @@ class ActorTaskListBubbleController : public views::WidgetObserver {
   DECLARE_USER_DATA(ActorTaskListBubbleController);
   static ActorTaskListBubbleController* From(BrowserWindowInterface* window);
 
-#if BUILDFLAG(ENABLE_GLIC)
-  void ShowBubble(views::View* anchor_view);
-  void OnStateUpdate();
-#endif
+  void ShowBubble(views::View* anchor_view, bool is_start_notification = false);
+  void OnStateUpdate(bool is_start_notification);
 
   void OnWidgetDestroyed(views::Widget* widget) override;
 
@@ -54,6 +49,7 @@ class ActorTaskListBubbleController : public views::WidgetObserver {
       base::RepeatingClosure callback);
 
  private:
+  void ShowBubbleImpl(views::View* anchor_view, bool is_start_notification);
   void OnTaskRowClicked(actor::TaskId task_id);
 
   raw_ptr<BrowserWindowInterface> browser_ = nullptr;
@@ -61,12 +57,8 @@ class ActorTaskListBubbleController : public views::WidgetObserver {
   base::RepeatingClosureList on_bubble_shown_callback_list;
   base::RepeatingClosureList on_bubble_destroyed_callback_list;
 
-#if BUILDFLAG(ENABLE_GLIC)
-  void OnStateUpdateImpl();
-
   std::vector<base::CallbackListSubscription>
       bubble_state_change_callback_subscription_;
-#endif
 
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       widget_observation_{this};

@@ -31,13 +31,10 @@ class ChromeRulesService : public RulesServiceBase {
   // Returns a clipboard verdict to be applied to a paste action. A null browser
   // context on `source` represents data coming from the OS clipboard.
   // `destination` is always expected to have a valid browser context.
-  Verdict GetPasteVerdict(const content::ClipboardEndpoint& source,
-                          const content::ClipboardEndpoint& destination) const;
-
-  // Returns true if rules indicate screenshots should be blocked. Only the
-  // "block" level is supported, a "warn" screenshot rule will not make this
-  // functions return true.
-  bool BlockScreenshots(const GURL& url) const;
+  Verdict GetPasteVerdict(
+      const content::ClipboardEndpoint& source,
+      const content::ClipboardEndpoint& destination,
+      const ui::ClipboardMetadata& metadata) const;
 
  protected:
   friend class ChromeRulesServiceFactory;
@@ -50,7 +47,8 @@ class ChromeRulesService : public RulesServiceBase {
 
   // Helpers to convert action-specific types to rule-specific types.
   ActionSource GetAsActionSource(
-      const content::ClipboardEndpoint& endpoint) const;
+      const content::ClipboardEndpoint& endpoint,
+      const ui::ClipboardMetadata& metadata) const;
   ActionDestination GetAsActionDestination(
       const content::ClipboardEndpoint& endpoint) const;
   template <typename ActionSourceOrDestination>

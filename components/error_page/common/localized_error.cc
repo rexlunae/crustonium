@@ -335,7 +335,7 @@ const LocalizedErrorMap net_error_options[] = {
    SHOW_BUTTON_RELOAD,
   },
   {net::ERR_BLOCKED_BY_ADMINISTRATOR,
-   IDS_ERRORPAGES_HEADING_BLOCKED,
+   IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR,
    IDS_ERRORPAGES_SUMMARY_BLOCKED_BY_ADMINISTRATOR,
    SUGGEST_NONE,
    SHOW_NO_BUTTONS,
@@ -502,16 +502,6 @@ const LocalizedErrorMap dns_probe_error_options[] = {
     },
 };
 
-const LocalizedErrorMap link_preview_error_options[] = {
-    {
-        error_page::LinkPreviewErrorCode::kNonHttpsForbidden,
-        IDS_ERRORPAGES_HEADING_LINKPREVIEW_NON_HTTPS_FORBIDDEN,
-        IDS_ERRORPAGES_SUMMARY_LINKPREVIEW_NON_HTTPS_FORBIDDEN,
-        SUGGEST_NONE,
-        SHOW_NO_BUTTONS,
-    },
-};
-
 std::u16string GetStringWithPlaceholder(int resource_id,
                                         std::u16string host_name,
                                         std::u16string failed_url_string) {
@@ -519,11 +509,8 @@ std::u16string GetStringWithPlaceholder(int resource_id,
     case IDS_ERRORPAGES_CHECK_TYPO_SUMMARY:
     case IDS_ERRORPAGES_HEADING_ACCESS_DENIED:
     case IDS_ERRORPAGES_HEADING_BLOCKED:
-    case IDS_ERRORPAGES_HEADING_BLOCKED_SCHEME:
     case IDS_ERRORPAGES_HEADING_NOT_FOUND:
     case IDS_ERRORPAGES_SUMMARY_BAD_SSL_CLIENT_AUTH_CERT:
-    case IDS_ERRORPAGES_SUMMARY_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR:
-    case IDS_ERRORPAGES_SUMMARY_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR_SCHEME:
     case IDS_ERRORPAGES_SUMMARY_CONNECTION_CLOSED:
     case IDS_ERRORPAGES_SUMMARY_CONNECTION_FAILED:
     case IDS_ERRORPAGES_SUMMARY_CONNECTION_REFUSED:
@@ -589,11 +576,7 @@ const LocalizedErrorMap* LookupErrorMap(const std::string& error_domain,
         FindErrorMapInArray(dns_probe_error_options, error_code);
     DCHECK(map);
     return map;
-  } else if (error_domain == Error::kLinkPreviewErrorDomain) {
-    const LocalizedErrorMap* map =
-        FindErrorMapInArray(link_preview_error_options, error_code);
-    CHECK(map);
-    return map;
+
   } else {
     NOTREACHED();
   }
@@ -1077,19 +1060,6 @@ LocalizedError::PageState LocalizedError::GetPageState(
     result.strings.Set("title", host_name);
   } else {
     result.strings.Set("title", failed_url_string);
-
-    // If the page is blocked by policy, and no hostname is available to show,
-    // instead show the scheme.
-    if (error_code == net::ERR_BLOCKED_BY_ADMINISTRATOR && host_name.empty()) {
-      options.heading_resource_id = IDS_ERRORPAGES_HEADING_BLOCKED_SCHEME;
-      host_name = base::UTF8ToUTF16(failed_url.GetScheme());
-    }
-    if (error_code == net::ERR_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR &&
-        host_name.empty()) {
-      options.summary_resource_id =
-          IDS_ERRORPAGES_SUMMARY_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR_SCHEME;
-      host_name = base::UTF8ToUTF16(failed_url.GetScheme());
-    }
   }
 
   result.strings.Set("iconClass",
@@ -1154,9 +1124,7 @@ LocalizedError::PageState LocalizedError::GetPageState(
   } else if (error_domain == Error::kDnsProbeErrorDomain) {
     error_code_string =
         base::ASCIIToUTF16(error_page::DnsProbeStatusToString(error_code));
-  } else if (error_domain == Error::kLinkPreviewErrorDomain) {
-    // NOP. Link Preview doesn't show error code and describes an error with
-    // text only.
+
   } else {
     NOTREACHED();
   }

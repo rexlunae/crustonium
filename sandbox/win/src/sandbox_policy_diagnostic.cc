@@ -190,7 +190,7 @@ std::string GetIpcTagAsString(IpcTag service) {
   NOTREACHED();
 }
 
-std::string GetOpcodeAction(EvalResult action, uintptr_t constant) {
+std::string GetOpcodeAction(EvalResult action) {
   switch (action) {
     case EVAL_TRUE:
       return "true";
@@ -209,8 +209,7 @@ std::string GetOpcodeAction(EvalResult action, uintptr_t constant) {
     case FAKE_ACCESS_DENIED:
       return "fakeDenied";
     case RETURN_CONST:
-      return base::StringPrintf("returnConst %p",
-                                reinterpret_cast<void*>(constant));
+      return "returnConst";
   }
   NOTREACHED();
 }
@@ -243,22 +242,9 @@ std::string GetPolicyOpcode(const PolicyOpcode* opcode, bool continuation) {
     condition += "!(";
 
   switch (opcode->GetID()) {
-    case OP_ALWAYS_FALSE:
-      condition += "false";
-      break;
-    case OP_ALWAYS_TRUE:
-      condition += "true";
-      break;
     case OP_NUMBER_MATCH:
-      opcode->GetArgument(1, &args[1]);
-      if (args[1] == UINT32_TYPE) {
-        opcode->GetArgument(0, &args[0]);
-        condition += base::StringPrintf("p[%d] == %x", param, args[0]);
-      } else {
-        const void* match_ptr = nullptr;
-        opcode->GetArgument(0, &match_ptr);
-        condition += base::StringPrintf("p[%d] == %p", param, match_ptr);
-      }
+      opcode->GetArgument(0, &args[0]);
+      condition += base::StringPrintf("p[%d] == %x", param, args[0]);
       break;
     case OP_NUMBER_AND_MATCH:
       opcode->GetArgument(0, &args[0]);
@@ -278,9 +264,15 @@ std::string GetPolicyOpcode(const PolicyOpcode* opcode, bool continuation) {
     } break;
     case OP_ACTION:
       opcode->GetArgument(0, &args[0]);
-      uintptr_t constant;
-      opcode->GetArgument(1, &constant);
-      condition += GetOpcodeAction(static_cast<EvalResult>(args[0]), constant);
+      EvalResult result;
+      result = static_cast<EvalResult>(args[0]);
+      condition += GetOpcodeAction(result);
+      if (result == RETURN_CONST) {
+        uintptr_t constant;
+        opcode->GetArgument(1, &constant);
+        condition +=
+            base::StringPrintf(" %p", reinterpret_cast<void*>(constant));
+      }
       break;
     default:
       DCHECK(false) << "Unknown Opcode";
@@ -303,8 +295,7 @@ std::string GetPolicyOpcode(const PolicyOpcode* opcode, bool continuation) {
 base::ListValue GetPolicyOpcodes(const PolicyGlobal* policy_rules,
                                  IpcTag service) {
   base::ListValue entry;
-  PolicyBuffer* policy_buffer =
-      UNSAFE_TODO(policy_rules->entry[static_cast<size_t>(service)]);
+  const PolicyBuffer* policy_buffer = policy_rules->GetService(service);
   // Build up rules and emit when we hit an action.
   std::string cur_rule;
   for (size_t i = 0; i < policy_buffer->opcode_count; i++) {

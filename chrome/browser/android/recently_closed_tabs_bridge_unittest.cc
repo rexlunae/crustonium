@@ -10,6 +10,8 @@
 #include "chrome/browser/sessions/chrome_tab_restore_service_client.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/sessions/content/content_live_tab.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
@@ -204,6 +206,7 @@ class RecentlyClosedTabsBridgeTest : public ChromeRenderViewHostTestHarness {
  protected:
   raw_ptr<sessions::TabRestoreService> tab_restore_service_ = nullptr;
   raw_ptr<recent_tabs::RecentlyClosedTabsBridge> bridge_ = nullptr;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
 
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
@@ -224,16 +227,22 @@ class RecentlyClosedTabsBridgeTest : public ChromeRenderViewHostTestHarness {
   }
 
   void CreateService() {
+    os_crypt_async_ = os_crypt_async::GetTestOSCryptAsyncForTesting(
+        /*is_sync_for_unittests=*/true);
     // Override the TabRestoreServiceFactory to use a custom testing instance.
     TabRestoreServiceFactory::GetInstance()->SetTestingFactory(
-        profile(), base::BindRepeating([](content::BrowserContext* context) {
-          Profile* profile = Profile::FromBrowserContext(context);
-          auto service = std::make_unique<sessions::TabRestoreServiceImpl>(
-              std::make_unique<ChromeTabRestoreServiceClient>(profile),
-              profile->GetPrefs(), nullptr);
+        profile(),
+        base::BindRepeating(
+            [](os_crypt_async::OSCryptAsync* os_crypt_async,
+               content::BrowserContext* context) {
+              Profile* profile = Profile::FromBrowserContext(context);
+              auto service = std::make_unique<sessions::TabRestoreServiceImpl>(
+                  std::make_unique<ChromeTabRestoreServiceClient>(profile),
+                  profile->GetPrefs(), nullptr, os_crypt_async);
 
-          return std::unique_ptr<KeyedService>(std::move(service));
-        }));
+              return std::unique_ptr<KeyedService>(std::move(service));
+            },
+            os_crypt_async_.get()));
 
     // Retrieve and cache the raw pointer for use in the test class.
     tab_restore_service_ = TabRestoreServiceFactory::GetForProfile(profile());
@@ -296,6 +305,27 @@ TEST_F(RecentlyClosedTabsBridgeTest, ClearLeastRecentlyUsedClosedEntries) {
 
   // Verify the remaining entry matches the ID of the most recently added entry.
   EXPECT_EQ(tab_restore_service_->entries().front()->id.id(), sessionId->id());
+}
+
+// Verify that ClearLeastRecentlyUsedClosedEntries removes all recently closed
+// entries when the specified size is bigger than the entries size.
+TEST_F(RecentlyClosedTabsBridgeTest,
+       ClearLeastRecentlyUsedClosedEntries_ClearAll) {
+  // Create 3 entries.
+  NavigateToNonEmptyPage();
+  AddHistoricalEntries(0);
+  AddHistoricalEntries(1);
+  std::optional<SessionID> sessionId = AddHistoricalEntries(2);
+  ASSERT_TRUE(sessionId.has_value());
+
+  // Verify there are 3 entries in the TabRestoreService.
+  EXPECT_EQ(tab_restore_service_->entries().size(), 3U);
+
+  // Trigger clear 4 least recently used entries.
+  bridge_->ClearLeastRecentlyUsedClosedEntries(nullptr, 4);
+
+  // Verify the entries in the TabRestoreService are cleared.
+  EXPECT_EQ(tab_restore_service_->entries().size(), 0U);
 }
 
 }  // namespace

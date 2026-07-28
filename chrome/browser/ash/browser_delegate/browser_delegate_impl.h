@@ -9,6 +9,7 @@
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 
 class Browser;
+class BrowserWindowInterface;
 
 namespace ash {
 
@@ -18,11 +19,13 @@ class BrowserDelegateImpl : public BrowserDelegate {
   virtual ~BrowserDelegateImpl();
 
   // BrowserDelegate:
-  Browser& GetBrowser() const override;
+  BrowserWindowInterface& GetBrowser() const override;
   BrowserType GetType() const override;
   SessionID GetSessionID() const override;
   const AccountId& GetAccountId() const override;
   bool IsOffTheRecord() const override;
+  bool IsCreatedByStartupCreator() const override;
+  bool IsCreatedBySessionRestoreForStartupUrls() const override;
   gfx::Rect GetBounds() const override;
   content::WebContents* GetActiveWebContents() const override;
   size_t GetWebContentsCount() const override;
@@ -32,6 +35,7 @@ class BrowserDelegateImpl : public BrowserDelegate {
   aura::Window* GetNativeWindow() const override;
   std::optional<webapps::AppId> GetAppId() const override;
   bool IsWebApp() const override;
+  const SystemWebAppDelegate* GetSWADelegate() const override;
   bool IsClosing() const override;
   bool IsAttemptingToClose() const override;
   bool IsActive() const override;
@@ -46,13 +50,22 @@ class BrowserDelegateImpl : public BrowserDelegate {
               std::optional<size_t> index,
               TabDisposition disposition) override;
   void CloseWebContentsAt(size_t index, UserGesture user_gesture) override;
-  content::WebContents* NavigateWebApp(const GURL& url,
-                                       TabPinning pin_tab) override;
+  content::WebContents* NavigateWebApp(
+      const GURL& url,
+      TabPinning pin_tab,
+      std::optional<webapps::LaunchParams> launch_params =
+          std::nullopt) override;
   void CreateTabGroup(const tab_groups::TabGroupInfo& tab_group) override;
   void PinTab(size_t tab_index) override;
   void MoveTab(size_t tab_index, BrowserDelegate& target_browser) override;
   bool CreateWebAppFromActiveWebContents() override;
   void ResetLocationBar() override;
+  void EnterLockedFullscreen(bool focus_toolbar) override;
+  void LeaveLockedFullscreen() override;
+  bool IsLockedFullscreen() const override;
+  void SetDevToolsCommandsEnabled(bool enabled) override;
+  void SetTabSwitchCommandsEnabled(bool enabled) override;
+  void ActivateWebContentsAt(size_t index) override;
 
  private:
   const raw_ref<Browser> browser_;

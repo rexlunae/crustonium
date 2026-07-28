@@ -134,7 +134,8 @@ class StatisticsRecorderTest : public testing::TestWithParam<bool> {
     Histogram::InitializeBucketRanges(min, max, ranges);
     const BucketRanges* registered_ranges =
         StatisticsRecorder::RegisterOrDeleteDuplicateRanges(ranges);
-    return new Histogram(durable_name, registered_ranges);
+    return new Histogram(durable_name, HashMetricName(durable_name.value()),
+                         registered_ranges);
   }
 
   template <size_t N>
@@ -912,7 +913,7 @@ class TestHistogramProvider : public StatisticsRecorder::HistogramProvider {
       if (!histogram) {
         break;
       }
-      allocator_->MergeHistogramDeltaToStatisticsRecorder(histogram.get());
+      allocator_->MergeHistogramDeltaToStatisticsRecorder(histogram.get(), "");
     }
     std::move(done_callback).Run();
   }

@@ -49,6 +49,7 @@
 #include "third_party/blink/renderer/platform/scheduler/main_thread/memory_purge_manager.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/page_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/pending_user_input.h"
+#include "third_party/blink/renderer/platform/scheduler/main_thread/performance_helper.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/render_widget_signals.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/use_case.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/user_model.h"
@@ -89,6 +90,7 @@ FORWARD_DECLARE_TEST(MainThreadSchedulerImplTest,
 }  // namespace main_thread_scheduler_impl_unittest
 
 PLATFORM_EXPORT BASE_DECLARE_FEATURE(kLowerPriorityForCompositorGestures);
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(kBusyLoopAggressiveAfterCommittedLoad);
 
 class AgentGroupSchedulerImpl;
 class CPUTimeBudgetPool;
@@ -97,37 +99,7 @@ class PageSchedulerImpl;
 class WebRenderWidgetSchedulingState;
 class WidgetSchedulerImpl;
 
-#if BUILDFLAG(IS_ANDROID)
-PLATFORM_EXPORT BASE_DECLARE_FEATURE(kRestrictMainThreadBigCoreAffinity);
 
-// Must be created on the main thread, can be deleted from any thread.
-class PLATFORM_EXPORT ThreadAffinityBoost {
- public:
-  ThreadAffinityBoost();
-  ~ThreadAffinityBoost();
-  static void StopDelayed(std::unique_ptr<ThreadAffinityBoost> boost,
-                          base::TimeDelta delay);
-
-  using SetCanRunOnBigCoreFn =
-      base::RepeatingCallback<void(base::PlatformThreadId, bool)>;
-
-  static void SetTaskRunnerForTesting(base::TaskRunner* task_runner) {
-    task_runner_for_testing_ = task_runner;
-  }
-
-  static void SetCanRunOnBigCoreOverrideForTesting(SetCanRunOnBigCoreFn* cb) {
-    set_can_run_on_big_core_override_ = cb;
-  }
-
- private:
-  static base::Lock& lock();
-
-  const base::PlatformThreadId thread_id_;
-  static uint64_t depth_ GUARDED_BY(lock());
-  static base::TaskRunner* task_runner_for_testing_;
-  static SetCanRunOnBigCoreFn* set_can_run_on_big_core_override_;
-};
-#endif  // BUILDFLAG(IS_ANDROID)
 
 class PLATFORM_EXPORT MainThreadSchedulerImpl
     : public ThreadSchedulerBase,
@@ -311,6 +283,7 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   }
 
   scoped_refptr<base::SingleThreadTaskRunner> DefaultTaskRunner();
+  scoped_refptr<MainThreadTaskQueue> DefaultTaskQueue();
 
   scoped_refptr<SingleThreadIdleTaskRunner> IdleTaskRunner();
   base::TimeTicks NowTicks() const;
@@ -426,12 +399,16 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
     return main_thread_only().current_task_start_time;
   }
 
+  // TODO(crbug.com/470337728): Remove these functions when
+  // kWebRtcUseMediaThreadTypes is enabled by default.
+  void IncreaseDefaultThreadTypeUsageCount();
+  void DecreaseDefaultThreadTypeUsageCount();
+
  protected:
   // ThreadSchedulerBase implementation:
   Vector<base::OnceClosure>& GetOnTaskCompletionCallbacks() override;
 
   scoped_refptr<MainThreadTaskQueue> ControlTaskQueue();
-  scoped_refptr<MainThreadTaskQueue> DefaultTaskQueue();
   scoped_refptr<MainThreadTaskQueue> V8TaskQueue();
 
   virtual void PerformMicrotaskCheckpoint();
@@ -668,6 +645,10 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
       MainThreadTaskQueue*,
       const base::sequence_manager::TaskQueue::TaskTiming&);
 
+#if BUILDFLAG(IS_ANDROID)
+  void ApplyPerformanceState(bool prefer_efficient_scheduling);
+#endif
+
   // Computes the priority for compositing based on the current use case.
   // Returns nullopt if the use case does not need to set the priority.
   std::optional<TaskPriority> ComputeCompositorPriorityFromUseCase() const;
@@ -680,6 +661,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
   bool AllPagesFrozen() const;
 
+  void MaybeSetBusyLoop();
+
   // Indicates that scheduler has been shutdown.
   // It should be accessed only on the main thread, but couldn't be a member
   // of MainThreadOnly struct because last might be destructed before we
@@ -688,6 +671,9 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
   bool has_ipc_callback_set_ = false;
   bool IsIpcTrackingEnabledForAllPages();
+
+  // Updates the thread type lease based on the current use case.
+  void MaybeUpdateThreadTypeLease();
 
   // This controller should be initialized before any TraceableVariables
   // because they require one to initialize themselves.
@@ -742,6 +728,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
   MemoryPurgeManager memory_purge_manager_;
 
+  base::TimeTicks last_input_use_case_time_ = base::TimeTicks::Min();
+
   base::RepeatingClosure update_policy_closure_;
   DeadlineTaskRunner delayed_update_policy_runner_;
   CancelableClosureHolder end_renderer_hidden_idle_period_closure_;
@@ -780,6 +768,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
         has_navigated;
     TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")>
         pause_timers_for_webview;
+    // If true, indicates that CPU performance management is applied.
+    TraceableState<bool, "renderer.scheduler"> restrict_cpu_performance;
     base::TimeTicks background_status_changed_at;
     HashSet<PageSchedulerImpl*> page_schedulers;  // Not owned.
     base::ObserverList<RAILModeObserver>::Unchecked
@@ -838,11 +828,15 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
     HashSet<scoped_refptr<WidgetSchedulerImpl>> widget_schedulers;
     raw_ptr<base::MessagePump> message_pump;
 
-#if BUILDFLAG(IS_ANDROID)
-    // Used to change thread affinity when KRestrictMainThreadAffinity is
-    // enabled.
-    std::unique_ptr<ThreadAffinityBoost> affinity_boost = nullptr;
-#endif  // BUILDFLAG(IS_ANDROID)
+    // Multiplier to apply to the message busy loop maximum duration
+    float busy_loop_scale_factor = 0.f;
+
+    // When busy looping is enabled, and the feature
+    // kBusyLoopAggressiveAfterCommittedLoad is enabled, holds the time of the
+    // last commit (unless it's too far in the past). When `is_null()`, this
+    // either means that the feature is not enabled, or the commit is too far in
+    // the past.
+    base::TimeTicks last_committed_load_time;
   };
 
   struct AnyThread {
@@ -921,6 +915,12 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
   PollableThreadSafeFlag policy_may_need_update_;
   WeakPersistent<AgentGroupScheduler> current_agent_group_scheduler_;
+
+  PerformanceHelper performance_helper_;
+
+  std::optional<base::PlatformThread::RaiseThreadTypeLease>
+      raise_thread_type_lease_;
+  size_t default_thread_type_usage_count_ = 0;
 
   // This is accessed from both the main and IO (IPC) threads. It's incremented
   // when an urgent IPC task is posted and decremented when that IPC task runs

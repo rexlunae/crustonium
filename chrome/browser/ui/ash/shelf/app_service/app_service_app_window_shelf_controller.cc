@@ -39,7 +39,6 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/crostini_app_window.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chromeos/ash/components/borealis/borealis_util.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
@@ -324,12 +323,6 @@ void AppServiceAppWindowShelfController::OnWindowActivated(
 
 void AppServiceAppWindowShelfController::OnInstanceUpdate(
     const apps::InstanceUpdate& update) {
-  if (app_service_instance_helper_->IsOpenedInBrowser(update.AppId(),
-                                                      update.Window())) {
-    // Only deal with window based app instances past here.
-    return;
-  }
-
   if (update.IsDestruction()) {
     // For Chrome apps edge case, it could be added for the inactive users, and
     // then removed. Since it is not registered we don't need to do anything
@@ -339,6 +332,12 @@ void AppServiceAppWindowShelfController::OnInstanceUpdate(
     if (it != window_list_.end()) {
       window_list_.erase(it);
     }
+    return;
+  }
+
+  if (app_service_instance_helper_->IsOpenedInBrowser(update.AppId(),
+                                                      update.Window())) {
+    // Only deal with window based app instances past here.
     return;
   }
 

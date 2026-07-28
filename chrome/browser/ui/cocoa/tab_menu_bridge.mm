@@ -60,20 +60,6 @@ void UpdateItemForWebContents(NSMenuItem* item,
         gfx::ElideMenuItemTitle(tab_ui_helper->GetTitle()));
   }
 
-  if (base::FeatureList::IsEnabled(features::kShowTabGroupsMacSystemMenu)) {
-    std::optional<tab_groups::TabGroupColorId> tab_group_color_id;
-    std::optional<tab_groups::TabGroupId> group =
-        tab_strip_model->GetTabForWebContents(web_contents)->GetGroup();
-    if (group.has_value()) {
-      TabGroup* tab_group =
-          tab_strip_model->group_model()->GetTabGroup(group.value());
-      if (tab_group) {
-        tab_group_color_id = tab_group->visual_data()->color();
-      }
-    }
-
-    chrome::UpdateGroupIndicatorForMenuItem(item, tab_group_color_id);
-  }
 
   item.image = NSImageFromImageSkia(
       tab_ui_helper->GetFavicon().Rasterize(&web_contents->GetColorProvider()));
@@ -180,6 +166,7 @@ void TabMenuBridge::SetTabStripModel(TabStripModel* model) {
     AddDynamicItemsFromModel();
   } else {
     RemoveMenuItems(DynamicMenuItems());
+    menu_item_to_tab_.clear();
   }
 }
 
@@ -209,6 +196,7 @@ void TabMenuBridge::AddDynamicItemsFromModel() {
   NSMutableArray* recyclable_items = DynamicMenuItems();
   NSMenu* tabMenu = menu_item_.submenu;
 
+  menu_item_to_tab_.clear();
   dynamic_items_start_ = tabMenu.numberOfItems - recyclable_items.count;
   for (int i = 0; i < model_->count(); ++i) {
     NSMenuItem* item;
@@ -227,7 +215,10 @@ void TabMenuBridge::AddDynamicItemsFromModel() {
     if (model_->active_index() == i) {
       [item setState:NSControlStateValueOn];
     }
-    UpdateItemForWebContents(item, model_->GetWebContentsAt(i), model_);
+
+    tabs::TabInterface* tab = model_->GetTabAtIndex(i);
+    UpdateItemForWebContents(item, tab->GetContents(), model_);
+    menu_item_to_tab_[item] = tab;
 
     if ([item menu] == nil) {
       [tabMenu addItem:item];
@@ -243,7 +234,16 @@ void TabMenuBridge::OnDynamicItemChosen(NSMenuItem* item) {
   }
 
   DCHECK_EQ(item.target, menu_listener_);
-  int index = [menu_item_.submenu indexOfItem:item] - dynamic_items_start_;
+  auto it = menu_item_to_tab_.find(item);
+  if (it == menu_item_to_tab_.end()) {
+    return;
+  }
+
+  int index = model_->GetIndexOfTab(it->second);
+  if (index == TabStripModel::kNoTab) {
+    return;
+  }
+
   model_->ActivateTabAt(index,
                         TabStripUserGestureDetails(
                             TabStripUserGestureDetails::GestureType::kTabMenu));
@@ -258,6 +258,17 @@ void TabMenuBridge::OnTabStripModelChanged(
 
   if (!force_rebuild_menu_ && ![menu_listener_ isMenuOpen]) {
     [menu_listener_ setRebuildMenu:YES];
+    // When tabs are removed while the menu is not open, erase their entries
+    // from the map to release raw_ptr<TabInterface> before the tabs are freed.
+    // For other changes (moves, inserts, etc.), keep the existing map so that
+    // clicks on stale menu items can still activate the correct tab.
+    if (change.type() == TabStripModelChange::kRemoved) {
+      for (const auto& removed_tab : change.GetRemove()->contents) {
+        std::erase_if(menu_item_to_tab_, [&](const auto& pair) {
+          return pair.second == removed_tab.tab;
+        });
+      }
+    }
     return;
   }
 
@@ -344,4 +355,5 @@ void TabMenuBridge::TabGroupedStateChanged(
 void TabMenuBridge::OnTabStripModelDestroyed(TabStripModel* model) {
   model_->RemoveObserver(this);
   model_ = nullptr;
+  menu_item_to_tab_.clear();
 }

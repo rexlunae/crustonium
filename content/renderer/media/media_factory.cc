@@ -116,9 +116,6 @@
 #include "media/remoting/renderer_controller.h"       // nogncheck
 #endif
 
-#if BUILDFLAG(ENABLE_CAST_AUDIO_RENDERER)
-#include "content/renderer/media/cast_renderer_factory.h"
-#endif  // BUILDFLAG(ENABLE_CAST_AUDIO_RENDERER)
 
 #if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
 // Enable remoting receiver
@@ -269,7 +266,6 @@ std::unique_ptr<blink::WebVideoFrameSubmitter> CreateSubmitter(
         main_thread_compositor_task_runner,
     const cc::LayerTreeSettings& settings,
     media::MediaLog* media_log) {
-  CHECK(features::UseSurfaceLayerForVideo());
   CHECK(content::RenderThreadImpl::current());
 
   auto log_roughness_cb =
@@ -444,11 +440,8 @@ std::unique_ptr<blink::WebMediaPlayer> MediaFactory::CreateMediaPlayer(
   GetInterfaceBroker().GetInterface(
       metrics_provider.InitWithNewPipeAndPassReceiver());
 
-  const bool use_surface_layer = features::UseSurfaceLayerForVideo();
-  std::unique_ptr<blink::WebVideoFrameSubmitter> submitter =
-      use_surface_layer ? CreateSubmitter(main_thread_compositor_task_runner,
-                                          settings, media_log.get())
-                        : nullptr;
+  std::unique_ptr<blink::WebVideoFrameSubmitter> submitter = CreateSubmitter(
+      main_thread_compositor_task_runner, settings, media_log.get());
 
   scoped_refptr<base::SequencedTaskRunner> media_task_runner =
       render_thread->GetMediaSequencedTaskRunner();
@@ -495,7 +488,6 @@ std::unique_ptr<blink::WebMediaPlayer> MediaFactory::CreateMediaPlayer(
       base::BindOnce(&blink::WebSurfaceLayerBridge::Create,
                      parent_frame_sink_id),
       RenderThreadImpl::current()->SharedMainThreadContextProvider(),
-      use_surface_layer,
       render_frame_->GetRenderFrameMediaPlaybackOptions()
           .is_background_suspend_enabled,
       render_frame_->GetRenderFrameMediaPlaybackOptions()
@@ -596,17 +588,6 @@ MediaFactory::CreateRendererFactorySelector(
   }
 #endif  // BUILDFLAG(ENABLE_MOJO_RENDERER)
 
-#if BUILDFLAG(ENABLE_CAST_AUDIO_RENDERER)
-  DCHECK(!is_base_renderer_factory_set);
-  is_base_renderer_factory_set = true;
-  factory_selector->AddBaseFactory(
-      RendererType::kCast,
-      std::make_unique<CastRendererFactory>(
-          media_log, decoder_factory,
-          base::BindRepeating(&RenderThreadImpl::GetGpuFactories,
-                              base::Unretained(render_thread)),
-          render_frame_->GetBrowserInterfaceBroker()));
-#endif  // BUILDFLAG(ENABLE_CAST_AUDIO_RENDERER)
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
   mojo::PendingRemote<media::mojom::RemotingSource> remoting_source;
@@ -748,11 +729,8 @@ MediaFactory::CreateWebMediaPlayerForMediaStream(
       render_frame_->GetTaskRunner(blink::TaskType::kInternalMedia),
       std::move(handlers));
 
-  const bool use_surface_layer = features::UseSurfaceLayerForVideo();
-  std::unique_ptr<blink::WebVideoFrameSubmitter> submitter =
-      use_surface_layer ? CreateSubmitter(main_thread_compositor_task_runner,
-                                          settings, media_log.get())
-                        : nullptr;
+  std::unique_ptr<blink::WebVideoFrameSubmitter> submitter = CreateSubmitter(
+      main_thread_compositor_task_runner, settings, media_log.get());
 
   return std::make_unique<blink::WebMediaPlayerMS>(
       frame, client, GetWebMediaPlayerDelegate(), std::move(media_log),
@@ -764,7 +742,7 @@ MediaFactory::CreateWebMediaPlayerForMediaStream(
       render_thread->GetGpuFactories(), sink_id,
       base::BindOnce(&blink::WebSurfaceLayerBridge::Create,
                      parent_frame_sink_id),
-      std::move(submitter), use_surface_layer);
+      std::move(submitter));
 }
 
 media::RendererWebMediaPlayerDelegate*

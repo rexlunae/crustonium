@@ -17,6 +17,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -39,29 +40,32 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLog;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
+import org.chromium.chrome.browser.omnibox.OmniboxStub;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteController;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteControllerJni;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler.VoiceInteractionSource;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler.VoiceResult;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.VoiceInteractionSource;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.VoiceResult;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
+import org.chromium.components.omnibox.AutocompleteRequestType;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -92,14 +96,17 @@ public class VoiceRecognitionHandlerUnitTest {
     private @Mock AutocompleteMatch mMatch;
     private @Mock AutocompleteCoordinator mAutocompleteCoordinator;
     private @Mock LocationBarDataProvider mDataProvider;
-    private @Mock VoiceRecognitionHandler.Delegate mDelegate;
+    private @Mock OmniboxStub mOmniboxStub;
     private @Mock AndroidPermissionDelegate mPermissionDelegate;
+    private @Mock FuseboxSessionState mFuseboxSessionState;
+    private @Mock AutocompleteInput mAutocompleteInput;
     private @Mock Profile mProfile;
     private @Mock PrefService mPrefs;
     private @Mock TemplateUrlService mTemplateUrlService;
     private @Captor ArgumentCaptor<List<VoiceResult>> mVoiceResults;
     private @Captor ArgumentCaptor<WindowAndroid.IntentCallback> mIntentCallback;
 
+    private VoiceRecognitionIntentHandler mIntentHandler;
     private VoiceRecognitionHandler mHandler;
     private WindowAndroid mWindowAndroid;
     private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
@@ -113,7 +120,6 @@ public class VoiceRecognitionHandlerUnitTest {
         doReturn(mAutocompleteController).when(mAutocompleteControllerJniMock).getForProfile(any());
         UserPrefs.setPrefServiceForTesting(mPrefs);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
-        ProfileManager.onProfileAdded(mProfile);
         ProfileManager.setLastUsedProfileForTesting(mProfile);
 
         doReturn(DEFAULT_SEARCH_URL).when(mTemplateUrlService).getUrlForVoiceSearchQuery(any());
@@ -123,17 +129,23 @@ public class VoiceRecognitionHandlerUnitTest {
         doReturn(true).when(mPermissionDelegate).hasPermission(anyString());
         var activity = Robolectric.buildActivity(Activity.class).setup().get();
 
-        mWindowAndroid = spy(new WindowAndroid(activity, /* trackOcclusion= */ true));
-        mHandler = spy(new VoiceRecognitionHandler(mDelegate, mProfileSupplier));
+        mWindowAndroid = spy(new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true));
+        mIntentHandler = spy(new VoiceRecognitionIntentHandler(mWindowAndroid));
+        mHandler =
+                spy(
+                        new VoiceRecognitionHandler(
+                                mOmniboxStub,
+                                mDataProvider,
+                                mAutocompleteCoordinator,
+                                mWindowAndroid,
+                                mProfileSupplier,
+                                mIntentHandler));
         mHandler.addObserver(mObserver);
 
         mWindowAndroid.setAndroidPermissionDelegate(mPermissionDelegate);
-        doReturn(new WeakReference(activity)).when(mWindowAndroid).getActivity();
+        doReturn(new WeakReference<>(activity)).when(mWindowAndroid).getActivity();
         doReturn(mTab).when(mDataProvider).getTab();
         doReturn(DEFAULT_URL).when(mTab).getUrl();
-        doReturn(mDataProvider).when(mDelegate).getLocationBarDataProvider();
-        doReturn(mAutocompleteCoordinator).when(mDelegate).getAutocompleteCoordinator();
-        doReturn(mWindowAndroid).when(mDelegate).getWindowAndroid();
     }
 
     @After
@@ -142,9 +154,8 @@ public class VoiceRecognitionHandlerUnitTest {
         // Make sure destroy() propagates.
         // Any cleanup code scheduled for execution via the means of a Handler or PostTask
         // will be taken care of here.
-        ShadowLooper.shadowMainLooper().idle();
+        RobolectricUtil.runAllBackgroundAndUi();
         mHandler.removeObserver(mObserver);
-        ProfileManager.resetForTesting();
     }
 
     /**
@@ -194,13 +205,6 @@ public class VoiceRecognitionHandlerUnitTest {
                         })
                 .when(mWindowAndroid)
                 .showCancelableIntent(any(Intent.class), mIntentCallback.capture(), any());
-    }
-
-    @Test
-    @SmallTest
-    public void testIsVoiceSearchEnabled_FalseOnNullDataProvider() {
-        doReturn(null).when(mDelegate).getLocationBarDataProvider();
-        assertFalse(mHandler.isVoiceSearchEnabled());
     }
 
     @Test
@@ -275,9 +279,9 @@ public class VoiceRecognitionHandlerUnitTest {
     public void testStartVoiceRecognition_OnlyUpdateMicButtonStateIfCantRequestPermission() {
         doReturn(false).when(mPermissionDelegate).hasPermission(anyString());
         verify(mObserver, never()).onVoiceAvailabilityImpacted();
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
 
-        verify(mHandler, never()).recordVoiceSearchStartEvent(anyInt());
+        verify(mIntentHandler, never()).recordVoiceSearchStartEvent(anyInt());
         verify(mObserver).onVoiceAvailabilityImpacted();
     }
 
@@ -289,7 +293,7 @@ public class VoiceRecognitionHandlerUnitTest {
         clearInvocations(mObserver);
 
         mHandler.destroy();
-        mProfileSupplier.set(Mockito.mock(Profile.class));
+        mProfileSupplier.set(mock(Profile.class));
         // Stop propagating changes after destroy.
         verifyNoInteractions(mObserver);
     }
@@ -302,8 +306,8 @@ public class VoiceRecognitionHandlerUnitTest {
         verify(mObserver, never()).onVoiceAvailabilityImpacted();
         doReturn(true).when(mPermissionDelegate).canRequestPermission(anyString());
         setReportedPermissionResult(PackageManager.PERMISSION_DENIED);
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
-        verify(mHandler, never()).recordVoiceSearchStartEvent(anyInt());
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+        verify(mIntentHandler, never()).recordVoiceSearchStartEvent(anyInt());
         verify(mObserver, never()).onVoiceAvailabilityImpacted();
     }
 
@@ -315,8 +319,8 @@ public class VoiceRecognitionHandlerUnitTest {
         verify(mObserver, never()).onVoiceAvailabilityImpacted();
         doReturn(false).when(mPermissionDelegate).canRequestPermission(anyString());
         setReportedPermissionResult(PackageManager.PERMISSION_DENIED);
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
-        verify(mHandler, never()).recordVoiceSearchStartEvent(anyInt());
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+        verify(mIntentHandler, never()).recordVoiceSearchStartEvent(anyInt());
         verify(mObserver).onVoiceAvailabilityImpacted();
     }
 
@@ -328,12 +332,13 @@ public class VoiceRecognitionHandlerUnitTest {
                 .when(mWindowAndroid)
                 .showCancelableIntent(any(Intent.class), any(), any());
 
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
 
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
         verify(mObserver).onVoiceAvailabilityImpacted();
 
-        verify(mHandler, times(1))
+        verify(mIntentHandler, times(1))
                 .recordVoiceSearchFailureEvent(eq(VoiceInteractionSource.OMNIBOX));
     }
 
@@ -341,8 +346,9 @@ public class VoiceRecognitionHandlerUnitTest {
     @SmallTest
     public void testStartVoiceRecognition_StartsVoiceSearchWithSuccessfulIntent() {
         setVoiceResult(Activity.RESULT_OK, /* text= */ null, /* confidence= */ 0.f);
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
         verify(mObserver, never()).onVoiceAvailabilityImpacted();
     }
 
@@ -357,10 +363,12 @@ public class VoiceRecognitionHandlerUnitTest {
     public void testCallback_noVoiceSearchResultWithBadResultCode() {
         setVoiceResult(Activity.RESULT_FIRST_USER, /* text= */ null, /* confidence= */ 0.f);
 
-        mHandler.startVoiceRecognition(VoiceInteractionSource.NTP);
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.NTP));
-        verify(mHandler, never()).recordVoiceSearchResult(anyBoolean());
-        verify(mHandler, times(1)).recordVoiceSearchFailureEvent(eq(VoiceInteractionSource.NTP));
+        mHandler.startVoiceRecognition(VoiceInteractionSource.NTP, () -> {});
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.NTP));
+        verify(mIntentHandler, never()).recordVoiceSearchResult(anyBoolean());
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchFailureEvent(eq(VoiceInteractionSource.NTP));
     }
 
     @Test
@@ -368,10 +376,12 @@ public class VoiceRecognitionHandlerUnitTest {
     public void testCallback_noVoiceSearchResultCanceled() {
         setVoiceResult(Activity.RESULT_CANCELED, /* text= */ null, /* confidence= */ 0.f);
 
-        mHandler.startVoiceRecognition(VoiceInteractionSource.NTP);
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.NTP));
-        verify(mHandler, never()).recordVoiceSearchResult(anyBoolean());
-        verify(mHandler, times(1)).recordVoiceSearchDismissedEvent(eq(VoiceInteractionSource.NTP));
+        mHandler.startVoiceRecognition(VoiceInteractionSource.NTP, () -> {});
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.NTP));
+        verify(mIntentHandler, never()).recordVoiceSearchResult(anyBoolean());
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchDismissedEvent(eq(VoiceInteractionSource.NTP));
     }
 
     @Test
@@ -379,19 +389,20 @@ public class VoiceRecognitionHandlerUnitTest {
     public void testCallback_noVoiceSearchResultWithNullAutocompleteResult() {
         setVoiceResult(Activity.RESULT_OK, /* text= */ null, /* confidence= */ 0.f);
 
-        mHandler.startVoiceRecognition(VoiceInteractionSource.SEARCH_WIDGET);
-        verify(mHandler, times(1))
+        mHandler.startVoiceRecognition(VoiceInteractionSource.SEARCH_WIDGET, () -> {});
+        verify(mIntentHandler, times(1))
                 .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.SEARCH_WIDGET));
-        verify(mHandler, times(1)).recordVoiceSearchResult(eq(false));
+        verify(mIntentHandler, times(1)).recordVoiceSearchResult(eq(false));
     }
 
     @Test
     @SmallTest
     public void testCallback_noVoiceSearchResultWithNoMatch() {
         setVoiceResult(Activity.RESULT_OK, /* text= */ "", /* confidence= */ 1.f);
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
-        verify(mHandler, times(1)).recordVoiceSearchResult(eq(false));
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
+        verify(mIntentHandler, times(1)).recordVoiceSearchResult(eq(false));
     }
 
     @Test
@@ -401,13 +412,15 @@ public class VoiceRecognitionHandlerUnitTest {
                 VoiceRecognitionHandler.VOICE_SEARCH_CONFIDENCE_NAVIGATE_THRESHOLD - 0.01f;
         setVoiceResult(Activity.RESULT_OK, /* text= */ "testing", /* confidence= */ confidence);
 
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
-        verify(mHandler, times(1)).recordVoiceSearchFinishEvent(eq(VoiceInteractionSource.OMNIBOX));
-        verify(mHandler).recordVoiceSearchResult(eq(true));
-        verify(mHandler).recordVoiceSearchConfidenceValue(eq(confidence));
-        verify(mHandler, times(1)).recordVoiceSearchResult(anyBoolean());
-        verify(mHandler, times(1)).recordVoiceSearchConfidenceValue(anyFloat());
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchFinishEvent(eq(VoiceInteractionSource.OMNIBOX));
+        verify(mIntentHandler).recordVoiceSearchResult(eq(true));
+        verify(mIntentHandler).recordVoiceSearchConfidenceValue(eq(confidence));
+        verify(mIntentHandler, times(1)).recordVoiceSearchResult(anyBoolean());
+        verify(mIntentHandler, times(1)).recordVoiceSearchConfidenceValue(anyFloat());
 
         verify(mAutocompleteCoordinator).onVoiceResults(mVoiceResults.capture());
         RecognitionTestHelper.assertVoiceResultsAreEqual(
@@ -422,15 +435,17 @@ public class VoiceRecognitionHandlerUnitTest {
                 Activity.RESULT_OK,
                 /* text= */ "testing",
                 VoiceRecognitionHandler.VOICE_SEARCH_CONFIDENCE_NAVIGATE_THRESHOLD);
-        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX);
-        verify(mHandler, times(1)).recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
-        verify(mHandler, times(1)).recordVoiceSearchFinishEvent(eq(VoiceInteractionSource.OMNIBOX));
-        verify(mHandler).recordVoiceSearchResult(eq(true));
-        verify(mHandler)
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchStartEvent(eq(VoiceInteractionSource.OMNIBOX));
+        verify(mIntentHandler, times(1))
+                .recordVoiceSearchFinishEvent(eq(VoiceInteractionSource.OMNIBOX));
+        verify(mIntentHandler).recordVoiceSearchResult(eq(true));
+        verify(mIntentHandler)
                 .recordVoiceSearchConfidenceValue(
                         eq(VoiceRecognitionHandler.VOICE_SEARCH_CONFIDENCE_NAVIGATE_THRESHOLD));
-        verify(mHandler, times(1)).recordVoiceSearchResult(anyBoolean());
-        verify(mHandler, times(1)).recordVoiceSearchConfidenceValue(anyFloat());
+        verify(mIntentHandler, times(1)).recordVoiceSearchResult(anyBoolean());
+        verify(mIntentHandler, times(1)).recordVoiceSearchConfidenceValue(anyFloat());
         verify(mAutocompleteCoordinator).onVoiceResults(mVoiceResults.capture());
         RecognitionTestHelper.assertVoiceResultsAreEqual(
                 mVoiceResults.getValue(),
@@ -441,18 +456,18 @@ public class VoiceRecognitionHandlerUnitTest {
     @Test
     @SmallTest
     public void testParseResults_EmptyBundle() {
-        assertNull(mHandler.convertBundleToVoiceResults(new Bundle()));
+        assertNull(VoiceRecognitionIntentHandler.convertBundleToVoiceResults(new Bundle()));
     }
 
     @Test
     @SmallTest
     public void testParseResults_MismatchedTextAndConfidenceScores() {
         assertNull(
-                mHandler.convertBundleToVoiceResults(
+                VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(
                                 new String[] {"blah"}, new float[] {0f, 1f})));
         assertNull(
-                mHandler.convertBundleToVoiceResults(
+                VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(
                                 new String[] {"blah", "foo"}, new float[] {7f})));
     }
@@ -464,7 +479,7 @@ public class VoiceRecognitionHandlerUnitTest {
         float[] confidences = new float[] {0.8f, 1.0f, 1.0f};
 
         List<VoiceResult> results =
-                mHandler.convertBundleToVoiceResults(
+                VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(texts, confidences));
         assertEquals(3, results.size());
         RecognitionTestHelper.assertVoiceResultsAreEqual(results, texts, confidences);
@@ -481,13 +496,34 @@ public class VoiceRecognitionHandlerUnitTest {
 
         String[] texts = new String[] {"a", "www. b .co .uk", "engadget .com", "www.google.com"};
         float[] confidences = new float[] {1.0f, 1.0f, 1.0f, 1.0f};
-        List<VoiceResult> results =
-                mHandler.convertBundleToVoiceResults(
+        List<VoiceResult> rawResults =
+                VoiceRecognitionIntentHandler.convertBundleToVoiceResults(
                         RecognitionTestHelper.createPlaceholderBundle(texts, confidences));
 
+        mHandler.handleTranscriptionResult(rawResults);
+
+        verify(mAutocompleteCoordinator).onVoiceResults(mVoiceResults.capture());
         RecognitionTestHelper.assertVoiceResultsAreEqual(
-                results,
+                mVoiceResults.getValue(),
                 new String[] {"a", "www.b.co.uk", "engadget.com", "www.google.com"},
                 new float[] {1.0f, 1.0f, 1.0f, 1.0f});
+    }
+
+    @Test
+    @SmallTest
+    public void testHandleTranscriptionResult_aimRequestLowConfidence_noUrlNavigation() {
+        float confidence = 0;
+        setVoiceResult(Activity.RESULT_OK, /* text= */ "voice text", confidence);
+
+        doReturn(mFuseboxSessionState).when(mDataProvider).getFuseboxSessionState();
+        doReturn(mAutocompleteInput).when(mFuseboxSessionState).getAutocompleteInput();
+        doReturn(AutocompleteRequestType.AI_MODE).when(mAutocompleteInput).getRequestType();
+
+        mHandler.startVoiceRecognition(VoiceInteractionSource.OMNIBOX, () -> {});
+
+        ArgumentCaptor<AutocompleteInput> inputCaptor =
+                ArgumentCaptor.forClass(AutocompleteInput.class);
+        verify(mOmniboxStub).beginInput(inputCaptor.capture());
+        assertEquals(AutocompleteRequestType.AI_MODE, inputCaptor.getValue().getRequestType());
     }
 }

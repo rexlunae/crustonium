@@ -20,7 +20,11 @@ enum class PinAppToTaskbarChannel {
   kFirstRunExperience,
   kSettingsPage,
   kPinWebApp,
-  kMaxValue = kPinWebApp,
+  kDefaultBrowserBubbleDialog,
+  kDefaultBrowserModalDialogWithSettingsImage,
+  kDefaultBrowserModalDialogWithoutSettingsImage,
+  kDefaultBrowserVisualGuidedSetter,
+  kMaxValue = kDefaultBrowserVisualGuidedSetter,
 };
 // LINT.ThenChange(//chrome/browser/win/taskbar_manager.cc:PinAppToTaskbarChannel)
 
@@ -28,6 +32,9 @@ enum class PinAppToTaskbarChannel {
 // check if Chrome should offer to pin. These functions do most of their work on
 // a background thread, but have to finish the work on the UI thread.
 // The result callback will be called from the thread that called them.
+
+// Returns true if the com.microsoft.windows.taskbar.pin feature can be used.
+bool PinLimitedAccessFeatureAvailable();
 
 // `callback` is called with true if pinning is supported, and the app is not
 // currently pinned to the taskbar, false otherwise. There must be a shortcut

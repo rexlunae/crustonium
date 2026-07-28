@@ -4,15 +4,24 @@
 
 #include "components/autofill/core/browser/metrics/field_filling_stats_and_score_metrics.h"
 
-#include "base/containers/flat_map.h"
+#include <stddef.h>
+
+#include <algorithm>
+#include <memory>
+#include <string>
+
+#include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/field_type_utils.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
-#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
+#include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/html_field_types.h"
 
 namespace autofill::autofill_metrics {
@@ -170,10 +179,10 @@ FieldFillingStatus GetFieldFillingStatus(const AutofillField& field) {
   const bool possible_types_empty =
       !FieldHasMeaningfulPossibleFieldTypes(field);
   const bool possible_types_contain_type = TypeOfFieldIsPossibleType(field);
-  if (field.is_autofilled()) {
+  if (field.last_modifier() == FieldModifier::kAutofill) {
     return FieldFillingStatus::kAccepted;
   }
-  if (field.previously_autofilled()) {
+  if (field.all_modifiers().contains(FieldModifier::kAutofill)) {
     if (is_empty) {
       return FieldFillingStatus::kCorrectedToEmpty;
     }

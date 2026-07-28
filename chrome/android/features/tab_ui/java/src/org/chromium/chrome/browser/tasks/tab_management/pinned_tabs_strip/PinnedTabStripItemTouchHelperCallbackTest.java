@@ -31,11 +31,12 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
-import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridItemLongPressOrchestrator.OnLongPressTabItemEventListener;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties;
@@ -70,10 +71,12 @@ public class PinnedTabStripItemTouchHelperCallbackTest {
     @Mock private RecyclerView mRecyclerView;
     @Mock private OnLongPressTabItemEventListener mOnLongPressListener;
     @Mock private Canvas mCanvas;
-    @Mock private MonotonicObservableSupplier<TabGroupModelFilter> mTabGroupModelFilterSupplier;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
+    @Mock private TabModel mTabModel;
     @Mock private View mItemView1;
     @Mock private View mItemView2;
+
+    private final SettableMonotonicObservableSupplier<TabModel> mTabModelSupplier =
+            ObservableSuppliers.createMonotonic();
     private ViewHolder mMockViewHolder1;
     private ViewHolder mMockViewHolder2;
     private RecyclerView.ViewHolder mViewHolder;
@@ -82,17 +85,18 @@ public class PinnedTabStripItemTouchHelperCallbackTest {
     @Before
     public void setUp() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
+        mTabModelSupplier.set(mTabModel);
+
         mViewHolder = spy(new TestViewHolder(new View(context)));
 
         when(mRecyclerViewSupplier.get()).thenReturn(mRecyclerView);
-        when(mTabGroupModelFilterSupplier.get()).thenReturn(mTabGroupModelFilter);
         mMockViewHolder1 = prepareMockViewHolder(TAB_ID1, mItemView1, POSITION1);
         mMockViewHolder2 = prepareMockViewHolder(TAB_ID2, mItemView2, POSITION2);
 
         mCallback =
                 new PinnedTabStripItemTouchHelperCallback(
                         context,
-                        mTabGroupModelFilterSupplier,
+                        mTabModelSupplier,
                         mTabListModel,
                         mRecyclerViewSupplier,
                         mOnLongPressListener);
@@ -102,7 +106,7 @@ public class PinnedTabStripItemTouchHelperCallbackTest {
     public void testOnMove() {
         mCallback.onMove(null, mMockViewHolder1, mMockViewHolder2);
 
-        verify(mTabGroupModelFilter).moveRelatedTabs(TAB_ID1, POSITION2);
+        verify(mTabModel).moveRelatedTabs(TAB_ID1, POSITION2);
         verify(mTabListModel).move(POSITION1, POSITION2);
     }
 
@@ -124,7 +128,7 @@ public class PinnedTabStripItemTouchHelperCallbackTest {
     @Test
     public void testLongPress_NoOpWithNoAction() {
         mCallback.onSelectedChanged(mViewHolder, ItemTouchHelper.ACTION_STATE_IDLE);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mOnLongPressListener, never()).onLongPressEvent(anyInt(), any());
     }
 
@@ -138,7 +142,7 @@ public class PinnedTabStripItemTouchHelperCallbackTest {
     public void testLongPress_CancelledByClearView() {
         mCallback.onSelectedChanged(mViewHolder, ItemTouchHelper.ACTION_STATE_DRAG);
         mCallback.clearView(mRecyclerView, mViewHolder);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mOnLongPressListener, never()).onLongPressEvent(anyInt(), any());
     }
 
@@ -157,7 +161,7 @@ public class PinnedTabStripItemTouchHelperCallbackTest {
         mCallback.onSelectedChanged(mViewHolder, ItemTouchHelper.ACTION_STATE_DRAG);
         // dX=threshold, dY=1, dX*dX+dY*dY > threshold*threshold
         mCallback.onChildDraw(mCanvas, mRecyclerView, mViewHolder, threshold, 1f, 0, true);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mOnLongPressListener, never()).onLongPressEvent(anyInt(), any());
     }
 

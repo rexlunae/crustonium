@@ -6,16 +6,16 @@
 
 #include <memory>
 #include <optional>
-#include <string>
 #include <utility>
 
 #include "base/check.h"
-#include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/types/expected.h"
+#include "base/types/expected_macros.h"
 #include "components/persistent_cache/backend.h"
 #include "components/persistent_cache/backend_type.h"
 #include "components/persistent_cache/metrics_util.h"
@@ -26,18 +26,13 @@
 namespace persistent_cache {
 
 // static
-std::unique_ptr<PersistentCache> PersistentCache::Bind(
-    Client client,
-    PendingBackend pending_backend) {
+base::expected<std::unique_ptr<PersistentCache>, TransactionError>
+PersistentCache::Bind(Client client, PendingBackend pending_backend) {
   // If there is ever occasion to have more than one type, branch on the type
   // here.
-  if (auto backend =
-          SqliteBackendImpl::Bind(std::move(pending_backend), client);
-      backend) {
-    return std::make_unique<PersistentCache>(client, std::move(backend));
-  }
-
-  return nullptr;
+  ASSIGN_OR_RETURN(auto backend,
+                   SqliteBackendImpl::Bind(std::move(pending_backend), client));
+  return std::make_unique<PersistentCache>(client, std::move(backend));
 }
 
 PersistentCache::PersistentCache(Client client,
@@ -49,7 +44,8 @@ PersistentCache::PersistentCache(Client client,
 PersistentCache::~PersistentCache() = default;
 
 base::expected<std::optional<EntryMetadata>, TransactionError>
-PersistentCache::Find(std::string_view key, BufferProvider buffer_provider) {
+PersistentCache::Find(base::span<const uint8_t> key,
+                      BufferProvider buffer_provider) {
   std::optional<base::ElapsedTimer> timer = MaybeGetTimerForHistogram();
 
   auto entry_metadata = backend_->Find(key, buffer_provider);
@@ -64,7 +60,7 @@ PersistentCache::Find(std::string_view key, BufferProvider buffer_provider) {
 }
 
 base::expected<void, TransactionError> PersistentCache::Insert(
-    std::string_view key,
+    base::span<const uint8_t> key,
     base::span<const uint8_t> content,
     EntryMetadata metadata) {
   std::optional<base::ElapsedTimer> timer = MaybeGetTimerForHistogram();
@@ -73,6 +69,11 @@ base::expected<void, TransactionError> PersistentCache::Insert(
   if (timer.has_value()) {
     base::UmaHistogramMicrosecondsTimes(GetHistogramName(client_, "Insert"),
                                         timer->Elapsed());
+
+    if (result.has_value()) {
+      base::UmaHistogramCounts10M(GetHistogramName(client_, "InsertSize"),
+                                  base::saturated_cast<int>(content.size()));
+    }
   }
 
   return result;
@@ -89,8 +90,8 @@ Backend* PersistentCache::GetBackendForTesting() {
 std::optional<base::ElapsedTimer> PersistentCache::MaybeGetTimerForHistogram() {
   std::optional<base::ElapsedTimer> timer;
 
-  base::AutoLock lock(metrics_subsampler_lock_);
-  if (metrics_subsampler_.ShouldSample(kTimingLoggingProbability)) {
+  static constexpr double kTimingLoggingProbability = 0.01;
+  if (base::ShouldRecordSubsampledMetric(kTimingLoggingProbability)) {
     timer.emplace();
   }
 

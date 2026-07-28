@@ -118,7 +118,6 @@ class TestingBrowserProcess
   ui::UnownedUserDataHost& GetUnownedUserDataHost() override;
   const ui::UnownedUserDataHost& GetUnownedUserDataHost() const override;
   void EndSession() override;
-  void FlushLocalStateAndReply(base::OnceClosure reply) override;
   metrics_services_manager::MetricsServicesManager* GetMetricsServicesManager()
       override;
   metrics::MetricsService* metrics_service() override;
@@ -195,7 +194,11 @@ class TestingBrowserProcess
   SerialPolicyAllowedPorts* serial_policy_allowed_ports() override;
 #if !BUILDFLAG(IS_ANDROID)
   HidSystemTrayIcon* hid_system_tray_icon() override;
+  void set_hid_system_tray_icon_for_test(
+      std::unique_ptr<HidSystemTrayIcon> icon) override;
   UsbSystemTrayIcon* usb_system_tray_icon() override;
+  void set_usb_system_tray_icon_for_test(
+      std::unique_ptr<UsbSystemTrayIcon> icon) override;
 #endif
   os_crypt_async::OSCryptAsync* os_crypt_async() override;
   void set_additional_os_crypt_async_provider_for_test(
@@ -230,10 +233,6 @@ class TestingBrowserProcess
   void SetComponentUpdater(
       std::unique_ptr<component_updater::ComponentUpdateService>
           component_updater);
-  void SetHidSystemTrayIcon(
-      std::unique_ptr<HidSystemTrayIcon> hid_system_tray_icon);
-  void SetUsbSystemTrayIcon(
-      std::unique_ptr<UsbSystemTrayIcon> usb_system_tray_icon);
 #endif
 
   // Same as local_state() but provides TestingPrefServiceSimple interface.
@@ -261,6 +260,16 @@ class TestingBrowserProcess
   // |features_|, so having it lower in this file could cause use-after-free
   // issues.
   std::unique_ptr<GlobalFeatures> features_;
+
+  // Tracks whether `TearDownGlobalFeaturesForTesting()` has been called for
+  // TestingBrowserProcess yet. This is public and can be invoked by individual
+  // test cases depending on their test setup and teardown requirements. Track
+  // this so we know whether this needs to be called before
+  // TestingBrowserProcess is finally destroyed.
+  // TODO(crbug.com/485923746): Explore whether we can guarantee
+  // `TearDownGlobalFeaturesForTesting()` is called only once during
+  // destruction.
+  bool is_global_features_torn_down_ = false;
 
   // The value returned by `IsShuttingDown()`.
   bool is_shutting_down_ = false;

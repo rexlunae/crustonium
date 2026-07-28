@@ -12,16 +12,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/syslog_logging.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_broker.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "components/account_id/account_id.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -75,8 +72,17 @@ PolicyUserManagerController::PolicyUserManagerController(
     user_manager::UserManager* user_manager,
     CrosSettings* cros_settings,
     DeviceSettingsService* device_settings_service,
-    policy::MinimumVersionPolicyHandler* minimum_version_policy_handler)
-    : user_manager_(user_manager), cros_settings_(cros_settings) {
+    policy::MinimumVersionPolicyHandler* minimum_version_policy_handler,
+    policy::DeviceLocalAccountPolicyService*
+        device_local_account_policy_service)
+    : user_manager_(user_manager),
+      cros_settings_(cros_settings),
+      device_local_account_policy_service_(
+          device_local_account_policy_service) {
+  if (!device_local_account_policy_service_) {
+    CHECK_IS_TEST();
+  }
+
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   // UserManager outlives PolicyUserManagerController, and subscriptions are
@@ -146,10 +152,9 @@ PolicyUserManagerController::~PolicyUserManagerController() = default;
 
 void PolicyUserManagerController::OwnershipStatusChanged() {
   if (!device_local_account_policy_service_observation_.IsObserving()) {
+    CHECK(device_local_account_policy_service_);
     device_local_account_policy_service_observation_.Observe(
-        g_browser_process->platform_part()
-            ->browser_policy_connector_ash()
-            ->GetDeviceLocalAccountPolicyService());
+        device_local_account_policy_service_);
   }
   RetrieveTrustedDevicePolicies();
 }
@@ -267,7 +272,7 @@ void PolicyUserManagerController::OnUsersSignInConstraintsUpdated() {
     if (!user_manager_->IsUserAllowed(*user)) {
       SYSLOG(ERROR)
           << "The current user is not allowed, terminating the session.";
-      chrome::AttemptUserExit();
+      session_manager::SessionManager::Get()->RequestSignOut();
     }
   }
 }

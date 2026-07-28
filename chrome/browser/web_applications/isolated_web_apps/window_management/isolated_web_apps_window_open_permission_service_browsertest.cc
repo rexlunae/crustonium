@@ -16,8 +16,6 @@
 #include "chrome/browser/notifications/notification_handler.h"
 #include "chrome/browser/notifications/stub_notification_display_service.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
@@ -30,7 +28,6 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/isolated_web_apps/test_support/signing_keys.h"
@@ -70,7 +67,8 @@ class IsolatedWebAppsWindowOpenPermissionServiceBrowserTest
   void SetUpOnMainThread() override {
     IsolatedWebAppBrowserTestHarness::SetUpOnMainThread();
 
-    WebAppProvider* provider = WebAppProvider::GetForTest(browser()->profile());
+    WebAppProvider* provider =
+        WebAppProvider::GetForTest(browser()->GetProfile());
     test::WaitUntilWebAppProviderAndSubsystemsReady(provider);
 
     display_service_tester_ =
@@ -86,7 +84,7 @@ class IsolatedWebAppsWindowOpenPermissionServiceBrowserTest
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   WebAppProvider& provider() { return *WebAppProvider::GetForTest(profile()); }
 

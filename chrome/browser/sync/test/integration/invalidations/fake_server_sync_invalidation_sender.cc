@@ -72,9 +72,16 @@ void FakeServerSyncInvalidationSender::OnCommit(
           syncer::GetSpecificsFieldNumberFromDataType(data_type));
     }
 
-    // Versions are used to keep hints ordered. Versions are not really used by
-    // tests, just use current time.
-    payload.set_version(base::Time::Now().InMillisecondsSinceUnixEpoch());
+    // Versions are used to keep hints ordered. SyncEngineBackend interprets the
+    // version as microseconds since the Unix epoch when calculating transit
+    // latency. Additionally, set the dedicated publish and dispatch time
+    // fields.
+    payload.set_version(
+        (base::Time::Now() - base::Time::UnixEpoch()).InMicroseconds());
+    payload.set_server_publish_time_unix_epoch_millis(
+        (base::Time::Now() - base::Time::UnixEpoch()).InMilliseconds());
+    payload.set_server_dispatch_time_unix_epoch_millis(
+        (base::Time::Now() - base::Time::UnixEpoch()).InMilliseconds());
     payload.set_hint("hint");
 
     invalidations_to_deliver_[token].push_back(std::move(payload));

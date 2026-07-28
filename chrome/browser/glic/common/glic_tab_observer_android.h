@@ -44,12 +44,14 @@ class GlicTabObserverAndroid : public GlicTabObserver,
   void DidAddTab(TabAndroid* tab, TabModel::TabLaunchType type) override;
   void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type) override;
   void TabClosureCommitted(TabAndroid* tab) override;
+  void DidRemoveTabForClosure(TabAndroid* tab) override;
   void TabRemoved(TabAndroid* tab) override;
   void DidMoveTab(TabAndroid* tab, int new_index, int old_index) override;
   void OnTabClosePending(const std::vector<TabAndroid*>& tabs,
                          TabModel::TabClosingSource source) override;
   void TabClosureUndone(TabAndroid* tab) override;
   void OnTabCloseUndone(const std::vector<TabAndroid*>& tabs) override;
+  void WillCloseTab(TabAndroid* tab) override;
 
   // TabAndroid::Observer:
   void OnInitWebContents(TabAndroid* tab) override;
@@ -58,12 +60,15 @@ class GlicTabObserverAndroid : public GlicTabObserver,
   class TabContentObserver;
 
   void OnTabChanged(TabAndroid* tab);
+  void OnTabGroupChanged(tabs::TabInterface* tab,
+                         std::optional<tab_groups::TabGroupId> new_group);
   void StartObservingTab(TabAndroid* tab);
   void StopObservingTab(TabAndroid* tab);
 
   tabs::TabInterface* GetLastActiveTab(TabModel* tab_model);
 
   void ResetLastActiveTab(TabModel* tab_model);
+  void MaybeClearLastActiveTab(TabModel* tab_model, TabAndroid* tab);
 
   raw_ptr<Profile> profile_;
   EventCallback callback_;
@@ -82,6 +87,9 @@ class GlicTabObserverAndroid : public GlicTabObserver,
 
   absl::flat_hash_map<TabAndroid*, std::unique_ptr<TabContentObserver>>
       tab_observers_;
+
+  absl::flat_hash_map<TabAndroid*, base::CallbackListSubscription>
+      tab_group_subscriptions_;
 };
 
 #endif  // CHROME_BROWSER_GLIC_COMMON_GLIC_TAB_OBSERVER_ANDROID_H_

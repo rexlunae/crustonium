@@ -673,7 +673,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
 
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("Extension")
-          .SetManifestVersion(2)
           .SetID(crx_file::id_util::GenerateId("extension"))
           .Build();
   extension_registrar()->AddExtension(extension.get());
@@ -690,7 +689,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
 
   scoped_refptr<const Extension> extension_with_options =
       ExtensionBuilder("Extension with options page")
-          .SetManifestVersion(2)
           .SetID(crx_file::id_util::GenerateId("extension_with_options_page"))
           .SetManifestKey("options_page", "options_page.html")
           .Build();
@@ -1560,8 +1558,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuModelTest,
   // Update kOriginalUrl to have "on site" site access. This will make all other
   // non-restricted urls to have "on click" site access.
   SitePermissionsHelper permissions(profile());
-  permissions.UpdateSiteAccess(*extension, web_contents,
-                               PermissionsManager::UserSiteAccess::kOnSite);
+  permissions.UpdateSiteAccess(
+      *extension, web_contents, PermissionsManager::UserSiteAccess::kOnSite,
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
 
   PermissionsManager* permissions_manager = PermissionsManager::Get(profile());
   EXPECT_EQ(permissions_manager->GetUserSiteAccess(*extension, kOriginalUrl),

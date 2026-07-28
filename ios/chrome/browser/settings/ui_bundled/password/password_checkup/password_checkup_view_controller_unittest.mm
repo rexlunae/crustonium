@@ -69,6 +69,11 @@ class PasswordCheckupViewControllerTest
 
     CreateController();
 
+    // Embed the controller in a navigation controller to test navigation.
+    __unused UINavigationController* navigationController =
+        [[UINavigationController alloc]
+            initWithRootViewController:GetPasswordCheckupViewController()];
+
     PasswordCheckupViewController* view_controller =
         GetPasswordCheckupViewController();
 
@@ -79,6 +84,9 @@ class PasswordCheckupViewControllerTest
     mediator_.consumer = view_controller;
 
     handler_ = OCMStrictProtocolMock(@protocol(PasswordCheckupCommands));
+    // Stub dismissAfterAllPasswordsGone by default to tolerate async state
+    // transitions that can happen during test setup/execution.
+    OCMStub([handler_ dismissAfterAllPasswordsGone]);
     view_controller.handler = handler_;
 
     // Add a saved password since Password Checkup is not available when the
@@ -108,7 +116,7 @@ class PasswordCheckupViewControllerTest
         GetPasswordCheckupViewController();
 
     password_manager::InsecurePasswordCounts counts = {};
-    for (const auto& signon_realm_forms : GetTestStore().stored_passwords()) {
+    for (const auto& signon_realm_forms : GetAllLoginsSync(&GetTestStore())) {
       for (const PasswordForm& form : signon_realm_forms.second) {
         CredentialUIEntry credential = CredentialUIEntry(form);
         if (credential.IsMuted()) {
@@ -131,45 +139,45 @@ class PasswordCheckupViewControllerTest
                       [mediator_ formattedElapsedTimeSinceLastCheck]];
   }
 
-  // Adds a form to the test password store.
-  void AddPasswordForm(std::unique_ptr<password_manager::PasswordForm> form) {
-    GetTestStore().AddLogin(*form);
+  // Adds a credential to the test password store.
+  void AddStoredCredential(password_manager::StoredCredential cred) {
+    GetTestStore().AddLogin(std::move(cred));
     RunUntilIdle();
   }
 
   // Creates and adds a saved password form.
   void AddSavedForm(std::string url = "http://www.example1.com/") {
-    auto form = std::make_unique<password_manager::PasswordForm>();
-    form->url = GURL(url);
-    form->username_element = u"Email";
-    form->username_value = u"test@egmail.com";
-    form->password_element = u"Passwd";
-    form->password_value = u"test";
-    form->signon_realm = url;
-    form->scheme = password_manager::PasswordForm::Scheme::kHtml;
-    form->in_store = password_manager::PasswordForm::Store::kProfileStore;
-    AddPasswordForm(std::move(form));
+    password_manager::StoredCredential cred;
+    cred.url = GURL(url);
+    cred.username_element = u"Email";
+    cred.username_value = u"test@egmail.com";
+    cred.password_element = u"Passwd";
+    cred.password_value = u"test";
+    cred.signon_realm = url;
+    cred.scheme = password_manager::PasswordForm::Scheme::kHtml;
+    cred.in_store = password_manager::PasswordForm::Store::kProfileStore;
+    AddStoredCredential(std::move(cred));
   }
 
   // Creates and adds a saved insecure password form.
   void AddSavedInsecureForm(InsecureType insecure_type,
                             bool is_muted = false,
                             std::string url = "http://www.example2.com/") {
-    auto form = std::make_unique<password_manager::PasswordForm>();
-    form->url = GURL(url);
-    form->username_element = u"Email";
-    form->username_value = u"test@egmail.com";
-    form->password_element = u"Passwd";
-    form->password_value = u"test";
-    form->signon_realm = url;
-    form->scheme = password_manager::PasswordForm::Scheme::kHtml;
-    form->in_store = password_manager::PasswordForm::Store::kProfileStore;
-    form->password_issues = {
+    password_manager::StoredCredential cred;
+    cred.url = GURL(url);
+    cred.username_element = u"Email";
+    cred.username_value = u"test@egmail.com";
+    cred.password_element = u"Passwd";
+    cred.password_value = u"test";
+    cred.signon_realm = url;
+    cred.scheme = password_manager::PasswordForm::Scheme::kHtml;
+    cred.in_store = password_manager::PasswordForm::Store::kProfileStore;
+    cred.password_issues = {
         {insecure_type,
          password_manager::InsecurityMetadata(
              base::Time::Now(), password_manager::IsMuted(is_muted),
              password_manager::TriggerBackendNotification(false))}};
-    AddPasswordForm(std::move(form));
+    AddStoredCredential(std::move(cred));
   }
 
   // Checks if the header image of the table view is as expected.
@@ -605,39 +613,99 @@ TEST_F(PasswordCheckupViewControllerTest, TestTapWeakPasswordsNotifiesHandler) {
   EXPECT_OCMOCK_VERIFY((id)handler_);
 }
 
-// Verifies that interactions are ignored during the cooldown period.
-TEST_F(PasswordCheckupViewControllerTest, TestCooldown) {
-  AddSavedInsecureForm(InsecureType::kLeaked);
-  ChangePasswordCheckupHomepageState(PasswordCheckupHomepageStateDone);
-
-  // 1. First tap should succeed.
-  OCMExpect([handler_ showPasswordIssuesWithWarningType:
-                          WarningType::kCompromisedPasswordsWarning]);
-  SimulateTap(/*index=*/0, /*section=*/0);
-  EXPECT_OCMOCK_VERIFY((id)handler_);
-
-  // 2. Second tap immediately after should be ignored (cooldown active).
-  // We strictly expect NO call to handler.
-  SimulateTap(/*index=*/0, /*section=*/0);
-  EXPECT_OCMOCK_VERIFY((id)handler_);
-
-  // 3. Fast forward past the cooldown ( > 500 milliseconds).
-  // Using 600us to be safe.
-  task_environment_.FastForwardBy(base::Milliseconds(600));
-
-  // 4. Third tap should succeed again.
-  OCMExpect([handler_ showPasswordIssuesWithWarningType:
-                          WarningType::kCompromisedPasswordsWarning]);
-  SimulateTap(/*index=*/0, /*section=*/0);
-  EXPECT_OCMOCK_VERIFY((id)handler_);
-}
-
 // Verifies that deleting all saved passwords through Password Checkup triggers
 // a dismissal in the handler.
 TEST_F(PasswordCheckupViewControllerTest, TestDismissAfterPasswordsGone) {
+  // Re-create a fresh strict mock without the default stub to verify dismissal.
+  handler_ = OCMStrictProtocolMock(@protocol(PasswordCheckupCommands));
+  GetPasswordCheckupViewController().handler = handler_;
+
   OCMExpect([handler_ dismissAfterAllPasswordsGone]);
 
   ChangePasswordCheckupHomepageState(PasswordCheckupHomepageStateDisabled);
 
   EXPECT_OCMOCK_VERIFY((id)handler_);
+}
+
+// Verifies that a successful navigation blocks subsequent taps.
+TEST_F(PasswordCheckupViewControllerTest, TestSuccessfulNavigationBlocksTaps) {
+  AddSavedInsecureForm(InsecureType::kLeaked);
+  ChangePasswordCheckupHomepageState(PasswordCheckupHomepageStateDone);
+
+  PasswordCheckupViewController* pwd_checkup_vc =
+      GetPasswordCheckupViewController();
+  UIViewController* dummy_vc = [[UIViewController alloc] init];
+
+  // Stub the handler to perform a successful push.
+  OCMStub([handler_ showPasswordIssuesWithWarningType:
+                        WarningType::kCompromisedPasswordsWarning])
+      .andDo(^(NSInvocation* invocation) {
+        [pwd_checkup_vc.navigationController pushViewController:dummy_vc
+                                                       animated:NO];
+      });
+
+  // 1. First tap should succeed and trigger the push.
+  SimulateTap(/*index=*/0, /*section=*/0);
+  EXPECT_EQ(pwd_checkup_vc.navigationController.topViewController, dummy_vc);
+
+  // 2. Second tap should be ignored because navigating is active.
+  // We reject any calls to the handler.
+  OCMReject([handler_ showPasswordIssuesWithWarningType:
+                          WarningType::kCompromisedPasswordsWarning]);
+  SimulateTap(/*index=*/0, /*section=*/0);
+  EXPECT_OCMOCK_VERIFY((id)handler_);
+
+  // Verify the first part (reject was not violated)
+  EXPECT_OCMOCK_VERIFY((id)handler_);
+
+  // Re-setup a new mock for the second part. Use a regular mock to tolerate
+  // async noise (like dismissAfterAllPasswordsGone).
+  id<PasswordCheckupCommands> newHandler =
+      OCMProtocolMock(@protocol(PasswordCheckupCommands));
+  pwd_checkup_vc.handler = newHandler;
+
+  // 4. Simulate returning to the screen (pop the dummy and call
+  // viewWillAppear).
+  [pwd_checkup_vc.navigationController popViewControllerAnimated:NO];
+  EXPECT_EQ(pwd_checkup_vc.navigationController.topViewController,
+            pwd_checkup_vc);
+  [pwd_checkup_vc viewWillAppear:NO];
+
+  // 5. Third tap should now succeed again.
+  OCMExpect([newHandler showPasswordIssuesWithWarningType:
+                            WarningType::kCompromisedPasswordsWarning]);
+  SimulateTap(/*index=*/0, /*section=*/0);
+  EXPECT_OCMOCK_VERIFY((id)newHandler);
+}
+
+// Verifies that a failed navigation (no push) does not block subsequent taps.
+TEST_F(PasswordCheckupViewControllerTest,
+       TestFailedNavigationDoesNotBlockTaps) {
+  AddSavedInsecureForm(InsecureType::kLeaked);
+  ChangePasswordCheckupHomepageState(PasswordCheckupHomepageStateDone);
+
+  PasswordCheckupViewController* pwd_checkup_vc =
+      GetPasswordCheckupViewController();
+
+  // Stub the handler to do nothing (failed navigation).
+  OCMStub([handler_ showPasswordIssuesWithWarningType:
+                        WarningType::kCompromisedPasswordsWarning]);
+
+  // 1. First tap should succeed (calls handler, but no push).
+  SimulateTap(/*index=*/0, /*section=*/0);
+  EXPECT_EQ(pwd_checkup_vc.navigationController.topViewController,
+            pwd_checkup_vc);
+
+  // Re-setup a new mock for the second part to avoid stub/expect collision.
+  // Use a regular mock to tolerate async noise (like
+  // dismissAfterAllPasswordsGone).
+  id<PasswordCheckupCommands> newHandler =
+      OCMProtocolMock(@protocol(PasswordCheckupCommands));
+  pwd_checkup_vc.handler = newHandler;
+
+  // 2. Second tap should succeed again because navigating was never set.
+  OCMExpect([newHandler showPasswordIssuesWithWarningType:
+                            WarningType::kCompromisedPasswordsWarning]);
+  SimulateTap(/*index=*/0, /*section=*/0);
+  EXPECT_OCMOCK_VERIFY((id)newHandler);
 }

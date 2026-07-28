@@ -7,6 +7,7 @@
 #include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 #include "net/cert/x509_certificate.h"
+#include "net/cert/x509_util.h"
 #include "net/log/net_log_values.h"
 #include "net/quic/address_utils.h"
 #include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_protocol.h"
@@ -275,16 +276,25 @@ base::DictValue NetLogQuicOnConnectionClosedParams(
 }
 
 base::DictValue NetLogQuicCertificateVerifiedParams(
-    scoped_refptr<X509Certificate> cert) {
-  // Only the subjects are logged so that we can investigate connection pooling.
-  // More fields could be logged in the future.
-  std::vector<std::string> dns_names;
-  cert->GetSubjectAltName(&dns_names, nullptr);
-  base::ListValue subjects;
-  for (auto& dns_name : dns_names) {
-    subjects.Append(std::move(dns_name));
+    scoped_refptr<X509Certificate> cert,
+    const std::vector<std::vector<uint8_t>>& server_tais) {
+  auto dict = base::DictValue();
+  if (cert != nullptr) {
+    // Only the subjects are logged so that we can investigate connection
+    // pooling. More fields could be logged in the future.
+    std::vector<std::string> dns_names;
+    cert->GetSubjectAltName(&dns_names, nullptr);
+    base::ListValue subjects;
+    for (auto& dns_name : dns_names) {
+      subjects.Append(std::move(dns_name));
+    }
+    dict.Set("subjects", std::move(subjects));
   }
-  return base::DictValue().Set("subjects", std::move(subjects));
+  if (!server_tais.empty()) {
+    dict.Set("server_available_trust_anchor_ids",
+             x509_util::TrustAnchorIDsToString(server_tais));
+  }
+  return dict;
 }
 
 base::DictValue NetLogQuicCryptoFrameParams(const quic::QuicCryptoFrame* frame,
@@ -340,10 +350,8 @@ base::DictValue NetLogQuicRetireConnectionIdFrameParams(
 
 base::DictValue NetLogQuicNewTokenFrameParams(
     const quic::QuicNewTokenFrame* frame) {
-  return base::DictValue().Set(
-      "token",
-      NetLogBinaryValue(reinterpret_cast<const void*>(frame->token.data()),
-                        frame->token.length()));
+  return base::DictValue().Set("token",
+                               NetLogBinaryValue(base::as_byte_span(frame->token)));
 }
 
 }  // namespace
@@ -760,14 +768,21 @@ void QuicEventLogger::OnSuccessfulVersionNegotiation(
       quic_version);
 }
 
-void QuicEventLogger::OnCertificateVerified(const CertVerifyResult& result) {
-  if (result.cert_status == CERT_STATUS_INVALID) {
-    net_log_.AddEvent(NetLogEventType::QUIC_SESSION_CERTIFICATE_VERIFY_FAILED);
-    return;
+void QuicEventLogger::OnCertificateVerified(
+    const CertVerifyResult& result,
+    const std::vector<std::vector<uint8_t>>& server_tais) {
+  if (IsCertStatusError(result.cert_status)) {
+    net_log_.AddEvent(NetLogEventType::QUIC_SESSION_CERTIFICATE_VERIFY_FAILED,
+                      [&] {
+                        return NetLogQuicCertificateVerifiedParams(
+                            result.verified_cert, server_tais);
+                      });
+  } else {
+    net_log_.AddEvent(NetLogEventType::QUIC_SESSION_CERTIFICATE_VERIFIED, [&] {
+      return NetLogQuicCertificateVerifiedParams(result.verified_cert,
+                                                 server_tais);
+    });
   }
-  net_log_.AddEvent(NetLogEventType::QUIC_SESSION_CERTIFICATE_VERIFIED, [&] {
-    return NetLogQuicCertificateVerifiedParams(result.verified_cert);
-  });
 }
 
 void QuicEventLogger::OnTransportParametersSent(

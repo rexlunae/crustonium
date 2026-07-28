@@ -41,7 +41,7 @@ ChromeContentSettingsAgentDelegate::ChromeContentSettingsAgentDelegate(
   content::RenderFrame* main_frame = render_frame->GetMainRenderFrame();
   // TODO(nasko): The main frame is not guaranteed to be in the same process
   // with this frame with --site-per-process. This code needs to be updated
-  // to handle this case. See https://crbug.com/496670.
+  // to handle this case. See https://crbug.com/40421201.
   if (main_frame && main_frame != render_frame) {
     auto* parent = ChromeContentSettingsAgentDelegate::Get(main_frame);
     temporarily_allowed_plugins_ = parent->temporarily_allowed_plugins_;
@@ -149,7 +149,7 @@ void ChromeContentSettingsAgentDelegate::DidCommitProvisionalLoad(
 void ChromeContentSettingsAgentDelegate::OnDestruct() {}
 
 bool ChromeContentSettingsAgentDelegate::IsPlatformApp() {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
   blink::WebLocalFrame* frame = render_frame_->GetWebFrame();
   blink::WebSecurityOrigin origin = frame->GetDocument().GetSecurityOrigin();
   const extensions::Extension* extension = GetExtension(origin);

@@ -39,6 +39,7 @@
 #include "services/network/public/cpp/resource_request_body.h"
 #include "third_party/blink/public/common/loader/resource_type_util.h"
 #include "third_party/blink/public/common/service_worker/service_worker_loader_helpers.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
 #include "components/offline_pages/core/request_header/offline_page_header.h"
@@ -175,7 +176,8 @@ void ServiceWorkerControlleeRequestHandler::MaybeCreateLoader(
   // `ServiceWorkerMainResourceLoaderInterceptor::MaybeCreateLoader()` to use
   // `skip_service_worker` flag.
   if (service_worker_loader_helpers::IsEligibleForSyntheticResponse(
-          browser_context, tentative_resource_request.url)) {
+          browser_context, context_->wrapper()->storage_partition(),
+          tentative_resource_request.url)) {
     const int kReloadFlags = net::LOAD_VALIDATE_CACHE | net::LOAD_BYPASS_CACHE;
     // If the navigation is from reloading, do not inject the service worker
     // registration.
@@ -245,11 +247,13 @@ void ServiceWorkerControlleeRequestHandler::ContinueWithRegistration(
         "ServiceWorker.FoundServiceWorkerRegistrationOnNavigation",
         status == blink::ServiceWorkerStatusCode::kOk);
 
+    auto track = perfetto::NamedTrack::FromPointer(
+        "ServiceWorker.MaybeCreateLoaderToContinueWithRegistration", this);
     TRACE_EVENT_BEGIN(
         "ServiceWorker",
-        "ServiceWorker.MaybeCreateLoaderToContinueWithRegistration",
-        perfetto::Track::FromPointer(this), find_registration_start_time);
-    TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this), now);
+        "ServiceWorker.MaybeCreateLoaderToContinueWithRegistration", track,
+        find_registration_start_time);
+    TRACE_EVENT_END("ServiceWorker", track, now);
   }
 
   if (status != blink::ServiceWorkerStatusCode::kOk) {
@@ -271,7 +275,6 @@ void ServiceWorkerControlleeRequestHandler::ContinueWithRegistration(
     CompleteWithoutLoader();
     return;
   }
-  service_worker_client_->AddMatchingRegistration(registration.get());
 
   if (!context_) {
     TRACE_EVENT(
@@ -303,6 +306,10 @@ void ServiceWorkerControlleeRequestHandler::ContinueWithRegistration(
     return;
   }
 
+  // Only expose the registration to the client (e.g. for .ready and claim())
+  // once the embedder has allowed the service worker for this client.
+  service_worker_client_->AddMatchingRegistration(registration.get());
+
   if (!service_worker_client_->IsEligibleForServiceWorkerController()) {
     // TODO(falken): Figure out a way to surface in the page's DevTools
     // console that the service worker was blocked for security.
@@ -323,14 +330,18 @@ void ServiceWorkerControlleeRequestHandler::ContinueWithRegistration(
   const bool need_to_update = !force_update_started_ &&
                               context_->force_update_on_page_load() &&
                               can_update;
+  // Passing an empty outside fetch client settings object as there is no
+  // associated execution context.
+  auto fetch_client_settings_object =
+      blink::mojom::FetchClientSettingsObject::New();
+  fetch_client_settings_object->policy_container_policies =
+      blink::mojom::PolicyContainerPolicies::New();
   if (need_to_update) {
     force_update_started_ = true;
     context_->UpdateServiceWorker(
         registration.get(), true /* force_bypass_cache */,
         true /* skip_script_comparison */,
-        // Passing an empty outside fetch client settings object as there is no
-        // associated execution context.
-        blink::mojom::FetchClientSettingsObject::New(),
+        std::move(fetch_client_settings_object),
         base::BindOnce(
             &ServiceWorkerControlleeRequestHandler::DidUpdateRegistration,
             weak_factory_.GetWeakPtr(), registration));

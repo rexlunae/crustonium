@@ -26,6 +26,29 @@ chromium-metrics-reviews@google.com.
 
 <enums>
 
+<!-- LINT.IfChange(AccessibilityAndroidAssistiveTools) -->
+
+<enum name="AccessibilityAndroidAccessibilityTools">
+  <summary>
+    List known accessibility tools on Android; only includes assistive
+    technologies intended for disabled users rather than automation tools such
+    as password managers using the accessibility APIs. The &quot;Unknown
+    Declared Accessibility Tool&quot; variant includes tools that declare
+    `isAccessibilityTool = true` on their Android manifest but are not found
+    elsewhere in the list.
+  </summary>
+  <int value="0" label="Unknown Declared Accessibility Tool"/>
+  <int value="1" label="TalkBack"/>
+  <int value="2" label="Voice Access"/>
+  <int value="3" label="Action Blocks"/>
+  <int value="4" label="Sound Amplifier"/>
+  <int value="5" label="Switch Access"/>
+  <int value="6" label="Accessibility Menu"/>
+  <int value="7" label="BrailleBack"/>
+</enum>
+
+<!-- LINT.ThenChange(//content/browser/accessibility/browser_accessibility_state_impl_android.cc:AccessibilityAndroidAssistiveTools) -->
+
 <!-- LINT.IfChange(AccessibilityAndroidServiceInfoEnum)-->
 
 <enum name="AccessibilityAndroidServiceInfoEnum">
@@ -38,64 +61,65 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS"/>
   <int value="4" label="CAPABILITY_CAN_REQUEST_TOUCH_EXPLORATION"/>
   <int value="5" label="CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT"/>
-  <int value="6" label="EVENT_ANNOUNCEMENT"/>
-  <int value="7" label="EVENT_ASSIST_READING_CONTEXT"/>
-  <int value="8" label="EVENT_GESTURE_DETECTION_END"/>
-  <int value="9" label="EVENT_GESTURE_DETECTION_START"/>
-  <int value="10" label="EVENT_NOTIFICATION_STATE_CHANGED"/>
-  <int value="11" label="EVENT_TOUCH_EXPLORATION_GESTURE_END"/>
-  <int value="12" label="EVENT_TOUCH_EXPLORATION_GESTURE_START"/>
-  <int value="13" label="EVENT_TOUCH_INTERACTION_END"/>
-  <int value="14" label="EVENT_TOUCH_INTERACTION_START"/>
-  <int value="15" label="EVENT_VIEW_ACCESSIBILITY_FOCUSED"/>
-  <int value="16" label="EVENT_VIEW_ACCESSIBILITY_FOCUS_CLEARED"/>
-  <int value="17" label="EVENT_VIEW_CLICKED"/>
-  <int value="18" label="EVENT_VIEW_CONTEXT_CLICKED"/>
-  <int value="19" label="EVENT_VIEW_FOCUSED"/>
-  <int value="20" label="EVENT_VIEW_HOVER_ENTER"/>
-  <int value="21" label="EVENT_VIEW_HOVER_EXIT"/>
-  <int value="22" label="EVENT_VIEW_LONG_CLICKED"/>
-  <int value="23" label="EVENT_VIEW_SCROLLED"/>
-  <int value="24" label="EVENT_VIEW_SELECTED"/>
-  <int value="25" label="EVENT_VIEW_TEXT_CHANGED"/>
-  <int value="26" label="EVENT_VIEW_TEXT_SELECTION_CHANGED"/>
-  <int value="27" label="EVENT_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY"/>
-  <int value="28" label="EVENT_WINDOWS_CHANGED"/>
-  <int value="29" label="EVENT_WINDOW_CONTENT_CHANGED"/>
-  <int value="30" label="EVENT_WINDOW_STATE_CHANGED"/>
-  <int value="31" label="FEEDBACK_AUDIBLE"/>
-  <int value="32" label="FEEDBACK_BRAILLE"/>
-  <int value="33" label="FEEDBACK_GENERIC"/>
-  <int value="34" label="FEEDBACK_HAPTIC"/>
-  <int value="35" label="FEEDBACK_SPOKEN"/>
-  <int value="36" label="FEEDBACK_VISUAL"/>
-  <int value="37" label="FLAG_FORCE_DIRECT_BOOT_AWARE"/>
-  <int value="38" label="FLAG_INCLUDE_NOT_IMPORTANT_VIEWS"/>
-  <int value="39" label="FLAG_REPORT_VIEW_IDS"/>
-  <int value="40" label="FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY"/>
-  <int value="41" label="FLAG_REQUEST_FILTER_KEY_EVENTS"/>
-  <int value="42" label="FLAG_REQUEST_TOUCH_EXPLORATION_MODE"/>
-  <int value="43" label="FLAG_RETRIEVE_INTERACTIVE_WINDOWS"/>
-  <int value="44" label="SERVICE_TYPE_UNKNOWN"/>
-  <int value="45" label="SERVICE_TYPE_PASSWORD_MANAGER"/>
-  <int value="46" label="SERVICE_TYPE_ASSISTIVE_TECH"/>
-  <int value="47" label="CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES"/>
-  <int value="48" label="CAPABILITY_CAN_TAKE_SCREENSHOT"/>
+  <int value="6" label="CAPABILITY_CAN_REQUEST_FINGERPRINT_GESTURES"/>
+  <int value="7" label="CAPABILITY_CAN_TAKE_SCREENSHOT"/>
+  <int value="8" label="EVENT_ANNOUNCEMENT"/>
+  <int value="9" label="EVENT_ASSIST_READING_CONTEXT"/>
+  <int value="10" label="EVENT_GESTURE_DETECTION_END"/>
+  <int value="11" label="EVENT_GESTURE_DETECTION_START"/>
+  <int value="12" label="EVENT_NOTIFICATION_STATE_CHANGED"/>
+  <int value="13" label="EVENT_TOUCH_EXPLORATION_GESTURE_END"/>
+  <int value="14" label="EVENT_TOUCH_EXPLORATION_GESTURE_START"/>
+  <int value="15" label="EVENT_TOUCH_INTERACTION_END"/>
+  <int value="16" label="EVENT_TOUCH_INTERACTION_START"/>
+  <int value="17" label="EVENT_VIEW_ACCESSIBILITY_FOCUSED"/>
+  <int value="18" label="EVENT_VIEW_ACCESSIBILITY_FOCUS_CLEARED"/>
+  <int value="19" label="EVENT_VIEW_CLICKED"/>
+  <int value="20" label="EVENT_VIEW_CONTEXT_CLICKED"/>
+  <int value="21" label="EVENT_VIEW_FOCUSED"/>
+  <int value="22" label="EVENT_VIEW_HOVER_ENTER"/>
+  <int value="23" label="EVENT_VIEW_HOVER_EXIT"/>
+  <int value="24" label="EVENT_VIEW_LONG_CLICKED"/>
+  <int value="25" label="EVENT_VIEW_SCROLLED"/>
+  <int value="26" label="EVENT_VIEW_SELECTED"/>
+  <int value="27" label="EVENT_VIEW_TEXT_CHANGED"/>
+  <int value="28" label="EVENT_VIEW_TEXT_SELECTION_CHANGED"/>
+  <int value="29" label="EVENT_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY"/>
+  <int value="30" label="EVENT_WINDOWS_CHANGED"/>
+  <int value="31" label="EVENT_WINDOW_CONTENT_CHANGED"/>
+  <int value="32" label="EVENT_WINDOW_STATE_CHANGED"/>
+  <int value="33" label="EVENT_SPEECH_STATE_CHANGE"/>
+  <int value="34" label="EVENT_VIEW_TARGETED_BY_SCROLL"/>
+  <int value="35" label="FEEDBACK_AUDIBLE"/>
+  <int value="36" label="FEEDBACK_BRAILLE"/>
+  <int value="37" label="FEEDBACK_GENERIC"/>
+  <int value="38" label="FEEDBACK_HAPTIC"/>
+  <int value="39" label="FEEDBACK_SPOKEN"/>
+  <int value="40" label="FEEDBACK_VISUAL"/>
+  <int value="41" label="FEEDBACK_ALL_MASK"/>
+  <int value="42" label="FLAG_FORCE_DIRECT_BOOT_AWARE"/>
+  <int value="43" label="FLAG_INCLUDE_NOT_IMPORTANT_VIEWS"/>
+  <int value="44" label="FLAG_REPORT_VIEW_IDS"/>
+  <int value="45" label="FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY"/>
+  <int value="46" label="FLAG_REQUEST_FILTER_KEY_EVENTS"/>
+  <int value="47" label="FLAG_REQUEST_TOUCH_EXPLORATION_MODE"/>
+  <int value="48" label="FLAG_RETRIEVE_INTERACTIVE_WINDOWS"/>
   <int value="49" label="FLAG_ENABLE_ACCESSIBILITY_VOLUME"/>
   <int value="50" label="FLAG_REQUEST_ACCESSIBILITY_BUTTON"/>
   <int value="51" label="FLAG_REQUEST_FINGERPRINT_GESTURES"/>
   <int value="52" label="FLAG_REQUEST_MULTI_FINGER_GESTURES"/>
   <int value="53" label="FLAG_REQUEST_SHORTCUT_WARNING_DIALOG_SPOKEN_FEEDBACK"/>
   <int value="54" label="FLAG_SERVICE_HANDLES_DOUBLE_TAP"/>
-  <int value="55" label="SERVICE_TYPE_ASSISTIVE_TECH_WITH_PASSWORD_MANAGER"/>
-  <int value="56" label="SERVICE_TYPE_ASSISTIVE_TECH_WITH_UNKNOWN"/>
-  <int value="57" label="SERVICE_TYPE_PASSWORD_MANAGER_WITH_UNKNOWN"/>
-  <int value="58" label="SERVICE_TYPE_ALL_VARIANTS"/>
-  <int value="59" label="EVENT_SPEECH_STATE_CHANGE"/>
-  <int value="60" label="FEEDBACK_ALL_MASK"/>
-  <int value="61" label="FLAG_REQUEST_2_FINGER_PASSTHROUGH"/>
-  <int value="62" label="FLAG_SEND_MOTION_EVENTS"/>
-  <int value="63" label="FLAG_INPUT_METHOD_EDITOR"/>
+  <int value="55" label="FLAG_REQUEST_2_FINGER_PASSTHROUGH"/>
+  <int value="56" label="FLAG_SEND_MOTION_EVENTS"/>
+  <int value="57" label="FLAG_INPUT_METHOD_EDITOR"/>
+  <int value="58" label="SERVICE_TYPE_UNKNOWN"/>
+  <int value="59" label="SERVICE_TYPE_PASSWORD_MANAGER"/>
+  <int value="60" label="SERVICE_TYPE_ASSISTIVE_TECH"/>
+  <int value="61" label="SERVICE_TYPE_ASSISTIVE_TECH_WITH_PASSWORD_MANAGER"/>
+  <int value="62" label="SERVICE_TYPE_ASSISTIVE_TECH_WITH_UNKNOWN"/>
+  <int value="63" label="SERVICE_TYPE_PASSWORD_MANAGER_WITH_UNKNOWN"/>
+  <int value="64" label="SERVICE_TYPE_ALL_VARIANTS"/>
 </enum>
 
 <!-- LINT.ThenChange(//content/browser/accessibility/browser_accessibility_state_impl_android.cc) -->
@@ -173,6 +197,7 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="OS Enabled"/>
   <int value="3" label="User Disabled"/>
   <int value="4" label="Form Factor Enabled"/>
+  <int value="5" label="User Has Custom Zoom"/>
 </enum>
 
 <!-- LINT.ThenChange(//components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/PageZoomUma.java:AccessibilityPageZoomAppMenuEnabledState) -->
@@ -1189,30 +1214,18 @@ Unknown properties are collapsed to zero. -->
   <int value="30174" label="IsDialog"/>
 </enum>
 
-<!-- LINT.IfChange(AssistiveTech)-->
+<!-- LINT.IfChange(ActiveClientApi) -->
 
-<enum name="AssistiveTech">
+<enum name="ActiveClientApi">
   <summary>
-    Auto Disable can be blocked via the detection of known screen assistive
-    technologies such as screen readers.
+    Which Windows accessibility client APIs have been actively used.
   </summary>
-  <int value="0" label="None"/>
-  <int value="1" label="Uninitialized"/>
-  <int value="2" label="ChromeVox"/>
-  <int value="3" label="JAWS"/>
-  <int value="4" label="Narrator"/>
-  <int value="5" label="NVDA"/>
-  <int value="6" label="Orca"/>
-  <int value="7" label="Supernova"/>
-  <int value="8" label="Talkback"/>
-  <int value="9" label="VoiceOver"/>
-  <int value="10" label="ZoomText"/>
-  <int value="11" label="ZDSR"/>
-  <int value="12" label="Generic Screen Reader"/>
-  <int value="13" label="Windows Magnifier"/>
+  <int value="0" label="UIA only"/>
+  <int value="1" label="MSAA/IA2 only"/>
+  <int value="2" label="Both UIA and MSAA/IA2"/>
 </enum>
 
-<!-- LINT.ThenChange(//ui/accessibility/platform/assistive_tech.h:AssistiveTech) -->
+<!-- LINT.ThenChange(//ui/accessibility/platform/ax_platform.h:ActiveClientApi) -->
 
 <enum name="AudioPlayback">
   <int value="0" label="Can play through"/>
@@ -1259,6 +1272,21 @@ Unknown properties are collapsed to zero. -->
 </enum>
 
 <!-- LINT.ThenChange(//content/renderer/accessibility/ax_tree_snapshotter_impl.cc:AXTreeSnapshotErrorReason) -->
+
+<!-- LINT.IfChange(CanvasAccessibilityHeuristicResult) -->
+
+<enum name="CanvasAccessibilityHeuristicResult">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="IsNotVisible (deprecated)"/>
+  <int value="2" label="IsIgnored"/>
+  <int value="3" label="TooSmall"/>
+  <int value="4" label="HasLayoutSubtree"/>
+  <int value="5" label="HasFallbackContent"/>
+  <int value="6" label="HasAriaAttributes"/>
+  <int value="7" label="NeedsA11ySupport"/>
+</enum>
+
+<!-- LINT.ThenChange(//third_party/blink/renderer/core/html/canvas/html_canvas_accessibility_manager.h:CanvasAccessibilityHeuristicResult) -->
 
 <!-- LINT.IfChange(CaptionBubbleErrorType) -->
 
@@ -1622,7 +1650,7 @@ Unknown properties are collapsed to zero. -->
   <int value="3" label="Content Too Short"/>
 </enum>
 
-<!-- LINT.ThenChange(//components/dom_distiller/core/distiller_page.cc:DistillationParseResult) -->
+<!-- LINT.ThenChange(//components/dom_distiller/core/distiller_page.h:DistillationParseResult) -->
 
 <!-- LINT.IfChange(DistillationResult)-->
 
@@ -1649,9 +1677,10 @@ Unknown properties are collapsed to zero. -->
   <int value="1" label="Through a message"/>
   <int value="2" label="Through the app menu item"/>
   <int value="3" label="Through the toolbar button"/>
+  <int value="4" label="Through the context menu"/>
 </enum>
 
-<!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeManager.java:EntryPoint) -->
+<!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeManager.java:DomDistillerEntryPoint) -->
 
 <!-- LINT.IfChange(JAWSMajorVersion)-->
 
@@ -1702,7 +1731,7 @@ Unknown properties are collapsed to zero. -->
   <int value="9" label="Move to tab right"/>
   <int value="10" label="Move to specific tab"/>
   <int value="11" label="Move to last tab"/>
-  <int value="12" label="Search currently-open tabs (not implemented)"/>
+  <int value="12" label="Search currently-open tabs"/>
   <int value="13" label="Toggle multi-task menu (not implemented)"/>
   <int value="14" label="Close tab"/>
   <int value="15" label="Close window"/>
@@ -1727,11 +1756,11 @@ Unknown properties are collapsed to zero. -->
       label="Reorder the currently-open tab to the left (not implemented)"/>
   <int value="29"
       label="Reorder the currently-open tab to the right (not implemented)"/>
-  <int value="30" label="Toggle caret browsing (not implemented)"/>
+  <int value="30" label="Toggle caret browsing"/>
   <int value="31" label="Focus on inactive dialogs (not implemented)"/>
   <int value="32" label="Open bookmarks"/>
   <int value="33" label="Bookmark page"/>
-  <int value="34" label="Bookmark all tabs (not implemented)"/>
+  <int value="34" label="Bookmark all tabs"/>
   <int value="35" label="Show or hide the bookmarks bar"/>
   <int value="36" label="Toggle immersive mode (not implemented)"/>
   <int value="37" label="Exit immersive mode (not implemented)"/>
@@ -1747,7 +1776,7 @@ Unknown properties are collapsed to zero. -->
   <int value="46" label="Open history"/>
   <int value="47" label="Go back in history"/>
   <int value="48" label="Go forward in history"/>
-  <int value="49" label="Clear browsing data (not implemented)"/>
+  <int value="49" label="Clear browsing data"/>
   <int value="50" label="Print"/>
   <int value="51" label="Basic print (not implemented)"/>
   <int value="52" label="Zoom in"/>
@@ -1756,15 +1785,19 @@ Unknown properties are collapsed to zero. -->
   <int value="55" label="Show avatar menu (not implemented)"/>
   <int value="56" label="Show feedback form"/>
   <int value="57" label="Find in page"/>
-  <int value="58" label="Go to home page (not implemented)"/>
+  <int value="58" label="Open home page"/>
   <int value="59" label="Open help"/>
   <int value="60" label="Open menu"/>
   <int value="61"
       label="Use a custom keyboard shortcut registered by an extension"/>
   <int value="62" label="Toggle multiselect"/>
+  <int value="63" label="Zoom in (Visual/Legacy) (deprecated)"/>
+  <int value="64" label="Zoom out (Visual/Legacy) (deprecated)"/>
+  <int value="65" label="Focus on the app menu button in toolbar"/>
+  <int value="66" label="Tab search start anchored side UI"/>
 </enum>
 
-<!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/KeyboardShortcuts.java:KeyboardShortcutsSemanticMeaning, //tools/metrics/histograms/metadata/accessibility/histograms.xml:KeyboardShortcutsSemanticMeaning) -->
+<!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/KeyboardShortcuts.java:KeyboardShortcutsSemanticMeaning) -->
 
 <enum name="KeyCode">
   <int value="0" label="UNKNOWN"/>
@@ -2054,17 +2087,6 @@ Unknown properties are collapsed to zero. -->
 
 <!-- LINT.ThenChange(//chrome/services/speech/soda/soda_client.h:LoadSodaResult) -->
 
-<!-- LINT.IfChange(MainContentExtractionClientType) -->
-
-<enum name="MainContentExtractionClientType">
-  <int value="0" label="Tests"/>
-  <int value="1" label="Reading Mode"/>
-  <int value="2" label="MainNode"/>
-  <int value="3" label="ChromeOS Mahi"/>
-</enum>
-
-<!-- LINT.ThenChange(//services/screen_ai/screen_ai_service_impl.cc:MainContentExtractionClientType) -->
-
 <!-- LINT.IfChange(MainNodeAnnotationResult) -->
 
 <enum name="MainNodeAnnotationResult">
@@ -2118,6 +2140,7 @@ Unknown properties are collapsed to zero. -->
   <int value="4" label="Not Used"/>
   <int value="5" label="MediaApp"/>
   <int value="6" label="Screenshot Text Detection"/>
+  <int value="7" label="Canvas"/>
 </enum>
 
 <!-- LINT.ThenChange(//services/screen_ai/screen_ai_service_impl.cc:OCRClientType) -->
@@ -2131,12 +2154,27 @@ Unknown properties are collapsed to zero. -->
   <int value="3" label="Yellow"/>
   <int value="4" label="Blue"/>
   <int value="5" label="High contrast"/>
-  <int value="6" label="Low contrast"/>
-  <int value="7" label="Sepia light"/>
-  <int value="8" label="Sepia dark"/>
+  <int value="6" label="Low contrast (Deprecated)"/>
+  <int value="7" label="Low contrast light"/>
+  <int value="8" label="Low contrast dark"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/common/read_anything/read_anything.mojom:Colors) -->
+
+<!-- LINT.IfChange(ReadAnythingDistillationQualityEvaluationStatus) -->
+
+<enum name="ReadAnythingDistillationQualityEvaluationStatus">
+  <int value="0" label="Success (Logged to UKM)"/>
+  <int value="1" label="Skipped: Empty Snapshot"/>
+  <int value="2" label="Skipped: Snapshot Reached Node Limit"/>
+  <int value="3" label="Skipped: Empty Distilled HTML"/>
+  <int value="4" label="Skipped: Distilled HTML Exceeds Size Limit"/>
+  <int value="5" label="Error: Tree Building Failed / Null Root"/>
+  <int value="6" label="Error: Original AXTree Text is Empty"/>
+  <int value="7" label="Error: Malformed Distilled HTML"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/common/read_anything/distillation_evaluator.mojom:EvaluationStatus) -->
 
 <!-- LINT.IfChange(ReadAnythingDistillationScheme) -->
 
@@ -2163,6 +2201,15 @@ Unknown properties are collapsed to zero. -->
 </enum>
 
 <!-- LINT.ThenChange(//chrome/common/read_anything/read_anything.mojom:DistillationStatus) -->
+
+<!-- LINT.IfChange(ReadAnythingEarlySelection) -->
+
+<enum name="ReadAnythingEarlySelection">
+  <int value="0" label="Side panel selection"/>
+  <int value="1" label="Main panel selection"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/renderer/accessibility/read_anything/read_anything_app_model.h:ReadAnythingEarlySelection) -->
 
 <!-- LINT.IfChange(ReadAnythingEmptyState) -->
 
@@ -2202,18 +2249,6 @@ Unknown properties are collapsed to zero. -->
 </enum>
 
 <!-- LINT.ThenChange(//chrome/common/read_anything/read_anything_util.cc:ReadAnythingFont) -->
-
-<!-- LINT.IfChange(ReadAnythingHeuristics) -->
-
-<enum name="ReadAnythingHeuristics">
-  <int value="0" label="None"/>
-  <int value="1" label="NodeNotFound"/>
-  <int value="2" label="InvisibleOrIgnored"/>
-  <int value="3" label="NotExpanded"/>
-  <int value="4" label="NoDeepsetLastDecendent"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/renderer/accessibility/read_anything/read_anything_app_model.cc:ReadAnythingHeuristics) -->
 
 <!-- LINT.IfChange(ReadAnythingHighlightGranularity) -->
 
@@ -2277,12 +2312,40 @@ Unknown properties are collapsed to zero. -->
 
 <!-- LINT.ThenChange(//chrome/browser/resources/side_panel/read_anything/shared/metrics_browser_proxy.ts:ReadAnythingNewPage) -->
 
+<!-- LINT.IfChange(ReadAnythingOmniboxChipDecision) -->
+
+<enum name="ReadAnythingOmniboxChipDecision">
+  <int value="0" label="Shown on an article"/>
+  <int value="1" label="Shown on a PDF"/>
+  <int value="2" label="Not shown on app window"/>
+  <int value="3" label="Not shown on non-http(s)"/>
+  <int value="4" label="Not shown on block-listed site"/>
+  <int value="5" label="Not shown because of optimization guide"/>
+  <int value="6" label="Not shown because of Readability signal"/>
+  <int value="7" label="Not shown on a short PDF"/>
+  <int value="8"
+      label="Not shown on a PDF with too many non-alphabetic characters"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/read_anything/read_anything_enums.h:ReadAnythingOmniboxChipDecision) -->
+
+<!-- LINT.IfChange(ReadAnythingPlaybackContext) -->
+
+<enum name="ReadAnythingPlaybackContext">
+  <summary>The UI context where Read Aloud speech was started.</summary>
+  <int value="0" label="Side Panel"/>
+  <int value="1" label="Immersive Overlay"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/renderer/accessibility/read_anything/read_aloud_app_model.h:ReadAnythingPlaybackContext) -->
+
 <!-- LINT.IfChange(ReadAnythingReadAloudSettingsChange) -->
 
 <enum name="ReadAnythingReadAloudSettingsChange">
   <int value="0" label="Voice speed change"/>
   <int value="1" label="Voice name change"/>
   <int value="2" label="Highlight change"/>
+  <int value="3" label="Language toggle"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/resources/side_panel/read_anything/shared/metrics_browser_proxy.ts:ReadAloudSettingsChange) -->
@@ -2309,6 +2372,14 @@ Unknown properties are collapsed to zero. -->
 
 <!-- LINT.ThenChange(//chrome/renderer/accessibility/read_anything/read_anything_app_model.cc:ReadAnythingScrollEvent) -->
 
+<!-- LINT.IfChange(ReadAnythingSettingsAction) -->
+
+<enum name="ReadAnythingSettingsAction">
+  <int value="0" label="Translate entrypoint"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/resources/side_panel/read_anything/shared/metrics_browser_proxy.ts:ReadAnythingSettingsAction) -->
+
 <!-- LINT.IfChange(ReadAnythingSettingsChange) -->
 
 <enum name="ReadAnythingSettingsChange">
@@ -2322,6 +2393,7 @@ Unknown properties are collapsed to zero. -->
   <int value="7" label="Line focus change (Deprecated)"/>
   <int value="8" label="Line focus style change"/>
   <int value="9" label="Line focus movement change"/>
+  <int value="10" label="Line focus toggle"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/resources/side_panel/read_anything/shared/metrics_browser_proxy.ts:ReadAnythingSettingsChange) -->
@@ -2338,6 +2410,8 @@ Unknown properties are collapsed to zero. -->
   <int value="6" label="Audio busy"/>
   <int value="7" label="Audio hardware"/>
   <int value="8" label="Network"/>
+  <int value="9" label="Timeout engine stalled"/>
+  <int value="10" label="Timeout stalled after engine attempted recovery"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/resources/side_panel/read_anything/shared/metrics_browser_proxy.ts:ReadAnythingSpeechError) -->
@@ -2379,26 +2453,26 @@ Unknown properties are collapsed to zero. -->
 
 <!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeMetrics.java:ReaderModeContextualPageActionEvent) -->
 
-<!-- LINT.IfChange(ReaderModeEntryPoint) -->
-
-<enum name="ReaderModeEntryPoint">
-  <int value="0" label="Omnibox icon"/>
-  <int value="1" label="Menu option"/>
-</enum>
-
-<!-- LINT.ThenChange(//components/dom_distiller/content/browser/uma_helper.h:ReaderModeEntryPoint) -->
+<!-- LINT.IfChange(ReaderModePrefsFontFamily) -->
 
 <enum name="ReaderModePrefsFontFamily">
   <int value="0" label="Sans serif"/>
   <int value="1" label="Serif"/>
   <int value="2" label="Monospace"/>
+  <int value="3" label="Lexend"/>
 </enum>
+
+<!-- LINT.ThenChange(//components/dom_distiller/core/mojom/distilled_page_prefs.mojom:ReaderModePrefsFontFamily) -->
+
+<!-- LINT.IfChange(ReaderModePrefsTheme) -->
 
 <enum name="ReaderModePrefsTheme">
   <int value="0" label="Light"/>
   <int value="1" label="Dark"/>
   <int value="2" label="Sepia"/>
 </enum>
+
+<!-- LINT.ThenChange(//components/dom_distiller/core/mojom/distilled_page_prefs.mojom:ReaderModePrefsTheme) -->
 
 <!-- LINT.IfChange(SodaLanguageCode) -->
 

@@ -17,8 +17,8 @@ import org.chromium.base.test.transit.OptionalViewElement;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.transit.ViewSpec;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omnibox.UrlBar;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.components.browser_ui.widget.scrim.ScrimView;
 
@@ -49,9 +49,8 @@ public class OmniboxFacility extends Facility<CtaPageStation> {
         // Action buttons are 71% displayed in tablets (though the actual image is fully displayed).
         urlBarElement = declareView(URL_FIELD, ViewElement.unscopedOption());
         statusIconElement = declareOptionalView(STATUS_ICON);
-        micButtonElement = declareOptionalView(MIC_BUTTON, ViewElement.displayingAtLeastOption(50));
-        deleteButtonElement =
-                declareOptionalView(DELETE_BUTTON, ViewElement.displayingAtLeastOption(50));
+        micButtonElement = declareOptionalView(MIC_BUTTON);
+        deleteButtonElement = declareOptionalView(DELETE_BUTTON);
     }
 
     public FakeOmniboxSuggestions getFakeSuggestions() {

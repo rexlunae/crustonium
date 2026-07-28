@@ -20,12 +20,10 @@ TEST(PolicyEngineTest, Rules1) {
   //
   // #1
   // If the path is c:\\documents and settings\\* AND
-  // If the creation mode is 'open existing' AND
-  // If the security descriptor is null THEN
+  // If the creation mode is 'open existing' THEN
   // Ask the broker.
   //
   // #2
-  // If the security descriptor is null AND
   // If the path ends with *.txt AND
   // If the creation mode is not 'create new' THEN
   // return constant (uintptr_t)-1.
@@ -33,8 +31,7 @@ TEST(PolicyEngineTest, Rules1) {
   enum FileCreateArgs {
     FileNameArg,
     CreationDispositionArg,
-    FlagsAndAttributesArg,
-    SecurityAttributes
+    FlagsAndAttributesArg
   };
 
   const size_t policy_sz = 1024;
@@ -46,7 +43,6 @@ TEST(PolicyEngineTest, Rules1) {
                                   0, kPolNone, false);
   opcode_maker.MakeOpNumberMatch(CreationDispositionArg, OPEN_EXISTING,
                                  kPolNone);
-  opcode_maker.MakeOpVoidPtrMatch(SecurityAttributes, nullptr, kPolNone);
   opcode_maker.MakeOpAction(ASK_BROKER, 0U);
 
   // Add rule set #2
@@ -56,50 +52,48 @@ TEST(PolicyEngineTest, Rules1) {
                                  kPolNegateEval);
   constexpr uintptr_t kConstantValue = static_cast<uintptr_t>(-1);
   opcode_maker.MakeOpAction(RETURN_CONST, kConstantValue);
-  policy->opcode_count = 7;
+  policy->opcode_count = 6;
 
   std::wstring_view filename =
       L"c:\\Documents and Settings\\Microsoft\\BLAH.txt";
   uint32_t creation_mode = OPEN_EXISTING;
   uint32_t flags = FILE_ATTRIBUTE_NORMAL;
-  void* security_descriptor = nullptr;
 
   POLPARAMS_BEGIN(eval_params)
     POLPARAM(filename)
     POLPARAM(creation_mode)
     POLPARAM(flags)
-    POLPARAM(security_descriptor)
   POLPARAMS_END;
 
   PolicyResult pr;
   PolicyProcessor pol_ev(policy);
 
   // Test should match the first rule set.
-  pr = pol_ev.Evaluate(kShortEval, eval_params, _countof(eval_params));
+  pr = pol_ev.Evaluate(eval_params, _countof(eval_params));
   EXPECT_EQ(POLICY_MATCH, pr);
   EXPECT_EQ(ASK_BROKER, pol_ev.GetAction());
 
   // Test should still match the first rule set.
-  pr = pol_ev.Evaluate(kShortEval, eval_params, _countof(eval_params));
+  pr = pol_ev.Evaluate(eval_params, _countof(eval_params));
   EXPECT_EQ(POLICY_MATCH, pr);
   EXPECT_EQ(ASK_BROKER, pol_ev.GetAction());
   EXPECT_EQ(0U, pol_ev.GetConstant());
 
   // Changing creation_mode such that evaluation should not match any rule.
   creation_mode = CREATE_NEW;
-  pr = pol_ev.Evaluate(kShortEval, eval_params, _countof(eval_params));
+  pr = pol_ev.Evaluate(eval_params, _countof(eval_params));
   EXPECT_EQ(NO_POLICY_MATCH, pr);
 
   // Changing creation_mode such that evaluation should match rule #2.
   creation_mode = OPEN_ALWAYS;
-  pr = pol_ev.Evaluate(kShortEval, eval_params, _countof(eval_params));
+  pr = pol_ev.Evaluate(eval_params, _countof(eval_params));
   EXPECT_EQ(POLICY_MATCH, pr);
   EXPECT_EQ(RETURN_CONST, pol_ev.GetAction());
   EXPECT_EQ(kConstantValue, pol_ev.GetConstant());
 
   // Cope ok with nullptr string fields.
   filename = std::wstring_view();
-  pr = pol_ev.Evaluate(kShortEval, eval_params, _countof(eval_params));
+  pr = pol_ev.Evaluate(eval_params, _countof(eval_params));
   EXPECT_EQ(NO_POLICY_MATCH, pr);
 
   delete[] reinterpret_cast<char*>(policy);

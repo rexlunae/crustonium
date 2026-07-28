@@ -59,10 +59,10 @@ class AutofillCacheResetter : public content::BrowsingDataRemover::Observer {
 // chrome://autofill-internals that takes care of subscribing to the autofill
 // logging instance.
 class InternalsUIHandler : public content::WebUIMessageHandler,
-                           public autofill::LogReceiver {
+                           public LogReceiver {
  public:
   using GetLogRouterFunction =
-      base::RepeatingCallback<autofill::LogRouter*(content::BrowserContext*)>;
+      base::RepeatingCallback<LogRouter*(content::BrowserContext*)>;
 
   InternalsUIHandler(std::string call_on_load,
                      base::Value call_on_load_argument,
@@ -93,6 +93,8 @@ class InternalsUIHandler : public content::WebUIMessageHandler,
   void OnLoaded(const base::ListValue& args);
   void OnResetCache(const base::ListValue& args);
   void OnDumpAddresses(const base::ListValue& args);
+  void OnSetPasswordChangeOverrideUrl(const base::ListValue& args);
+  void CheckAtMemoryPermissions(const base::ListValue& args);
 #if !BUILDFLAG(IS_ANDROID)
   void CheckAutofillAiPermissions(const base::ListValue& args);
   void SetDomNodeId(const base::ListValue& args);

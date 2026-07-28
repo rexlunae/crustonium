@@ -159,12 +159,20 @@ public class BookmarkImageFetcher {
                                     faviconDisplaySize));
                 };
 
-        if (mImageServiceBridge.hasConsentToFetchImages(item.isAccountBookmark())) {
+        if (item.isAccountBookmark()) {
             mFaviconHelper.getForeignFaviconImageForURL(
-                    mProfile, faviconUrl, faviconDisplaySize, faviconCallback);
+                    mProfile,
+                    faviconUrl,
+                    faviconDisplaySize,
+                    /* fallbackToHost= */ true,
+                    faviconCallback);
         } else {
             mFaviconHelper.getLocalFaviconImageForURL(
-                    mProfile, faviconUrl, faviconDisplaySize, faviconCallback);
+                    mProfile,
+                    faviconUrl,
+                    faviconDisplaySize,
+                    /* fallbackToHost= */ true,
+                    faviconCallback);
         }
     }
 

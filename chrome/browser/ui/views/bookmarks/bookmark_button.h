@@ -57,14 +57,13 @@ class BookmarkButton : public BookmarkButtonBase, public views::WidgetObserver {
   BookmarkButton& operator=(const BookmarkButton&) = delete;
   ~BookmarkButton() override;
 
-  void OnButtonPressed(const ui::Event& event) { callback_.Run(event); }
-
-  void UpdateTooltipText();
+  void OnButtonPressed(const ui::Event& event);
 
   // views::View:
   void AddedToWidget() override;
   void RemovedFromWidget() override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  std::u16string GetRenderedTooltipText(const gfx::Point& p) const override;
   void AdjustAccessibleName(std::u16string& new_name,
                             ax::mojom::NameFrom& name_from) override;
   void SetText(std::u16string_view text) override;
@@ -84,11 +83,17 @@ class BookmarkButton : public BookmarkButtonBase, public views::WidgetObserver {
 
   BookmarkBarPreloadPipelineManager* GetBookmarkBarPreloadPipelineManager();
 
+  // Computes the tooltip text if needed and calls SetTooltipText() to update
+  // the cached text and trigger accessibility notifications.
+  void MaybeUpdateTooltipText();
+
   void UpdateMaxTooltipWidth();
 
   // A cached value of maximum width for tooltip to skip generating
   // new tooltip text.
   mutable int max_tooltip_width_ = 0;
+  // Whether the tooltip text needs to be recomputed.
+  bool tooltip_text_needs_update_ = true;
   PressedCallback callback_;
   const raw_ref<const GURL> url_;
   const raw_ptr<Browser> browser_;

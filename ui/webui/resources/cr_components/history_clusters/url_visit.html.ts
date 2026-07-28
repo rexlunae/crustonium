@@ -8,10 +8,10 @@ import type {UrlVisitElement} from './url_visit.js';
 
 export function getHtml(this: UrlVisitElement) {
   return html`
-<div id="header" @click="${this.onClick_}" @auxclick="${this.onClick_}"
-    @keydown="${this.onKeydown_}" @contextmenu="${this.onContextMenu_}">
+<div id="header" @click="${this.onClick_}" @auxclick="${this.onAuxclick_}"
+    @keydown="${this.onKeydown_}" @contextmenu="${this.onContextmenu_}">
   <a id="link-container" href="${this.visit?.normalizedUrl || nothing}">
-    <page-favicon id="icon" .url="${this.visit?.normalizedUrl}"
+    <page-favicon id="icon" .url="${this.visit?.normalizedUrl || null}"
         .isKnownToSync="${this.visit?.isKnownToSync || false}">
     </page-favicon>
     <div id="page-info">
@@ -42,7 +42,8 @@ export function getHtml(this: UrlVisitElement) {
 
 ${
       this.renderActionMenu_ ? html`
-    <cr-action-menu role-description="${this.i18n('actionMenuDescription')}">
+    <cr-action-menu auto-close-on-focusout
+        role-description="${this.i18n('actionMenuDescription')}">
       <button id="removeSelfButton" class="dropdown-item"
           ?hidden="${!this.allowDeletingHistory_}"
           @click="${this.onRemoveSelfButtonClick_}">

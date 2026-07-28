@@ -41,6 +41,7 @@
 #include "ui/events/gestures/gesture_types.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
+#include "ui/gfx/geometry/clamp_float_geometry.h"
 #import "ui/gfx/mac/coordinate_conversion.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/native_theme/native_theme.h"
@@ -185,22 +186,44 @@ void NativeWidgetMac::OnWindowKeyStatusChanged(
 
   if (is_key) {
     widget->OnNativeFocus();
-    widget->GetFocusManager()->RestoreFocusedView();
+    // GetFocusManager() can be null for detached child widgets during
+    // reparenting.
+    if (FocusManager* focus_manager = widget->GetFocusManager()) {
+      focus_manager->RestoreFocusedView();
+    }
   } else {
     widget->OnNativeBlur();
-    widget->GetFocusManager()->StoreFocusedView(false);
+    if (FocusManager* focus_manager = widget->GetFocusManager()) {
+      focus_manager->StoreFocusedView(false);
+    }
     parent_key_lock_.reset();
+  }
+}
+
+void NativeWidgetMac::OnWindowWillMove() {
+  if (delegate_) {
+    delegate_->OnNativeWidgetBeginUserBoundsChange();
+    delegate_->OnNativeWidgetUserDragStarted();
+  }
+}
+
+void NativeWidgetMac::OnWindowDidEndMove() {
+  if (delegate_) {
+    delegate_->OnNativeWidgetEndUserBoundsChange();
+    delegate_->OnNativeWidgetUserDragEnded();
   }
 }
 
 void NativeWidgetMac::OnWindowWillStartLiveResize() {
   if (delegate_) {
+    delegate_->OnNativeWidgetBeginUserBoundsChange();
     delegate_->OnNativeWidgetUserResizeStarted();
   }
 }
 
 void NativeWidgetMac::OnWindowDidEndLiveResize() {
   if (delegate_) {
+    delegate_->OnNativeWidgetEndUserBoundsChange();
     delegate_->OnNativeWidgetUserResizeEnded();
   }
 }
@@ -391,8 +414,7 @@ void NativeWidgetMac::ReparentNativeViewImpl(gfx::NativeView new_parent) {
 }
 
 std::unique_ptr<FrameView> NativeWidgetMac::CreateFrameView() {
-  return GetWidget() ? std::make_unique<NativeFrameViewMac>(GetWidget(),
-                                                            /*client=*/nullptr)
+  return GetWidget() ? std::make_unique<NativeFrameViewMac>(GetWidget())
                      : nullptr;
 }
 
@@ -827,7 +849,14 @@ void NativeWidgetMac::SetVisibleOnAllWorkspaces(bool always_visible) {
 }
 
 bool NativeWidgetMac::IsVisibleOnAllWorkspaces() const {
-  return false;
+  return ns_window_host_ ? ns_window_host_->IsVisibleOnAllWorkspaces() : false;
+}
+
+void NativeWidgetMac::MoveToActiveFullscreenSpace() {
+  if (!GetNSWindowMojo()) {
+    return;
+  }
+  GetNSWindowMojo()->MoveToActiveFullscreenSpace();
 }
 
 void NativeWidgetMac::Maximize() {
@@ -900,17 +929,20 @@ void NativeWidgetMac::SetAspectRatio(const gfx::SizeF& aspect_ratio,
   if (!GetNSWindowMojo()) {
     return;
   }
-  GetNSWindowMojo()->SetAspectRatio(aspect_ratio, excluded_margin);
+  gfx::SizeF sanitized_aspect_ratio(
+      std::max(0.0f, gfx::ClampFloatGeometry(aspect_ratio.width())),
+      std::max(0.0f, gfx::ClampFloatGeometry(aspect_ratio.height())));
+  GetNSWindowMojo()->SetAspectRatio(sanitized_aspect_ratio, excluded_margin);
 }
 
 void NativeWidgetMac::FlashFrame(bool flash_frame) {
   NOTIMPLEMENTED();
 }
 
-void NativeWidgetMac::RunShellDrag(std::unique_ptr<ui::OSExchangeData> data,
-                                   const gfx::Point& location,
-                                   int operation,
-                                   ui::mojom::DragEventSource source) {
+void NativeWidgetMac::RunDragDropLoop(std::unique_ptr<ui::OSExchangeData> data,
+                                      const gfx::Point& location,
+                                      int operation,
+                                      ui::mojom::DragEventSource source) {
   if (!ns_window_host_) {
     return;
   }
@@ -918,7 +950,7 @@ void NativeWidgetMac::RunShellDrag(std::unique_ptr<ui::OSExchangeData> data,
                                                         operation, source);
 }
 
-void NativeWidgetMac::CancelShellDrag(View* view) {
+void NativeWidgetMac::CancelDragDropLoop(View* view) {
   if (!ns_window_host_) {
     return;
   }

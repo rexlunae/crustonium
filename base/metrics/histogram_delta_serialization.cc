@@ -20,8 +20,10 @@ namespace {
 
 // Create or find existing histogram and add the samples from pickle.
 // Silently returns when seeing any data problem in the pickle.
-void DeserializeHistogramAndAddSamples(PickleIterator* iter) {
-  HistogramBase* histogram = DeserializeHistogramInfo(iter);
+void DeserializeHistogramAndAddSamples(PickleIterator* iter,
+                                       HistogramBase::NameMapper mapper) {
+  HistogramBase* histogram =
+      HistogramBase::DeserializeInfo(iter, std::move(mapper));
   if (!histogram) {
     return;
   }
@@ -55,11 +57,12 @@ void HistogramDeltaSerialization::PrepareAndSerializeDeltas(
 
 // static
 void HistogramDeltaSerialization::DeserializeAndAddSamples(
-    const std::vector<std::string>& serialized_deltas) {
+    const std::vector<std::string>& serialized_deltas,
+    HistogramBase::NameMapper mapper) {
   for (const std::string& serialized_delta : serialized_deltas) {
-    Pickle pickle = Pickle::WithUnownedBuffer(as_byte_span(serialized_delta));
-    PickleIterator iter(pickle);
-    DeserializeHistogramAndAddSamples(&iter);
+    PickleIterator iter =
+        PickleIterator::WithData(as_byte_span(serialized_delta));
+    DeserializeHistogramAndAddSamples(&iter, mapper);
   }
 }
 
@@ -72,7 +75,7 @@ void HistogramDeltaSerialization::RecordDelta(
   Pickle pickle;
   histogram.SerializeInfo(&pickle);
   snapshot.Serialize(&pickle);
-  serialized_deltas_->emplace_back(pickle.data_as_char(), pickle.size());
+  serialized_deltas_->emplace_back(pickle.AsStringView());
 }
 
 }  // namespace base

@@ -60,7 +60,7 @@
     ],
     "profile_mode": "local",
     "project": "rbe-chromium-untrusted",
-    "remote_jobs": 5120
+    "remote_jobs": -1
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -71,5 +71,5 @@
   },
   "builder_group": "chromium.build",
   "recipe": "chrome_build/build_perf_developer",
-  "xcode_build_version": "17a400"
+  "xcode_build_version": "17f42"
 }

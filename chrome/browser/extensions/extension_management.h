@@ -10,22 +10,22 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/values.h"
-#include "chrome/browser/extensions/managed_installation_mode.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "extensions/browser/extension_management_client.h"
 #include "extensions/browser/forced_extensions/install_stage_tracker.h"
+#include "extensions/browser/managed_installation_mode.h"
 #include "extensions/browser/management_policy.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -94,6 +94,21 @@ class ExtensionManagement : public KeyedService,
       const Extension* extension) override;
   bool UsesDefaultPolicyHostRestrictions(const Extension* extension) override;
   bool BlocklistedByDefault() const override;
+  GURL GetEffectiveUpdateURL(const Extension& extension) override;
+  bool IsAllowedManifestType(Manifest::Type manifest_type,
+                             const std::string& extension_id) const override;
+  ManagedInstallationMode GetInstallationMode(
+      const Extension* extension) override;
+  ManagedInstallationMode GetInstallationMode(
+      const ExtensionId& extension_id,
+      const std::string& update_url) override;
+  bool IsInstallationExplicitlyBlocked(const ExtensionId& id) override;
+  const std::string BlockedInstallMessage(const ExtensionId& id) override;
+  bool IsPermissionSetAllowed(const Extension* extension,
+                              const PermissionSet& perms) override;
+  bool IsPermissionSetAllowed(const ExtensionId& extension_id,
+                              const std::string& update_url,
+                              const PermissionSet& perms) override;
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
@@ -111,14 +126,6 @@ class ExtensionManagement : public KeyedService,
   bool ExtensionsEnabledForDesktopAndroid() const;
 #endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 
-  // Returns installation mode for an extension.
-  ManagedInstallationMode GetInstallationMode(const Extension* extension);
-
-  // Returns installation mode for an extension with id `extension_id` and
-  // updated with `update_url`.
-  ManagedInstallationMode GetInstallationMode(const ExtensionId& extension_id,
-                                              const std::string& update_url);
-
   // Returns the force install list, in format specified by
   // ExternalPolicyLoader::AddExtension().
   base::DictValue GetForceInstallList() const;
@@ -135,33 +142,9 @@ class ExtensionManagement : public KeyedService,
   // overridden by policy.
   bool IsUpdateUrlOverridden(const ExtensionId& id);
 
-  // Get the effective update URL for the extension. Normally this URL comes
-  // from the extension manifest, but may be overridden by policies.
-  GURL GetEffectiveUpdateURL(const Extension& extension);
-
-  // Returns if an extension with id `id` is explicitly blocked by enterprise
-  // policy or not.
-  bool IsInstallationExplicitlyBlocked(const ExtensionId& id);
-
   // Returns true if an extension download should be allowed to proceed.
   bool IsOffstoreInstallAllowed(const GURL& url,
                                 const GURL& referrer_url) const;
-
-  // Returns true if an extension with manifest type `manifest_type` and
-  // id `extension_id` is allowed to be installed.
-  bool IsAllowedManifestType(Manifest::Type manifest_type,
-                             const std::string& extension_id) const;
-
-  bool IsAllowedManifestVersion(int manifest_version,
-                                const std::string& extension_id,
-                                Manifest::Type manifest_type);
-  bool IsAllowedManifestVersion(const Extension* extension);
-
-  // Returns true if the extension associated with the given `extension_id` is
-  // exempt from the MV2 deprecation because of an active admin policy.
-  bool IsExemptFromMV2DeprecationByPolicy(int manifest_version,
-                                          const std::string& extension_id,
-                                          Manifest::Type manifest_type);
 
   bool IsAllowedByUnpublishedAvailabilityPolicy(const Extension* extension);
 
@@ -203,21 +186,6 @@ class ExtensionManagement : public KeyedService,
   // Returns blocked permission set for `extension`.
   std::unique_ptr<const PermissionSet> GetBlockedPermissions(
       const Extension* extension);
-
-  // If the extension is blocked from install and a custom error message
-  // was defined returns it. Otherwise returns an empty string. The maximum
-  // string length is 1000 characters.
-  const std::string BlockedInstallMessage(const ExtensionId& id);
-
-  // Returns true if every permission in `perms` is allowed for `extension`.
-  bool IsPermissionSetAllowed(const Extension* extension,
-                              const PermissionSet& perms);
-
-  // Returns true if every permission in `perms` is allowed for an extension
-  // with id `extension_id` and updated with `update_url`.
-  bool IsPermissionSetAllowed(const ExtensionId& extension_id,
-                              const std::string& update_url,
-                              const PermissionSet& perms);
 
   // Returns true if `extension` meets the minimum required version set for it.
   // If there is no such requirement set for it, returns true as well.
@@ -320,7 +288,7 @@ class ExtensionManagement : public KeyedService,
   // A set of extension IDs whose parsing of settings and insertion into
   // `settings_by_id_` has been deferred until needed. We keep track of this to
   // avoid scanning the prefs repeatedly for entries that don't have a setting.
-  base::flat_set<std::string> deferred_ids_;
+  absl::flat_hash_set<std::string> deferred_ids_;
 
   // Similar to `settings_by_id_`, but contains the settings for a group of
   // extensions with same update URL. The update url itself is used as index
@@ -342,7 +310,12 @@ class ExtensionManagement : public KeyedService,
   raw_ptr<PrefService> pref_service_ = nullptr;
   bool is_signin_profile_ = false;
 
-  base::ObserverList<Observer, true>::Unchecked observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/true,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observer_list_;
   PrefChangeRegistrar pref_change_registrar_;
   std::vector<std::unique_ptr<ManagementPolicy::Provider>> providers_;
 
@@ -363,7 +336,7 @@ class ExtensionManagementFactory : public ProfileKeyedServiceFactory {
   static ExtensionManagementFactory* GetInstance();
 
  private:
-  friend struct base::DefaultSingletonTraits<ExtensionManagementFactory>;
+  friend base::NoDestructor<ExtensionManagementFactory>;
 
   ExtensionManagementFactory();
   ~ExtensionManagementFactory() override;

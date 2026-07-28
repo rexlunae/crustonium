@@ -478,7 +478,7 @@ std::vector<std::string> MakeMenuItemStringsFor(ContextMenuData* context_menu) {
     }
     std::vector<WebString> suggestions;
     WebTestSpellChecker::FillSuggestionList(
-        WebString::FromUTF16(context_menu->misspelled_word), &suggestions);
+        WebString::FromUtf16(context_menu->misspelled_word), &suggestions);
     for (const WebString& suggestion : suggestions)
       strings.push_back(suggestion.Utf8());
   } else {
@@ -2015,8 +2015,8 @@ void EventSender::BeginDragWithStringData(blink::WebLocalFrame* frame,
                                           const std::string& mime_type) {
   std::vector<WebDragData::Item> items;
   WebDragData::StringItem item = {
-      .type = WebString::FromUTF8(mime_type),
-      .data = WebString::FromUTF8(data),
+      .type = WebString::FromUtf8(mime_type),
+      .data = WebString::FromUtf8(data),
   };
   items.emplace_back(item);
 

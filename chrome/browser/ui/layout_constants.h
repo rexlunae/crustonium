@@ -16,6 +16,10 @@ enum class LayoutConstant {
   // The maximum character length for strings in the app menu.
   kAppMenuMaximumCharacterLength,
 
+  // The horizontal padding between the image and the title of the app menu
+  // button.
+  kAppMenuButtonImageLabelPadding,
+
   // The height of Bookmarks Bar when attached to the toolbar. The height of the
   // Bookmarks Bar is larger than the kBookmarkBarHeight by a fixed
   // amount.
@@ -49,6 +53,9 @@ enum class LayoutConstant {
   // The internal padding to use inside children of the location bar.
   kLocationBarChildInteriorPadding,
 
+  // The internal spacing between the icon and text inside a location bar chip.
+  kLocationBarChildInternalSpacing,
+
   // The corner radius to use for children of the location bar.
   kLocationBarChildCornerRadius,
 
@@ -68,9 +75,25 @@ enum class LayoutConstant {
   // The vertical margins from the page info icon
   kLocationBarPageInfoIconVerticalPadding,
 
+  // Extra space between the page info icon's label and trailing edge.
+  kLocationBarPageInfoIconLabelExtraTrailingPadding,
+
+  // Extra space between the leading edge and label of the page info icon when
+  // it is dangerous.
+  kLocationBarPageInfoIconDangerousLeadingPadding,
+
+  // Extra space between the label and trailing edge of the page info icon when
+  // it is dangerous.
+  kLocationBarPageInfoIconDangerousTrailingPadding,
+
   // The leading edge space in the omnibox from the LHS icons used in Chrome
   // with the chrome refresh flag.
-  kLocationBarLeadingDecorationEdgePadding,
+  // TODO(manukh): See comment in `LocationBarView::Layout()`. We have too
+  // many feature permutations that would affect this and other layout
+  // constants, so instead of spreading the permutation logic here and
+  // elsewhere, it's consolidated in `Layout()` and will be moved back
+  // here once we decide on a permutation.
+  // kLocationBarLeadingDecorationEdgePadding,
 
   // The trailing edge space in the omnibox from the RHS icons used in Chrome
   // with the chrome refresh flag.
@@ -86,11 +109,22 @@ enum class LayoutConstant {
   // `kLocationBarTrailingIconSize`
   kLocationBarIconSize,
 
+  // Amount of space on either side of the separator that appears after the icon
+  // or label in location bar (if the separator is enabled).
+  kLocationBarIconLabelBubbleSpaceBesideSeparator,
+
+  // Amount of space reserved for the separator that appears after the icon or
+  // label in location bar (if the separator is enabled).
+  kLocationBarIconLabelBubbleSeparatorWidth,
+
   // The size of the leading icons used inside the LocationBar.
   kLocationBarLeadingIconSize,
 
   // The size of the trailing icons used inside the LocationBar.
   kLocationBarTrailingIconSize,
+
+  // The horizontal margin between location bar and other toolbar items.
+  kLocationBarMargin,
 
   // The corner radius of the MainBackgroundRegion when tool bar height side
   // panel is visible
@@ -145,11 +179,14 @@ enum class LayoutConstant {
   // space to prevent a gap from appearing between the toolbar and the
   // bottom of tabs on some non-integral scales.
   // TODO(tbergquist): Remove this after pixel canvas or any deeper fix to
-  // non-pixel-aligned drawing goes in.  See https://crbug.com/765723.
+  // non-pixel-aligned drawing goes in.  See https://crbug.com/41344902.
   kTabstripToolbarOverlap,
 
   // The total height, including icons and insets, of buttons in the toolbar.
   kToolbarButtonHeight,
+
+  // The icon size for toolbar buttons.
+  kToolbarButtonIconSize,
 
   // The corner radius for a divider in the toolbar.
   kToolbarDividerCornerRadius,
@@ -169,15 +206,12 @@ enum class LayoutConstant {
   // Default margin of the toolbar icons set by the layout manager.
   kToolbarIconDefaultMargin,
 
-  // The horizontal space between most items in the toolbar.
-  kToolbarStandardSpacing,
-
   // corner radius on the top of the toolbar introduced in chrome refresh 2023
   kToolbarCornerRadius,
 
   // The padding between the bottom of the tab strip and top of the toolbar
   // height side panel.
-  kToolbarHeightSidePanelInset,
+  kSidePanelInset,
 
   // The corner radius used for borders, fill, and hover targets with vertical
   // tabs.
@@ -195,42 +229,55 @@ enum class LayoutConstant {
   // The width of the border stroke around pinned tabs in a vertical tab strip.
   kVerticalTabPinnedBorderThickness,
 
-  // The padding between the sides/bottom of the vertical tab strip and its
-  // content when in the uncollapsed state.
-  kVerticalTabStripUncollapsedPadding,
+  // The padding between the sides of the vertical tab strip and its content.
+  kVerticalTabStripHorizontalPadding,
 
-  // The padding between the sides/bottom of the vertical tab strip and its
+  // The padding between the bottom of the vertical tab strip and its content
+  // when in the uncollapsed state.
+  kVerticalTabStripUncollapsedVerticalPadding,
+
+  // The padding between the top/bottom of the vertical tab strip and its
   // content when in the collapsed state.
-  kVerticalTabStripCollapsedPadding,
+  kVerticalTabStripCollapsedVerticalPadding,
 
-  // The icon size of top buttons in the vertical tab strip.
-  kVerticalTabStripTopButtonIconSize,
+  // The icon size of the combo buttons in the vertical tab strip.
+  kVerticalTabStripComboButtonIconSize,
+
+  // The icon size of the collapse and new tab button in the vertical tab strip.
+  kVerticalTabStripButtonIconSize,
 
   // The padding between the buttons in the top container of the vertical tab
   // strip. When it is collapsed, this is vertical padding. When it is
   // uncollapsed and expanded, this is horizontal padding.
   kVerticalTabStripTopButtonPadding,
 
-  // The icon size of bottom buttons in the vertical tab strip.
-  kVerticalTabStripBottomButtonIconSize,
-
-  // The horizontal padding between the two buttons in the bottom container of
-  // the vertical tab strip when it is uncollapsed.
-  kVerticalTabStripBottomButtonPadding,
-
-  // The vertical padding between the two buttons in the bottom container of
-  // the vertical tab strip when it is collapsed.
-  kVerticalTabStripCollapsedBottomButtonPadding,
+  // The vertical or horizontal padding between two buttons (tab groups and tab
+  // search) that have flat edges in the top container of the vertical tab
+  // strip.
+  kVerticalTabStripFlatEdgeButtonPadding,
 
   // The default height of the top container for the vertical tab strip when
   // uncollapsed.
   kVerticalTabStripTopButtonContainerHeight,
+
+  // The default height and width of the new tab button for the vertical tab
+  // strip.
+  kVerticalTabStripNewTabButtonSize,
+
+  // The height and width of the collapse button for the vertical tab strip.
+  kVerticalTabStripCollapseButtonSize,
+
+  // The default height and width of the tab groups and tab search buttons for
+  // the vertical tab strip.
+  kVerticalTabStripTopContainerButtonSize,
 
   // The size of the app menu button in a web app browser window.
   kWebAppMenuButtonSize,
 
   // The size of page action icons in a web app title bar.
   kWebAppPageActionIconSize,
+
+  kLast = kWebAppPageActionIconSize
 };
 
 enum LayoutInset {
@@ -268,6 +315,10 @@ enum LayoutInset {
   // The padding around the app menu chip in a web app browser window.
   WEB_APP_APP_MENU_CHIP_PADDING,
 
+  // The padding around the uninstall chip in the web app browser window,
+  // showing up after first launch.
+  WEB_APP_UNINSTALL_BUTTON_PADDING,
+
   // The padding around the profile menu chip.
   AVATAR_CHIP_PADDING,
 
@@ -288,6 +339,16 @@ enum LayoutInset {
   // strip when it is collapsed.
   VERTICAL_TAB_STRIP_BOTTOM_BUTTON_COLLAPSED,
 };
+
+// Layout constants for the split tabs button status indicator.
+inline constexpr int kSplitTabsStatusIndicatorWidth = 14;
+inline constexpr int kSplitTabsStatusIndicatorHeight = 2;
+inline constexpr int kSplitTabsStatusIndicatorSpacing = 1;
+
+// Default icon size for toolbar buttons.
+inline constexpr int kDefaultIconSizeChromeRefresh = 20;
+// Default icon size for toolbar buttons in touch mode.
+inline constexpr int kDefaultTouchableIconSize = 24;
 
 int GetLayoutConstant(LayoutConstant constant);
 

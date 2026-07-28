@@ -8,7 +8,9 @@ import("//build/config/android/rules.gni")
 android_library("support_lib_glue_java") {
   sources = [
     "java/src/org/chromium/support_lib_glue/SupportLibDropDataContentProviderAdapter.java",
+    "java/src/org/chromium/support_lib_glue/SupportLibHttpCache.java",
     "java/src/org/chromium/support_lib_glue/SupportLibJsReplyProxyAdapter.java",
+    "java/src/org/chromium/support_lib_glue/SupportLibNavigationParametersAdapter.java",
     "java/src/org/chromium/support_lib_glue/SupportLibOriginMatchedHeader.java",
     "java/src/org/chromium/support_lib_glue/SupportLibProfile.java",
     "java/src/org/chromium/support_lib_glue/SupportLibProfileStore.java",
@@ -54,6 +56,7 @@ android_library("support_lib_glue_java") {
     "//base:base_java",
     "//build/android:build_java",
     "//components/embedder_support/android:util_java",
+    "//components/js_injection/common:enum_mojom_java",
     "//components/webauthn/android:java",
     "//content/public/android:content_java",
     "//third_party/androidx:androidx_annotation_annotation_java",

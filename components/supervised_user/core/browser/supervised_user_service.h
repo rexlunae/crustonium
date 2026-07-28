@@ -39,6 +39,10 @@ namespace syncer {
 class SyncService;
 }  // namespace syncer
 
+namespace version_info {
+enum class Channel;
+}  // namespace version_info
+
 namespace supervised_user {
 class FamilyLinkSettingsService;
 
@@ -133,7 +137,7 @@ class SupervisedUserService : public KeyedService {
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  // Use |SupervisedUserServiceFactory::GetForProfile(..)| to get
+  // Use |supervised_user::SupervisedUserServiceFactory::GetForProfile(..)| to get
   // an instance of this service.
   // Public to allow visibility to iOS factory.
   SupervisedUserService(

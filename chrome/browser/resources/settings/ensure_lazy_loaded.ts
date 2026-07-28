@@ -20,9 +20,8 @@ export function ensureLazyLoaded(): Promise<void> {
               'settings-appearance-page', 'settings-autofill-section',
               'settings-payments-section',
               'settings-clear-browsing-data-dialog',
-              'settings-clear-browsing-data-dialog-v2',
-              'settings-search-engines-page',
-              'settings-a11y-page', 'settings-downloads-page',
+              'settings-search-engines-page', 'settings-a11y-page',
+              'settings-downloads-page',
               // <if expr="not is_chromeos">
               'settings-languages-page',
               // </if>

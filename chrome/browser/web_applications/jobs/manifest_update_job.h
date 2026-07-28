@@ -13,6 +13,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
+#include "chrome/browser/web_applications/jobs/finalize_install_job.h"
+#include "chrome/browser/web_applications/jobs/finalize_update_job.h"
 #include "chrome/browser/web_applications/jobs/manifest_update_job_result.h"
 #include "chrome/browser/web_applications/model/web_app_comparison.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
@@ -20,6 +22,7 @@
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 #include "url/gurl.h"
 
@@ -30,6 +33,8 @@ class DictValue;
 namespace content {
 class WebContents;
 }
+
+class Profile;
 
 namespace web_app {
 
@@ -75,16 +80,22 @@ class ManifestUpdateJob {
     bool record_icon_results_on_update = false;
     // If true, the job will consider all manifest icons as trusted icons,
     // instead of selecting one primary icon.
+    // Please consider the nuances of setting this flag to true, as outlined in
+    // `WebAppInstallInfoConstructOptions::use_manifest_icons_as_trusted`, which
+    // this variable feeds into.
     bool use_manifest_icons_as_trusted = false;
     // If true, the job will silently update everything, including the name &
-    // icon.
+    // icon. Apps satisfying `WebAppFilter::IsTrusted()` are usually allowed to
+    // set this field to `true`.
     bool force_silent_update_identity = false;
   };
 
   // Creates the job and starts it right away. The `callback` is guaranteed to
   // be called asynchronously when the job completes.
   static std::unique_ptr<ManifestUpdateJob> CreateAndStart(
-      WithAppResources* lock,
+      Profile& profile,
+      Lock* lock,
+      WithAppResources* lock_resources,
       content::WebContents* web_contents,
       base::DictValue* debug_value,
       blink::mojom::ManifestPtr manifest,
@@ -96,7 +107,9 @@ class ManifestUpdateJob {
   ~ManifestUpdateJob();
 
  private:
-  ManifestUpdateJob(WithAppResources* lock,
+  ManifestUpdateJob(Profile& profile,
+                    Lock* lock,
+                    WithAppResources* lock_resources,
                     content::WebContents* web_contents,
                     base::DictValue* debug_value,
                     blink::mojom::ManifestPtr manifest,
@@ -113,8 +126,20 @@ class ManifestUpdateJob {
   void ContinueToFetchIcons();
   void OnIconsFetched();
   void FinalizeUpdateIfSilentChangesExist();
+  void OnImageDiffComputedFinalizeUpdate(
+      std::optional<proto::PendingUpdateInfo> pending_update_info,
+      SkBitmap old_trusted_icon,
+      SkBitmap new_trusted_icon,
+      base::Time current_time,
+      bool silent_icon_update_throttled,
+      bool more_than_ten_percent_diff);
+  void OnInstallUpdateJobFinished(FinalizeUpdateJob* job,
+                                  InstallFinalizedCallback callback,
+                                  const webapps::AppId& app_id,
+                                  webapps::InstallResultCode code);
   void UpdateFinalizedWritePendingInfo(
       std::optional<proto::PendingUpdateInfo> pending_update_info,
+      bool silent_icon_update_happened,
       const webapps::AppId& app_id,
       webapps::InstallResultCode code);
   void WritePendingUpdateInfoThenComplete(
@@ -125,7 +150,9 @@ class ManifestUpdateJob {
   void Complete(Result result);
   bool IsWebContentsDestroyed();
 
-  const raw_ref<WithAppResources> lock_;
+  const raw_ref<Profile> profile_;
+  const raw_ref<Lock> lock_;
+  const raw_ref<WithAppResources> lock_resources_;
   const base::WeakPtr<content::WebContents> web_contents_;
   const raw_ref<base::DictValue> debug_value_;
   const blink::mojom::ManifestPtr manifest_;
@@ -137,6 +164,7 @@ class ManifestUpdateJob {
 
   std::unique_ptr<WebAppInstallInfo> new_install_info_;
   std::unique_ptr<ManifestToWebAppInstallInfoJob> manifest_to_install_info_job_;
+  std::unique_ptr<FinalizeUpdateJob> install_update_job_;
 
   WebAppComparison web_app_comparison_;
   IconBitmaps existing_manifest_icon_bitmaps_;

@@ -265,6 +265,23 @@ void SystemMediaControlsWin::SetArtist(const std::u16string& artist) {
   DCHECK(SUCCEEDED(hr));
 }
 
+void SystemMediaControlsWin::SetAlbum(const std::u16string& album) {
+  DCHECK(initialized_);
+  DCHECK(display_properties_);
+
+  Microsoft::WRL::ComPtr<ABI::Windows::Media::IMusicDisplayProperties2>
+      display_properties_2;
+  HRESULT hr = display_properties_.As(&display_properties_2);
+  if (FAILED(hr)) {
+    return;
+  }
+
+  base::win::ScopedHString h_album =
+      base::win::ScopedHString::Create(base::UTF16ToWide(album));
+  hr = display_properties_2->put_AlbumTitle(h_album.get());
+  DCHECK(SUCCEEDED(hr));
+}
+
 void SystemMediaControlsWin::SetThumbnail(const SkBitmap& bitmap) {
   DCHECK(initialized_);
   DCHECK(display_updater_);
@@ -308,10 +325,16 @@ void SystemMediaControlsWin::SetThumbnail(const SkBitmap& bitmap) {
 
   // Make a callback that gives the icon to the SMTC once the bits make it into
   // |icon_stream_|
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   auto store_async_callback = Microsoft::WRL::Callback<
       ABI::Windows::Foundation::IAsyncOperationCompletedHandler<unsigned int>>(
-      [this](ABI::Windows::Foundation::IAsyncOperation<unsigned int>* async_op,
-             ABI::Windows::Foundation::AsyncStatus status) mutable {
+      [weak_ptr](
+          ABI::Windows::Foundation::IAsyncOperation<unsigned int>* async_op,
+          ABI::Windows::Foundation::AsyncStatus status) mutable {
+        if (!weak_ptr) {
+          return S_OK;
+        }
+
         // Check the async operation completed successfully.
         ABI::Windows::Foundation::IAsyncInfo* async_info;
         HRESULT hr = async_op->QueryInterface(
@@ -328,15 +351,15 @@ void SystemMediaControlsWin::SetThumbnail(const SkBitmap& bitmap) {
               &reference_statics);
           DCHECK(SUCCEEDED(result));
 
-          result = reference_statics->CreateFromStream(icon_stream_.Get(),
-                                                       &icon_stream_reference_);
+          result = reference_statics->CreateFromStream(
+              weak_ptr->icon_stream_.Get(), &weak_ptr->icon_stream_reference_);
           DCHECK(SUCCEEDED(result));
 
-          result =
-              display_updater_->put_Thumbnail(icon_stream_reference_.Get());
+          result = weak_ptr->display_updater_->put_Thumbnail(
+              weak_ptr->icon_stream_reference_.Get());
           DCHECK(SUCCEEDED(result));
 
-          result = display_updater_->Update();
+          result = weak_ptr->display_updater_->Update();
           DCHECK(SUCCEEDED(result));
         }
         return hr;

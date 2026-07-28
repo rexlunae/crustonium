@@ -18,6 +18,7 @@
 
 namespace metrics {
 class MetricsServiceAccessor;
+class MetricsReportingChoiceService;
 }  // namespace metrics
 
 namespace content {
@@ -26,8 +27,11 @@ class SyntheticTrialSyncer;
 
 class UmaSessionStatsExternalExperimentRegistrar;
 
-namespace variations {
+namespace android_webview {
+class AwMetricsServiceAccessor;
+}  // namespace android_webview
 
+namespace variations {
 struct ActiveGroupId;
 class FieldTrialsProvider;
 class FieldTrialsProviderTest;
@@ -78,6 +82,13 @@ class COMPONENT_EXPORT(VARIATIONS) SyntheticTrialRegistry {
       const std::vector<int>& experiment_ids,
       OverrideMode mode);
 
+  // As above, but restricted to only be called by
+  // android_webview::AwMetricsServiceAccessor.
+  void RegisterExternalExperiments(
+      base::PassKey<android_webview::AwMetricsServiceAccessor> pass_key,
+      const std::vector<int>& experiment_ids,
+      OverrideMode mode);
+
   // As above, but for testing purposes only.
   void RegisterExternalExperimentsForTesting(
       const std::vector<int>& experiment_ids,
@@ -89,11 +100,12 @@ class COMPONENT_EXPORT(VARIATIONS) SyntheticTrialRegistry {
   std::vector<ActiveGroupId> GetCurrentSyntheticFieldTrialsForTest() const;
 
  private:
-  friend metrics::MetricsServiceAccessor;
-  friend FieldTrialsProvider;
-  friend FieldTrialsProviderTest;
-  friend SyntheticTrialRegistryTest;
-  friend content::SyntheticTrialSyncer;
+  friend class metrics::MetricsServiceAccessor;
+  friend class metrics::MetricsReportingChoiceService;
+  friend class FieldTrialsProvider;
+  friend class FieldTrialsProviderTest;
+  friend class SyntheticTrialRegistryTest;
+  friend class content::SyntheticTrialSyncer;
   FRIEND_TEST_ALL_PREFIXES(SyntheticTrialRegistryTest, RegisterSyntheticTrial);
   FRIEND_TEST_ALL_PREFIXES(SyntheticTrialRegistryTest,
                            GetSyntheticFieldTrialsOlderThanSuffix);

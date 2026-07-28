@@ -89,18 +89,6 @@ def get_parts(config):
                 | CodeSignOptions.HARDENED_RUNTIME,
                 entitlements='helper-gpu-entitlements.plist',
                 verify_options=verify_options),
-        'helper-plugin-app':
-            CodeSignedProduct(
-                '{0.framework_dir}/Helpers/{0.product} Helper (Plugin).app'
-                .format(config),
-                '{}.helper.plugin'.format(uncustomized_bundle_id),
-                # Do not use |CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS|
-                # because library validation is incompatible with the
-                # disable-library-validation entitlement.
-                options=CodeSignOptions.RESTRICT | CodeSignOptions.KILL
-                | CodeSignOptions.HARDENED_RUNTIME,
-                entitlements='helper-plugin-entitlements.plist',
-                verify_options=verify_options),
         'helper-alerts':
             CodeSignedProduct(
                 '{0.framework_dir}/Helpers/{0.product} Helper (Alerts).app'
@@ -135,12 +123,19 @@ def get_parts(config):
             verify_options=verify_options)
 
     dylibs = [
-        'libEGL.dylib',
-        'libGLESv2.dylib',
         'libvk_swiftshader.dylib',
+        'libvulkan.dylib',
     ]
+    if not config.use_static_angle:
+        dylibs.extend([
+            'libEGL.dylib',
+            'libGLESv2.dylib',
+        ])
     if config.is_chrome_branded():
-        dylibs.append('liboptimization_guide_internal.dylib')
+        dylibs.extend((
+            'liboptimization_guide_internal.dylib',
+            'libchromecompaneros.dylib',
+        ))
     for library in dylibs:
         library_basename = os.path.basename(library)
         parts[library_basename] = CodeSignedProduct(

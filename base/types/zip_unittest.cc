@@ -7,6 +7,7 @@
 #include <array>
 #include <iostream>
 #include <iterator>
+#include <list>
 #include <ranges>
 #include <vector>
 
@@ -229,6 +230,46 @@ TEST(ZipTest, ZipAsRange) {
 
   EXPECT_TRUE(std::ranges::any_of(zip(a, b), elements_are_equal));
   EXPECT_FALSE(std::ranges::all_of(zip(a, b), elements_are_equal));
+}
+
+TEST(ZipTest, SentinelEquality) {
+  std::vector<int> a = {1, 2, 3};
+  std::vector<int> b = {4, 5, 6};
+
+  auto z = zip(a, b);
+  auto it = z.begin();
+  auto end = z.end();
+
+  // Both directions must work without infinite recursion via C++20.
+  EXPECT_FALSE(end == it);
+  EXPECT_TRUE(end != it);
+
+  std::advance(it, 3);
+  EXPECT_TRUE(end == it);
+  EXPECT_FALSE(end != it);
+}
+
+TEST(ZipTest, SizeEmptyRange) {
+  std::list<int> a;
+
+  const auto z = zip(a);
+  EXPECT_EQ(z.size(), 0);
+}
+
+TEST(ZipTest, SizeSingleRange) {
+  std::vector<int> a = {8, 9};
+
+  const auto z = zip(a);
+  EXPECT_EQ(z.size(), a.size());
+}
+
+TEST(ZipTest, SizeMultipleRanges) {
+  std::vector<int> a = {1, 2, 3};
+  std::list<bool> b = {true};
+  std::array<std::string, 4> c = {"1", "2", "3", "4"};
+
+  const auto z = zip(a, b, c);
+  EXPECT_EQ(z.size(), b.size());
 }
 
 }  // namespace base

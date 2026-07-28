@@ -30,6 +30,7 @@
 #include "ash/webui/shortcut_customization_ui/backend/accelerator_layout_table.h"
 #include "ash/webui/shortcut_customization_ui/mojom/shortcut_customization.mojom-test-utils.h"
 #include "ash/webui/shortcut_customization_ui/mojom/shortcut_customization.mojom.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
@@ -398,8 +399,8 @@ class AcceleratorConfigurationProviderTest : public AshTestBase {
     // `provider_` has a dependency on `input_method_manager_`.
     provider_.reset();
     AshTestBase::TearDown();
-    input_method::InputMethodManager::Shutdown();
     input_method_manager_ = nullptr;
+    input_method::InputMethodManager::Shutdown();
     histogram_tester_.reset();
     user_action_tester_.reset();
   }
@@ -467,7 +468,7 @@ class AcceleratorConfigurationProviderTest : public AshTestBase {
   std::unique_ptr<AcceleratorConfigurationProvider> provider_;
   NonConfigurableActionsMap non_configurable_actions_map_;
   // Test global singleton. Delete is handled by InputMethodManager::Shutdown().
-  raw_ptr<TestInputMethodManager, DanglingUntriaged> input_method_manager_;
+  raw_ptr<TestInputMethodManager> input_method_manager_;
   std::unique_ptr<FakeDeviceManager> fake_keyboard_manager_;
   FakeAcceleratorsUpdatedObserver observer_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;

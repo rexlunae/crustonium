@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/ash/login/local_password_setup_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
@@ -53,6 +54,17 @@ void LocalPasswordSetupHandler::DeclareLocalizedValues(
                IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_CONFIRM_PLACEHOLDER);
   builder->Add("setLocalPasswordMinCharsHint",
                IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_MIN_CHARS_HINT);
+  builder->Add("setLocalPasswordErrorTooShort",
+               IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_ERROR_TOO_SHORT);
+  builder->Add(
+      "setLocalPasswordErrorContainsTrivialSequence",
+      IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_ERROR_CONTAINS_TRIVIAL_SEQUENCE);
+  builder->Add("setLocalPasswordReqLetterOrSymbol",
+               IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_REQ_LETTER_OR_SYMBOL);
+  builder->Add("setLocalPasswordReqTwoClasses",
+               IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_REQ_TWO_CLASSES);
+  builder->Add("setLocalPasswordReqFourClasses",
+               IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_REQ_FOUR_CLASSES);
   builder->Add("setLocalPasswordComplexityErrorNone",
                IDS_AUTH_SETUP_SET_LOCAL_PASSWORD_COMPLEXITY_ERROR_NONE);
   builder->Add("setLocalPasswordComplexityErrorLow",

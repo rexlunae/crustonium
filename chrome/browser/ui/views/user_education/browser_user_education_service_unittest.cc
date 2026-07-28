@@ -201,7 +201,6 @@ TEST(BrowserUserEducationServiceTest, PreventNewHardCodedConfigurations) {
       &feature_engagement::kIPHReadingListInSidePanelFeature,
       &feature_engagement::kIPHReadingModeSidePanelFeature,
       &feature_engagement::kIPHSidePanelGenericPinnableFeature,
-      &feature_engagement::kIPHTabOrganizationSuccessFeature,
       &feature_engagement::kIPHProfileSwitchFeature,
       &feature_engagement::kIPHPriceTrackingInSidePanelFeature,
       &feature_engagement::kIPHBackNavigationMenuFeature,
@@ -209,10 +208,6 @@ TEST(BrowserUserEducationServiceTest, PreventNewHardCodedConfigurations) {
       &feature_engagement::kIPHAutofillExternalAccountProfileSuggestionFeature,
       &feature_engagement::kIPHAutofillVirtualCardCVCSuggestionFeature,
       &feature_engagement::kIPHAutofillVirtualCardSuggestionFeature,
-      &feature_engagement::kIPHCookieControlsFeature,
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-      &feature_engagement::kIPHDesktopPWAsLinkCapturingLaunch
-#endif
       // Explicitly allowed:
       //
       // (These have been cleared by Frizzle Team as requiring their own
@@ -221,7 +216,6 @@ TEST(BrowserUserEducationServiceTest, PreventNewHardCodedConfigurations) {
       // DO NOT ADD ENTRIES TO THIS LIST WITHOUT APPROVAL FROM
       // components/user_education/OWNERS
   };
-
   std::vector<std::string> invalid_configs;
 
   user_education::FeaturePromoRegistry registry;
@@ -265,8 +259,7 @@ TEST(BrowserUserEducationServiceTest, CheckFeaturePromoMetadata) {
       &feature_engagement::kIPHReadingListEntryPointFeature,
       &feature_engagement::kIPHReadingListInSidePanelFeature,
       &feature_engagement::kIPHProfileSwitchFeature,
-      &feature_engagement::kIPHBackNavigationMenuFeature,
-      &feature_engagement::kIPHCookieControlsFeature};
+      &feature_engagement::kIPHBackNavigationMenuFeature};
 
   user_education::FeaturePromoRegistry registry;
   MaybeRegisterChromeFeaturePromos(registry);

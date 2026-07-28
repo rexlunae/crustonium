@@ -390,6 +390,7 @@ ci.thin_tester(
     targets = targets.bundle(
         targets = [
             "gpu_common_gtests_passthrough",
+            "gpu_fyi_and_optional_non_linux_gtests",
             "gpu_angle_mac_telemetry_tests",
         ],
         mixins = [
@@ -433,29 +434,13 @@ ci.thin_tester(
     targets = targets.bundle(
         targets = [
             "gpu_common_gtests_passthrough",
+            "gpu_fyi_and_optional_non_linux_gtests",
             "gpu_angle_mac_telemetry_tests",
         ],
         mixins = [
             "mac_mini_intel_gpu_stable",
         ],
         per_test_modifications = {
-            "webgl2_conformance_gl_passthrough_ganesh_tests": targets.per_test_modification(
-                mixins = targets.mixin(
-                    # TODO(crbug.com/326277739): Remove this once we determine
-                    # if this has an impact on ANGLE test stability.
-                    args = [
-                        "--jobs=2",
-                    ],
-                ),
-                replacements = targets.replacements(
-                    # Magic substitution happens after regular replacement, so
-                    # remove it now since we are manually applying the number of
-                    # jobs above.
-                    args = {
-                        targets.magic_args.GPU_PARALLEL_JOBS: None,
-                    },
-                ),
-            ),
             "webgl2_conformance_metal_passthrough_graphite_tests": targets.per_test_modification(
                 mixins = targets.mixin(
                     # TODO(crbug.com/326277739): Remove this once we determine
@@ -520,8 +505,8 @@ gpu.ci.mac_builder(
     ),
     targets = targets.bundle(),
     cores = None,
-    os = os.MAC_DEFAULT,
-    cpu = cpu.ARM64,
+    os = os.MAC_15,
+    cpu = cpu.X86_64,
     console_view_entry = consoles.console_view_entry(
         category = "iOS|Builder|ANGLE",
         short_name = "x64",
@@ -640,6 +625,7 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
+            "gpu_fyi_and_optional_non_linux_gtests",
             "gpu_angle_win_intel_nvidia_telemetry_tests",
         ],
         mixins = [
@@ -681,6 +667,7 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
+            "gpu_fyi_and_optional_non_linux_gtests",
             "gpu_angle_win_intel_nvidia_telemetry_tests",
         ],
         mixins = [

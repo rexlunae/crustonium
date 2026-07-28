@@ -43,6 +43,7 @@
 #include "third_party/blink/renderer/core/css/css_custom_ident_value.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_length_resolver.h"
+#include "third_party/blink/renderer/core/css/css_markup.h"
 #include "third_party/blink/renderer/core/css/css_math_operator.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/css_scoped_keyword_value.h"
@@ -92,6 +93,11 @@ enum CalculationResultCategory {
   kCalcFrequency,
   kCalcResolution,
   kCalcIdent,
+  // kCalcPercentAngle is used for calc() expressions that mix <angle> and
+  // <percentage>. It is analogous to kCalcLengthFunction (for length+percent
+  // mixes), but the percentage resolves against a context-supplied angle
+  // (e.g. 360deg for conic-gradient color stops).
+  kCalcPercentAngle,
   kCalcOther,
 };
 using CalculationResultCategorySet =
@@ -317,6 +323,9 @@ class CORE_EXPORT CSSMathExpressionNode
     return !(value_feature_flags_ &
              ValueFeatureFlag::kNeedsTreeScopePopulation);
   }
+  bool HasUnresolvablePercentages() const {
+    return value_feature_flags_ & ValueFeatureFlag::kHasUnresolvablePercentages;
+  }
 
   const CSSMathExpressionNode& EnsureScopedValue(
       const TreeScope* tree_scope) const {
@@ -327,14 +336,6 @@ class CORE_EXPORT CSSMathExpressionNode
   }
   virtual const CSSMathExpressionNode& PopulateWithTreeScope(
       const TreeScope*) const = 0;
-
-#if DCHECK_IS_ON()
-  // There's a subtle issue in comparing two percentages, e.g., min(10%, 20%).
-  // It doesn't always resolve into 10%, because the reference value may be
-  // negative. We use this to prevent comparing two percentages without knowing
-  // the sign of the reference value.
-  virtual bool InvolvesPercentageComparisons() const = 0;
-#endif
 
   // Rewrite this function according to the specified TryTacticTransform,
   // e.g. anchor(left) -> anchor(right). If this function is not affected
@@ -358,6 +359,7 @@ class CORE_EXPORT CSSMathExpressionNode
     kHasAnchorFunctions = 1 << 2,
     kHasRandomFunctions = 1 << 3,
     kNeedsTreeScopePopulation = 1 << 4,
+    kHasUnresolvablePercentages = 1 << 5,
   };
   using ValueFeatureFlags = uint8_t;
 
@@ -374,7 +376,7 @@ class CORE_EXPORT CSSMathExpressionNode
   }
 
   CalculationResultCategory category_;
-  ValueFeatureFlags value_feature_flags_ : 5 = kNoValueFeatures;
+  ValueFeatureFlags value_feature_flags_ : 6 = kNoValueFeatures;
 };
 
 class CORE_EXPORT CSSMathExpressionNumericLiteral final
@@ -430,10 +432,6 @@ class CORE_EXPORT CSSMathExpressionNumericLiteral final
   bool operator==(const CSSMathExpressionNode& other) const final;
   CSSPrimitiveValue::UnitType ResolvedUnitType() const final;
   void Trace(Visitor* visitor) const final;
-
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final;
-#endif
 
  protected:
   double ComputeDouble(const CSSLengthResolver& length_resolver) const final;
@@ -526,10 +524,6 @@ class CORE_EXPORT CSSMathExpressionIdentifierLiteral final
   void Trace(Visitor* visitor) const final {
     CSSMathExpressionNode::Trace(visitor);
   }
-
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final { return false; }
-#endif
 
  protected:
   double ComputeDouble(const CSSLengthResolver& length_resolver) const final {
@@ -630,10 +624,6 @@ class CORE_EXPORT CSSMathExpressionKeywordLiteral final
     CSSMathExpressionNode::Trace(visitor);
   }
 
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final { return false; }
-#endif
-
  protected:
   double ComputeDouble(const CSSLengthResolver& length_resolver) const final;
   std::optional<double> GetValueIfKnown() const final { return std::nullopt; }
@@ -714,11 +704,6 @@ class CORE_EXPORT CSSMathExpressionOperation final
   // Note: `CSSMathType type` is default for all non-arithemtic operations.
   CSSMathExpressionOperation(CalculationResultCategory category,
                              Operands&& operands,
-                             CSSMathOperator op,
-                             CSSMathType type);
-
-  // Note: `CSSMathType type` is default for all non-arithemtic operations.
-  CSSMathExpressionOperation(CalculationResultCategory category,
                              CSSMathOperator op,
                              CSSMathType type);
 
@@ -821,10 +806,6 @@ class CORE_EXPORT CSSMathExpressionOperation final
       const WritingDirectionMode&) const final;
   bool HasInvalidAnchorFunctions(const CSSLengthResolver&) const final;
   void Trace(Visitor* visitor) const final;
-
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final;
-#endif
 
  protected:
   double ComputeDouble(const CSSLengthResolver& length_resolver) const final;
@@ -945,10 +926,6 @@ class CORE_EXPORT CSSMathExpressionContainerFeature final
     CSSMathExpressionNode::Trace(visitor);
   }
 
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final { return false; }
-#endif
-
  protected:
   double ComputeDouble(const CSSLengthResolver& length_resolver) const final;
   std::optional<double> GetValueIfKnown() const final { return std::nullopt; }
@@ -1029,10 +1006,6 @@ class CORE_EXPORT CSSMathExpressionAnchorQuery final
   const CSSMathExpressionNode& PopulateWithTreeScope(
       const TreeScope*) const final;
   void Trace(Visitor* visitor) const final;
-
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final { return false; }
-#endif
 
   const CSSMathExpressionNode* TransformAnchors(
       LogicalAxis,
@@ -1121,10 +1094,6 @@ class CORE_EXPORT CSSMathExpressionSiblingFunction final
   const CSSMathExpressionNode& PopulateWithTreeScope(
       const TreeScope*) const final;
 
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final { return false; }
-#endif
-
   const CSSMathExpressionNode* TransformAnchors(
       LogicalAxis,
       const TryTacticTransform&,
@@ -1157,70 +1126,115 @@ struct DowncastTraits<CSSMathExpressionSiblingFunction> {
   }
 };
 
-// <random-value-sharing> = [ [ auto | <dashed-ident> ] || element-shared ]
-//                          | fixed <number [0,1]>
-// https://drafts.csswg.org/css-values-5/#typedef-random-value-sharing
-class RandomValueSharing : public GarbageCollected<RandomValueSharing> {
+// <random-cache-key> = auto | <random-name> | fixed <number [0,1]>
+// https://drafts.csswg.org/css-values-5/#typedef-random-cache-key
+class CORE_EXPORT RandomCacheKey : public GarbageCollected<RandomCacheKey> {
  public:
-  static const RandomValueSharing* Parse(CSSParserTokenStream& stream,
-                                         const CSSParserContext&,
-                                         CSSParserLocalContext&);
-  static const RandomValueSharing* Auto(const CSSParserLocalContext&);
-  static const RandomValueSharing* Fixed(double fixed_value);
+  static const RandomCacheKey* Parse(CSSParserTokenStream& stream,
+                                     const CSSParserContext&,
+                                     CSSParserLocalContext&);
+  static const RandomCacheKey* Auto(const CSSParserLocalContext&);
+  static const RandomCacheKey* Fixed(double fixed_value);
 
-  RandomValueSharing() = delete;
-  using ElementShared = base::StrongAlias<class ElementSharedTag, bool>;
-  RandomValueSharing(const AtomicString& name, ElementShared element_shared)
-      : value_(NameAndElementShared(name, element_shared)) {}
-  explicit RandomValueSharing(const CSSPrimitiveValue* fixed_value)
+  RandomCacheKey() = delete;
+  using ElementScoped = base::StrongAlias<class ElementScopedTag, bool>;
+  RandomCacheKey(const AtomicString& ident,
+                 ElementScoped element_scoped,
+                 const AtomicString& random_ua_ident)
+      : value_(RandomName(ident, element_scoped, random_ua_ident)) {}
+  explicit RandomCacheKey(const CSSPrimitiveValue* fixed_value)
       : value_(fixed_value) {}
 
   bool IsFixed() const;
   const CSSPrimitiveValue* GetFixed() const;
-  bool IsAuto() const;
-  const AtomicString& Name() const;
-  bool IsElementShared() const;
+  bool IsElementScoped() const;
 
-  bool operator==(const RandomValueSharing& other) const;
+  // For non-fixed values, returns a concatenated string of the identifier,
+  // property name, and property value index (if present). For fixed values,
+  // returns a null string.
+  AtomicString RandomNameForCaching() const;
+
+  bool operator==(const RandomCacheKey& other) const;
   String CssText() const;
   void Trace(Visitor* visitor) const;
 
  private:
-  // Used for non fixed <random-value-sharing> values, i.e.:
-  // [ [ auto | <dashed-ident> ] || element-shared ]
-  // "name" can refer to either the property name and property value index, or
-  // the random identifier.
-  struct NameAndElementShared {
-    NameAndElementShared() = delete;
-    explicit NameAndElementShared(
-        const AtomicString& random_name,
-        ElementShared element_shared = ElementShared(false))
-        : name(random_name), is_element_shared(element_shared) {}
-    bool operator==(const NameAndElementShared& other) const {
-      return name == other.name && is_element_shared == other.is_element_shared;
+  // Used for non fixed <random-cache-key> values, i.e.:
+  // <random-name> =  <dashed-ident> || element-scoped
+  //                        || [ property-scoped | property-index-scoped |
+  //                        <random-ua-ident> ]
+  // <random-ua-ident> = <custom-ident>
+  // https://drafts.csswg.org/css-values-5/#typedef-random-name
+  struct RandomName {
+    RandomName() = delete;
+    explicit RandomName(const AtomicString& random_ident,
+                        ElementScoped element_scoped,
+                        const AtomicString& random_ua_ident)
+        : ident(random_ident),
+          ua_ident(random_ua_ident),
+          is_element_scoped(element_scoped) {}
+    bool operator==(const RandomName& other) const {
+      return ident == other.ident &&
+             is_element_scoped == other.is_element_scoped &&
+             ua_ident == other.ua_ident;
     }
-    const AtomicString name;
-    ElementShared is_element_shared;
+    String CssText() const {
+      StringBuilder result;
+      if (ident) {
+        SerializeIdentifier(ident, result);
+      }
+      if (is_element_scoped) {
+        if (!result.empty()) {
+          result.Append(" ");
+        }
+        result.Append("element-scoped");
+      }
+      if (ua_ident) {
+        if (!result.empty()) {
+          result.Append(" ");
+        }
+        SerializeIdentifier(ua_ident, result);
+      }
+      return result.ToString();
+    }
+    // user specified dashed ident
+    const AtomicString ident;
+    // property index ident
+    const AtomicString ua_ident;
+    ElementScoped is_element_scoped;
   };
-  std::variant<NameAndElementShared, Member<const CSSPrimitiveValue>> value_;
+  std::variant<RandomName, Member<const CSSPrimitiveValue>> value_;
 };
 
 // <random()> = random( <random-value-sharing>? , <calc-sum>, <calc-sum>,
-// <calc-sum>? ) https://drafts.csswg.org/css-values-5/#random
+// <calc-sum>? )
+// https://drafts.csswg.org/css-values-5/#random
 class CORE_EXPORT CSSMathExpressionRandomFunction final
     : public CSSMathExpressionNode {
  public:
+  // Currently the computed value for calc() expressions with category
+  // `kCalcPercent`, i.e. calc() with only percentages: random(10%, 30%)
+  // would be simplified to X%. This is not correct, if percentages depend on a
+  // used value. To control that use `percentages_depend_on_used_value`
+  // parameter.
   explicit CSSMathExpressionRandomFunction(
       base::PassKey<CSSMathExpressionRandomFunction>,
       CalculationResultCategory category,
-      const RandomValueSharing* random_value_sharing,
+      const RandomCacheKey* random_cache_key,
       const CSSMathExpressionNode* min,
       const CSSMathExpressionNode* max,
-      const CSSMathExpressionNode* step);
+      const CSSMathExpressionNode* step,
+      bool percentages_depend_on_used_value);
 
+  // Currently the computed value for calc() expressions with category
+  // `kCalcPercent`, i.e. calc() with only percentages: random(10%, 30%)
+  // would be simplified to X%. This is not correct, if percentages depend on a
+  // used value. To control that use `percentages_depend_on_used_value`
+  // parameter.
   static CSSMathExpressionRandomFunction* Create(
-      const RandomValueSharing* random_value_sharing,
-      HeapVector<Member<const CSSMathExpressionNode>>&& nodes);
+      const RandomCacheKey* random_cache_key,
+      HeapVector<Member<const CSSMathExpressionNode>>&& nodes,
+      bool percentages_depend_on_used_value);
 
   CSSMathExpressionNode* Copy() const override;
   bool IsRandomFunction() const final { return true; }
@@ -1259,9 +1273,6 @@ class CORE_EXPORT CSSMathExpressionRandomFunction final
       const TreeScope*) const final {
     NOTREACHED();
   }
-#if DCHECK_IS_ON()
-  bool InvolvesPercentageComparisons() const final;
-#endif
   const CSSMathExpressionNode* TransformAnchors(
       LogicalAxis,
       const TryTacticTransform&,
@@ -1269,9 +1280,7 @@ class CORE_EXPORT CSSMathExpressionRandomFunction final
     NOTREACHED();
   }
   bool HasInvalidAnchorFunctions(const CSSLengthResolver&) const final;
-  const RandomValueSharing* GetRandomValueSharing() const {
-    return random_value_sharing_;
-  }
+  const RandomCacheKey* GetRandomCacheKey() const { return random_cache_key_; }
   const CSSMathExpressionNode* Min() const { return min_; }
   const CSSMathExpressionNode* Max() const { return max_; }
   const CSSMathExpressionNode* Step() const { return step_; }
@@ -1282,7 +1291,7 @@ class CORE_EXPORT CSSMathExpressionRandomFunction final
   std::optional<double> GetValueIfKnown() const final { return std::nullopt; }
 
  private:
-  Member<const RandomValueSharing> random_value_sharing_;
+  Member<const RandomCacheKey> random_cache_key_;
   Member<const CSSMathExpressionNode> min_;
   Member<const CSSMathExpressionNode> max_;
   Member<const CSSMathExpressionNode> step_;

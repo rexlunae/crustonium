@@ -16,12 +16,12 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -131,6 +131,7 @@ public class PaymentRequestRetryTest {
     @Test
     @MediumTest
     @Feature({"Payments", "RenderTest"})
+    @DisabledTest(message = "https://crbug.com/519619313")
     public void testRetryWithShippingAddressErrors() throws Throwable {
         mPaymentRequestTestRule.triggerUiAndWait(
                 "buyWithUrlMethod", mPaymentRequestTestRule.getReadyForInput());
@@ -165,7 +166,7 @@ public class PaymentRequestRetryTest {
                 "retry_with_shipping_address_errors");
 
         mPaymentRequestTestRule.setSpinnerSelectionInEditorAndWait(
-                0 /* Afghanistan */, mPaymentRequestTestRule.getEditorTextUpdate());
+                0, mPaymentRequestTestRule.getEditorTextUpdate());
         mPaymentRequestTestRule.setTextInEditorAndWait(
                 new String[] {
                     "Alice", "Supreme Court", "Airport Road", "Kabul", "1043", "020-253-0000"
@@ -179,6 +180,7 @@ public class PaymentRequestRetryTest {
     @Test
     @MediumTest
     @Feature({"Payments", "RenderTest"})
+    @DisabledTest(message = "https://crbug.com/519625746")
     public void testRetryWithPayerErrors() throws Throwable {
         mPaymentRequestTestRule.triggerUiAndWait(
                 "buyWithUrlMethod", mPaymentRequestTestRule.getReadyForInput());

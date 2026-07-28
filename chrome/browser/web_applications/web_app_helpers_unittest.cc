@@ -34,16 +34,13 @@ TEST(WebAppHelpers, GenerateAppId) {
 
 TEST(WebAppHelpers, GenerateAppIdForSubApps) {
   const std::string subapp_starturl = "https://example.com/subapp";
-  const webapps::ManifestId parent_manifest_id =
-      webapps::ManifestId(GURL("https://example.com"));
 
-  EXPECT_EQ("emdpgjhffapdncpmnindbhiapcohmjga",
-            GenerateAppId(/*manifest_id_path=*/std::nullopt,
-                          GURL(subapp_starturl), parent_manifest_id));
+  EXPECT_EQ(
+      "ghmpeckcpimfdekfodogbnnpmkppngmo",
+      GenerateAppId(/*manifest_id_path=*/std::nullopt, GURL(subapp_starturl)));
 
-  EXPECT_EQ("jaadilplijgkeakjaoplplaeceoommee",
-            GenerateAppId("manifest.webmanifest", GURL(subapp_starturl),
-                          parent_manifest_id));
+  EXPECT_EQ("fekpfidpgacknlbhejgeblllclomiekk",
+            GenerateAppId("manifest.webmanifest", GURL(subapp_starturl)));
 }
 
 TEST(WebAppHelpers, GenerateManifestIdFromStartUrlOnly) {
@@ -63,46 +60,10 @@ TEST(WebAppHelpers, GenerateManifestIdFromStartUrlOnly) {
                 .spec());
 }
 
-TEST(WebAppHelpers, IsValidWebAppUrl) {
-  // TODO(crbug.com/40793595): Remove chrome-extension scheme from being
-  // installed as PWAs on ChromeOS.
-  bool is_chrome_extension_valid_web_app = true;
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  // chrome-extension:// URLs can no longer be PWAs, but they can be shortcuts.
-  is_chrome_extension_valid_web_app = false;
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-
-  EXPECT_EQ(IsValidWebAppUrl(
-                GURL("chrome-extension://oafaagfgbdpldilgjjfjocjglfbolmac")),
-            is_chrome_extension_valid_web_app);
-
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("https://chromium.org")));
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("https://www.chromium.org")));
-  EXPECT_TRUE(
-      IsValidWebAppUrl(GURL("https://www.chromium.org/path/to/page.html")));
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("http://chromium.org")));
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("http://www.chromium.org")));
-  EXPECT_TRUE(
-      IsValidWebAppUrl(GURL("http://www.chromium.org/path/to/page.html")));
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("https://examle.com/foo?bar")));
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("https://examle.com/foo#bar")));
-
-  EXPECT_FALSE(IsValidWebAppUrl(GURL()));
-  EXPECT_FALSE(IsValidWebAppUrl(GURL("ftp://www.chromium.org")));
-  EXPECT_FALSE(IsValidWebAppUrl(GURL("chrome://flags")));
-  EXPECT_FALSE(IsValidWebAppUrl(GURL("about:blank")));
-  EXPECT_FALSE(
-      IsValidWebAppUrl(GURL("file://mhjfbmdgcfjbbpaeojofohoefgiehjai")));
-  EXPECT_FALSE(IsValidWebAppUrl(GURL("chrome://extensions")));
-  EXPECT_FALSE(
-      IsValidWebAppUrl(GURL("filesystem:http://example.com/path/file.html")));
-  EXPECT_TRUE(IsValidWebAppUrl(GURL("chrome://password-manager")));
-}
-
 TEST(WebAppHelpers, ManifestIdEncoding) {
   GURL start_url("https://example.com/abc");
   // ASCII character. URL parser no longer unescapes percent encoded ASCII
-  // characters. See https://crbug.com/1252531.
+  // characters. See https://crbug.com/40198802.
   EXPECT_EQ(GenerateAppId("j", start_url), GenerateAppId("j", start_url));
   EXPECT_EQ(GenerateAppId("%6Ax", start_url), GenerateAppId("%6Ax", start_url));
 

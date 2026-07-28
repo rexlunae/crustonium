@@ -8,10 +8,10 @@
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey.h"
 #import "ios/chrome/browser/data_import/public/accessibility_utils.h"
 #import "ios/chrome/browser/data_import/public/credential_item_identifier.h"
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/browser/passwords/model/password_manager_app_interface.h"
 #import "ios/chrome/browser/safari_data_import/test/safari_data_import_app_interface.h"
 #import "ios/chrome/browser/safari_data_import/test/safari_data_import_earl_grey_ui.h"
-#import "ios/chrome/browser/settings/ui_bundled/password/password_settings_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -80,6 +80,12 @@ NSString* const kInvalidPasswordUsername = @"Superman";
   [AutofillAppInterface clearCreditCardStore];
 }
 
+- (void)tearDownHelper {
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:@"NextPromoForDisplayOverride"];
+  [super tearDownHelper];
+}
+
 /// Verify that the current number of items in the storage matches the
 /// parameters.
 - (void)verifyItemCountForBookmarks:(int)bookmarksCount
@@ -114,24 +120,25 @@ NSString* const kInvalidPasswordUsername = @"Superman";
     /// Show the First Run UI at startup.
     firstRunConfig.additional_args.push_back("-FirstRunForceEnabled");
     firstRunConfig.additional_args.push_back("true");
+    firstRunConfig.additional_args.push_back(
+        "--enable-features=UpdatedFirstRunSequence:updated-first-run-sequence-"
+        "param/2");
     firstRunConfig.features_disabled.push_back(kBestOfAppFRE);
     firstRunConfig.relaunch_policy = ForceRelaunchByCleanShutdown;
     [[AppLaunchManager sharedManager]
         ensureAppLaunchedWithConfiguration:firstRunConfig];
-    /// Go through first run screens by tapping the secondary action twice
-    /// (skipping default browser settings and sign-in.)
+    /// Go through first run screens by tapping the secondary action once
+    /// (skipping default browser settings.)
     id<GREYMatcher> buttonMatcher = ButtonStackSecondaryButton();
     id<GREYMatcher> scrollViewMatcher =
         grey_accessibilityID(kPromoStyleScrollViewAccessibilityIdentifier);
     id<GREYAction> searchAction =
         grey_scrollInDirection(kGREYDirectionDown, 200);
-    for (int i = 0; i < 2; i++) {
-      GREYElementInteraction* element =
-          [[EarlGrey selectElementWithMatcher:buttonMatcher]
-                 usingSearchAction:searchAction
-              onElementWithMatcher:scrollViewMatcher];
-      [element performAction:grey_tap()];
-    }
+    GREYElementInteraction* element =
+        [[EarlGrey selectElementWithMatcher:buttonMatcher]
+               usingSearchAction:searchAction
+            onElementWithMatcher:scrollViewMatcher];
+    [element performAction:grey_tap()];
     /// Verify the visibility of the entry point, and register reminder.
     SetReminderOnSafariDataImportEntryPoint();
 
@@ -289,8 +296,7 @@ NSString* const kInvalidPasswordUsername = @"Superman";
 /// password conflicts, if there is any,
 - (void)testPasswordConflictResolution {
   if (@available(iOS 18.2, *)) {
-    [PasswordSettingsAppInterface setUpMockReauthenticationModule];
-    [PasswordSettingsAppInterface mockReauthenticationModuleExpectedResult:
+    [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                       ReauthenticationResult::kSuccess];
     /// Store some password that will result in a conflict.
     NSString* existingPassword = @"Google!Password)";
@@ -386,7 +392,6 @@ NSString* const kInvalidPasswordUsername = @"Superman";
                                   password:existingPassword];
     [PasswordManagerAppInterface verifyCredentialStoredWithUsername:kUsername2
                                                            password:kPassword2];
-    [PasswordSettingsAppInterface removeMockReauthenticationModule];
   }
 }
 

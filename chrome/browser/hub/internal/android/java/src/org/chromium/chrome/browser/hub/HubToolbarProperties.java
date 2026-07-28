@@ -11,6 +11,7 @@ import android.view.View;
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableFloatPropertyKey;
@@ -33,6 +34,9 @@ class HubToolbarProperties {
             new WritableBooleanPropertyKey();
 
     public static final WritableBooleanPropertyKey SEARCH_LOUPE_VISIBLE =
+            new WritableBooleanPropertyKey();
+
+    public static final WritableBooleanPropertyKey CLOSE_BUTTON_VISIBLE =
             new WritableBooleanPropertyKey();
 
     public static final WritableBooleanPropertyKey HUB_SEARCH_ENABLED_STATE =
@@ -71,7 +75,7 @@ class HubToolbarProperties {
     }
 
     public static final WritableObjectPropertyKey<Callback<PaneButtonLookup>>
-            PANE_BUTTON_LOOKUP_CALLBACK = new WritableObjectPropertyKey();
+            PANE_BUTTON_LOOKUP_CALLBACK = new WritableObjectPropertyKey<>();
 
     static final PropertyKey[] ALL_KEYS = {
         PANE_SWITCHER_BUTTON_DATA,
@@ -81,6 +85,7 @@ class HubToolbarProperties {
         PANE_BUTTON_LOOKUP_CALLBACK,
         SEARCH_BOX_VISIBLE,
         SEARCH_LOUPE_VISIBLE,
+        CLOSE_BUTTON_VISIBLE,
         SEARCH_LISTENER,
         IS_INCOGNITO,
         APPLY_DELAY_FOR_SEARCH_BOX_ANIMATION,

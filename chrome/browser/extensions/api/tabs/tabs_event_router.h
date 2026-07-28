@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -16,11 +17,12 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
-#include "chrome/browser/ui/tabs/tab_list_interface_observer.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "chrome/browser/tab_list/tab_list_interface_observer.h"
 #include "components/favicon/core/favicon_driver.h"
 #include "components/favicon/core/favicon_driver_observer.h"
 #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/zoom/zoom_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/event_router.h"
@@ -97,12 +99,21 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
     void DidUpdateAudioMutingState(bool muted) override;
     void WebContentsDestroyed() override;
 
+    int last_known_index() const { return last_known_index_; }
+    void set_last_known_index(int last_known_index) {
+      last_known_index_ = last_known_index;
+    }
+
    private:
     // Called when the recently-audible state for the tab changed.
     void OnRecentlyAudibleStateChanged(bool was_recently_audible);
 
     // Called when the pin state has changed for the given tab.
     void OnPinnedStateChanged(tabs::TabInterface* tab, bool new_pinned_state);
+
+    // Called when the group state has changed for the given tab.
+    void OnGroupChanged(tabs::TabInterface* tab,
+                        std::optional<tab_groups::TabGroupId> new_group);
 
     // Whether we are waiting to fire the 'complete' status change. This will
     // occur the first time the WebContents stops loading after the
@@ -116,12 +127,18 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
     // Callback subscription to be notified as the "pinned" state changes.
     base::CallbackListSubscription pinned_state_subscription_;
 
+    // Callback subscription to be notified as the "group" state changes.
+    base::CallbackListSubscription group_changed_subscription_;
+
     // Callback subscription to be notified as the "recently audible" state
     // changes.
     base::CallbackListSubscription recently_audible_subscription_;
 
     // Event router that the WebContents's notifications are forwarded to.
     raw_ref<TabsEventRouter> router_;
+
+    // The most recent index we have associated with this tab.
+    int last_known_index_ = -1;
 
     base::WeakPtrFactory<TabEntry> weak_factory_{this};
   };
@@ -134,7 +151,8 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
 
   // Registers to receive the various notifications we are interested in for a
   // tab.
-  void RegisterForTabNotifications(content::WebContents& contents);
+  void RegisterForTabNotifications(content::WebContents& contents,
+                                   int tab_index);
 
   // Removes notifications and tab entry added in RegisterForTabNotifications.
   // `expect_registered` indicates whether we should enforce that the tab was
@@ -160,6 +178,14 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
   // `active` indicates if the tab is active in its tab strip.
   void DispatchTabCreatedEvent(content::WebContents* contents, bool active);
 
+  // Dispatches the `tabs.onRemoved` event. `is_window_closing` indicates if
+  // the window owning the tab is also closing.
+  void DispatchTabRemovedEvent(content::WebContents& contents,
+                               bool is_window_closing);
+
+  // Dispatches the `tabs.onDetached` event.
+  void DispatchTabDetachedEvent(content::WebContents& contents);
+
   // The DispatchEvent methods forward events to the `profile`'s event router.
   // The TabsEventRouterPlatformDelegate listens to events for all profiles,
   // so we avoid duplication by dropping events destined for other profiles.
@@ -169,11 +195,30 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
                      base::ListValue args,
                      EventRouter::UserGestureState user_gesture);
 
+  // Updates the last known indices recorded in `tab_entries_` for the tabs in
+  // `tab_list`.
+  void UpdateTabIndices(TabListInterface& tab_list);
+
   // TabListInterfaceObserver:
-  void OnTabAdded(tabs::TabInterface* tab, int index) override;
-  void OnTabMoved(tabs::TabInterface* tab,
+  void OnTabAdded(TabListInterface& tab_list,
+                  tabs::TabInterface* tab,
+                  int index) override;
+  void OnActiveTabChanged(TabListInterface& tab_list,
+                          tabs::TabInterface* tab) override;
+  void OnTabRemoved(TabListInterface& tab_list,
+                    tabs::TabInterface* tab,
+                    TabRemovedReason removed_reason) override;
+  void OnTabMoved(TabListInterface& tab_list,
+                  tabs::TabInterface* tab,
                   int from_index,
                   int to_index) override;
+  void OnHighlightedTabsChanged(
+      TabListInterface& tab_list,
+      const std::set<tabs::TabInterface*>& highlighted_tabs) override;
+  void OnWebContentsReplaced(TabListInterface& tab_list,
+                             tabs::TabInterface* tab,
+                             content::WebContents* old_contents,
+                             content::WebContents* new_contents) override;
   void OnTabListDestroyed(TabListInterface& tab_list) override;
 
   // ZoomObserver:

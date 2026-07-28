@@ -5,27 +5,38 @@
 package org.chromium.chrome.browser.toolbar.extensions;
 
 import android.app.Activity;
-import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Build;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.PopupWindow.OnDismissListener;
 
+import org.chromium.base.Callback;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.version_info.VersionInfo;
 import org.chromium.build.NullUtil;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.toolbar.R;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.extensions.ExtensionActionPopupContents;
+import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.components.thinwebview.ThinWebView;
+import org.chromium.components.thinwebview.ThinWebViewAttachParams;
 import org.chromium.components.thinwebview.ThinWebViewConstraints;
 import org.chromium.components.thinwebview.ThinWebViewFactory;
+import org.chromium.components.thinwebview.internal.ThinWebViewContextMenuItemDelegate;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.selection.SelectionDropdownMenuDelegate;
+import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.ViewRectProvider;
 
@@ -42,8 +53,9 @@ import org.chromium.ui.widget.ViewRectProvider;
  */
 @NullMarked
 class ExtensionActionPopup implements Destroyable {
-    /** The context to use for creating views. */
-    private final Context mContext;
+
+    /** The activity to use for creating views. */
+    private final Activity mActivity;
 
     /** The ID of the extension action this popup is associated with. */
     private final String mActionId;
@@ -57,10 +69,19 @@ class ExtensionActionPopup implements Destroyable {
     /** The PopupWindow that is displayed on the screen, anchored to a view. */
     private final AnchoredPopupWindow mPopupWindow;
 
+    /** The window of the popup. */
+    private final ActivityWindowAndroid mPopupWindowAndroid;
+
+    /** The content view of the popup. */
+    private final ContentView mContentView;
+
+    private final TabModelSelector mTabModelSelector;
+    private final Callback<@Nullable Tab> mCurrentTabObserver;
+
     /**
      * Constructs an ExtensionActionPopup.
      *
-     * @param context The {@link Context} to use for creating views.
+     * @param activity The {@link Activity} to use for creating views.
      * @param windowAndroid The {@link WindowAndroid} for the current activity.
      * @param anchorView The {@link View} to which the popup will be anchored.
      * @param actionId The ID of the extension action.
@@ -68,40 +89,69 @@ class ExtensionActionPopup implements Destroyable {
      *     WebContents and native communication for this popup. The new {@link ExtensionActionPopup}
      *     instance takes ownership of the provided {@code contents} and will be responsible for
      *     calling its {@code destroy()} method.
+     * @param contextMenuPopulatorFactory The {@link ContextMenuPopulatorFactory} to use.
+     * @param selectionDropdownMenuDelegate The {@link SelectionDropdownMenuDelegate} to use.
+     * @param tabModelSelector The {@link TabModelSelector} to use.
      */
     public ExtensionActionPopup(
-            Context context,
+            Activity activity,
             WindowAndroid windowAndroid,
             View anchorView,
             String actionId,
-            ExtensionActionPopupContents contents) {
-        mContext = context;
+            ExtensionActionPopupContents contents,
+            @Nullable ContextMenuPopulatorFactory contextMenuPopulatorFactory,
+            @Nullable SelectionDropdownMenuDelegate selectionDropdownMenuDelegate,
+            TabModelSelector tabModelSelector) {
+        mActivity = activity;
         mActionId = actionId;
         mContents = contents;
 
         WebContents webContents = contents.getWebContents();
 
-        ContentView contentView = ContentView.createContentView(context, webContents);
+        mContentView = ContentView.createContentView(activity, webContents);
 
         webContents.setDelegates(
                 VersionInfo.getProductVersion(),
-                ViewAndroidDelegate.createBasicDelegate(contentView),
-                contentView,
+                ViewAndroidDelegate.createBasicDelegate(mContentView),
+                mContentView,
                 windowAndroid,
                 WebContents.createDefaultInternalsHolder());
 
+        mPopupWindowAndroid =
+                new ActivityWindowAndroid(
+                        activity,
+                        /* listenToActivityState= */ true,
+                        NullUtil.assumeNonNull(windowAndroid.getIntentRequestTracker()),
+                        /* insetObserver= */ null,
+                        /* occlusionTrackingAllowed= */ true) {
+                    @Override
+                    public @Nullable ModalDialogManager getModalDialogManager() {
+                        return windowAndroid.getModalDialogManager();
+                    }
+                };
+
         mThinWebView =
                 ThinWebViewFactory.create(
-                        context,
-                        new ThinWebViewConstraints(),
-                        NullUtil.assumeNonNull(windowAndroid.getIntentRequestTracker()));
-        mThinWebView.attachWebContents(webContents, contentView, null);
+                        activity, new ThinWebViewConstraints(), mPopupWindowAndroid);
 
-        View decorView = ((Activity) anchorView.getContext()).getWindow().getDecorView();
+        if (contextMenuPopulatorFactory != null) {
+            ThinWebViewContextMenuItemDelegate itemDelegate =
+                    new ThinWebViewContextMenuItemDelegate(webContents);
+            contextMenuPopulatorFactory.setItemDelegate(itemDelegate);
+        }
+
+        mThinWebView.attachWebContents(
+                webContents,
+                mContentView,
+                new ThinWebViewAttachParams.Builder()
+                        .setContextMenuPopulatorFactory(contextMenuPopulatorFactory)
+                        .setSelectionDropdownMenuDelegate(selectionDropdownMenuDelegate)
+                        .build());
+
         mPopupWindow =
                 new AnchoredPopupWindow(
-                        context,
-                        decorView,
+                        activity,
+                        activity.getWindow().getDecorView(),
                         new ColorDrawable(Color.WHITE),
                         mThinWebView.getView(),
                         new ViewRectProvider(anchorView));
@@ -110,7 +160,7 @@ class ExtensionActionPopup implements Destroyable {
         mPopupWindow.setOutsideTouchable(true);
         mPopupWindow.setAllowNonTouchableSize(true);
 
-        Resources resources = mContext.getResources();
+        Resources resources = mActivity.getResources();
         mPopupWindow.setElevation(
                 resources.getDimensionPixelSize(R.dimen.extension_action_popup_elevation));
 
@@ -120,14 +170,29 @@ class ExtensionActionPopup implements Destroyable {
                 resources.getDimensionPixelSize(R.dimen.extension_action_popup_min_height));
         mPopupWindow.setFocusable(true);
 
+        mTabModelSelector = tabModelSelector;
+        mCurrentTabObserver =
+                tab -> {
+                    if (mPopupWindow.isShowing()) {
+                        // Due to inherent differences between platforms on focus handling, we
+                        // explicitly observe tab changes and dismiss, unlike on Desktop where
+                        // the popup is automatically dismissed as it loses focus due to the tab
+                        // change.
+                        mPopupWindow.dismiss();
+                    }
+                };
+        mTabModelSelector.getCurrentTabSupplier().addSyncObserver(mCurrentTabObserver);
+
         contents.setDelegate(new ContentsDelegate());
     }
 
     /** Cleans up resources used by this popup. */
     @Override
     public void destroy() {
+        mTabModelSelector.getCurrentTabSupplier().removeObserver(mCurrentTabObserver);
         mPopupWindow.dismiss();
         mThinWebView.destroy();
+        mPopupWindowAndroid.destroy();
         mContents.destroy();
     }
 
@@ -149,13 +214,31 @@ class ExtensionActionPopup implements Destroyable {
     private class ContentsDelegate implements ExtensionActionPopupContents.Delegate {
         @Override
         public void resizeDueToAutoResize(int width, int height) {
+            if (Build.VERSION.SDK_INT >= 34) {
+                // Disable transition animations for the popup window. On Android, {@link
+                // onLoaded()} is called first, and then {@link resizeDueToAutoResize()} is called.
+                // A transition would result in a sliding animation from the original bounds to the
+                // updated bounds.
+                // TODO(crbug.com/478100096): Figure out what to do for lower API levels.
+                ((WindowManager.LayoutParams) mContentView.getRootView().getLayoutParams())
+                        .setCanPlayMoveAnimation(false);
+            }
+
             mPopupWindow.setDesiredContentSize(
-                    ViewUtils.dpToPx(mContext, width), ViewUtils.dpToPx(mContext, height));
+                    ViewUtils.dpToPx(mActivity, width), ViewUtils.dpToPx(mActivity, height));
+        }
+
+        @Override
+        public boolean handleKeyboardEvent(WebContents webContents, KeyEvent event) {
+            // We send unhandled keyboard events to the main {@link Activity} so that unconsumed
+            // keybindings pass through to the application window.
+            return mActivity.dispatchKeyEvent(event);
         }
 
         @Override
         public void onLoaded() {
             mPopupWindow.show();
+            mContentView.requestFocus();
         }
 
         @Override

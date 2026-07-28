@@ -83,15 +83,20 @@ void AudioSender::InsertAudio(std::unique_ptr<AudioBus> audio_bus,
   if (reason != CastStreamingFrameDropReason::kNotDropped) {
     number_of_frames_dropped_++;
     base::UmaHistogramEnumeration(kHistogramFrameDropped, reason);
-    TRACE_EVENT_INSTANT2("cast.stream", "Audio Frame Drop (raw frame)",
-                         TRACE_EVENT_SCOPE_THREAD, "duration",
-                         next_frame_duration, "reason", reason);
+    TRACE_EVENT_INSTANT("cast.stream", "Audio Frame Drop (raw frame)",
+                        "duration", next_frame_duration, "reason", reason);
     return;
   }
 
   samples_in_encoder_ += audio_bus->frames();
 
   audio_encoder_->InsertAudio(std::move(audio_bus), recorded_time);
+}
+
+AudioSender::AsynchronousEncodeCallback
+AudioSender::GetAsynchronousEncodeCallback() {
+  return audio_encoder_ ? audio_encoder_->GetAsynchronousEncodeCallback()
+                        : AudioSender::AsynchronousEncodeCallback();
 }
 
 void AudioSender::SetTargetPlayoutDelay(
@@ -103,8 +108,16 @@ base::TimeDelta AudioSender::GetTargetPlayoutDelay() const {
   return frame_sender_->GetTargetPlayoutDelay();
 }
 
-int AudioSender::GetEncoderBitrate() const {
+uint32_t AudioSender::GetEncoderBitrate() const {
   return audio_encoder_->GetBitrate();
+}
+
+int AudioSender::GetFramesInserted() const {
+  return number_of_frames_inserted_;
+}
+
+int AudioSender::GetFramesDropped() const {
+  return number_of_frames_dropped_;
 }
 
 base::WeakPtr<AudioSender> AudioSender::AsWeakPtr() {
@@ -138,9 +151,9 @@ void AudioSender::OnEncodedAudioFrame(
   if (reason != CastStreamingFrameDropReason::kNotDropped) {
     number_of_frames_dropped_++;
     base::UmaHistogramEnumeration(kHistogramFrameDropped, reason);
-    TRACE_EVENT_INSTANT2("cast.stream", "Audio Frame Drop (already encoded)",
-                         TRACE_EVENT_SCOPE_THREAD, "rtp_timestamp",
-                         rtp_timestamp.lower_32_bits(), "reason", reason);
+    TRACE_EVENT_INSTANT("cast.stream", "Audio Frame Drop (already encoded)",
+                        "rtp_timestamp", rtp_timestamp.lower_32_bits(),
+                        "reason", reason);
   }
 }
 

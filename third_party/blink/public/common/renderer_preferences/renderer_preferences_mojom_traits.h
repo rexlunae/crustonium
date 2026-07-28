@@ -133,7 +133,7 @@ struct BLINK_COMMON_EXPORT
     return data.enable_encrypted_media;
   }
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   static const bool& use_overlay_scrollbar(
       const ::blink::RendererPreferences& data) {
     return data.use_overlay_scrollbar;
@@ -247,22 +247,6 @@ struct BLINK_COMMON_EXPORT
       const ::blink::RendererPreferences& data) {
     return data.message_font_height;
   }
-  static const int32_t& vertical_scroll_bar_width_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.vertical_scroll_bar_width_in_dips;
-  }
-  static const int32_t& horizontal_scroll_bar_height_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.horizontal_scroll_bar_height_in_dips;
-  }
-  static const int32_t& arrow_bitmap_height_vertical_scroll_bar_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.arrow_bitmap_height_vertical_scroll_bar_in_dips;
-  }
-  static const int32_t& arrow_bitmap_width_horizontal_scroll_bar_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.arrow_bitmap_width_horizontal_scroll_bar_in_dips;
-  }
 #endif
 
   static const bool& plugin_fullscreen_allowed(
@@ -281,6 +265,21 @@ struct BLINK_COMMON_EXPORT
     return data.uses_platform_autofill;
   }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+  static int32_t autofill_shortcut_key_code(
+      const ::blink::RendererPreferences& data) {
+    return static_cast<int32_t>(data.autofill_shortcut_key_code);
+  }
+
+  static int32_t autofill_shortcut_modifiers(
+      const ::blink::RendererPreferences& data) {
+    return data.autofill_shortcut_modifiers;
+  }
+
+  static const std::string& autofill_trigger_string(
+      const ::blink::RendererPreferences& data) {
+    return data.autofill_trigger_string;
+  }
 
   static const std::vector<uint16_t>& explicitly_allowed_network_ports(
       const ::blink::RendererPreferences& data) {

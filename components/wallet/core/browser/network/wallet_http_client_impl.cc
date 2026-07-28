@@ -9,96 +9,37 @@
 
 #include "base/check_deref.h"
 #include "base/functional/bind.h"
-#include "base/json/json_writer.h"
-#include "base/uuid.h"
-#include "base/values.h"
+#include "base/notimplemented.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/oauth_consumer_id.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "components/version_info/version_info.h"
-#include "components/wallet/core/browser/data_models/walletable_pass.h"
+#include "components/wallet/core/browser/data_models/wallet_pass.h"
+#include "components/wallet/core/browser/metrics/wallet_metrics.h"
+#include "components/wallet/core/browser/network/get_unmasked_pass_request.h"
+#include "components/wallet/core/browser/network/upsert_private_pass_request.h"
+#include "components/wallet/core/browser/network/upsert_public_pass_request.h"
+#include "components/wallet/core/browser/network/wallet_request.h"
 #include "components/wallet/core/common/wallet_features.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
-#include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace wallet {
 namespace {
-constexpr char kSavePassRequestPath[] = "v1/passes:upsert";
-constexpr int kExternalIdNamespaceChrome = 1;
 
-base::DictValue BuildExternalId() {
-  base::DictValue external_id;
-  external_id.Set("namespace", kExternalIdNamespaceChrome);
-  external_id.Set("external_id",
-                  base::Uuid::GenerateRandomV4().AsLowercaseString());
-  return external_id;
+// Determines whether a HTTP request was successful based on its response code.
+bool IsHttpSuccess(int response_code) {
+  return response_code >= 200 && response_code < 300;
 }
 
-base::DictValue BuildClientInfo() {
-  base::DictValue chrome_client_info;
-  chrome_client_info.Set("version", version_info::GetVersionNumber());
-
-  base::DictValue client_info;
-  client_info.Set("chrome_client_info", std::move(chrome_client_info));
-  return client_info;
-}
-
-std::string BuildLoyaltyCardRequest(const LoyaltyCard& card) {
-  // TODO(crbug.com/468916773): Migrate to protobuf to ensure type safety.
-  base::DictValue request_dict;
-
-  base::DictValue pass_dict;
-  pass_dict.Set("external_id", BuildExternalId());
-
-  base::DictValue loyalty_card_dict;
-  loyalty_card_dict.Set("merchant_name", card.issuer_name);
-  loyalty_card_dict.Set("loyalty_number", card.member_id);
-  loyalty_card_dict.Set("program_name", card.plan_name);
-  pass_dict.Set("loyalty_card", std::move(loyalty_card_dict));
-
-  request_dict.Set("pass", std::move(pass_dict));
-  request_dict.Set("client_info", BuildClientInfo());
-
-  std::string json_output;
-  base::JSONWriter::Write(request_dict, &json_output);
-  return json_output;
-}
-
-std::string BuildEventPassRequest(const EventPass& pass) {
-  // TODO(crbug.com/468916773): Implement EventPass request building.
-  return std::string();
-}
-
-std::string BuildBoardingPassRequest(const BoardingPass& pass) {
-  // TODO(crbug.com/468916773): Implement BoardingPass request building.
-  return std::string();
-}
-
-std::string BuildTransitTicketRequest(const TransitTicket& ticket) {
-  // TODO(crbug.com/468916773): Implement TransitTicket request building.
-  return std::string();
-}
-
-std::string BuildSavePassRequest(const WalletablePass& pass) {
-  return std::visit(
-      absl::Overload{
-          [](const LoyaltyCard& card) { return BuildLoyaltyCardRequest(card); },
-          [](const EventPass& pass) { return BuildEventPassRequest(pass); },
-          [](const BoardingPass& pass) {
-            return BuildBoardingPassRequest(pass);
-          },
-          [](const TransitTicket& ticket) {
-            return BuildTransitTicketRequest(ticket);
-          }},
-      pass.pass_data);
-}
 }  // namespace
 
 WalletHttpClientImpl::WalletHttpClientImpl(
@@ -109,23 +50,42 @@ WalletHttpClientImpl::WalletHttpClientImpl(
 
 WalletHttpClientImpl::~WalletHttpClientImpl() = default;
 
-void WalletHttpClientImpl::SavePass(const WalletablePass& pass,
-                                    SavePassCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  SendRequest(
-      kSavePassRequestPath, BuildSavePassRequest(pass),
-      base::BindOnce(&WalletHttpClientImpl::OnSavePassResponse,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+void WalletHttpClientImpl::UpsertPublicPass(Pass pass,
+                                            UpsertPublicPassCallback callback) {
+  if (!base::FeatureList::IsEnabled(features::kWalletablePassDetection)) {
+    std::move(callback).Run(
+        base::unexpected(WalletRequestError::kGenericError));
+    return;
+  }
+  SendRequest(std::make_unique<UpsertPublicPassRequest>(std::move(pass),
+                                                        std::move(callback)));
 }
 
-void WalletHttpClientImpl::SendRequest(
-    const std::string& request_path,
-    const std::string& request_body,
-    base::OnceCallback<void(HttpResponse)> response_callback) {
+void WalletHttpClientImpl::UpsertPrivatePass(
+    PrivatePass pass,
+    std::optional<consent_auditor::ConsentAuditor::SessionId> session_id,
+    UpsertPrivatePassCallback callback) {
+  if (!base::FeatureList::IsEnabled(features::kWalletApiPrivatePassesEnabled)) {
+    std::move(callback).Run(
+        base::unexpected(WalletRequestError::kGenericError));
+    return;
+  }
+  SendRequest(std::make_unique<UpsertPrivatePassRequest>(
+      std::move(pass), std::move(session_id), std::move(callback)));
+}
+
+void WalletHttpClientImpl::GetUnmaskedPass(std::string_view pass_id,
+                                           GetUnmaskedPassCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  SendRequest(std::make_unique<GetUnmaskedPassRequest>(std::string(pass_id),
+                                                       std::move(callback)));
+}
+
+void WalletHttpClientImpl::SendRequest(std::unique_ptr<WalletRequest> request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   GetAuthToken(base::BindOnce(&WalletHttpClientImpl::SendRequestInternal,
-                              weak_ptr_factory_.GetWeakPtr(), request_path,
-                              request_body, std::move(response_callback)));
+                              weak_ptr_factory_.GetWeakPtr(),
+                              std::move(request)));
 }
 
 void WalletHttpClientImpl::GetAuthToken(TokenReadyCallback callback) {
@@ -137,9 +97,7 @@ void WalletHttpClientImpl::GetAuthToken(TokenReadyCallback callback) {
 
   access_token_fetcher_ =
       std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          // TODO(crbug.com/468916773): Replace with wallet auth id
-          signin::OAuthConsumerId::kPaymentsAccessTokenFetcher,
-          &identity_manager_.get(),
+          signin::OAuthConsumerId::kWalletPasses, &identity_manager_.get(),
           base::BindOnce(&WalletHttpClientImpl::OnTokenFetched,
                          weak_ptr_factory_.GetWeakPtr()),
           // The user must be signed in to make requests.
@@ -152,9 +110,9 @@ void WalletHttpClientImpl::OnTokenFetched(
     signin::AccessTokenInfo access_token_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   access_token_fetcher_.reset();
+  metrics::RecordNetworkRequestOauthError(error);
 
   std::optional<std::string> access_token;
-  // TODO(crbug.com/471165306): Report error to UMA.
   if (error.state() == GoogleServiceAuthError::NONE) {
     access_token = access_token_info.token;
   }
@@ -170,26 +128,24 @@ void WalletHttpClientImpl::OnTokenFetched(
 }
 
 void WalletHttpClientImpl::SendRequestInternal(
-    const std::string& request_path,
-    const std::string& request_body,
-    base::OnceCallback<void(HttpResponse)> response_callback,
+    std::unique_ptr<WalletRequest> request,
     std::optional<std::string> access_token) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!access_token) {
-    std::move(response_callback)
-        .Run(base::unexpected(
-            WalletHttpClient::WalletRequestError::kAccessTokenFetchFailed));
+    std::move(*request).OnResponse(base::unexpected(
+        WalletHttpClient::WalletRequestError::kAccessTokenFetchFailed));
     return;
   }
 
   std::unique_ptr<network::ResourceRequest> resource_request =
       std::make_unique<network::ResourceRequest>();
-  GURL base_url(kWalletablePassSaveUrl.Get());
-  resource_request->url = base_url.Resolve(request_path);
+  GURL base_url(features::kWalletSaveUrl.Get());
+  resource_request->url = base_url.Resolve(request->GetRequestUrlPath());
   resource_request->method = "POST";
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   resource_request->headers.SetHeader(net::HttpRequestHeaders::kAuthorization,
                                       base::StrCat({"Bearer ", *access_token}));
+  resource_request->headers.MergeFrom(request->GetRequestHeaders());
 
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("wallet_http_request", R"(
@@ -200,7 +156,7 @@ void WalletHttpClientImpl::SendRequestInternal(
           trigger:
             "User triggers a wallet action."
           data:
-            "JSON data specific to the request."
+            "Serialised proto data specific to the request."
           destination: GOOGLE_OWNED_SERVICE
           internal {
             contacts {
@@ -232,43 +188,55 @@ void WalletHttpClientImpl::SendRequestInternal(
   network::SimpleURLLoader* loader_ptr = simple_url_loader.get();
   UrlLoaderList::iterator it = active_loaders_.insert(
       active_loaders_.begin(), std::move(simple_url_loader));
-  loader_ptr->AttachStringForUpload(request_body, "application/json");
+  loader_ptr->AttachStringForUpload(request->GetRequestContent(),
+                                    "application/x-protobuf");
   loader_ptr->SetAllowHttpErrorResults(true);
+  loader_ptr->SetTimeoutDuration(request->GetTimeout());
   loader_ptr->DownloadToString(
       url_loader_factory_.get(),
       base::BindOnce(&WalletHttpClientImpl::OnSimpleLoaderComplete,
-                     weak_ptr_factory_.GetWeakPtr(), it,
-                     std::move(response_callback)),
+                     weak_ptr_factory_.GetWeakPtr(), it, std::move(request),
+                     base::TimeTicks::Now()),
       network::SimpleURLLoader::kMaxBoundedStringDownloadSize);
 }
 
 void WalletHttpClientImpl::OnSimpleLoaderComplete(
     UrlLoaderList::iterator it,
-    base::OnceCallback<void(HttpResponse)> response_callback,
+    std::unique_ptr<WalletRequest> request,
+    base::TimeTicks request_start,
     std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::unique_ptr<network::SimpleURLLoader> loader = std::move(*it);
   active_loaders_.erase(it);
-  if (!response_body) {
-    // TODO(crbug.com/468915960): Handle detailed errors.
-    std::move(response_callback)
-        .Run(base::unexpected(
-            WalletHttpClient::WalletRequestError::kGenericError));
+  int http_response_code = -1;  // Invalid response code.
+  if (loader) {
+    if (loader->ResponseInfo() && loader->ResponseInfo()->headers) {
+      http_response_code = loader->ResponseInfo()->headers->response_code();
+    }
+    int net_error = loader->NetError();
+    // Log the HTTP response or error code and request duration.
+    metrics::RecordHttpResponseOrErrorCode(
+        request->GetRequestType(),
+        net_error != net::OK && net_error != net::ERR_HTTP_RESPONSE_CODE_FAILURE
+            ? net_error
+            : http_response_code);
+
+    metrics::RecordNetworkRequestLatency(
+        request->GetRequestType(), base::TimeTicks::Now() - request_start);
+  }
+
+  if (response_body) {
+    metrics::RecordNetworkRequestResponseSize(request->GetRequestType(),
+                                              response_body->size());
+  }
+
+  const bool success = response_body && IsHttpSuccess(http_response_code);
+  if (!success) {
+    std::move(*request).OnResponse(
+        base::unexpected(WalletHttpClient::WalletRequestError::kGenericError));
     return;
   }
-  std::move(response_callback).Run(std::move(*response_body));
-}
-
-void WalletHttpClientImpl::OnSavePassResponse(SavePassCallback callback,
-                                              HttpResponse http_response) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!http_response.has_value()) {
-    std::move(callback).Run(base::unexpected(http_response.error()));
-    return;
-  }
-
-  // TODO(crbug.com/468916773): Parse the response body to extract pass_id.
-  std::move(callback).Run(
-      WalletHttpClient::SavePassResult{.pass_id = "dummy_pass_id"});
+  std::move(*request).OnResponse(std::move(*response_body));
 }
 
 }  // namespace wallet

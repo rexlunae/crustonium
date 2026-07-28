@@ -71,8 +71,7 @@ public class CentralAccountCardPreference extends Preference
     public void onBindViewHolder(PreferenceViewHolder holder) {
         super.onBindViewHolder(holder);
 
-        DisplayableProfileData profileData =
-                mProfileDataCache.getProfileDataOrDefault(mAccountInfo.getEmail());
+        DisplayableProfileData profileData = mProfileDataCache.getById(mAccountInfo.getId());
 
         ImageView imageView = (ImageView) holder.findViewById(R.id.central_account_image);
         imageView.setImageDrawable(profileData.getImage());
@@ -94,7 +93,7 @@ public class CentralAccountCardPreference extends Preference
 
     /** ProfileDataCache.Observer implementation. */
     @Override
-    public void onProfileDataUpdated(String accountEmail) {
+    public void onProfileDataUpdated(DisplayableProfileData profileData) {
         notifyChanged();
     }
 

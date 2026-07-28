@@ -49,6 +49,7 @@ class TestPermissionBubbleViewDelegate
   void SetManageClicked() override {}
   void SetLearnMoreClicked() override {}
   void SetHatsShownCallback(base::OnceCallback<void()> callback) override {}
+  void SwitchToLoudPrompt() override {}
 
   std::optional<permissions::PermissionUiSelector::QuietUiReason>
   ReasonForUsingQuietUi() const override;
@@ -62,6 +63,8 @@ class TestPermissionBubbleViewDelegate
   const permissions::PermissionPrompt* GetCurrentPrompt() const override;
   content::WebContents* GetAssociatedWebContents() override;
 
+  std::optional<permissions::GeolocationPromptType> GetGeolocationPromptType()
+      const override;
   base::WeakPtr<permissions::PermissionPrompt::Delegate> GetWeakPtr() override;
 
   void set_requests(

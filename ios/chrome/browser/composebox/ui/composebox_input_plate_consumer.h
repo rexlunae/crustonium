@@ -7,10 +7,14 @@
 
 #import <UIKit/UIKit.h>
 
+#import <unordered_set>
+
 #import "ios/chrome/browser/composebox/ui/composebox_input_item.h"
 
 enum class ComposeboxInputPlateControls : unsigned int;
 enum class ComposeboxModelOption;
+@class ComposeboxServerStrings;
+@class ComposeboxUIInputState;
 
 // Consumer for the composebox composebox.
 @protocol ComposeboxInputPlateConsumer
@@ -25,65 +29,14 @@ enum class ComposeboxModelOption;
 // Sets whether to show the shortcuts (Lens and microphone actions).
 - (void)updateVisibleControls:(ComposeboxInputPlateControls)controls;
 
-// Sets whether AI mode is enabled.
-- (void)setAIModeEnabled:(BOOL)enabled;
-
-// Sets whether Image Generation mode is enabled.
-- (void)setImageGenerationEnabled:(BOOL)enabled;
-
-// Sets whether Canvas mode is enabled.
-- (void)setCanvasEnabled:(BOOL)enabled;
-
-// Sets whether the model picker is enabled.
-- (void)allowModelPicker:(BOOL)allowed;
-
 // Whether to present in compact (single line) mode.
 - (void)setCompact:(BOOL)compact;
 
-// Sets the favicon for the current tab.
-- (void)setCurrentTabFavicon:(UIImage*)favicon;
+// Sets the UI input state.
+- (void)setUIInputState:(ComposeboxUIInputState*)state;
 
-// Sets whether the "Attach current tab" action is hidden.
-- (void)hideAttachCurrentTabAction:(BOOL)hidden;
-
-// Sets whether the attach tab actions are hidden.
-- (void)hideAttachTabActions:(BOOL)hidden;
-
-// Sets whether the attach tab actions are disabled.
-- (void)disableAttachTabActions:(BOOL)disabled;
-
-// Sets whether the attach file actions are hidden.
-- (void)hideAttachFileActions:(BOOL)hidden;
-
-// Sets whether the attach file actions are disabled.
-- (void)disableAttachFileActions:(BOOL)disabled;
-
-// Sets whether the create image actions are hidden.
-- (void)hideCreateImageActions:(BOOL)hidden;
-
-// Sets whether the canvas actions are hidden.
-- (void)hideCanvasActions:(BOOL)hidden;
-
-// Sets whether the create image actions are disabled.
-- (void)disableCreateImageActions:(BOOL)disabled;
-
-// Sets whether the camera actions are hidden.
-- (void)hideCameraActions:(BOOL)hidden;
-
-// Sets whether the camera actions are disabled.
-- (void)disableCameraActions:(BOOL)disabled;
-
-// Sets whether the gallery actions are hidden.
-- (void)hideGalleryActions:(BOOL)hidden;
-
-// Sets whether the gallery actions are disabled.
-- (void)disableGalleryActions:(BOOL)disabled;
-
-// Sets the remaining capacity for attachments.
-- (void)setRemainingAttachmentCapacity:(NSUInteger)capacity;
-
-// Called when the model option is updated.
-- (void)setModelOption:(ComposeboxModelOption)modelOption;
+// Called when the text field height changes.
+- (void)updatePreferredContentSizeForNewTextFieldHeight;
 
 @end
 

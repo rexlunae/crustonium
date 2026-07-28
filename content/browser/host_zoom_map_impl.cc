@@ -185,10 +185,6 @@ void HostZoomMapImpl::CopyFrom(HostZoomMap* copy_interface) {
     scheme_host_zoom_levels_[host].insert(it.second.begin(), it.second.end());
   }
   default_zoom_level_ = copy->default_zoom_level_;
-
-  host_zoom_levels_for_preview_.insert(
-      copy->host_zoom_levels_for_preview_.begin(),
-      copy->host_zoom_levels_for_preview_.end());
 }
 
 double HostZoomMapImpl::GetZoomLevelForHost(const std::string& host) const {
@@ -387,7 +383,7 @@ void HostZoomMapImpl::SetDefaultZoomLevel(double level) {
 
   // Second, update zoom levels for all pages that do not have an overriding
   // entry.
-  for (auto* web_contents : WebContentsImpl::GetAllWebContents()) {
+  for (auto web_contents : WebContentsImpl::GetAllWebContents()) {
     // Only change zoom for WebContents tied to the StoragePartition this
     // HostZoomMap serves.
     if (GetForWebContents(web_contents) != this)
@@ -540,7 +536,7 @@ void HostZoomMapImpl::SendZoomLevelChange(const std::string& scheme,
   // other case of interest is where the renderer is hosting a plugin document;
   // that should be reflected in our temporary zoom level map, but we will
   // double check on the renderer side to avoid the possibility of any races.
-  for (auto* web_contents : WebContentsImpl::GetAllWebContents()) {
+  for (auto web_contents : WebContentsImpl::GetAllWebContents()) {
     // Only send zoom level changes to WebContents that are using this
     // HostZoomMap.
     if (GetForWebContents(web_contents) != this)
@@ -812,22 +808,7 @@ void HostZoomMapImpl::RemoveJniZoomLevelObserver(int64_t subscription_key) {
 }
 #endif
 
-double HostZoomMapImpl::GetZoomLevelForPreviewAndHost(const std::string& host) {
-  const auto it = host_zoom_levels_for_preview_.find(host);
-  return it != host_zoom_levels_for_preview_.end() ? it->second.level
-                                                   : default_zoom_level_;
-}
 
-void HostZoomMapImpl::SetZoomLevelForPreviewAndHost(const std::string& host,
-                                                    double level) {
-  if (blink::ZoomValuesEqual(level, default_zoom_level_)) {
-    host_zoom_levels_for_preview_.erase(host);
-  } else {
-    ZoomLevel& zoomLevel = host_zoom_levels_for_preview_[host];
-    zoomLevel.level = level;
-    zoomLevel.last_modified = clock_->Now();
-  }
-}
 
 void HostZoomMapImpl::SetIndependentZoomForFrameTreeNode(
     WebContents* web_contents,

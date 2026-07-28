@@ -651,6 +651,14 @@ UserMediaRequest* UserMediaRequest::Create(
         "Media.GetDisplayMedia.Constraints.MonitorTypeSurfaces");
   }
 
+  result->set_audio_selection_preferred(options->hasAudioSelection());
+  if (media_type == UserMediaRequestType::kDisplayMedia) {
+    RecordBooleanConstraintUma(
+        result->audio_selection_preferred() ? std::make_optional(true)
+                                            : std::nullopt,
+        "Media.GetDisplayMedia.Constraints.AudioSelection");
+  }
+
   result->set_suppress_local_audio_playback(
       suppress_local_audio_playback.value_or(false));
   if (media_type == UserMediaRequestType::kDisplayMedia) {
@@ -964,7 +972,21 @@ void UserMediaRequest::Fail(Result error, const String& message) {
       break;
     case Result::INVALID_STATE:
     case Result::INVALID_VIDEO_DEVICE_ID:
-    case Result::FAILED_DUE_TO_SHUTDOWN:
+    case Result::FAILED_DUE_TO_SHUTDOWN_OTHER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_CONTROLLER_DESTRUCTOR:
+    case Result::FAILED_DUE_TO_SHUTDOWN_REQUEST_REMOVED:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_DELEGATE:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_GUEST_PAGE_HOLDER_DELEGATE:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_DISPATCHER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_CANCELLED_REQUEST:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_CONTROLLER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_HANDLER:
+    case Result::FAILED_DUE_TO_SHUTDOWN_NO_WEB_VIEW_DELEGATE:
+    case Result::FAILED_DUE_TO_SHUTDOWN_WEB_VIEW_NOT_ATTACHED:
+    case Result::FAILED_DUE_TO_SHUTDOWN_USER_MEDIA_PROCESSOR_CANCEL_REQUEST:
+    case Result::
+        FAILED_DUE_TO_SHUTDOWN_USER_MEDIA_PROCESSOR_STOP_ALL_PROCESSING:
+    case Result::FAILED_DUE_TO_SHUTDOWN_WEB_CONTENTS_NO_DELEGATE:
     case Result::INVALID_EXTENSION_TYPE_REQUEST:
     case Result::CAPTURED_TAB_DESTROYED:
     case Result::CAPTURE_NOT_ENABLED:
@@ -982,6 +1004,7 @@ void UserMediaRequest::Fail(Result error, const String& message) {
     case Result::TRACK_START_FAILURE_VIDEO:
     case Result::AUDIO_DEVICE_SOCKET_ERROR:
     case Result::DEVICE_IN_USE:
+    case Result::DEVICE_REMOVED:
       exception_code = DOMExceptionCode::kNotReadableError;
       result_enum = UserMediaRequestResult::kNotReadableError;
       break;

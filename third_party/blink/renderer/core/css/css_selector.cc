@@ -29,13 +29,15 @@
 #include <algorithm>
 #include <iterator>
 #include <memory>
+#include <new>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/strings/string_view_util.h"
 #include "style_rule.h"
+#include "third_party/blink/renderer/core/css/active_navigation_condition.h"
 #include "third_party/blink/renderer/core/css/css_markup.h"
 #include "third_party/blink/renderer/core/css/css_selector_list.h"
-#include "third_party/blink/renderer/core/css/link_condition.h"
+#include "third_party/blink/renderer/core/css/navigation_query.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_selector_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
@@ -44,6 +46,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/core/html/html_install_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
@@ -152,7 +155,7 @@ void CSSSelector::CreateRareData() {
   // compile and may kinda work, but will be undefined behavior.
   auto* rare_data = MakeGarbageCollected<RareData>(data_.value_);
   data_.value_.~AtomicString();
-  data_.rare_data_ = rare_data;
+  new (&data_.rare_data_) Member<RareData>(rare_data);
   bits_.set<HasRareDataField>(true);
 }
 
@@ -294,6 +297,16 @@ inline unsigned CSSSelector::SpecificityForOneSelector() const {
   NOTREACHED();
 }
 
+std::array<uint8_t, 3> CSSSelector::SimpleSelectorSpecificityTuple() const {
+  unsigned specificity = SpecificityForOneSelector();
+
+  uint8_t a = (specificity & kIdMask) >> 16;
+  uint8_t b = (specificity & kClassMask) >> 8;
+  uint8_t c = (specificity & kElementMask);
+
+  return {a, b, c};
+}
+
 unsigned CSSSelector::SpecificityForPage() const {
   // See https://drafts.csswg.org/css-page/#cascading-and-page-context
   unsigned s = 0;
@@ -338,10 +351,12 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
       return kPseudoIdBefore;
     case kPseudoAfter:
       return kPseudoIdAfter;
+    case kPseudoExpandIcon:
+      return kPseudoIdExpandIcon;
     case kPseudoPickerIcon:
       return kPseudoIdPickerIcon;
-    case kPseudoInterestHint:
-      return kPseudoIdInterestHint;
+    case kPseudoInterestButton:
+      return kPseudoIdInterestButton;
     case kPseudoMarker:
       return kPseudoIdMarker;
     case kPseudoBackdrop:
@@ -391,6 +406,8 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
       // need to refactor something here (possibly the callers of this method)
       // to account for this.
       return kPseudoIdPickerSelect;
+    case kPseudoSelectListbox:
+      return kPseudoIdSelectListbox;
     case kPseudoViewTransition:
       return kPseudoIdViewTransition;
     case kPseudoViewTransitionGroup:
@@ -405,7 +422,12 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
       return kPseudoIdViewTransitionNew;
     case kPseudoOverscrollAreaParent:
       return kPseudoIdOverscrollAreaParent;
+    case kPseudoOverscrollBackdrop:
+      return kPseudoIdOverscrollBackdrop;
+    case kPseudoAnimatedImage:
     case kPseudoActive:
+    case kPseudoActiveNavigation:
+    case kPseudoActiveOption:
     case kPseudoActiveViewTransition:
     case kPseudoActiveViewTransitionType:
     case kPseudoAny:
@@ -414,6 +436,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoAutofillPreviewed:
     case kPseudoAutofillSelected:
     case kPseudoBlinkInternalElement:
+    case kPseudoBuffering:
     case kPseudoChecked:
     case kPseudoCornerPresent:
     case kPseudoCue:
@@ -429,6 +452,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoEmpty:
     case kPseudoEnabled:
     case kPseudoEnd:
+    case kPseudoFiltered:
     case kPseudoFirstChild:
     case kPseudoFirstOfType:
     case kPseudoFirstPage:
@@ -443,6 +467,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoHas:
     case kPseudoHasSlotted:
     case kPseudoHasDatalist:
+    case kPseudoHasOpenMenuitem:
     case kPseudoHorizontal:
     case kPseudoHost:
     case kPseudoHostContext:
@@ -467,6 +492,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoMenulistPopoverWithMenulistAnchor:
     case kPseudoModal:
     case kPseudoMultiSelectFocus:
+    case kPseudoMuted:
     case kPseudoNoButton:
     case kPseudoNot:
     case kPseudoNthChild:
@@ -478,7 +504,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoOpen:
     case kPseudoOptional:
     case kPseudoOutOfRange:
-    case kPseudoOverscrollTarget:
+    case kPseudoOverscrollOpen:
     case kPseudoParent:
     case kPseudoPart:
     case kPseudoPastCue:
@@ -496,20 +522,25 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoRightPage:
     case kPseudoRoot:
     case kPseudoScope:
+    case kPseudoSeeking:
+    case kPseudoSelectContainsInput:
     case kPseudoSelectHasSlottedButton:
-    case kPseudoSelectorFragmentAnchor:
     case kPseudoSingleButton:
     case kPseudoSlotted:
     case kPseudoSpatialNavigationFocus:
+    case kPseudoStalled:
     case kPseudoStart:
     case kPseudoState:
     case kPseudoTarget:
     case kPseudoTargetCurrent:
     case kPseudoTargetBefore:
     case kPseudoTargetAfter:
+    case kPseudoTextField:
     case kPseudoToolFormActive:
     case kPseudoToolSubmitActive:
+    case kPseudoNavSource:
     case kPseudoUnknown:
+    case kPseudoUnbounded:
     case kPseudoUnparsed:
     case kPseudoUserInvalid:
     case kPseudoUserValid:
@@ -518,6 +549,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoVideoPersistent:
     case kPseudoVideoPersistentAncestor:
     case kPseudoVisited:
+    case kPseudoVolumeLocked:
     case kPseudoWebKitAutofill:
     case kPseudoWebKitCustomElement:
     case kPseudoWebkitAnyLink:
@@ -569,6 +601,7 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"-internal-autofill-selected", CSSSelector::kPseudoAutofillSelected},
     {"-internal-dialog-in-top-layer", CSSSelector::kPseudoDialogInTopLayer},
     {"-internal-has-datalist", CSSSelector::kPseudoHasDatalist},
+    {"-internal-has-open-menuitem", CSSSelector::kPseudoHasOpenMenuitem},
     {"-internal-is-html", CSSSelector::kPseudoIsHtml},
     {"-internal-list-box", CSSSelector::kPseudoListBox},
     {"-internal-media-controls-overlay-cast-button",
@@ -578,17 +611,17 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"-internal-menulist-popover-with-menulist-anchor",
      CSSSelector::kPseudoMenulistPopoverWithMenulistAnchor},
     {"-internal-multi-select-focus", CSSSelector::kPseudoMultiSelectFocus},
-    {"-internal-overscroll-target", CSSSelector::kPseudoOverscrollTarget},
     {"-internal-popover-in-top-layer", CSSSelector::kPseudoPopoverInTopLayer},
     {"-internal-relative-anchor", CSSSelector::kPseudoRelativeAnchor},
+    {"-internal-select-contains-input",
+     CSSSelector::kPseudoSelectContainsInput},
     {"-internal-select-has-slotted-button",
      CSSSelector::kPseudoSelectHasSlottedButton},
-    {"-internal-selector-fragment-anchor",
-     CSSSelector::kPseudoSelectorFragmentAnchor},
     {"-internal-shadow-host-has-non-auto-appearance",
      CSSSelector::kPseudoHostHasNonAutoAppearance},
     {"-internal-spatial-navigation-focus",
      CSSSelector::kPseudoSpatialNavigationFocus},
+    {"-internal-text-field", CSSSelector::kPseudoTextField},
     {"-internal-video-persistent", CSSSelector::kPseudoVideoPersistent},
     {"-internal-video-persistent-ancestor",
      CSSSelector::kPseudoVideoPersistentAncestor},
@@ -606,12 +639,15 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"-webkit-scrollbar-track", CSSSelector::kPseudoScrollbarTrack},
     {"-webkit-scrollbar-track-piece", CSSSelector::kPseudoScrollbarTrackPiece},
     {"active", CSSSelector::kPseudoActive},
+    {"active-option", CSSSelector::kPseudoActiveOption},
     {"active-view-transition", CSSSelector::kPseudoActiveViewTransition},
     {"after", CSSSelector::kPseudoAfter},
+    {"animated-image", CSSSelector::kPseudoAnimatedImage},
     {"any-link", CSSSelector::kPseudoAnyLink},
     {"autofill", CSSSelector::kPseudoAutofill},
     {"backdrop", CSSSelector::kPseudoBackdrop},
     {"before", CSSSelector::kPseudoBefore},
+    {"buffering", CSSSelector::kPseudoBuffering},
     {"checked", CSSSelector::kPseudoChecked},
     {"checkmark", CSSSelector::kPseudoCheckMark},
     {"column", CSSSelector::kPseudoColumn},
@@ -627,7 +663,9 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"empty", CSSSelector::kPseudoEmpty},
     {"enabled", CSSSelector::kPseudoEnabled},
     {"end", CSSSelector::kPseudoEnd},
+    {"expand-icon", CSSSelector::kPseudoExpandIcon},
     {"file-selector-button", CSSSelector::kPseudoFileSelectorButton},
+    {"filtered", CSSSelector::kPseudoFiltered},
     {"first", CSSSelector::kPseudoFirstPage},
     {"first-child", CSSSelector::kPseudoFirstChild},
     {"first-letter", CSSSelector::kPseudoFirstLetter},
@@ -647,7 +685,7 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"in-range", CSSSelector::kPseudoInRange},
     {"increment", CSSSelector::kPseudoIncrement},
     {"indeterminate", CSSSelector::kPseudoIndeterminate},
-    {"interest-hint", CSSSelector::kPseudoInterestHint},
+    {"interest-button", CSSSelector::kPseudoInterestButton},
     {"interest-source", CSSSelector::kPseudoInterestSource},
     {"interest-target", CSSSelector::kPseudoInterestTarget},
     {"invalid", CSSSelector::kPseudoInvalid},
@@ -657,12 +695,16 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"link", CSSSelector::kPseudoLink},
     {"marker", CSSSelector::kPseudoMarker},
     {"modal", CSSSelector::kPseudoModal},
+    {"muted", CSSSelector::kPseudoMuted},
+    {"nav-source", CSSSelector::kPseudoNavSource},
     {"no-button", CSSSelector::kPseudoNoButton},
     {"only-child", CSSSelector::kPseudoOnlyChild},
     {"only-of-type", CSSSelector::kPseudoOnlyOfType},
     {"open", CSSSelector::kPseudoOpen},
     {"optional", CSSSelector::kPseudoOptional},
     {"out-of-range", CSSSelector::kPseudoOutOfRange},
+    {"overscroll-backdrop", CSSSelector::kPseudoOverscrollBackdrop},
+    {"overscroll-open", CSSSelector::kPseudoOverscrollOpen},
     {"past", CSSSelector::kPseudoPastCue},
     {"paused", CSSSelector::kPseudoPaused},
     {"permission-icon", CSSSelector::kPseudoPermissionIcon},
@@ -681,9 +723,12 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"scroll-marker", CSSSelector::kPseudoScrollMarker},
     {"scroll-marker-group", CSSSelector::kPseudoScrollMarkerGroup},
     {"search-text", CSSSelector::kPseudoSearchText},
+    {"seeking", CSSSelector::kPseudoSeeking},
+    {"select-listbox", CSSSelector::kPseudoSelectListbox},
     {"selection", CSSSelector::kPseudoSelection},
     {"single-button", CSSSelector::kPseudoSingleButton},
     {"spelling-error", CSSSelector::kPseudoSpellingError},
+    {"stalled", CSSSelector::kPseudoStalled},
     {"start", CSSSelector::kPseudoStart},
     {"target", CSSSelector::kPseudoTarget},
     {"target-after", CSSSelector::kPseudoTargetAfter},
@@ -692,12 +737,14 @@ constexpr static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"target-text", CSSSelector::kPseudoTargetText},
     {"tool-form-active", CSSSelector::kPseudoToolFormActive},
     {"tool-submit-active", CSSSelector::kPseudoToolSubmitActive},
+    {"unbounded", CSSSelector::kPseudoUnbounded},
     {"user-invalid", CSSSelector::kPseudoUserInvalid},
     {"user-valid", CSSSelector::kPseudoUserValid},
     {"valid", CSSSelector::kPseudoValid},
     {"vertical", CSSSelector::kPseudoVertical},
     {"view-transition", CSSSelector::kPseudoViewTransition},
     {"visited", CSSSelector::kPseudoVisited},
+    {"volume-locked", CSSSelector::kPseudoVolumeLocked},
     {"window-inactive", CSSSelector::kPseudoWindowInactive},
     {"xr-overlay", CSSSelector::kPseudoXrOverlay},
 };
@@ -706,6 +753,7 @@ constexpr static NameToPseudoStruct kPseudoTypeWithArgumentsMap[] = {
     {"-internal-overscroll-area-parent",
      CSSSelector::kPseudoOverscrollAreaParent},
     {"-webkit-any", CSSSelector::kPseudoAny},
+    {"active-navigation", CSSSelector::kPseudoActiveNavigation},
     {"active-view-transition-type",
      CSSSelector::kPseudoActiveViewTransitionType},
     {"cue", CSSSelector::kPseudoCue},
@@ -779,22 +827,23 @@ CSSSelector::PseudoType CSSSelector::NameToPseudoType(
     return CSSSelector::kPseudoUnknown;
   }
 
-  if (match->type == CSSSelector::kPseudoPaused &&
-      !RuntimeEnabledFeatures::CSSPseudoPlayingPausedEnabled()) {
-    return CSSSelector::kPseudoUnknown;
-  }
-
-  if (match->type == CSSSelector::kPseudoPlaying &&
-      !RuntimeEnabledFeatures::CSSPseudoPlayingPausedEnabled()) {
+  if ((match->type == CSSSelector::kPseudoPlaying ||
+       match->type == CSSSelector::kPseudoPaused ||
+       match->type == CSSSelector::kPseudoSeeking ||
+       match->type == CSSSelector::kPseudoBuffering ||
+       match->type == CSSSelector::kPseudoStalled ||
+       match->type == CSSSelector::kPseudoMuted ||
+       match->type == CSSSelector::kPseudoVolumeLocked) &&
+      !RuntimeEnabledFeatures::CSSMediaElementPseudosEnabled()) {
     return CSSSelector::kPseudoUnknown;
   }
 
   if (match->type == CSSSelector::kPseudoPermissionGranted &&
-      !RuntimeEnabledFeatures::PermissionElementEnabled(
-          document ? document->GetExecutionContext() : nullptr) &&
       !RuntimeEnabledFeatures::GeolocationElementEnabled(
           document ? document->GetExecutionContext() : nullptr) &&
       !RuntimeEnabledFeatures::UserMediaElementEnabled(
+          document ? document->GetExecutionContext() : nullptr) &&
+      !RuntimeEnabledFeatures::InstallElementEnabled(
           document ? document->GetExecutionContext() : nullptr)) {
     return CSSSelector::kPseudoUnknown;
   }
@@ -832,9 +881,15 @@ CSSSelector::PseudoType CSSSelector::NameToPseudoType(
     return CSSSelector::kPseudoUnknown;
   }
 
-  if ((match->type == CSSSelector::kPseudoInterestSource ||
-       match->type == CSSSelector::kPseudoInterestTarget) &&
-      !RuntimeEnabledFeatures::HTMLInterestForAttributeEnabled()) {
+  if ((match->type == CSSSelector::kPseudoToolFormActive ||
+       match->type == CSSSelector::kPseudoToolSubmitActive) &&
+      document &&
+      !RuntimeEnabledFeatures::WebMCPEnabled(document->GetExecutionContext())) {
+    return CSSSelector::kPseudoUnknown;
+  }
+
+  if (match->type == CSSSelector::kPseudoUnbounded &&
+      !RuntimeEnabledFeatures::UnboundedElementEnabled()) {
     return CSSSelector::kPseudoUnknown;
   }
 
@@ -843,8 +898,31 @@ CSSSelector::PseudoType CSSSelector::NameToPseudoType(
     return CSSSelector::kPseudoUnknown;
   }
 
-  if (match->type == CSSSelector::kPseudoOverscrollAreaParent &&
+  if ((match->type == CSSSelector::kPseudoOverscrollAreaParent ||
+       match->type == CSSSelector::kPseudoOverscrollBackdrop ||
+       match->type == CSSSelector::kPseudoOverscrollOpen) &&
       !RuntimeEnabledFeatures::OverscrollGesturesEnabled()) {
+    return CSSSelector::kPseudoUnknown;
+  }
+
+  if ((match->type == CSSSelector::kPseudoActiveOption ||
+       match->type == CSSSelector::kPseudoFiltered) &&
+      !RuntimeEnabledFeatures::CustomizableComboboxEnabled() &&
+      !RuntimeEnabledFeatures::FilterableSelectEnabled()) {
+    return CSSSelector::kPseudoUnknown;
+  }
+  if (match->type == CSSSelector::kPseudoAnimatedImage &&
+      !RuntimeEnabledFeatures::CSSImageAnimationEnabled()) {
+    return CSSSelector::kPseudoUnknown;
+  }
+
+  if (match->type == CSSSelector::kPseudoExpandIcon &&
+      !RuntimeEnabledFeatures::MenuElementsEnabled()) {
+    return CSSSelector::kPseudoUnknown;
+  }
+
+  if (match->type == CSSSelector::kPseudoNavSource &&
+      !RuntimeEnabledFeatures::RouteMatchingEnabled()) {
     return CSSSelector::kPseudoUnknown;
   }
 
@@ -903,7 +981,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
                                    bool has_arguments,
                                    CSSParserMode mode) {
   DCHECK(Match() == kPseudoClass || Match() == kPseudoElement);
-  AtomicString lower_value = value.LowerASCII();
+  AtomicString lower_value = value.ToAsciiLower();
   PseudoType pseudo_type = CSSSelectorParser::ParsePseudoType(
       lower_value, has_arguments, context.GetDocument());
   SetPseudoType(pseudo_type);
@@ -922,10 +1000,12 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
       }
       [[fallthrough]];
     // For pseudo-elements
+    case kPseudoExpandIcon:
     case kPseudoPickerIcon:
-    case kPseudoInterestHint:
+    case kPseudoInterestButton:
     case kPseudoCheckMark:
     case kPseudoBackdrop:
+    case kPseudoOverscrollBackdrop:
     case kPseudoCue:
     case kPseudoMarker:
     case kPseudoPart:
@@ -943,6 +1023,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoScrollButton:
     case kPseudoColumn:
     case kPseudoPicker:
+    case kPseudoSelectListbox:
     case kPseudoSelection:
     case kPseudoWebKitCustomElement:
     case kPseudoSlotted:
@@ -974,10 +1055,12 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
       }
       break;
     case kPseudoHasDatalist:
+    case kPseudoHasOpenMenuitem:
     case kPseudoHostHasNonAutoAppearance:
     case kPseudoIsHtml:
     case kPseudoListBox:
     case kPseudoMultiSelectFocus:
+    case kPseudoSelectContainsInput:
     case kPseudoSpatialNavigationFocus:
     case kPseudoVideoPersistent:
     case kPseudoVideoPersistentAncestor:
@@ -988,13 +1071,17 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
       [[fallthrough]];
     // For pseudo-classes
     case kPseudoActive:
+    case kPseudoActiveNavigation:
+    case kPseudoActiveOption:
     case kPseudoActiveViewTransition:
     case kPseudoActiveViewTransitionType:
+    case kPseudoAnimatedImage:
     case kPseudoAny:
     case kPseudoAnyLink:
     case kPseudoAutofill:
     case kPseudoAutofillPreviewed:
     case kPseudoAutofillSelected:
+    case kPseudoBuffering:
     case kPseudoChecked:
     case kPseudoCornerPresent:
     case kPseudoCurrent:
@@ -1009,6 +1096,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoEmpty:
     case kPseudoEnabled:
     case kPseudoEnd:
+    case kPseudoFiltered:
     case kPseudoFirstChild:
     case kPseudoFirstOfType:
     case kPseudoFocus:
@@ -1040,6 +1128,8 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoMenulistPopoverWithMenubarAnchor:
     case kPseudoMenulistPopoverWithMenulistAnchor:
     case kPseudoModal:
+    case kPseudoMuted:
+    case kPseudoNavSource:
     case kPseudoNoButton:
     case kPseudoNot:
     case kPseudoNthChild:
@@ -1051,7 +1141,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoOpen:
     case kPseudoOptional:
     case kPseudoOutOfRange:
-    case kPseudoOverscrollTarget:
+    case kPseudoOverscrollOpen:
     case kPseudoParent:
     case kPseudoPastCue:
     case kPseudoPaused:
@@ -1067,34 +1157,34 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoRequired:
     case kPseudoRoot:
     case kPseudoScope:
+    case kPseudoSeeking:
     case kPseudoSelectHasSlottedButton:
-    case kPseudoSelectorFragmentAnchor:
     case kPseudoSingleButton:
+    case kPseudoStalled:
     case kPseudoStart:
     case kPseudoState:
     case kPseudoTarget:
     case kPseudoTargetCurrent:
     case kPseudoTargetBefore:
     case kPseudoTargetAfter:
+    case kPseudoTextField:
     case kPseudoUnknown:
+    case kPseudoUnbounded:
     case kPseudoUnparsed:
     case kPseudoUserInvalid:
     case kPseudoUserValid:
     case kPseudoValid:
     case kPseudoVertical:
     case kPseudoVisited:
+    case kPseudoVolumeLocked:
     case kPseudoWebKitAutofill:
     case kPseudoWebkitAnyLink:
     case kPseudoWhere:
     case kPseudoWindowInactive:
     case kPseudoXrOverlay:
-      if (Match() != kPseudoClass) {
-        bits_.set<PseudoTypeField>(kPseudoUnknown);
-      }
-      break;
     case kPseudoToolFormActive:
     case kPseudoToolSubmitActive:
-      if (Match() != kPseudoClass || !RuntimeEnabledFeatures::WebMCPEnabled()) {
+      if (Match() != kPseudoClass) {
         bits_.set<PseudoTypeField>(kPseudoUnknown);
       }
       break;
@@ -1314,9 +1404,16 @@ void CSSSelector::SerializeSimpleSelector(StringBuilder& builder,
         break;
       }
       case kPseudoLinkTo: {
-        DCHECK(GetLinkCondition());
+        DCHECK(GetRouteLocation());
         builder.Append("(");
-        GetLinkCondition()->SerializeTo(builder);
+        GetRouteLocation()->SerializeTo(builder);
+        builder.Append(")");
+        break;
+      }
+      case kPseudoActiveNavigation: {
+        DCHECK(GetActiveNavigationCondition());
+        builder.Append("(");
+        GetActiveNavigationCondition()->SerializeTo(builder);
         builder.Append(")");
         break;
       }
@@ -1339,14 +1436,18 @@ void CSSSelector::SerializeSimpleSelector(StringBuilder& builder,
         builder.Append(')');
         break;
       }
+      case kPseudoPicker:
       case kPseudoHighlight: {
         builder.Append('(');
-        builder.Append(Argument());
+        SerializeIdentifier(Argument(), builder);
         builder.Append(')');
         break;
       }
+      case kPseudoOverscrollAreaParent:
       case kPseudoScrollButton: {
         builder.Append('(');
+        // These accept only fixed arguments that do not require escaping (in
+        // some cases including "*" which should not be escaped).
         builder.Append(Argument());
         builder.Append(')');
         break;
@@ -1373,11 +1474,6 @@ void CSSSelector::SerializeSimpleSelector(StringBuilder& builder,
         builder.Append(')');
         break;
       }
-      case kPseudoOverscrollAreaParent:
-        builder.Append('(');
-        builder.Append(Argument());
-        builder.Append(')');
-        break;
       default:
         break;
     }
@@ -1531,9 +1627,15 @@ void CSSSelector::SetSelectorList(CSSSelectorList* selector_list) {
   data_.rare_data_->selector_list_ = selector_list;
 }
 
-void CSSSelector::SetLinkCondition(LinkCondition* condition) {
+void CSSSelector::SetRouteLocation(RouteLocation* location) {
   CreateRareData();
-  data_.rare_data_->link_condition_ = condition;
+  data_.rare_data_->route_location_ = location;
+}
+
+void CSSSelector::SetActiveNavigationCondition(
+    ActiveNavigationCondition* condition) {
+  CreateRareData();
+  data_.rare_data_->active_navigation_condition_ = condition;
 }
 
 void CSSSelector::SetContainsPseudoInsideHasPseudoClass() {
@@ -1551,7 +1653,9 @@ void CSSSelector::SetHasArgumentMatchInShadowTree() {
   data_.rare_data_->bits_.has_.argument_match_in_shadow_tree_ = true;
 }
 
-static bool ValidateSubSelector(const CSSSelector* selector) {
+namespace {
+
+bool IsSubSelectorCompound(const CSSSelector* selector) {
   switch (selector->Match()) {
     case CSSSelector::kTag:
     case CSSSelector::kUniversalTag:
@@ -1570,53 +1674,24 @@ static bool ValidateSubSelector(const CSSSelector* selector) {
       return false;
     case CSSSelector::kPagePseudoClass:
     case CSSSelector::kPseudoClass:
-      break;
+      if (const CSSSelectorList* sublist = selector->SelectorList()) {
+        for (const CSSSelector* subselector = sublist->First(); subselector;
+             subselector = CSSSelectorList::Next(*subselector)) {
+          if (!subselector->IsFullyCompound()) {
+            return false;
+          }
+        }
+      }
+      return true;
     case CSSSelector::kInvalidList:
       NOTREACHED();
   }
-
-  switch (selector->GetPseudoType()) {
-    case CSSSelector::kPseudoEmpty:
-    case CSSSelector::kPseudoLink:
-    case CSSSelector::kPseudoVisited:
-    case CSSSelector::kPseudoTarget:
-    case CSSSelector::kPseudoEnabled:
-    case CSSSelector::kPseudoDisabled:
-    case CSSSelector::kPseudoChecked:
-    case CSSSelector::kPseudoIndeterminate:
-    case CSSSelector::kPseudoNthChild:
-    case CSSSelector::kPseudoNthLastChild:
-    case CSSSelector::kPseudoNthOfType:
-    case CSSSelector::kPseudoNthLastOfType:
-    case CSSSelector::kPseudoFirstChild:
-    case CSSSelector::kPseudoLastChild:
-    case CSSSelector::kPseudoFirstOfType:
-    case CSSSelector::kPseudoLastOfType:
-    case CSSSelector::kPseudoOnlyOfType:
-    case CSSSelector::kPseudoHost:
-    case CSSSelector::kPseudoHostContext:
-    case CSSSelector::kPseudoNot:
-    case CSSSelector::kPseudoSpatialNavigationFocus:
-    case CSSSelector::kPseudoHasDatalist:
-    case CSSSelector::kPseudoIsHtml:
-    case CSSSelector::kPseudoListBox:
-    case CSSSelector::kPseudoHostHasNonAutoAppearance:
-      // TODO(https://crbug.com/1346456): Many pseudos should probably be
-      // added to this list.  The default: case below should also be removed
-      // so that those adding new pseudos know they need to choose one path or
-      // the other here.
-      //
-      // However, it's not clear why a pseudo should be in one list or the
-      // other.  It's also entirely possible that this entire switch() should
-      // be removed and all cases should return true.
-      return true;
-    default:
-      return false;
-  }
 }
 
-bool CSSSelector::IsCompound() const {
-  if (!ValidateSubSelector(this)) {
+}  // namespace
+
+bool CSSSelector::IsFullyCompound() const {
+  if (!IsSubSelectorCompound(this)) {
     return false;
   }
 
@@ -1627,7 +1702,7 @@ bool CSSSelector::IsCompound() const {
     if (prev_sub_selector->Relation() != kSubSelector) {
       return false;
     }
-    if (!ValidateSubSelector(sub_selector)) {
+    if (!IsSubSelectorCompound(sub_selector)) {
       return false;
     }
 
@@ -1712,12 +1787,14 @@ bool CSSSelector::IsTreeAbidingPseudoElement() const {
   return Match() == CSSSelector::kPseudoElement &&
          (GetPseudoType() == kPseudoCheckMark ||
           GetPseudoType() == kPseudoBefore || GetPseudoType() == kPseudoAfter ||
+          GetPseudoType() == kPseudoExpandIcon ||
           GetPseudoType() == kPseudoPickerIcon ||
-          GetPseudoType() == kPseudoInterestHint ||
+          GetPseudoType() == kPseudoInterestButton ||
           GetPseudoType() == kPseudoMarker ||
           GetPseudoType() == kPseudoPlaceholder ||
           GetPseudoType() == kPseudoFileSelectorButton ||
           GetPseudoType() == kPseudoBackdrop ||
+          GetPseudoType() == kPseudoOverscrollBackdrop ||
           GetPseudoType() == kPseudoViewTransition ||
           GetPseudoType() == kPseudoViewTransitionGroup ||
           GetPseudoType() == kPseudoViewTransitionGroupChildren ||
@@ -1731,7 +1808,7 @@ bool CSSSelector::IsTreeAbidingPseudoElement() const {
 /* static */ bool CSSSelector::IsElementBackedPseudoElement(
     CSSSelector::PseudoType pseudo) {
   return pseudo == kPseudoDetailsContent || pseudo == kPseudoPicker ||
-         pseudo == kPseudoPermissionIcon;
+         pseudo == kPseudoPermissionIcon || pseudo == kPseudoSelectListbox;
 }
 
 bool CSSSelector::IsElementBackedPseudoElement() const {
@@ -1752,13 +1829,15 @@ bool CSSSelector::IsAllowedAfterPart() const {
     case kPseudoCheckMark:
     case kPseudoBefore:
     case kPseudoAfter:
+    case kPseudoExpandIcon:
     case kPseudoPickerIcon:
-    case kPseudoInterestHint:
+    case kPseudoInterestButton:
     case kPseudoPlaceholder:
     case kPseudoFileSelectorButton:
     case kPseudoFirstLine:
     case kPseudoFirstLetter:
     case kPseudoPicker:
+    case kPseudoSelectListbox:
     case kPseudoSelection:
     case kPseudoSearchText:
     case kPseudoTargetText:
@@ -1766,6 +1845,7 @@ bool CSSSelector::IsAllowedAfterPart() const {
     case kPseudoSpellingError:
     case kPseudoGrammarError:
     case kPseudoBackdrop:
+    case kPseudoOverscrollBackdrop:
     case kPseudoCue:
     case kPseudoMarker:
     case kPseudoResizer:
@@ -1806,20 +1886,25 @@ bool CSSSelector::IsAllowedAfterPart() const {
     //
     // All non-structural pseudo-classes should be allowed, and structural
     // pseudo-classes should be forbidden.
+    case kPseudoAnimatedImage:
     case kPseudoAutofill:
     case kPseudoAutofillPreviewed:
     case kPseudoAutofillSelected:
     case kPseudoWebKitAutofill:
     case kPseudoActive:
+    case kPseudoActiveNavigation:
+    case kPseudoActiveOption:
     case kPseudoActiveViewTransition:
     case kPseudoActiveViewTransitionType:
     case kPseudoAnyLink:
+    case kPseudoBuffering:
     case kPseudoChecked:
     case kPseudoDefault:
     case kPseudoDialogInTopLayer:
     case kPseudoDisabled:
     case kPseudoDrag:
     case kPseudoEnabled:
+    case kPseudoFiltered:
     case kPseudoFocus:
     case kPseudoFocusVisible:
     case kPseudoFocusWithin:
@@ -1836,21 +1921,25 @@ bool CSSSelector::IsAllowedAfterPart() const {
     case kPseudoMenulistPopoverWithMenubarAnchor:
     case kPseudoMenulistPopoverWithMenulistAnchor:
     case kPseudoModal:
+    case kPseudoMuted:
     case kPseudoOptional:
-    case kPseudoOverscrollTarget:
+    case kPseudoOverscrollOpen:
     case kPseudoPermissionGranted:
     case kPseudoPlaceholderShown:
     case kPseudoReadOnly:
     case kPseudoReadWrite:
     case kPseudoRequired:
+    case kPseudoSeeking:
+    case kPseudoSelectContainsInput:
     case kPseudoSelectHasSlottedButton:
-    case kPseudoSelectorFragmentAnchor:
+    case kPseudoStalled:
     case kPseudoState:
     case kPseudoTarget:
     case kPseudoUserInvalid:
     case kPseudoUserValid:
     case kPseudoValid:
     case kPseudoVisited:
+    case kPseudoVolumeLocked:
     case kPseudoWebkitAnyLink:
     case kPseudoWindowInactive:
     case kPseudoFullScreen:
@@ -1868,6 +1957,7 @@ bool CSSSelector::IsAllowedAfterPart() const {
     case kPseudoIsHtml:
     case kPseudoListBox:
     case kPseudoMultiSelectFocus:
+    case kPseudoNavSource:
     case kPseudoOpen:
     case kPseudoPastCue:
     case kPseudoPopoverInTopLayer:
@@ -1877,8 +1967,10 @@ bool CSSSelector::IsAllowedAfterPart() const {
     case kPseudoTargetCurrent:
     case kPseudoTargetBefore:
     case kPseudoTargetAfter:
+    case kPseudoTextField:
     case kPseudoToolFormActive:
     case kPseudoToolSubmitActive:
+    case kPseudoUnbounded:
     case kPseudoVideoPersistent:
     case kPseudoVideoPersistentAncestor:
       return true;
@@ -1941,6 +2033,7 @@ bool CSSSelector::IsAllowedAfterPart() const {
     // rather than local element information, which should not be allowed.
     case kPseudoHas:
     case kPseudoHasDatalist:
+    case kPseudoHasOpenMenuitem:
     case kPseudoHost:
     case kPseudoHostContext:
     case kPseudoHostHasNonAutoAppearance:
@@ -2104,7 +2197,8 @@ void CSSSelector::Trace(Visitor* visitor) const {
 
 void CSSSelector::RareData::Trace(Visitor* visitor) const {
   visitor->Trace(selector_list_);
-  visitor->Trace(link_condition_);
+  visitor->Trace(route_location_);
+  visitor->Trace(active_navigation_condition_);
 }
 
 const CSSSelector* CSSSelector::SelectorListOrParent() const {
@@ -2159,13 +2253,17 @@ CSSSelector::RelationType ConvertRelationToRelative(
 // static
 bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
   switch (type) {
+    case CSSSelector::kPseudoAnimatedImage:
     case CSSSelector::kPseudoActive:
+    case CSSSelector::kPseudoActiveNavigation:
+    case CSSSelector::kPseudoActiveOption:
     case CSSSelector::kPseudoActiveViewTransition:
     case CSSSelector::kPseudoActiveViewTransitionType:
     case CSSSelector::kPseudoAnyLink:
     case CSSSelector::kPseudoAutofill:
     case CSSSelector::kPseudoAutofillPreviewed:
     case CSSSelector::kPseudoAutofillSelected:
+    case CSSSelector::kPseudoBuffering:
     case CSSSelector::kPseudoChecked:
     case CSSSelector::kPseudoDefault:
     case CSSSelector::kPseudoDefined:
@@ -2174,6 +2272,7 @@ bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
     case CSSSelector::kPseudoDrag:
     case CSSSelector::kPseudoEmpty:
     case CSSSelector::kPseudoEnabled:
+    case CSSSelector::kPseudoFiltered:
     case CSSSelector::kPseudoFirstChild:
     case CSSSelector::kPseudoFirstOfType:
     case CSSSelector::kPseudoFocus:
@@ -2184,6 +2283,7 @@ bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
     case CSSSelector::kPseudoFullscreen:
     case CSSSelector::kPseudoHas:
     case CSSSelector::kPseudoHasDatalist:
+    case CSSSelector::kPseudoHasOpenMenuitem:
     case CSSSelector::kPseudoHasSlotted:
     case CSSSelector::kPseudoHover:
     case CSSSelector::kPseudoInRange:
@@ -2199,6 +2299,8 @@ bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
     case CSSSelector::kPseudoListBox:
     case CSSSelector::kPseudoModal:
     case CSSSelector::kPseudoMultiSelectFocus:
+    case CSSSelector::kPseudoMuted:
+    case CSSSelector::kPseudoNavSource:
     case CSSSelector::kPseudoNthChild:
     case CSSSelector::kPseudoNthLastChild:
     case CSSSelector::kPseudoNthLastOfType:
@@ -2208,7 +2310,6 @@ bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
     case CSSSelector::kPseudoOpen:
     case CSSSelector::kPseudoOptional:
     case CSSSelector::kPseudoOutOfRange:
-    case CSSSelector::kPseudoOverscrollTarget:
     case CSSSelector::kPseudoPaused:
     case CSSSelector::kPseudoPermissionGranted:
     case CSSSelector::kPseudoPictureInPicture:
@@ -2218,16 +2319,20 @@ bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
     case CSSSelector::kPseudoReadOnly:
     case CSSSelector::kPseudoReadWrite:
     case CSSSelector::kPseudoRequired:
+    case CSSSelector::kPseudoSeeking:
+    case CSSSelector::kPseudoSelectContainsInput:
     case CSSSelector::kPseudoSelectHasSlottedButton:
     case CSSSelector::kPseudoSelection:
-    case CSSSelector::kPseudoSelectorFragmentAnchor:
+    case CSSSelector::kPseudoStalled:
     case CSSSelector::kPseudoState:
     case CSSSelector::kPseudoTarget:
     case CSSSelector::kPseudoTargetAfter:
     case CSSSelector::kPseudoTargetBefore:
     case CSSSelector::kPseudoTargetCurrent:
+    case CSSSelector::kPseudoTextField:
     case CSSSelector::kPseudoToolFormActive:
     case CSSSelector::kPseudoToolSubmitActive:
+    case CSSSelector::kPseudoUnbounded:
     case CSSSelector::kPseudoUserInvalid:
     case CSSSelector::kPseudoUserValid:
     case CSSSelector::kPseudoValid:
@@ -2243,37 +2348,17 @@ bool CSSSelector::SupportsPseudoStateChange(PseudoType type) {
   }
 }
 
-constexpr bool IsPseudoMapSorted(const NameToPseudoStruct* map, unsigned size) {
-  for (unsigned i = 0; i < size - 1; i++) {
-    // strcmp/strncmp would be much better here, but unfortunately they aren't
-    // constexpr.
-    const char* current_string = UNSAFE_TODO(map[i].string);
-    const char* next_string = UNSAFE_TODO(map[i + 1].string);
-    while (true) {
-      if (*current_string > *next_string) {
-        return false;
-      }
-      if (*current_string < *next_string) {
-        break;
-      }
-      if (!*current_string) {
-        break;
-      }
-      if (!*next_string) {
-        return false;
-      }
-      UNSAFE_TODO(current_string++);
-      UNSAFE_TODO(next_string++);
-    }
-  }
-  return true;
-}
+constexpr auto PseudoNameProjection = [](const NameToPseudoStruct& entry) {
+  return std::string_view(entry.string);
+};
 
-static_assert(IsPseudoMapSorted(kPseudoTypeWithoutArgumentsMap,
-                                std::size(kPseudoTypeWithoutArgumentsMap)),
+static_assert(std::ranges::is_sorted(kPseudoTypeWithoutArgumentsMap,
+                                     {},
+                                     PseudoNameProjection),
               "kPseudoTypeWithoutArgumentsMap must be sorted.");
-static_assert(IsPseudoMapSorted(kPseudoTypeWithArgumentsMap,
-                                std::size(kPseudoTypeWithArgumentsMap)),
+static_assert(std::ranges::is_sorted(kPseudoTypeWithArgumentsMap,
+                                     {},
+                                     PseudoNameProjection),
               "kPseudoTypeWithArgumentsMap must be sorted.");
 
 }  // namespace blink

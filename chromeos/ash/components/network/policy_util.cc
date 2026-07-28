@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/logging.h"
 #include "base/notreached.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chromeos/ash/components/network/network_event_log.h"
 #include "chromeos/ash/components/network/network_profile.h"
@@ -373,7 +374,7 @@ base::DictValue CreateShillConfiguration(const NetworkProfile& profile,
       &chromeos::onc::kNetworkConfigurationSignature, effective);
 
   base::DictValue shill_dictionary = onc::TranslateONCObjectToShill(
-      &chromeos::onc::kNetworkConfigurationSignature, effective);
+      &chromeos::onc::kNetworkConfigurationSignature, effective, onc_source);
   shill_dictionary.Set(shill::kProfileProperty, profile.path);
 
   // If AutoConnect is enabled by policy, set the ManagedCredentials property to
@@ -469,9 +470,12 @@ bool IsPolicyMatching(const base::DictValue& policy,
     if (!policy_wifi || !actual_wifi)
       return false;
 
+    // HexSSID is a case-insensitive hex encoding of the SSID bytes; the ONC
+    // validator accepts mixed case and FillInHexSSIDField only fills it when
+    // missing, so compare case-insensitively to avoid policy-guard bypass.
     std::string policy_ssid = GetString(*policy_wifi, ::onc::wifi::kHexSSID);
     std::string actual_ssid = GetString(*actual_wifi, ::onc::wifi::kHexSSID);
-    return (policy_ssid == actual_ssid);
+    return base::EqualsCaseInsensitiveASCII(policy_ssid, actual_ssid);
   }
 
   if (actual_network_type == ::onc::network_type::kCellular) {
@@ -524,19 +528,6 @@ const std::string* GetIccidFromONC(const base::DictValue& onc_config) {
   }
 
   return cellular_dict->FindString(::onc::cellular::kICCID);
-}
-
-const std::string* GetSMDPAddressFromONC(const base::DictValue& onc_config) {
-  const std::string* type = onc_config.FindString(::onc::network_config::kType);
-  const base::DictValue* cellular_dict =
-      onc_config.FindDict(::onc::network_config::kCellular);
-  const std::string* smdp_address = nullptr;
-
-  if (type && (*type == ::onc::network_type::kCellular) && cellular_dict) {
-    smdp_address = cellular_dict->FindString(::onc::cellular::kSMDPAddress);
-  }
-
-  return smdp_address;
 }
 
 std::optional<SmdxActivationCode> GetSmdxActivationCodeFromONC(

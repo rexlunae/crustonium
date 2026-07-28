@@ -101,7 +101,7 @@ class PrerenderHostObserver {
 class PrerenderHostCreationWaiter {
  public:
   PrerenderHostCreationWaiter();
-  ~PrerenderHostCreationWaiter() = default;
+  ~PrerenderHostCreationWaiter();
 
   PrerenderHostId Wait();
 
@@ -116,7 +116,6 @@ class PrerenderHostCreationWaiter {
 class ScopedPrerenderFeatureList {
  public:
   ScopedPrerenderFeatureList();
-  explicit ScopedPrerenderFeatureList(bool force_disable_prerender2_fallback);
   ScopedPrerenderFeatureList(const ScopedPrerenderFeatureList&) = delete;
   ScopedPrerenderFeatureList& operator=(const ScopedPrerenderFeatureList&) =
       delete;
@@ -129,8 +128,6 @@ class ScopedPrerenderFeatureList {
 class PrerenderTestHelper {
  public:
   explicit PrerenderTestHelper(const WebContents::Getter& fn);
-  explicit PrerenderTestHelper(const WebContents::Getter& fn,
-                               bool force_disable_prerender2_fallback);
   ~PrerenderTestHelper();
   PrerenderTestHelper(const PrerenderTestHelper&) = delete;
   PrerenderTestHelper& operator=(const PrerenderTestHelper&) = delete;
@@ -214,8 +211,13 @@ class PrerenderTestHelper {
       std::optional<bool> form_submission = std::nullopt);
   void AddPrerenderUntilScriptAsync(
       const GURL& url,
-      blink::mojom::SpeculationEagerness eagerness =
-          blink::mojom::SpeculationEagerness::kImmediate);
+      std::optional<blink::mojom::SpeculationEagerness> eagerness =
+          std::nullopt,
+      std::optional<std::string> no_vary_search_hint = std::nullopt,
+      const std::string& target_hint = "",
+      std::optional<std::string> ruleset_tag = std::nullopt,
+      int32_t world_id = ISOLATED_WORLD_ID_GLOBAL,
+      std::optional<bool> form_submission = std::nullopt);
 
   void AddPrefetchAsync(const GURL& prefetch_url);
 
@@ -278,7 +280,8 @@ class PrerenderTestHelper {
   // This is intended for activating a prerendered page initiated for a new
   // window.
   static void OpenNewWindowWithoutOpener(WebContents& web_contents,
-                                         const GURL& url);
+                                         const GURL& url,
+                                         bool is_form_submission = false);
 
   // Confirms that, internally, appropriate subframes report that they are
   // prerendering (and that each frame tree type is kPrerender).
@@ -316,8 +319,24 @@ class PrerenderTestHelper {
                    std::string_view predictor,
                    bool holdback);
 
+  // For non-//content tests.
+  static bool IsPrerender2FallbackPrefetchSpecRulesEnabled();
+  // Note that it uses `ScopedFeatureList` internally. Follow the WARNING and
+  // limitation of `ScopedFeatureList`.
+  void DisablePrerender2FallbackPrefetchSpecRules();
+
  private:
   void MonitorResourceRequest(const net::test_server::HttpRequest& request);
+
+  void AddPrerenderOrPUSAsync(
+      const std::string& action,
+      const std::vector<GURL>& prerendering_urls,
+      std::optional<blink::mojom::SpeculationEagerness> eagerness,
+      std::optional<std::string> no_vary_search_hint,
+      const std::string& target_hint,
+      std::optional<std::string> ruleset_tag,
+      int32_t world_id,
+      std::optional<bool> form_submission);
 
   WebContents* GetWebContents();
 
@@ -329,6 +348,7 @@ class PrerenderTestHelper {
   std::map<std::string, net::test_server::HttpRequest::HeaderMap>
       request_headers_by_path_ GUARDED_BY(lock_);
   ScopedPrerenderFeatureList feature_list_;
+  base::test::ScopedFeatureList scoped_feature_list_prerender2_fallback_;
   base::OnceClosure monitor_callback_ GUARDED_BY(lock_);
   base::Lock lock_;
   PreloadingConfigOverride preloading_config_override_;
@@ -350,25 +370,6 @@ class ScopedPrerenderWebContentsDelegate : public WebContentsDelegate {
 
  private:
   base::WeakPtr<WebContents> web_contents_;
-};
-
-// This test delegate is used for link preview tests, in order to check
-// whether the delegate receives `InitiatePreview` function call.
-class MockLinkPreviewWebContentsDelegate : public WebContentsDelegate {
- public:
-  MockLinkPreviewWebContentsDelegate();
-
-  MockLinkPreviewWebContentsDelegate(
-      const MockLinkPreviewWebContentsDelegate&) = delete;
-  MockLinkPreviewWebContentsDelegate& operator=(
-      const MockLinkPreviewWebContentsDelegate&) = delete;
-
-  ~MockLinkPreviewWebContentsDelegate() override;
-
-  MOCK_METHOD(void,
-              InitiatePreview,
-              (WebContents & web_contents, const GURL& url),
-              (override));
 };
 
 }  // namespace test

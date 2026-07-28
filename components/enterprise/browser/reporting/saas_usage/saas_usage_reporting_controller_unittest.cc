@@ -9,9 +9,11 @@
 #include <utility>
 #include <vector>
 
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/enterprise/browser/reporting/common_pref_names.h"
 #include "components/enterprise/browser/reporting/pref_url_list_matcher.h"
+#include "components/enterprise/browser/reporting/reporting_features.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -19,6 +21,24 @@
 #include "url/gurl.h"
 
 namespace enterprise_reporting {
+
+class FakeNavigationDataDelegate
+    : public SaasUsageReportingController::NavigationDataDelegate {
+ public:
+  explicit FakeNavigationDataDelegate(GURL url, std::string encryption_protocol)
+      : url_(std::move(url)),
+        encryption_protocol_(std::move(encryption_protocol)) {}
+  ~FakeNavigationDataDelegate() override = default;
+
+  GURL GetUrl() const override { return url_; }
+  std::string GetEncryptionProtocol() const override {
+    return encryption_protocol_;
+  }
+
+ private:
+  GURL url_;
+  std::string encryption_protocol_;
+};
 
 class SaasUsageReportingControllerTest : public testing::Test {
  public:
@@ -66,6 +86,12 @@ class SaasUsageReportingControllerTest : public testing::Test {
     return profile_pref_service_.GetDict(kSaasUsageReport);
   }
 
+  FakeNavigationDataDelegate CreateNavigation(std::string_view url,
+                                              std::string encryption_protocol) {
+    return FakeNavigationDataDelegate(GURL(url),
+                                      std::move(encryption_protocol));
+  }
+
   void VerifyReportEntry(const base::DictValue& report,
                          const std::string& domain,
                          int expected_navigation_count,
@@ -91,7 +117,8 @@ class SaasUsageReportingControllerTest : public testing::Test {
 TEST_F(SaasUsageReportingControllerTest, RecordNavigation_BrowserMatch) {
   SetBrowserUrls({"example.com"});
 
-  controller_->RecordNavigation(GURL("https://example.com/page"), "TLS 1.3");
+  controller_->RecordNavigation(
+      CreateNavigation("https://example.com/page", "TLS 1.3"));
 
   VerifyReportEntry(GetBrowserReport(), "example.com", 1, {"TLS 1.3"});
   EXPECT_TRUE(GetProfileReport().empty());
@@ -100,7 +127,8 @@ TEST_F(SaasUsageReportingControllerTest, RecordNavigation_BrowserMatch) {
 TEST_F(SaasUsageReportingControllerTest, RecordNavigation_ProfileMatch) {
   SetProfileUrls({"example.com"});
 
-  controller_->RecordNavigation(GURL("https://example.com/page"), "TLS 1.3");
+  controller_->RecordNavigation(
+      CreateNavigation("https://example.com/page", "TLS 1.3"));
 
   VerifyReportEntry(GetProfileReport(), "example.com", 1, {"TLS 1.3"});
   EXPECT_TRUE(GetBrowserReport().empty());
@@ -110,7 +138,8 @@ TEST_F(SaasUsageReportingControllerTest, RecordNavigation_BothMatch) {
   SetBrowserUrls({"example.com"});
   SetProfileUrls({"example.com"});
 
-  controller_->RecordNavigation(GURL("https://example.com/page"), "TLS 1.3");
+  controller_->RecordNavigation(
+      CreateNavigation("https://example.com/page", "TLS 1.3"));
 
   VerifyReportEntry(GetBrowserReport(), "example.com", 1, {"TLS 1.3"});
   VerifyReportEntry(GetProfileReport(), "example.com", 1, {"TLS 1.3"});
@@ -119,8 +148,8 @@ TEST_F(SaasUsageReportingControllerTest, RecordNavigation_BothMatch) {
 TEST_F(SaasUsageReportingControllerTest, SubdomainMatching) {
   SetBrowserUrls({"example.com"});
 
-  controller_->RecordNavigation(GURL("https://sub.example.com/page"),
-                                "TLS 1.3");
+  controller_->RecordNavigation(
+      CreateNavigation("https://sub.example.com/page", "TLS 1.3"));
 
   VerifyReportEntry(GetBrowserReport(), "example.com", 1, {"TLS 1.3"});
 }
@@ -129,7 +158,8 @@ TEST_F(SaasUsageReportingControllerTest, NoMatch) {
   SetBrowserUrls({"google.com"});
   SetProfileUrls({"google.com"});
 
-  controller_->RecordNavigation(GURL("https://example.com/page"), "TLS 1.3");
+  controller_->RecordNavigation(
+      CreateNavigation("https://example.com/page", "TLS 1.3"));
 
   EXPECT_TRUE(GetBrowserReport().empty());
   EXPECT_TRUE(GetProfileReport().empty());
@@ -138,12 +168,28 @@ TEST_F(SaasUsageReportingControllerTest, NoMatch) {
 TEST_F(SaasUsageReportingControllerTest, MultipleNavigations) {
   SetBrowserUrls({"example.com"});
 
-  controller_->RecordNavigation(GURL("https://example.com/page1"), "TLS 1.3");
-  controller_->RecordNavigation(GURL("https://sub.example.com/page2"),
-                                "TLS 1.2");
+  controller_->RecordNavigation(
+      CreateNavigation("https://example.com/page1", "TLS 1.3"));
+  controller_->RecordNavigation(
+      CreateNavigation("https://sub.example.com/page2", "TLS 1.2"));
 
   VerifyReportEntry(GetBrowserReport(), "example.com", 2,
                     {"TLS 1.3", "TLS 1.2"});
+}
+
+TEST_F(SaasUsageReportingControllerTest, RecordGeminiInChromeUsage) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kGeminiInChromeUsageReporting);
+
+  SetBrowserUrls({"gemini-in-chrome"});
+  SetProfileUrls({"gemini-in-chrome"});
+
+  controller_->RecordGeminiInChromeUsage();
+
+  // The virtual domain "gemini-in-chrome" should be matched and recorded
+  // with an empty encryption protocol.
+  VerifyReportEntry(GetBrowserReport(), "gemini-in-chrome", 1, {});
+  VerifyReportEntry(GetProfileReport(), "gemini-in-chrome", 1, {});
 }
 
 }  // namespace enterprise_reporting

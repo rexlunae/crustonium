@@ -56,6 +56,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebTransport final
       const std::vector<mojom::WebTransportCertificateFingerprintPtr>&
           fingerprints,
       const std::vector<std::string>& application_protocols,
+      mojom::WebTransportCongestionControl congestion_control,
+      std::optional<uint16_t>
+          anticipated_concurrent_incoming_unidirectional_streams,
+      std::optional<uint16_t>
+          anticipated_concurrent_incoming_bidirectional_streams,
       NetworkContext* context,
       mojo::PendingRemote<mojom::WebTransportHandshakeClient> handshake_client,
       mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>
@@ -68,6 +73,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebTransport final
                     base::OnceCallback<void(bool)> callback) override;
   void CreateStream(mojo::ScopedDataPipeConsumerHandle readable,
                     mojo::ScopedDataPipeProducerHandle writable,
+                    mojom::WebTransportStreamPriorityPtr priority,
                     base::OnceCallback<void(bool, uint32_t)> callback) override;
   void AcceptBidirectionalStream(
       BidirectionalStreamAcceptanceCallback callback) override;
@@ -99,8 +105,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebTransport final
   void OnDatagramProcessed(std::optional<quic::DatagramStatus> status) override;
 
   bool torn_down() const { return torn_down_; }
-
-  void CloseIfNonceMatches(base::UnguessableToken nonce);
 
  private:
   void TearDown();

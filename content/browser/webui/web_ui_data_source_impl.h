@@ -19,6 +19,7 @@
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/buildflags.h"
+#include "ui/base/template_expressions.h"
 #include "url/origin.h"
 
 namespace content {
@@ -67,6 +68,9 @@ class CONTENT_EXPORT WebUIDataSourceImpl : public URLDataSourceImpl,
   url::Origin GetOrigin() override;
   void SetSupportedScheme(std::string_view scheme) override;
 
+  // URLDataSourceImpl:
+  const ui::TemplateReplacements* GetReplacements() const override;
+
   // Add the locale to the load time data defaults. May be called repeatedly.
   void EnsureLoadTimeDataDefaultsAdded();
 
@@ -91,7 +95,7 @@ class CONTENT_EXPORT WebUIDataSourceImpl : public URLDataSourceImpl,
                                   bool from_js_module);
 
   // Protected for testing.
-  virtual const base::DictValue* GetLocalizedStrings() const;
+  const base::DictValue& GetLocalizedStringsForTesting() const;
 
   // Protected for testing.
   int URLToIdrOrDefault(const GURL& url) const;
@@ -107,7 +111,7 @@ class CONTENT_EXPORT WebUIDataSourceImpl : public URLDataSourceImpl,
 
   // Methods that match URLDataSource which are called by
   // InternalDataSource.
-  std::string GetMimeType(const GURL& url) const;
+  std::string_view GetMimeType(const GURL& url) const;
   void StartDataRequest(const GURL& url,
                         const WebContents::Getter& wc_getter,
                         URLDataSource::GotDataCallback callback);
@@ -153,6 +157,8 @@ class CONTENT_EXPORT WebUIDataSourceImpl : public URLDataSourceImpl,
 
   // Supported scheme if not one of the default supported schemes.
   std::optional<std::string> supported_scheme_;
+
+  mutable bool resources_frozen_ = false;
 };
 
 }  // namespace content

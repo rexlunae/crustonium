@@ -35,9 +35,9 @@ gfx::Size GetWindowSize(Browser* browser) {
   return bounds.size();
 }
 
-void VerifyColorsForFrameType(const Browser* browser, bool use_custom_frame) {
+void VerifyColorsForFrameType(Browser* browser, bool use_custom_frame) {
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser->profile());
+      ThemeServiceFactory::GetForProfile(browser->GetProfile());
   EXPECT_EQ(use_custom_frame, theme_service->ShouldUseCustomFrame());
 
   ui::ColorProviderManager::ResetForTesting();
@@ -62,14 +62,15 @@ void VerifyColorsForFrameType(const Browser* browser, bool use_custom_frame) {
 // Tests that BrowserNativeWidgetAuraLinux::UseCustomFrame() returns the correct
 // value that respects 1) the current value of the user preference and
 // 2) capabilities of the platform.
-// Also tests the regressions found in crbug.com/1243937 and crbug.com/1329756.
+// Also tests the regressions found in crbug.com/40195646 and
+// crbug.com/40842778.
 IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, UseCustomFrame) {
   const BrowserView* const browser_view =
       BrowserView::GetBrowserViewForBrowser(browser());
   const BrowserNativeWidgetAuraLinux* const native_widget =
       static_cast<BrowserNativeWidgetAuraLinux*>(
           browser_view->browser_widget()->browser_native_widget());
-  auto* pref_service = browser_view->browser()->profile()->GetPrefs();
+  auto* pref_service = browser()->GetProfile()->GetPrefs();
 
   // Try overriding the runtime platform property that indicates whether the
   // platform supports server-side window decorations.  For each variant,
@@ -114,14 +115,14 @@ IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, UseCustomFrame) {
 
 // Tests that the new browser window restores the bounds properly: its size must
 // be the same as the already existing window has.
-// The regression was found in https://crbug.com/1287212.
+// The regression was found in https://crbug.com/40816088.
 IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, NewWindowSize) {
   // Ensure the first window is active before creating the second one.
   ui_test_utils::BrowserActivationWaiter(browser()).WaitForActivation();
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   Browser::CreateParams params(profile, true /* user_gesture */);
   Browser* browser2 = Browser::Create(params);
-  browser2->window()->Show();
+  browser2->GetWindow()->Show();
 
   // The first window saves its placement on losing the active state, then the
   // second window needs to go through the initialisation, update its size and

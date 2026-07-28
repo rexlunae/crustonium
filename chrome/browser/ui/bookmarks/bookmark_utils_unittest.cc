@@ -10,13 +10,16 @@
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
+#include "components/bookmarks/common/bookmark_bar_visibility_state.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/bookmarks/managed/managed_bookmark_service.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
+#include "components/feature_engagement/public/feature_constants.h"
+#include "components/saved_tab_groups/public/features.h"
+#include "components/search/ntp_features.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -266,10 +269,118 @@ TEST_F(BookmarkUtilsGetBookmarkDropOperationTest, DropWhenNodeDeleted) {
             ui::mojom::DragOperation::kNone);
 }
 
-TEST_F(BookmarkUtilsGetBookmarkDropOperationTest,
-       ShouldHideBookmarksWhenProjectsPanelEnabled) {
+class BookmarkUtilsTest : public testing::Test {
+ protected:
+  content::BrowserTaskEnvironment task_environment_;
+};
+
+TEST_F(BookmarkUtilsTest,
+       ShouldShowTabGroupsInBookmarkBar_ReturnsFalseIfPrefIsFalse) {
+  TestingProfile profile;
+  profile.GetPrefs()->SetBoolean(bookmarks::prefs::kShowTabGroupsInBookmarkBar,
+                                 false);
+  EXPECT_FALSE(chrome::ShouldShowTabGroupsInBookmarkBar(&profile));
+}
+
+TEST_F(BookmarkUtilsTest,
+       ShouldShowTabGroupsInBookmarkBar_ReturnsTrueIfPrefIsTrue) {
+  TestingProfile profile;
+  profile.GetPrefs()->SetBoolean(bookmarks::prefs::kShowTabGroupsInBookmarkBar,
+                                 true);
+  EXPECT_TRUE(chrome::ShouldShowTabGroupsInBookmarkBar(&profile));
+}
+
+TEST_F(BookmarkUtilsTest,
+       UpdateBookmarkBarVisibilityPrefOnUserAction_FeatureDisabled) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(tabs::kProjectsPanel);
-  EXPECT_FALSE(chrome::ShouldShowTabGroupsInBookmarkBar(profile()));
+  feature_list.InitAndDisableFeature(
+      ntp_features::kNtpSimplificationBookmarkBar);
+
+  TestingProfile profile;
+  const PrefService::Preference* pref = profile.GetPrefs()->FindPreference(
+      bookmarks::prefs::kBookmarkBarVisibilityState);
+  ASSERT_TRUE(pref && pref->IsDefaultValue());
+
+  chrome::UpdateBookmarkBarVisibilityPrefOnUserAction(&profile);
+  EXPECT_TRUE(pref->IsDefaultValue());
+}
+
+TEST_F(BookmarkUtilsTest,
+       UpdateBookmarkBarVisibilityPrefOnUserAction_InTransition) {
+  base::test::ScopedFeatureList feature_list(
+      ntp_features::kNtpSimplificationBookmarkBar);
+
+  TestingProfile profile;
+  const PrefService::Preference* pref = profile.GetPrefs()->FindPreference(
+      bookmarks::prefs::kBookmarkBarVisibilityState);
+  ASSERT_TRUE(pref && pref->IsDefaultValue());
+
+  chrome::UpdateBookmarkBarVisibilityPrefOnUserAction(&profile);
+  EXPECT_FALSE(pref->IsDefaultValue());
+  EXPECT_EQ(
+      profile.GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kOnlyShowOnNtp));
+}
+
+TEST_F(BookmarkUtilsTest,
+       UpdateBookmarkBarVisibilityPrefOnUserAction_AlreadyConfigured) {
+  base::test::ScopedFeatureList feature_list(
+      ntp_features::kNtpSimplificationBookmarkBar);
+
+  TestingProfile profile;
+  profile.GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+
+  const PrefService::Preference* pref = profile.GetPrefs()->FindPreference(
+      bookmarks::prefs::kBookmarkBarVisibilityState);
+  ASSERT_TRUE(pref && !pref->IsDefaultValue());
+
+  chrome::UpdateBookmarkBarVisibilityPrefOnUserAction(&profile);
+  EXPECT_FALSE(pref->IsDefaultValue());
+  EXPECT_EQ(
+      profile.GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+}
+
+TEST_F(BookmarkUtilsTest, ToggleBookmarkBarWhenVisible) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      ntp_features::kNtpSimplificationBookmarkBar);
+
+  TestingProfile profile;
+  profile.GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, false);
+
+  chrome::ToggleBookmarkBarWhenVisible(&profile);
+  EXPECT_TRUE(
+      profile.GetPrefs()->GetBoolean(bookmarks::prefs::kShowBookmarkBar));
+
+  chrome::ToggleBookmarkBarWhenVisible(&profile);
+  EXPECT_FALSE(
+      profile.GetPrefs()->GetBoolean(bookmarks::prefs::kShowBookmarkBar));
+}
+
+TEST_F(BookmarkUtilsTest, NtpSimplification_ToggleBookmarkBarWhenVisible) {
+  base::test::ScopedFeatureList feature_list(
+      ntp_features::kNtpSimplificationBookmarkBar);
+
+  TestingProfile profile;
+  profile.GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+
+  chrome::ToggleBookmarkBarWhenVisible(&profile);
+  EXPECT_EQ(
+      profile.GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysHide));
+
+  chrome::ToggleBookmarkBarWhenVisible(&profile);
+  EXPECT_EQ(
+      profile.GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
 }
 }  // namespace

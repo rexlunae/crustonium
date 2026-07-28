@@ -85,6 +85,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_styles.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -147,6 +148,7 @@ std::unique_ptr<KeyedService> BuildArcFileSystemBridge(
 std::unique_ptr<KeyedService> BuildVolumeManager(
     content::BrowserContext* context) {
   return std::make_unique<file_manager::VolumeManager>(
+      TestingBrowserProcess::GetGlobal()->local_state(),
       Profile::FromBrowserContext(context),
       nullptr /* drive_integration_service */,
       nullptr /* power_manager_client */,
@@ -593,9 +595,6 @@ class HoldingSpaceKeyedServiceTest : public BrowserWithTestWindowTest {
             FileSuggestKeyedServiceFactory::GetInstance(),
             base::BindRepeating(
                 &MockFileSuggestKeyedService::BuildMockFileSuggestKeyedService,
-                TestingBrowserProcess::GetGlobal()
-                    ->GetFeatures()
-                    ->application_locale_storage(),
                 temp_dir_.GetPath())}};
   }
 
@@ -777,6 +776,11 @@ class HoldingSpaceKeyedServiceWithExperimentalFeatureForGuestTest
     profile_ =
         profile_manager()->CreateGuestProfile(std::move(guest_profile_builder));
     return profile_;
+  }
+
+  std::unique_ptr<BrowserWindow> CreateBrowserWindow() override {
+    // Do not create browser window.
+    return nullptr;
   }
 
   std::unique_ptr<Browser> CreateBrowser(
@@ -2431,7 +2435,9 @@ TEST_F(HoldingSpaceKeyedServiceTest, AddInProgressDownloadItem) {
                   gfx::ImageSkiaOperations::CreateSuperimposedImage(
                       image_util::CreateEmptyImage(kImageSize),
                       gfx::CreateVectorIcon(
-                          vector_icons::kErrorOutlineIcon,
+                          ::features::IsRoundedIconsEnabled()
+                              ? vector_icons::kErrorIcon
+                              : vector_icons::kErrorOutlineOldIcon,
                           kHoldingSpaceIconSize,
                           cros_styles::ResolveColor(
                               cros_styles::ColorName::kIconColorAlert,
@@ -2470,7 +2476,9 @@ TEST_F(HoldingSpaceKeyedServiceTest, AddInProgressDownloadItem) {
                   gfx::ImageSkiaOperations::CreateSuperimposedImage(
                       image_util::CreateEmptyImage(kImageSize),
                       gfx::CreateVectorIcon(
-                          vector_icons::kErrorOutlineIcon,
+                          ::features::IsRoundedIconsEnabled()
+                              ? vector_icons::kErrorIcon
+                              : vector_icons::kErrorOutlineOldIcon,
                           kHoldingSpaceIconSize,
                           cros_styles::ResolveColor(
                               cros_styles::ColorName::kIconColorWarning,
@@ -3159,7 +3167,8 @@ class HoldingSpaceKeyedServicePrintToPdfIntegrationTest
     // Create the PDF printer handler.
     Browser* browser = GetBrowserForPdfPrinterHandler();
     pdf_printer_handler_ = std::make_unique<::printing::PdfPrinterHandler>(
-        browser->profile(), browser->tab_strip_model()->GetActiveWebContents(),
+        browser->GetProfile(),
+        browser->tab_strip_model()->GetActiveWebContents(),
         /*sticky_settings=*/nullptr);
   }
 

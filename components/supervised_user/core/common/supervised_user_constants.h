@@ -12,12 +12,12 @@
 
 namespace supervised_user {
 
-// The result of local web approval flow.
+// The result of local approval flow.
 // Used for metrics. Those values are logged to UMA. Entries should not be
 // renumbered and numeric values should never be reused.
 // LINT.IfChange(LocalApprovalResult)
 enum class LocalApprovalResult {
-  // The parent has locally approved the website.
+  // The parent has locally approved.
   kApproved = 0,
   // The parent has explicitly declined the approval.
   kDeclined = 1,
@@ -29,7 +29,7 @@ enum class LocalApprovalResult {
   // Deprecated kMalformedPacpResult = 4,
   kMaxValue = kError
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/families/enums.xml:FamilyLinkUserLocalWebApprovalResult)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/families/enums.xml:FamilyLinkUserLocalApprovalResult)
 
 // Used for metrics. These values are logged to UMA. Entries should not be
 // renumbered and numeric values should never be reused.
@@ -133,6 +133,8 @@ enum class FilteringContext : int {
   // Use for filtering triggered by changes to Family Link.
   kFamilyLinkSettingsUpdated = 3
 };
+
+std::string GetFilteringContextName(FilteringContext context);
 // LINT.ThenChange(//tools/metrics/histograms/metadata/families/histograms.xml:top_level_filtering_context)
 
 // LINT.IfChange(top_level_filtering_result)
@@ -211,9 +213,6 @@ extern const char kSkipParentApprovalToInstallExtensionsHistogramName[];
 // transition.
 extern const char kSupervisedUserURLFilteringResultHistogramName[];
 
-// Histogram name to log top level URL filtering results with reason for filter
-extern const char kSupervisedUserTopLevelURLFilteringResultHistogramName[];
-
 // Histogram name to log top level URL filtering results with reason for filter,
 // for use in the navigation throttle context.
 extern const char kSupervisedUserTopLevelURLFilteringResult2HistogramName[];
@@ -223,10 +222,6 @@ extern const char kLocalWebApprovalResultHistogramName[];
 
 // The URL which the "Managed by your parent" UI links to.
 extern const char kManagedByParentUiMoreInfoUrl[];
-
-// The url that displays a user's Family info.
-// The navigations in the via PACP widget redirect to this url.
-extern const char kFamilyManagementUrl[];
 
 // The string used to denote an account that does not have a family member role.
 extern const char kDefaultEmptyFamilyMemberRole[];

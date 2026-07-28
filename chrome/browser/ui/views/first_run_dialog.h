@@ -61,6 +61,7 @@ class FirstRunDialog : public views::DialogDelegateView {
   raw_ptr<views::Checkbox> make_default_ = nullptr;
   raw_ptr<views::Checkbox> report_crashes_ = nullptr;
   OnCloseCallback on_close_callback_;
+
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FIRST_RUN_DIALOG_H_

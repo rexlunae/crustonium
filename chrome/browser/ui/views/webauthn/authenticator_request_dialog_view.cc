@@ -20,7 +20,6 @@
 #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
-#include "components/vector_icons/vector_icons.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "content/public/browser/render_frame_host.h"
@@ -79,7 +78,7 @@ AuthenticatorRequestDialogView::~AuthenticatorRequestDialogView() = default;
 void AuthenticatorRequestDialogView::Show() {
   if (web_contents_hidden_) {
     // Calling Widget::Show() while the tab is not in foreground shows the
-    // dialog on the foreground tab (https://crbug.com/969153). Instead, wait
+    // dialog on the foreground tab (https://crbug.com/40630135). Instead, wait
     // for OnVisibilityChanged() to signal the tab going into foreground again,
     // and then show the widget.
     return;
@@ -152,13 +151,13 @@ void AuthenticatorRequestDialogView::UpdateUIForCurrentSheet() {
             base::Unretained(this)),
         sheet_->model()->GetOtherMechanismButtonLabel()));
     other_mechanisms->SetEnabled(!model_->ui_disabled_);
-  } else if (sheet_->model()->IsManageDevicesButtonVisible()) {
-    auto* manage_devices = SetExtraView(std::make_unique<views::MdTextButton>(
+  } else if (sheet_->model()->IsGpmSettingsButtonVisible()) {
+    auto* gpm_settings = SetExtraView(std::make_unique<views::MdTextButton>(
         base::BindRepeating(
-            &AuthenticatorRequestDialogView::ManageDevicesButtonPressed,
+            &AuthenticatorRequestDialogView::OpenGpmSettingsButtonPressed,
             base::Unretained(this)),
-        l10n_util::GetStringUTF16(IDS_WEBAUTHN_MANAGE_DEVICES)));
-    manage_devices->SetEnabled(!model_->ui_disabled_);
+        l10n_util::GetStringUTF16(IDS_WEBAUTHN_GPM_SETTINGS)));
+    gpm_settings->SetEnabled(!model_->ui_disabled_);
   } else if (sheet_->model()->IsForgotGPMPinButtonVisible()) {
     auto forgot_pin_button = std::make_unique<views::MdTextButton>(
         base::BindRepeating(
@@ -382,8 +381,8 @@ void AuthenticatorRequestDialogView::OtherMechanismsButtonPressed() {
   sheet_->model()->OnBack();
 }
 
-void AuthenticatorRequestDialogView::ManageDevicesButtonPressed() {
-  sheet_->model()->OnManageDevices();
+void AuthenticatorRequestDialogView::OpenGpmSettingsButtonPressed() {
+  sheet_->model()->OnOpenGpmSettingsButtonPressed();
 }
 
 void AuthenticatorRequestDialogView::ForgotGPMPinPressed() {

@@ -14,12 +14,12 @@
 #import "components/search_engines/template_url_service.h"
 #import "ios/chrome/browser/default_browser/model/default_browser_interest_signals.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_omnibox_client.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_mediator_delegate.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_metrics_recorder.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_navigation_manager.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_navigation_mutator.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_url_utils.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/lens_overlay/public/lens_overlay_constants.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_toolbar_consumer.h"
 #import "ios/chrome/browser/omnibox/coordinator/omnibox_coordinator.h"
@@ -216,6 +216,10 @@ typedef NS_ENUM(NSUInteger, LensOverlayFilterState) {
 }
 
 - (void)omniboxDidResignFirstResponder {
+  // NO-OP
+}
+
+- (void)omniboxDidEndEditing {
   [self defocusOmnibox];
 }
 
@@ -317,6 +321,9 @@ typedef NS_ENUM(NSUInteger, LensOverlayFilterState) {
 
 - (void)lensOverlay:(id<ChromeLensOverlay>)lensOverlay
     didRequestToOpenURL:(GURL)URL {
+  if (!URL.SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
   [self.resultConsumer loadResultsURL:URL httpHeaders:nil];
 }
 
@@ -374,7 +381,7 @@ typedef NS_ENUM(NSUInteger, LensOverlayFilterState) {
     }
     // Multimodal query on a text selection are not handled. Thumbnail is not
     // updated.
-    CHECK(!isMultimodal, kLensOverlayNotFatalUntil);
+    CHECK(!isMultimodal);
   } else {
     // On image selection, hide the thumbnail and user selection when loading an
     // unimodal query.

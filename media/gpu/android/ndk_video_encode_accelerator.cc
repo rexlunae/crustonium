@@ -8,6 +8,7 @@
 
 #include <optional>
 
+#include "base/android/android_info.h"
 #include "base/bits.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
@@ -19,6 +20,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
@@ -32,13 +34,13 @@
 #include "media/base/media_serializers_base.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
+#include "media/gpu/android/ndk_video_encode_accelerator_svc_api.h"
 #include "media/gpu/android/video_accelerator_util.h"
 #include "media/gpu/command_buffer_helper.h"
 #include "media/gpu/gpu_video_encode_accelerator_helpers.h"
 #include "media/parsers/h264_level_limits.h"
 #include "media/parsers/h264_parser.h"
 #include "media/parsers/temporal_scalability_id_extractor.h"
-#include "ui/gl/gl_switches.h"
 
 #pragma clang attribute push DEFAULT_REQUIRES_ANDROID_API( \
     NDK_MEDIA_CODEC_MIN_API)
@@ -70,6 +72,86 @@ struct AMediaFormatDeleter {
     }
   }
 };
+
+std::vector<std::string> GetSupportedLayeringSchemas(
+    const std::string& codec_name) {
+  const auto* api = NdkVideoEncodeAcceleratorSvcApi::Get();
+  if (!api->AMediaCodecStore_getCodecInfo) {
+    return {};
+  }
+
+  const AMediaCodecInfo* info = nullptr;
+  media_status_t status =
+      api->AMediaCodecStore_getCodecInfo(codec_name.c_str(), &info);
+  if (status != AMEDIA_OK || !info) {
+    LOG(ERROR) << "AMediaCodecStore_getCodecInfo failed for " << codec_name
+               << " status: " << status;
+    return {};
+  }
+
+  const ACodecEncoderCapabilities* encoder_caps = nullptr;
+  status = api->AMediaCodecInfo_getEncoderCapabilities(info, &encoder_caps);
+  if (status != AMEDIA_OK || !encoder_caps) {
+    LOG(ERROR) << "AMediaCodecInfo_getEncoderCapabilities failed status: "
+               << status;
+    return {};
+  }
+
+  const char* const* schemas = nullptr;
+  size_t count = 0;
+  status = api->ACodecEncoderCapabilities_getSupportedLayeringSchemas(
+      encoder_caps, &schemas, &count);
+  if (status != AMEDIA_OK) {
+    LOG(ERROR) << "ACodecEncoderCapabilities_getSupportedLayeringSchemas "
+                  "failed status: "
+               << status;
+    return {};
+  }
+
+  std::vector<std::string> supported_schemas;
+  if (count > 0 && schemas) {
+    // SAFETY: The NDK API guarantees that `schemas` points to an array of
+    // `count` elements.
+    auto schemas_span = UNSAFE_BUFFERS(base::span(schemas, count));
+    for (const char* schema : schemas_span) {
+      if (schema) {
+        supported_schemas.emplace_back(schema);
+      }
+    }
+  }
+
+  return supported_schemas;
+}
+
+std::string GetOptimalLayeringSchema(MediaLog* log,
+                                     const std::string& codec_name,
+                                     int num_temporal_layers) {
+  std::vector<std::string> supported = GetSupportedLayeringSchemas(codec_name);
+  std::string android_schema =
+      base::StringPrintf("android.generic.%d", num_temporal_layers);
+
+  if (supported.empty()) {
+    return android_schema;
+  }
+
+  // Preference: webrtc.svc.l1tN > android.generic.N
+  std::string webrtc_schema =
+      base::StringPrintf("webrtc.svc.l1t%d", num_temporal_layers);
+  for (const auto& s : supported) {
+    if (s == webrtc_schema) {
+      MEDIA_LOG(INFO, log) << "Using SVC layering schema: " << webrtc_schema;
+      return webrtc_schema;
+    }
+  }
+
+  // Fallback to android.generic.N if webrtc schema not found.
+  // We use this even if it's not explicitly in the supported list, as it's
+  // the platform default fallback.
+  MEDIA_LOG(INFO, log)
+      << "No exact match for WebRTC SVC layering schema found. Fallback to "
+      << android_schema;
+  return android_schema;
+}
 
 enum class CodecProfileLevel {
   // Subset of MediaCodecInfo.CodecProfileLevel
@@ -309,13 +391,14 @@ bool SetFormatColorSpace(AMediaFormat* format, const gfx::ColorSpace& cs) {
 using MediaFormatPtr = std::unique_ptr<AMediaFormat, AMediaFormatDeleter>;
 
 MediaFormatPtr CreateVideoFormat(const VideoEncodeAccelerator::Config& config,
+                                 MediaLog* log,
+                                 const std::string& codec_name,
                                  int framerate,
                                  const gfx::Size& frame_size,
                                  const Bitrate& bitrate,
                                  std::optional<gfx::ColorSpace> cs,
                                  int num_temporal_layers,
                                  PixelFormat format) {
-  int iframe_interval = config.gop_length.value_or(kDefaultGOPLength);
   const auto codec = VideoCodecProfileToVideoCodec(config.output_profile);
   const auto mime = MediaCodecUtil::CodecToAndroidMimeType(codec);
   MediaFormatPtr result(AMediaFormat_new());
@@ -343,8 +426,11 @@ MediaFormatPtr CreateVideoFormat(const VideoEncodeAccelerator::Config& config,
                         frame_size.height());
 
   AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_FRAME_RATE, framerate);
-  AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
-                        iframe_interval);
+  float iframe_interval_sec =
+      static_cast<float>(config.gop_length.value_or(kDefaultGOPLength)) /
+      framerate;
+  AMediaFormat_setFloat(result.get(), AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
+                        iframe_interval_sec);
   AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_COLOR_FORMAT, format);
 
   if (config.require_low_delay) {
@@ -388,9 +474,32 @@ MediaFormatPtr CreateVideoFormat(const VideoEncodeAccelerator::Config& config,
     AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_MAX_B_FRAMES, 0);
 
     auto svc_layer_config =
-        base::StringPrintf("android.generic.%d", num_temporal_layers);
+        GetOptimalLayeringSchema(log, codec_name, num_temporal_layers);
     AMediaFormat_setString(result.get(), AMEDIAFORMAT_KEY_TEMPORAL_LAYERING,
                            svc_layer_config.c_str());
+
+    // Signal that we want to receive the temporal layer ID in the output
+    // format.
+    if (NdkVideoEncodeAcceleratorSvcApi::IsTemporalLayerIdSupported()) {
+      AMediaFormat_setInt32(
+          result.get(),
+          NdkVideoEncodeAcceleratorSvcApi::AMEDIAFORMAT_KEY_TEMPORAL_LAYER_ID,
+          0);
+    }
+
+    if (NdkVideoEncodeAcceleratorSvcApi::IsBitrateLayeringSupported()) {
+      std::vector<double> ratios =
+          NdkVideoEncodeAccelerator::GetDefaultSvcBitrateRatios(
+              num_temporal_layers);
+      if (!ratios.empty()) {
+        AMediaFormat_setString(
+            result.get(),
+            NdkVideoEncodeAcceleratorSvcApi::
+                AMEDIAFORMAT_KEY_VIDEO_BITRATE_LAYERING,
+            NdkVideoEncodeAccelerator::GetSvcBitrateRatiosString(ratios)
+                .c_str());
+      }
+    }
   }
 
   return result;
@@ -511,6 +620,55 @@ std::string GetInitStatusHistogramName(VideoCodecProfile profile) {
 }
 }  // namespace
 
+// static
+// Returns per-layer bitrate allocation factors (summing to 1.0).
+// These ratios are standard for Chromium encoders and are also used in
+// media/gpu/gpu_video_encode_accelerator_helpers.cc.
+std::vector<double> NdkVideoEncodeAccelerator::GetDefaultSvcBitrateRatios(
+    int num_temporal_layers) {
+  if (num_temporal_layers == 2) {
+    return {0.6, 0.4};
+  } else if (num_temporal_layers == 3) {
+    return {0.5, 0.2, 0.3};
+  }
+  return {};
+}
+
+// static
+/**
+ * Converts per-layer bitrate distribution factors into the cumulative string
+ * format expected by Android MediaCodec (KEY_VIDEO_BITRATE_LAYERING).
+ *
+ * The format is "ratio1;ratio2;...;ratioN", where N is the number of temporal
+ * layers - 1. Each ratio represents the cumulative bitrate allocation for the
+ * current layer and all lower layers, as a fraction of the total bitrate.
+ *
+ * For example, if there are 3 temporal layers with 50%, 20%, and 30%
+ * distribution:
+ * - Layer 0 (base): 50% -> ratio1 = "0.5"
+ * - Layer 0 + 1: 70% -> ratio2 = "0.7"
+ * - Resulting string: "0.5;0.7"
+ *
+ * Layer 2 (highest) is implicitly 1.0.
+ */
+std::string NdkVideoEncodeAccelerator::GetSvcBitrateRatiosString(
+    const std::vector<double>& ratios) {
+  if (ratios.empty()) {
+    return "";
+  }
+  std::string ratios_str;
+  double cumulative = 0;
+  // Android expects N-1 cumulative ratios for N layers.
+  for (size_t i = 0; i < ratios.size() - 1; ++i) {
+    cumulative += ratios[i];
+    ratios_str += base::NumberToString(cumulative);
+    if (i < ratios.size() - 2) {
+      ratios_str += ";";
+    }
+  }
+  return ratios_str;
+}
+
 NdkVideoEncodeAccelerator::PendingEncode::PendingEncode(
     scoped_refptr<VideoFrame> frame,
     const VideoEncoder::EncodeOptions& options)
@@ -522,12 +680,13 @@ NdkVideoEncodeAccelerator::PendingEncode&
 NdkVideoEncodeAccelerator::PendingEncode::operator=(PendingEncode&&) = default;
 
 NdkVideoEncodeAccelerator::NdkVideoEncodeAccelerator(
-    scoped_refptr<base::SequencedTaskRunner> runner)
+    scoped_refptr<base::SequencedTaskRunner> runner,
+    const gpu::GpuDriverBugWorkarounds& gpu_workarounds)
     : task_runner_(std::move(runner)),
       // We just need an arbitrary non-zero value for the first timestamp
       // due to issues with EGL surface path.
       next_timestamp_(base::TimeTicks::Now().since_origin()),
-      use_surface_as_input_(ShouldUseSurfaceInput()) {}
+      gpu_workarounds_(gpu_workarounds) {}
 
 NdkVideoEncodeAccelerator::~NdkVideoEncodeAccelerator() {
   // It's supposed to be cleared by Destroy(), it basically checks
@@ -543,23 +702,8 @@ NdkVideoEncodeAccelerator::~NdkVideoEncodeAccelerator() {
 
 std::vector<VideoPixelFormat>
 NdkVideoEncodeAccelerator::GetSupportedSharedImagePixelFormats() {
-  if (use_surface_as_input_) {
-    if (base::FeatureList::IsEnabled(features::kVulkanFromANGLE)) {
-      // If kVulkanFromANGLE = true (e.g. Desktop Android)
-      // we we get shared images with AngleVulkanImageBacking, NDK VEA can't
-      // handle such shared images yet.
-      if (base::FeatureList::IsEnabled(media::kAndroidZeroCopyVideoCapture)) {
-        // If zero-copy camera capture is enabled, let's allow XBGR shared
-        // images for testing, even though it breaks the canvas copy case.
-        return {PIXEL_FORMAT_XBGR};
-      }
-      return {};
-    }
-    return {PIXEL_FORMAT_ABGR, PIXEL_FORMAT_XBGR};
-  }
-
-  if (base::FeatureList::IsEnabled(media::kAndroidZeroCopyVideoCapture)) {
-    return {PIXEL_FORMAT_ABGR, PIXEL_FORMAT_XBGR};
+  if (media::IsAndroidZeroCopyVideoCaptureEnabled(gpu_workarounds_)) {
+    return {PIXEL_FORMAT_ABGR, PIXEL_FORMAT_XBGR, PIXEL_FORMAT_NV12};
   }
   return {};
 }
@@ -600,6 +744,12 @@ EncoderStatus NdkVideoEncodeAccelerator::Initialize(
     config_.required_encoder_type = EncoderType::kHardware;
   }
 
+  if (config.framerate == 0) {
+    MEDIA_LOG(ERROR, log_) << "Invalid config: framerate is 0";
+    return {EncoderStatus::Codes::kEncoderUnsupportedConfig,
+            "Framerate cannot be 0"};
+  }
+
   effective_framerate_ = config.framerate;
   num_temporal_layers_ =
       config_.HasTemporalLayer()
@@ -608,6 +758,11 @@ EncoderStatus NdkVideoEncodeAccelerator::Initialize(
   if (num_temporal_layers_ > 1) {
     svc_parser_ = std::make_unique<TemporalScalabilityIdExtractor>(
         codec, num_temporal_layers_);
+
+    // Log platform capabilities for SVC once per initialization.
+    base::UmaHistogramBoolean(
+        "Media.VideoEncoder.NDKVEA.TemporalLayerEncodingEnabled",
+        NdkVideoEncodeAcceleratorSvcApi::IsTemporalLayerEncodingEnabled());
   }
 
   const EncoderStatus status = ResetMediaCodec();
@@ -666,14 +821,9 @@ void NdkVideoEncodeAccelerator::NotifyEncoderInfo() {
       GetSupportedSharedImagePixelFormats();
   encoder_info_.supports_gpu_shared_images =
       !encoder_info_.gpu_supported_pixel_formats.empty();
-  const char* input_type_str = "buffer";
-  if (use_surface_as_input_) {
-    input_type_str = encoder_info_.supports_gpu_shared_images
-                         ? "surface_with_shared_images"
-                         : "surface";
-  } else if (encoder_info_.supports_gpu_shared_images) {
-    input_type_str = "buffer_with_shared_images";
-  }
+  const char* input_type_str = encoder_info_.supports_gpu_shared_images
+                                   ? "buffer_with_shared_images"
+                                   : "buffer";
   encoder_info_.implementation_name =
       base::StringPrintf("NdkVideoEncodeAccelerator(%s) input: %s",
                          codec_name.c_str(), input_type_str);
@@ -712,10 +862,19 @@ void NdkVideoEncodeAccelerator::RequestEncodingParametersChange(
     const Bitrate& bitrate,
     uint32_t framerate,
     const std::optional<gfx::Size>& size) {
+  // TODO(crbug.com/469819308): Support dynamic layered bitrate changes via
+  // VideoBitrateAllocation overload of RequestEncodingParametersChange().
+
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (size.has_value()) {
     NotifyErrorStatus({EncoderStatus::Codes::kEncoderUnsupportedConfig,
                        "Update output frame size is not supported"});
+    return;
+  }
+
+  if (framerate == 0) {
+    NotifyErrorStatus({EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                       "Framerate cannot be zero"});
     return;
   }
 
@@ -733,8 +892,9 @@ void NdkVideoEncodeAccelerator::RequestEncodingParametersChange(
       AMediaCodec_setParameters(media_codec_->codec(), format.get());
 
   if (status != AMEDIA_OK) {
-    NotifyMediaCodecError(EncoderStatus::Codes::kEncoderUnsupportedConfig,
-                          status, "Failed to change bitrate and framerate");
+    NotifyErrorStatus({EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                       "Failed to change bitrate and framerate", "syscode",
+                       status});
     return;
   }
   effective_framerate_ = framerate;
@@ -754,7 +914,6 @@ void NdkVideoEncodeAccelerator::Destroy() {
     // functions will use it via saved `userdata` pointers.
     media_codec_.reset();
   }
-  gl_renderer_.reset();
   metrics_helper_.reset();
   delete this;
 }
@@ -788,13 +947,10 @@ void NdkVideoEncodeAccelerator::OnCommandBufferHelperAvailable(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   command_buffer_helper_ = std::move(command_buffer_helper);
   if (!command_buffer_helper_) {
-    NotifyErrorStatus({EncoderStatus::Codes::kGPUCommandBufferNotAvailable});
+    NotifyErrorStatus(EncoderStatus::Codes::kGPUCommandBufferNotAvailable);
     return;
   }
   shared_image_manager_ = command_buffer_helper_->GetSharedImageManager();
-  if (gl_renderer_) {
-    gl_renderer_->SetSharedImageManager(shared_image_manager_);
-  }
 
   // Call FeedInput() in case we have pending frames waiting for
   // synchronization.
@@ -894,7 +1050,7 @@ void NdkVideoEncodeAccelerator::FeedInput() {
     return;
   }
 
-  if (!media_codec_->HasInput() && !use_surface_as_input_) {
+  if (!media_codec_->HasInput()) {
     // The encode is in a mode where it uses input buffers to feed new frames,
     // but we have no input buffers available.
     return;
@@ -947,8 +1103,8 @@ void NdkVideoEncodeAccelerator::FeedInput() {
       pending_color_space_ = frame_cs;
       media_status_t status = SendEndOfStream();
       if (status != AMEDIA_OK) {
-        NotifyMediaCodecError(EncoderStatus::Codes::kEncoderHardwareDriverError,
-                              status, "Failed to queueInputBuffer");
+        NotifyErrorStatus({EncoderStatus::Codes::kEncoderHardwareDriverError,
+                           "Failed to queueInputBuffer", "syscode", status});
       }
       return;
     }
@@ -964,8 +1120,8 @@ void NdkVideoEncodeAccelerator::FeedInput() {
         AMediaCodec_setParameters(media_codec_->codec(), format.get());
 
     if (status != AMEDIA_OK) {
-      NotifyMediaCodecError(EncoderStatus::Codes::kEncoderFailedEncode, status,
-                            "Failed to request a keyframe");
+      NotifyErrorStatus({EncoderStatus::Codes::kEncoderFailedEncode,
+                         "Failed to request a keyframe", "syscode", status});
       return;
     }
   }
@@ -978,11 +1134,7 @@ void NdkVideoEncodeAccelerator::FeedInput() {
   // timestamps.
   auto timestamp = RecordFrameTimestamps(frame->timestamp());
 
-  if (use_surface_as_input_) {
-    FeedGLSurface(std::move(frame), timestamp);
-  } else {
-    FeedInputBuffer(std::move(frame), timestamp);
-  }
+  FeedInputBuffer(std::move(frame), timestamp);
   have_encoded_frames_ = true;
   pending_frames_.pop_front();
 }
@@ -1018,6 +1170,13 @@ scoped_refptr<VideoFrame> NdkVideoEncodeAccelerator::MapSharedImage(
                        "Failed to produce VideoImageRepresentation"});
     return nullptr;
   }
+
+  if (representation->size() != frame.coded_size()) {
+    NotifyErrorStatus({EncoderStatus::Codes::kEncoderFailedEncode,
+                       "SharedImage size mismatch"});
+    return nullptr;
+  }
+
   auto scoped_access = representation->BeginScopedReadAccess();
   if (!scoped_access) {
     NotifyErrorStatus({EncoderStatus::Codes::kSystemAPICallError,
@@ -1143,10 +1302,9 @@ scoped_refptr<VideoFrame> NdkVideoEncodeAccelerator::MapSharedImage(
       break;
     }
     default: {
-      NotifyErrorStatus(
-          {EncoderStatus::Codes::kUnsupportedFrameFormat,
-           base::StringPrintf("Unsupported AHardwareBuffer format: %d",
-                              desc.format)});
+      NotifyErrorStatus({EncoderStatus::Codes::kUnsupportedFrameFormat,
+                         "Unsupported AHardwareBuffer format", "format",
+                         desc.format});
       return nullptr;
     }
   }
@@ -1190,8 +1348,7 @@ void NdkVideoEncodeAccelerator::FeedInputBuffer(scoped_refptr<VideoFrame> frame,
     return;
   }
 
-  const auto visible_size =
-      aligned_size_.value_or(src_frame->visible_rect().size());
+  const auto visible_size = aligned_size_.value_or(config_.input_visible_size);
 
   const int dst_stride_uv = input_buffer_stride_;
   const gfx::Size uv_plane_size = VideoFrame::PlaneSizeInSamples(
@@ -1216,13 +1373,11 @@ void NdkVideoEncodeAccelerator::FeedInputBuffer(scoped_refptr<VideoFrame> frame,
     return;
   }
 
-  const size_t y_plane_size =
-      input_buffer_stride_ * input_buffer_yplane_height_;
   const std::vector<ColorPlaneLayout> dst_planes = {
       ColorPlaneLayout(/*stride=*/static_cast<size_t>(input_buffer_stride_),
-                       /*offset=*/0, /*size=*/y_plane_size),
+                       /*offset=*/0, /*size=*/y_plane_len),
       ColorPlaneLayout(/*stride=*/static_cast<size_t>(input_buffer_stride_),
-                       /*offset=*/y_plane_size, /*size=*/uv_plane_len),
+                       /*offset=*/y_plane_len, /*size=*/uv_plane_len),
   };
 
   auto dst_layout = VideoFrameLayout::CreateWithPlanes(
@@ -1256,16 +1411,13 @@ void NdkVideoEncodeAccelerator::FeedInputBuffer(scoped_refptr<VideoFrame> frame,
       media_codec_->codec(), buffer_idx, /*offset=*/0, queued_size,
       timestamp.InMicroseconds(), flags);
   if (status != AMEDIA_OK) {
-    NotifyMediaCodecError(EncoderStatus::Codes::kEncoderHardwareDriverError,
-                          status, "Failed to queueInputBuffer");
+    NotifyErrorStatus({EncoderStatus::Codes::kEncoderHardwareDriverError,
+                       "Failed to queueInputBuffer", "syscode", status});
     return;
   }
 }
 
 media_status_t NdkVideoEncodeAccelerator::SendEndOfStream() {
-  if (use_surface_as_input_) {
-    return AMediaCodec_signalEndOfInputStream(media_codec_->codec());
-  }
   size_t buffer_idx = media_codec_->TakeInput();
   return AMediaCodec_queueInputBuffer(
       media_codec_->codec(), buffer_idx, /*offset=*/0, /*size=*/0,
@@ -1273,43 +1425,12 @@ media_status_t NdkVideoEncodeAccelerator::SendEndOfStream() {
       /*flags=*/AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
 }
 
-void NdkVideoEncodeAccelerator::FeedGLSurface(scoped_refptr<VideoFrame> frame,
-                                              base::TimeDelta timestamp) {
-  DCHECK(use_surface_as_input_);
-  TRACE_EVENT1("media", "NdkVideoEncodeAccelerator::FeedGLSurface", "timestamp",
-               timestamp);
-  if (!gl_renderer_) {
-    NotifyErrorStatus({EncoderStatus::Codes::kEncoderHardwareDriverError,
-                       "GL renderer is not initialized"});
-    return;
-  }
 
-  // RenderVideoFrame() submits the rendered frame to the MediaCodec's input
-  // surface.
-  auto render_status =
-      gl_renderer_->RenderVideoFrame(frame, timestamp + base::TimeTicks());
-  if (!render_status.is_ok()) {
-    NotifyErrorStatus(std::move(render_status));
-    MEDIA_LOG(ERROR, log_) << "Most recent frame: "
-                           << frame->AsHumanReadableString();
-    return;
-  }
-}
-
-void NdkVideoEncodeAccelerator::NotifyMediaCodecError(
-    EncoderStatus encoder_status,
-    media_status_t media_codec_status,
-    std::string message) {
-  NotifyErrorStatus({encoder_status.code(),
-                     base::StringPrintf("%s MediaCodec error code: %d",
-                                        message.c_str(), media_codec_status)});
-}
 
 void NdkVideoEncodeAccelerator::NotifyErrorStatus(EncoderStatus status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(!status.is_ok());
-  MEDIA_LOG(ERROR, log_) << EncoderStatusCodeToString(status.code()) << " "
-                         << status.message();
+  log_->NotifyError(status);
   if (!error_occurred_) {
     base::UmaHistogramEnumeration(
         GetEncoderStatusHistogramName(config_.output_profile), status.code());
@@ -1330,11 +1451,6 @@ void NdkVideoEncodeAccelerator::OnInputAvailable() {
 void NdkVideoEncodeAccelerator::OnOutputAvailable() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DrainOutput();
-  // When using a surface as input, the `OnInputAvailable()` callback is not
-  // triggered because we are not using input buffers. Instead, we feed frames
-  // by rendering them to a surface. Backpressure is handled by the rendering
-  // pipeline, which means the `pending_frames_` queue is usually empty.
-  //
   // We call `FeedInput()` here to handle cases where we were waiting for the
   // encoder to reconfigure with a new color space. This call is unconditional
   // because `FeedInput()` already performs all the necessary checks.
@@ -1343,8 +1459,8 @@ void NdkVideoEncodeAccelerator::OnOutputAvailable() {
 
 void NdkVideoEncodeAccelerator::OnError(media_status_t error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  NotifyMediaCodecError(EncoderStatus::Codes::kEncoderFailedEncode, error,
-                        "Async media codec error");
+  NotifyErrorStatus({EncoderStatus::Codes::kEncoderFailedEncode,
+                     "Async media codec error", "syscode", error});
 }
 
 bool NdkVideoEncodeAccelerator::DrainConfig() {
@@ -1484,25 +1600,59 @@ void NdkVideoEncodeAccelerator::DrainOutput() {
       input_since_keyframe_count_ = 0;
     }
 
-    TemporalScalabilityIdExtractor::BitstreamMetadata bits_md;
-    if (!svc_parser_->ParseChunk(output_dst.first(mc_buffer_size),
-                                 input_since_keyframe_count_, bits_md)) {
-      NotifyErrorStatus({EncoderStatus::Codes::kEncoderHardwareDriverError,
-                         "Parse bitstream failed"});
+    int32_t temporal_id = -1;
+    if (NdkVideoEncodeAcceleratorSvcApi::IsTemporalLayerIdSupported()) {
+      // For supported Android versions, retrieve the temporal layer ID
+      // natively from the output buffer format.
+      MediaFormatPtr buffer_format(AMediaCodec_getBufferFormat(
+          media_codec_->codec(), output_buffer.buffer_index));
+      if (buffer_format) {
+        AMediaFormat_getInt32(
+            buffer_format.get(),
+            NdkVideoEncodeAcceleratorSvcApi::AMEDIAFORMAT_KEY_TEMPORAL_LAYER_ID,
+            &temporal_id);
+      }
+    }
+
+    if (temporal_id < 0 && VideoCodecProfileToVideoCodec(
+                               config_.output_profile) == VideoCodec::kH264) {
+      // For H.264, if native retrieval is not supported or failed,
+      // fallback to parsing the bitstream.
+      TemporalScalabilityIdExtractor::BitstreamMetadata bits_md;
+      if (!svc_parser_->ParseChunk(out_buffer_data, input_since_keyframe_count_,
+                                   bits_md)) {
+        NotifyErrorStatus({EncoderStatus::Codes::kEncoderHardwareDriverError,
+                           "Parse bitstream failed"});
+        return;
+      }
+      temporal_id = bits_md.temporal_id;
+    }
+
+    if (temporal_id < 0 &&
+        NdkVideoEncodeAcceleratorSvcApi::IsTemporalLayerIdSupported()) {
+      // If native retrieval was expected but failed, treat it as a hardware
+      // error. For AV1/VP9 on older Android versions, we don't error out
+      // because these codecs follow standard scalability modes
+      // (follow_svc_spec = true), where layer information is available in the
+      // bitstream itself.
+      NotifyErrorStatus(
+          {EncoderStatus::Codes::kEncoderHardwareDriverError,
+           "Failed to retrieve temporal layer ID for SVC stream"});
       return;
     }
 
     switch (VideoCodecProfileToVideoCodec(config_.output_profile)) {
       case VideoCodec::kH264:
-        metadata.h264.emplace().temporal_idx = bits_md.temporal_id;
+        metadata.h264.emplace().temporal_idx = temporal_id;
         break;
       case VideoCodec::kAV1:
       case VideoCodec::kVP9:
-        // TODO(b/432558680): We should query for this from the new temporal
-        // layer encoding API once it's available. Currently, the only encoders
-        // on Android that implement AV1 and VP9 temporal layer encoding are the
-        // cros-codecs ones, which we know to support SVC spec.
         metadata.svc_generic.emplace().follow_svc_spec = true;
+        if (NdkVideoEncodeAcceleratorSvcApi::IsTemporalLayerIdSupported()) {
+          // Native temporal ID is only expected for AV1/VP9 when supported
+          // by the platform.
+          metadata.svc_generic->temporal_idx = temporal_id;
+        }
         break;
       default:
         NOTIMPLEMENTED() << "SVC is only supported for AV1, H.264, and VP9.";
@@ -1531,7 +1681,6 @@ EncoderStatus NdkVideoEncodeAccelerator::ResetMediaCodec() {
     media_codec_->Stop();
     media_codec_.reset();
   }
-  gl_renderer_.reset();
 
   auto name = FindMediaCodecFor(config_);
   if (!name) {
@@ -1541,21 +1690,21 @@ EncoderStatus NdkVideoEncodeAccelerator::ResetMediaCodec() {
   }
 
   auto configured_size = aligned_size_.value_or(config_.input_visible_size);
-  PixelFormat pixel_format = use_surface_as_input_
-                                 ? COLOR_FORMAT_SURFACE
-                                 : COLOR_FORMAT_YUV420_SEMIPLANAR;
-  auto media_format = CreateVideoFormat(
-      config_, effective_framerate_, configured_size, effective_bitrate_,
-      encoder_color_space_, num_temporal_layers_, pixel_format);
-  if (!media_format) {
-    MEDIA_LOG(ERROR, log_) << "Fail to create media format for: "
-                           << config_.AsHumanReadableString();
-    return {EncoderStatus::Codes::kEncoderUnsupportedConfig};
-  }
+  const PixelFormat pixel_format = COLOR_FORMAT_YUV420_SEMIPLANAR;
 
   // We do the following in a loop since we may need to recreate the MediaCodec
   // if it doesn't unaligned resolutions.
   do {
+    auto media_format = CreateVideoFormat(
+        config_, log_.get(), *name, effective_framerate_, configured_size,
+        effective_bitrate_, encoder_color_space_, num_temporal_layers_,
+        pixel_format);
+    if (!media_format) {
+      MEDIA_LOG(ERROR, log_) << "Fail to create media format for: "
+                             << config_.AsHumanReadableString();
+      return {EncoderStatus::Codes::kEncoderUnsupportedConfig};
+    }
+
     media_codec_ =
         NdkMediaCodecWrapper::CreateByCodecName(*name, this, task_runner_);
     if (!media_codec_) {
@@ -1573,34 +1722,7 @@ EncoderStatus NdkVideoEncodeAccelerator::ResetMediaCodec() {
       return {EncoderStatus::Codes::kEncoderInitializationError};
     }
 
-    if (use_surface_as_input_) {
-      ANativeWindow* surface;
-      status = AMediaCodec_createInputSurface(media_codec_->codec(), &surface);
-      if (status != AMEDIA_OK) {
-        MEDIA_LOG(ERROR, log_)
-            << "Can't create input surface. Error " << status;
-        return {EncoderStatus::Codes::kEncoderInitializationError};
-      }
 
-      input_surface_ = gl::ScopedANativeWindow::Adopt(surface);
-      gl_renderer_ = std::make_unique<VideoFrameGLSurfaceRenderer>(
-          std::move(input_surface_));
-      if (command_buffer_helper_) {
-        gl_renderer_->SetSharedImageManager(
-            command_buffer_helper_->GetSharedImageManager());
-      }
-      auto gl_renderer_status = gl_renderer_->Initialize();
-      if (!gl_renderer_status.is_ok()) {
-        MEDIA_LOG(ERROR, log_) << "Failed to initialize GL renderer: "
-                               << gl_renderer_status.message();
-        return gl_renderer_status;
-      }
-
-      // We exit the "loop", since the reset of the code below deals with
-      // the layout and workarounds for input buffers, which are unused
-      // for surface input.
-      break;
-    }
 
     if (!SetInputBufferLayout(configured_size)) {
       MEDIA_LOG(ERROR, log_) << "Can't get input buffer layout from MediaCodec";
@@ -1622,10 +1744,6 @@ EncoderStatus NdkVideoEncodeAccelerator::ResetMediaCodec() {
       media_codec_->Stop();
       media_codec_.reset();
 
-      AMediaFormat_setInt32(media_format.get(), AMEDIAFORMAT_KEY_WIDTH,
-                            aligned_size_->width());
-      AMediaFormat_setInt32(media_format.get(), AMEDIAFORMAT_KEY_HEIGHT,
-                            aligned_size_->height());
       configured_size = *aligned_size_;
     }
   } while (!media_codec_);
@@ -1646,6 +1764,10 @@ EncoderStatus NdkVideoEncodeAccelerator::ResetMediaCodec() {
 
   MEDIA_LOG(INFO, log_) << "Created MediaCodec (" << name.value()
                         << ") for config: " << config_.AsHumanReadableString();
+  MEDIA_LOG(INFO, log_) << "MediaCodec input buffer layout:"
+                        << " visible size: " << configured_size.ToString()
+                        << " stride: " << input_buffer_stride_ << " "
+                        << " y-height: " << input_buffer_yplane_height_;
 
   return {EncoderStatus::Codes::kOk};
 }
@@ -1670,18 +1792,6 @@ void NdkVideoEncodeAccelerator::SetEncoderColorSpace() {
   }
 
   DVLOG(1) << "Set color space to: " << encoder_color_space_->ToString();
-}
-
-// static
-bool NdkVideoEncodeAccelerator::ShouldUseSurfaceInput() {
-  if (__builtin_available(android 35, *)) {
-    // Limit surface input to Android 15+ (API Level: 35), because we see issues
-    // on older devices.
-    if (base::FeatureList::IsEnabled(media::kSurfaceInputForAndroidVEA)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 }  // namespace media

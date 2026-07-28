@@ -5,11 +5,13 @@
 #include "components/viz/service/layers/layer_context_impl.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
@@ -39,16 +41,19 @@
 #include "cc/layers/tile_display_layer_impl.h"
 #include "cc/layers/ui_resource_layer_impl.h"
 #include "cc/layers/view_transition_content_layer_impl.h"
+#include "cc/trees/latency_info_swap_promise.h"
 #include "cc/trees/layer_tree_host_impl.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "cc/trees/layer_tree_settings.h"
 #include "cc/trees/property_tree.h"
 #include "cc/trees/task_runner_provider.h"
+#include "cc/trees/tree_synchronizer.h"
 #include "components/viz/client/client_resource_provider.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
+#include "components/viz/service/layers/viz_layer_tree_host_impl.h"
 #include "ui/gfx/animation/keyframe/keyframed_animation_curve.h"
 
 namespace viz {
@@ -212,10 +217,10 @@ base::expected<void, std::string> CreateLayer(
       break;
     }
 
-    default:
-      // TODO(rockot): Support other layer types.
-      layer = cc::SolidColorLayerImpl::Create(&tree, id);
-      break;
+    case cc::mojom::LayerType::kHeadsUpDisplay:
+    case cc::mojom::LayerType::kPicture:
+    case cc::mojom::LayerType::kVideo:
+      return base::unexpected("Invalid LayerType for CreateLayer.");
   }
   return base::ok();
 }
@@ -235,6 +240,12 @@ base::expected<void, std::string> UpdatePropertyTreeNode(
     cc::PropertyTrees& trees,
     cc::TransformNode& node,
     const mojom::TransformNode& wire) {
+  if (wire.id == cc::kSecondaryRootPropertyNodeId &&
+      wire.parent_id == cc::kInvalidPropertyNodeId) {
+    return base::unexpected(
+        "Invalid parent_id for non-root property tree node");
+  }
+
   auto& tree = trees.transform_tree_mutable();
   if (!IsOptionalPropertyTreeIndexValid(tree, wire.parent_frame_id)) {
     return base::unexpected("Invalid parent_frame_id");
@@ -367,6 +378,16 @@ base::expected<void, std::string> UpdatePropertyTreeNode(
     return base::unexpected(
         "Invalid closest_ancestor_with_shared_element_id for effect node");
   }
+  if (!IsOptionalPropertyTreeIndexValid(trees.effect_tree(),
+                                        wire.view_transition_target_id)) {
+    return base::unexpected(
+        "Invalid view_transition_target_id for effect node");
+  }
+  if (wire.render_surface_reason != cc::RenderSurfaceReason::kNone &&
+      !wire.element_id) {
+    return base::unexpected(
+        "Effect node with render surface must have a valid element_id");
+  }
   node.transform_id = wire.transform_id;
   node.clip_id = wire.clip_id;
   node.element_id = wire.element_id;
@@ -428,6 +449,7 @@ base::expected<void, std::string> UpdatePropertyTreeNode(
   node.may_have_backdrop_effect = wire.may_have_backdrop_effect;
   node.needs_effect_for_2d_scale_transform =
       wire.needs_effect_for_2d_scale_transform;
+  node.only_draws_visible_content = wire.only_draws_visible_content;
 
   return base::ok();
 }
@@ -459,13 +481,132 @@ base::expected<void, std::string> UpdatePropertyTreeNode(
   return base::ok();
 }
 
+base::expected<void, std::string> ValidateTreeIndices(
+    cc::LayerTreeImpl& layers) {
+  const cc::PropertyTrees& property_trees = *layers.property_trees();
+  const auto& transform_tree = property_trees.transform_tree();
+  const auto& clip_tree = property_trees.clip_tree();
+  const auto& effect_tree = property_trees.effect_tree();
+  const auto& scroll_tree = property_trees.scroll_tree();
+
+  for (size_t i = cc::kContentsRootPropertyNodeId; i < transform_tree.size();
+       ++i) {
+    const auto& node = transform_tree.Node(i);
+    if (!IsOptionalPropertyTreeIndexValid(transform_tree,
+                                          node.parent_frame_id)) {
+      return base::unexpected("Invalid parent_frame_id in transform tree");
+    }
+    if (node.sticky_position_constraint_id != -1 &&
+        static_cast<size_t>(node.sticky_position_constraint_id) >=
+            transform_tree.sticky_position_data().size()) {
+      return base::unexpected("Invalid sticky_position_constraint_id");
+    }
+    if (node.anchor_position_scroll_data_id != -1 &&
+        static_cast<size_t>(node.anchor_position_scroll_data_id) >=
+            transform_tree.anchor_position_scroll_data().size()) {
+      return base::unexpected("Invalid anchor_position_scroll_data_id");
+    }
+  }
+
+  for (size_t i = cc::kContentsRootPropertyNodeId; i < clip_tree.size(); ++i) {
+    const auto& node = clip_tree.Node(i);
+    if (!IsPropertyTreeIndexValid(transform_tree, node.transform_id)) {
+      return base::unexpected("Invalid transform_id in clip tree");
+    }
+    if (!IsOptionalPropertyTreeIndexValid(effect_tree,
+                                          node.pixel_moving_filter_id)) {
+      return base::unexpected("Invalid pixel_moving_filter_id in clip tree");
+    }
+  }
+
+  for (size_t i = cc::kContentsRootPropertyNodeId; i < effect_tree.size();
+       ++i) {
+    const auto& node = effect_tree.Node(i);
+    if (node.HasRenderSurface() && !node.element_id) {
+      return base::unexpected(
+          "Effect node with render surface must have a valid element_id");
+    }
+    if (!IsPropertyTreeIndexValid(transform_tree, node.transform_id)) {
+      return base::unexpected("Invalid transform_id in effect tree");
+    }
+    if (!IsPropertyTreeIndexValid(clip_tree, node.clip_id)) {
+      return base::unexpected("Invalid clip_id in effect tree");
+    }
+    if (!IsPropertyTreeIndexValid(effect_tree, node.target_id)) {
+      return base::unexpected("Invalid target_id in effect tree");
+    }
+    if (!IsOptionalPropertyTreeIndexValid(
+            effect_tree, node.closest_ancestor_with_cached_render_surface_id)) {
+      return base::unexpected(
+          "Invalid closest_ancestor_with_cached_render_surface_id in effect "
+          "tree");
+    }
+    if (!IsOptionalPropertyTreeIndexValid(
+            effect_tree, node.closest_ancestor_with_copy_request_id)) {
+      return base::unexpected(
+          "Invalid closest_ancestor_with_copy_request_id in effect tree");
+    }
+    if (!IsOptionalPropertyTreeIndexValid(
+            effect_tree, node.closest_ancestor_being_captured_id)) {
+      return base::unexpected(
+          "Invalid closest_ancestor_being_captured_id in effect tree");
+    }
+    if (!IsOptionalPropertyTreeIndexValid(
+            effect_tree, node.closest_ancestor_with_shared_element_id)) {
+      return base::unexpected(
+          "Invalid closest_ancestor_with_shared_element_id in effect tree");
+    }
+    if (!IsOptionalPropertyTreeIndexValid(effect_tree,
+                                          node.view_transition_target_id)) {
+      return base::unexpected(
+          "Invalid view_transition_target_id in effect tree");
+    }
+  }
+
+  for (size_t i = cc::kContentsRootPropertyNodeId; i < scroll_tree.size();
+       ++i) {
+    const auto& node = scroll_tree.Node(i);
+    if (node.transform_id != cc::kInvalidPropertyNodeId &&
+        !IsPropertyTreeIndexValid(transform_tree, node.transform_id)) {
+      return base::unexpected("Invalid transform_id in scroll tree");
+    }
+  }
+
+  for (auto* layer : layers) {
+    if (!IsPropertyTreeIndexValid(transform_tree,
+                                  layer->transform_tree_index())) {
+      return base::unexpected("Invalid transform_tree_index for layer");
+    }
+    if (!IsPropertyTreeIndexValid(clip_tree, layer->clip_tree_index())) {
+      return base::unexpected("Invalid clip_tree_index for layer");
+    }
+    if (!IsPropertyTreeIndexValid(effect_tree, layer->effect_tree_index())) {
+      return base::unexpected("Invalid effect_tree_index for layer");
+    }
+    if (!IsPropertyTreeIndexValid(scroll_tree, layer->scroll_tree_index())) {
+      return base::unexpected("Invalid scroll_tree_index for layer");
+    }
+  }
+
+  return base::ok();
+}
+
 template <typename TreeType>
-bool ResizePropertyTree(TreeType& tree, uint32_t num_nodes) {
-  if (num_nodes == tree.nodes().size()) {
+base::expected<bool, std::string> ResizePropertyTree(TreeType& tree,
+                                                     uint32_t num_nodes) {
+  if (num_nodes < 1) {
+    return base::unexpected("Property tree size must be at least 1");
+  }
+
+  if (num_nodes > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
+    return base::unexpected("Property tree size too large");
+  }
+
+  if (static_cast<size_t>(num_nodes) == tree.nodes().size()) {
     return false;
   }
 
-  if (num_nodes < tree.nodes().size()) {
+  if (static_cast<size_t>(num_nodes) < tree.nodes().size()) {
     tree.RemoveNodes(tree.nodes().size() - num_nodes);
     return true;
   }
@@ -494,6 +635,11 @@ base::expected<bool, std::string> UpdatePropertyTree(
       return base::unexpected("Invalid property tree node parent_id");
     }
 
+    if (wire->id > cc::kRootPropertyNodeId && wire->parent_id >= wire->id) {
+      return base::unexpected(
+          "Property tree node parent_id must be less than id");
+    }
+
     if (wire->parent_id == cc::kInvalidPropertyNodeId &&
         wire->id != cc::kRootPropertyNodeId &&
         wire->id != cc::kSecondaryRootPropertyNodeId) {
@@ -501,10 +647,19 @@ base::expected<bool, std::string> UpdatePropertyTree(
           "Invalid parent_id for non-root property tree node");
     }
 
-    auto& node = *tree.Node(wire->id);
+    auto& node = tree.MutableNode(wire->id);
     node.id = wire->id;
     node.parent_id = wire->parent_id;
     RETURN_IF_ERROR(UpdatePropertyTreeNode(trees, node, *wire));
+  }
+
+  if (cc::kRootPropertyNodeId >= static_cast<int>(tree.size())) {
+    return base::unexpected("Missing root property node");
+  }
+  auto& root_node = tree.MutableNode(cc::kRootPropertyNodeId);
+  if (root_node.parent_id != cc::kInvalidPropertyNodeId) {
+    return base::unexpected(
+        "Root property node must have an invalid parent ID");
   }
   return true;
 }
@@ -516,12 +671,29 @@ DeserializeStickyPositionData(
   std::vector<cc::StickyPositionNodeData> sticky_position_node_data;
   sticky_position_node_data.reserve(wire_data.size());
   for (auto& wire : wire_data) {
-    if (!IsPropertyTreeIndexValid(trees.scroll_tree(), wire->scroll_ancestor)) {
+    if (!IsOptionalPropertyTreeIndexValid(trees.scroll_tree(),
+                                          wire->x_scroll_ancestor) ||
+        !IsOptionalPropertyTreeIndexValid(trees.scroll_tree(),
+                                          wire->y_scroll_ancestor) ||
+        (wire->x_scroll_ancestor == cc::kInvalidPropertyNodeId &&
+         wire->y_scroll_ancestor == cc::kInvalidPropertyNodeId)) {
       return base::unexpected("Invalid scroll ancestor ID");
     }
 
+    if (!IsOptionalPropertyTreeIndexValid(
+            trees.transform_tree(), wire->nearest_node_shifting_sticky_box)) {
+      return base::unexpected("Invalid nearest_node_shifting_sticky_box");
+    }
+
+    if (!IsOptionalPropertyTreeIndexValid(
+            trees.transform_tree(),
+            wire->nearest_node_shifting_containing_block)) {
+      return base::unexpected("Invalid nearest_node_shifting_containing_block");
+    }
+
     cc::StickyPositionNodeData& data = sticky_position_node_data.emplace_back();
-    data.scroll_ancestor = wire->scroll_ancestor;
+    data.x_scroll_ancestor = wire->x_scroll_ancestor;
+    data.y_scroll_ancestor = wire->y_scroll_ancestor;
     data.constraints.is_anchored_left = wire->is_anchored_left;
     data.constraints.is_anchored_right = wire->is_anchored_right;
     data.constraints.is_anchored_top = wire->is_anchored_top;
@@ -578,6 +750,18 @@ base::expected<bool, std::string> UpdateTransformTreeProperties(
       !std::isfinite(update.device_transform_scale_factor)) {
     return base::unexpected("Invalid device_transform_scale_factor");
   }
+  for (int id : update.nodes_affected_by_outer_viewport_bounds_delta) {
+    if (!IsPropertyTreeIndexValid(tree, id)) {
+      return base::unexpected(
+          "Invalid node ID in nodes_affected_by_outer_viewport_bounds_delta");
+    }
+  }
+  for (int id : update.nodes_affected_by_safe_area_bottom) {
+    if (!IsPropertyTreeIndexValid(tree, id)) {
+      return base::unexpected(
+          "Invalid node ID in nodes_affected_by_safe_area_bottom");
+    }
+  }
   tree.set_page_scale_factor(update.page_scale_factor);
   tree.set_device_scale_factor(update.device_scale_factor);
   tree.set_device_transform_scale_factor(update.device_transform_scale_factor);
@@ -615,9 +799,15 @@ base::expected<bool, std::string> UpdateScrollTreeProperties(
   return elastic_overscroll_changed;
 }
 
-void UpdateMirrorLayerExtra(const mojom::MirrorLayerExtraPtr& extra,
-                            cc::MirrorLayerImpl& layer) {
+base::expected<void, std::string> UpdateMirrorLayerExtra(
+    const mojom::MirrorLayerExtraPtr& extra,
+    cc::MirrorLayerImpl& layer) {
+  if (extra->mirrored_layer_id != 0 &&
+      !layer.layer_tree_impl()->LayerById(extra->mirrored_layer_id)) {
+    return base::unexpected("Invalid mirrored_layer_id");
+  }
   layer.SetMirroredLayerId(extra->mirrored_layer_id);
+  return base::ok();
 }
 
 base::expected<void, std::string> UpdateNinePatchLayerExtra(
@@ -776,6 +966,12 @@ void UpdateTileDisplayLayerExtra(const mojom::TileDisplayLayerExtraPtr& extra,
   layer.SetIsBackdropFilterMask(extra->is_backdrop_filter_mask);
   layer.SetIsDirectlyCompositedImage(extra->is_directly_composited_image);
   layer.SetNearestNeighbor(extra->nearest_neighbor);
+  if (extra->has_animated_image_update_rect) {
+    layer.set_has_animated_image_update_rect();
+  }
+  if (extra->has_non_animated_image_update_rect) {
+    layer.set_has_non_animated_image_update_rect();
+  }
   layer.SetContentColorUsage(extra->content_color_usage);
   layer.SetRecordedBounds(extra->recorded_bounds);
   layer.SetProposedTilingScalesForDeletion(
@@ -867,8 +1063,9 @@ base::expected<void, std::string> UpdateLayer(const mojom::Layer& wire,
         RETURN_IF_FALSE(
             general.layer_extra && general.layer_extra->is_mirror_layer_extra(),
             "Invalid layer_extra type for MirrorLayerImpl");
-        UpdateMirrorLayerExtra(general.layer_extra->get_mirror_layer_extra(),
-                               static_cast<cc::MirrorLayerImpl&>(layer));
+        RETURN_IF_ERROR(UpdateMirrorLayerExtra(
+            general.layer_extra->get_mirror_layer_extra(),
+            static_cast<cc::MirrorLayerImpl&>(layer)));
         break;
       case cc::mojom::LayerType::kNinePatch:
         RETURN_IF_FALSE(general.layer_extra &&
@@ -945,8 +1142,17 @@ base::expected<void, std::string> UpdateLayer(const mojom::Layer& wire,
             general.layer_extra->get_view_transition_content_layer_extra(),
             static_cast<cc::ViewTransitionContentLayerImpl&>(layer));
         break;
-      default:
-        // TODO(zmo): handle other types of LayerImpl.
+      case cc::mojom::LayerType::kHeadsUpDisplay:
+      case cc::mojom::LayerType::kPicture:
+      case cc::mojom::LayerType::kVideo:
+        return base::unexpected("Invalid LayerType for UpdateLayer.");
+      case cc::mojom::LayerType::kLayer:
+        RETURN_IF_FALSE(!general.layer_extra,
+                        "Unexpected layer_extra for LayerImpl");
+        break;
+      case cc::mojom::LayerType::kSolidColor:
+        RETURN_IF_FALSE(!general.layer_extra,
+                        "Unexpected layer_extra for SolidColorLayerImpl");
         break;
     }
   }
@@ -961,52 +1167,33 @@ base::expected<void, std::string> CreateOrUpdateLayers(
     cc::LayerTreeImpl& layers) {
   TRACE_EVENT1("viz", "CreateOrUpdateLayers", "LayerCount", updates.size());
 
-  // First, apply all updates. This may create new layers or update existing
-  // ones.
+  // First add new layers to the tree
   for (auto& wire : updates) {
     cc::LayerImpl* layer = layers.LayerById(wire->id);
-    if (layer) {
-      RETURN_IF_ERROR(UpdateLayer(*wire, *layer));
-    } else {
+    if (!layer) {
       if (!layer_order) {
         // If there's a new layer, there must also be a new |layer_order|.
         return base::unexpected("Invalid layer ID");
       }
       std::unique_ptr<cc::LayerImpl> new_layer;
       RETURN_IF_ERROR(CreateLayer(host_impl, layers, *wire, new_layer));
-      cc::LayerImpl* layer_ptr = new_layer.get();
-      RETURN_IF_ERROR(UpdateLayer(*wire, *layer_ptr));
       layers.AddLayer(std::move(new_layer));
     }
   }
 
+  // Reorder layers if necessary; obsolete layers will be deleted.
   if (layer_order) {
-    cc::OwnedLayerImplList old_layers = layers.DetachLayers();
-    std::vector<std::pair<int, size_t>> layer_indices_vector;
-    layer_indices_vector.reserve(old_layers.size());
-    for (size_t i = 0; i < old_layers.size(); ++i) {
-      layer_indices_vector.emplace_back(old_layers[i]->id(), i);
-    }
+    RETURN_IF_ERROR(cc::TreeSynchronizer::SynchronizeLayerOrder(
+        layer_order.value(), layers));
+  }
 
-    // Layer ids should be unique here, so doing a std::sort and
-    // base::sorted_unique initializer is the most efficient, avoiding
-    // a std::stable_sort inside base::flat_map.
-    std::sort(layer_indices_vector.begin(), layer_indices_vector.end());
-    base::flat_map<int, size_t> layer_indices(base::sorted_unique,
-                                              std::move(layer_indices_vector));
-
-    for (auto id : *layer_order) {
-      auto it = layer_indices.find(id);
-      if (it == layer_indices.end()) {
-        return base::unexpected("Invalid or duplicate layer ID");
-      }
-      size_t index = it->second;
-      auto& layer = old_layers[index];
-      if (!layer) {
-        return base::unexpected("Invalid or duplicate layer ID");
-      }
-      layers.AddLayer(std::move(layer));
+  // Apply layer updates
+  for (auto& wire : updates) {
+    cc::LayerImpl* layer = layers.LayerById(wire->id);
+    if (!layer) {
+      return base::unexpected("Layer ID not found after synchronization");
     }
+    RETURN_IF_ERROR(UpdateLayer(*wire, *layer));
   }
 
   return base::ok();
@@ -1030,11 +1217,16 @@ base::expected<void, std::string> UpdateViewportPropertyIds(
   if (!IsOptionalPropertyTreeIndexValid(scroll_tree, update.inner_scroll)) {
     return base::unexpected("Invalid inner_scroll");
   }
-  if (update.inner_scroll == cc::kInvalidPropertyNodeId &&
-      (update.outer_clip != cc::kInvalidPropertyNodeId ||
-       update.outer_scroll != cc::kInvalidPropertyNodeId)) {
-    return base::unexpected(
-        "Cannot set outer_clip or outer_scroll without valid inner_scroll");
+  if (update.inner_scroll == cc::kInvalidPropertyNodeId) {
+    if (update.outer_clip != cc::kInvalidPropertyNodeId ||
+        update.outer_scroll != cc::kInvalidPropertyNodeId) {
+      return base::unexpected(
+          "Cannot set outer_clip or outer_scroll without valid inner_scroll");
+    }
+  } else {
+    if (update.outer_scroll == cc::kInvalidPropertyNodeId) {
+      return base::unexpected("Must set outer_scroll if inner_scroll is set");
+    }
   }
   if (!IsOptionalPropertyTreeIndexValid(clip_tree, update.outer_clip)) {
     return base::unexpected("Invalid outer_clip");
@@ -1042,6 +1234,7 @@ base::expected<void, std::string> UpdateViewportPropertyIds(
   if (!IsOptionalPropertyTreeIndexValid(scroll_tree, update.outer_scroll)) {
     return base::unexpected("Invalid outer_scroll");
   }
+
   layers.SetViewportPropertyIds(cc::ViewportPropertyIds{
       .overscroll_elasticity_transform = update.overscroll_elasticity_transform,
       .page_scale_transform = update.page_scale_transform,
@@ -1115,6 +1308,25 @@ base::expected<void, std::string> DeserializeTiling(
   tiling.SetTileSize(wire.tile_size);
   tiling.SetTilingRect(wire.tiling_rect);
   for (auto& wire_tile : wire.tiles) {
+    const bool is_out_of_bounds =
+        wire_tile->column_index >=
+            static_cast<uint32_t>(tiling.tiling_data()->num_tiles_x()) ||
+        wire_tile->row_index >=
+            static_cast<uint32_t>(tiling.tiling_data()->num_tiles_y());
+    const bool is_deleted = wire_tile->contents->is_missing_reason() &&
+                            wire_tile->contents->get_missing_reason() ==
+                                cc::mojom::MissingTileReason::kTileDeleted;
+    // Deleted tiles (both in-bounds and out-of-bounds) are not allowed to track
+    // damage.
+    if (is_deleted && wire_tile->update_damage) {
+      return base::unexpected("Deleted tile cannot update damage");
+    }
+
+    if (is_out_of_bounds) {
+      if (!is_deleted) {
+        return base::unexpected("Invalid tile index in Tiling");
+      }
+    }
     ASSIGN_OR_RETURN(auto contents,
                      DeserializeTileContents(host_impl, *wire_tile->contents));
     tiling.SetTileContents(
@@ -1181,8 +1393,8 @@ gfx::StepsTimingFunction::StepPosition DeserializeTimingStepPosition(
   }
 }
 
-std::unique_ptr<gfx::TimingFunction> DeserializeTimingFunction(
-    mojom::TimingFunction& wire) {
+base::expected<std::unique_ptr<gfx::TimingFunction>, std::string>
+DeserializeTimingFunction(mojom::TimingFunction& wire) {
   switch (wire.which()) {
     case mojom::TimingFunction::Tag::kLinear: {
       const auto& wire_points = wire.get_linear();
@@ -1194,6 +1406,10 @@ std::unique_ptr<gfx::TimingFunction> DeserializeTimingFunction(
       if (points.empty()) {
         return gfx::LinearTimingFunction::Create();
       }
+      if (points.size() < 2) {
+        return base::unexpected(
+            "Invalid number of points: must be at least 2 for LinearTiming");
+      }
       return gfx::LinearTimingFunction::Create(std::move(points));
     }
     case mojom::TimingFunction::Tag::kCubicBezier: {
@@ -1203,6 +1419,12 @@ std::unique_ptr<gfx::TimingFunction> DeserializeTimingFunction(
     }
     case mojom::TimingFunction::Tag::kSteps: {
       const auto& steps = *wire.get_steps();
+      if (steps.num_steps == 0 ||
+          (steps.step_position == mojom::TimingStepPosition::kJumpNone &&
+           steps.num_steps <= 1)) {
+        return base::unexpected(
+            "Invalid num_steps: must be greater than 0 (or 1 for JumpNone)");
+      }
       return gfx::StepsTimingFunction::Create(
           base::saturated_cast<int32_t>(steps.num_steps),
           DeserializeTimingStepPosition(steps.step_position));
@@ -1355,19 +1577,26 @@ base::expected<void, std::string> DeserializeAnimationCurve(
     return base::unexpected("Invalid playback_rate: cannot be 0");
   }
 
-  curve->SetTimingFunction(DeserializeTimingFunction(*wire.timing_function));
+  ASSIGN_OR_RETURN(auto timing_function,
+                   DeserializeTimingFunction(*wire.timing_function));
+  curve->SetTimingFunction(std::move(timing_function));
   curve->set_scaled_duration(wire.scaled_duration);
   for (const auto& wire_keyframe : wire.keyframes) {
     std::unique_ptr<gfx::TimingFunction> keyframe_timing_function;
     if (wire_keyframe->timing_function) {
-      keyframe_timing_function =
-          DeserializeTimingFunction(*wire_keyframe->timing_function);
+      ASSIGN_OR_RETURN(
+          keyframe_timing_function,
+          DeserializeTimingFunction(*wire_keyframe->timing_function));
     }
     ASSIGN_OR_RETURN(auto keyframe,
                      DeserializeKeyframe<CurveType>(
                          *wire_keyframe->value, wire_keyframe->start_time,
                          std::move(keyframe_timing_function)));
     curve->AddKeyframe(std::move(keyframe));
+  }
+
+  if (wire.group_id == cc::KeyframeModel::kInvalidGroup) {
+    return base::unexpected("Invalid group_id");
   }
 
   auto model = cc::KeyframeModel::Create(
@@ -1378,7 +1607,8 @@ base::expected<void, std::string> DeserializeAnimationCurve(
   model->set_playback_rate(wire.playback_rate);
   model->set_iterations(wire.iterations);
   model->set_iteration_start(wire.iteration_start);
-  model->set_time_offset(wire.time_offset);
+  model->set_start_delay(wire.start_delay);
+  model->set_hold_time(wire.hold_time);
   model->set_element_id(wire.element_id);
   animation.keyframe_effect()->AddKeyframeModel(std::move(model));
   return base::ok();
@@ -1416,15 +1646,8 @@ base::expected<void, std::string> DeserializeAnimation(
                 *wire_model, *animation));
         break;
       case mojom::AnimationKeyframeValue::Tag::kSize:
-        RETURN_IF_ERROR(
-            DeserializeAnimationCurve<gfx::KeyframedSizeAnimationCurve>(
-                *wire_model, *animation));
-        break;
       case mojom::AnimationKeyframeValue::Tag::kRect:
-        RETURN_IF_ERROR(
-            DeserializeAnimationCurve<gfx::KeyframedRectAnimationCurve>(
-                *wire_model, *animation));
-        break;
+        return base::unexpected("Unsupported keyframe value type");
       case mojom::AnimationKeyframeValue::Tag::kTransform:
         RETURN_IF_ERROR(
             DeserializeAnimationCurve<gfx::KeyframedTransformAnimationCurve>(
@@ -1513,7 +1736,7 @@ LayerContextImpl::LayerContextImpl(
       task_runner_provider_(cc::TaskRunnerProvider::CreateForDisplayTree(
           base::SingleThreadTaskRunner::GetCurrentDefault())),
       rendering_stats_(cc::RenderingStatsInstrumentation::Create()),
-      host_impl_(cc::LayerTreeHostImpl::Create(
+      host_impl_(VizLayerTreeHostImpl::Create(
           GetDisplayTreeSettings(std::move(settings)),
           this,
           task_runner_provider_.get(),
@@ -1523,7 +1746,7 @@ LayerContextImpl::LayerContextImpl(
           /*dark_mode_filter=*/nullptr,
           GenerateNextDisplayTreeId(),
           /*image_worker_task_runner=*/nullptr,
-          /*scheduling_client=*/nullptr)) {
+          /*scheduling_delegate=*/nullptr)) {
   if (receiver_pipe.is_valid() && client_pipe.is_valid()) {
     receiver_ = std::make_unique<mojo::AssociatedReceiver<mojom::LayerContext>>(
         this, std::move(receiver_pipe));
@@ -1614,8 +1837,9 @@ void LayerContextImpl::SetNeedsPrepareTilesOnImplThread() {
   NOTREACHED();
 }
 
-void LayerContextImpl::SetNeedsCommitOnImplThread(bool urgent) {
-  NOTIMPLEMENTED();
+void LayerContextImpl::SetNeedsCommitOnImplThread(cc::BeginMainFrameReason,
+                                                  bool urgent) {
+  NOTREACHED();
 }
 
 void LayerContextImpl::SetVideoNeedsBeginFrames(bool needs_begin_frames) {}
@@ -1765,11 +1989,18 @@ void LayerContextImpl::UpdateDisplayTree(mojom::LayerTreeUpdatePtr update) {
   const BeginFrameArgs begin_frame_args = update->begin_frame_args;
   auto start_update_display_tree = base::TimeTicks::Now();
   const bool frame_has_damage = update->frame_has_damage;
-  host_impl_->AddDamageDataCrashKeys(update->damage_reasons_bit_mask,
-                                     /*is_viz=*/false);
+  const bool is_flush = update->is_flush;
   auto result = DoUpdateDisplayTree(std::move(update));
   if (!result.has_value()) {
     HandleBadMojoMessage("UpdateDisplayTree", result.error());
+    return;
+  }
+
+  // If this is a flush-only update, we only want to synchronize the state
+  // and return any resources that were released. We skip the draw and
+  // expensive post-sync recomputations.
+  if (is_flush) {
+    DoReturnResources();
     return;
   }
 
@@ -1784,20 +2015,38 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
     mojom::LayerTreeUpdatePtr update) {
   TRACE_EVENT0("viz", "LayerContextImpl::DoUpdateDisplayTree");
   cc::LayerTreeImpl& layers = *host_impl_->active_tree();
+  cc::PropertyTrees& property_trees = *layers.property_trees();
+
+  // Any update to the display tree requires a new draw properties update if
+  // validation fails and returns early, because we may have already mutated
+  // some state (like taking render surfaces or resizing trees).
+  base::ScopedClosureRunner cleanup(base::BindOnce(
+      [](cc::LayerTreeImpl* layers) {
+        layers->set_needs_update_draw_properties();
+      },
+      &layers));
+
+  std::vector<std::unique_ptr<cc::RenderSurfaceImpl>> old_render_surfaces;
+  property_trees.effect_tree_mutable().TakeRenderSurfaces(&old_render_surfaces);
 
   // We resize all property trees first, as layers and property tree nodes
   // themselves may index one or more other property tree nodes. These indices
   // need to be validated, and the dependency can be cyclic (e.g. scroll nodes
   // may index transform nodes and transform nodes may index scroll nodes).
-  cc::PropertyTrees& property_trees = *layers.property_trees();
-  const bool transform_size_changed = ResizePropertyTree(
-      property_trees.transform_tree_mutable(), update->num_transform_nodes);
-  const bool clip_size_changed = ResizePropertyTree(
-      property_trees.clip_tree_mutable(), update->num_clip_nodes);
-  const bool effect_size_changed = ResizePropertyTree(
-      property_trees.effect_tree_mutable(), update->num_effect_nodes);
-  const bool scroll_size_changed = ResizePropertyTree(
-      property_trees.scroll_tree_mutable(), update->num_scroll_nodes);
+  ASSIGN_OR_RETURN(const bool transform_size_changed,
+                   ResizePropertyTree(property_trees.transform_tree_mutable(),
+                                      update->num_transform_nodes));
+  ASSIGN_OR_RETURN(const bool clip_size_changed,
+                   ResizePropertyTree(property_trees.clip_tree_mutable(),
+                                      update->num_clip_nodes));
+  const bool effect_size_increased =
+      update->num_effect_nodes > property_trees.effect_tree().nodes().size();
+  ASSIGN_OR_RETURN(const bool effect_size_changed,
+                   ResizePropertyTree(property_trees.effect_tree_mutable(),
+                                      update->num_effect_nodes));
+  ASSIGN_OR_RETURN(const bool scroll_size_changed,
+                   ResizePropertyTree(property_trees.scroll_tree_mutable(),
+                                      update->num_scroll_nodes));
 
   // Transform tree properties need to update before its nodes are updated, as
   // the nodes may index properties on the tree itself (e.g. scroll
@@ -1846,6 +2095,10 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
       UpdatePropertyTree(property_trees, property_trees.scroll_tree_mutable(),
                          update->scroll_nodes));
 
+  // Property tree updates may have invalidated the existing viewport property
+  // ID values. Update them now.
+  RETURN_IF_ERROR(UpdateViewportPropertyIds(layers, property_trees, *update));
+
   // Pull any copy output requests that came in over the wire.
   for (const auto& wire : update->effect_nodes) {
     for (auto&& copy_request : wire->copy_output_requests) {
@@ -1855,10 +2108,8 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
   }
 
   if (update->surface_ranges) {
-    base::flat_set<SurfaceRange> surface_ranges;
-    for (auto& surface_range : *(update->surface_ranges)) {
-      surface_ranges.insert(surface_range);
-    }
+    base::flat_set<SurfaceRange> surface_ranges(std::from_range,
+                                                *(update->surface_ranges));
     layers.ClearSurfaceRanges();
     layers.SetSurfaceRanges(surface_ranges);
   }
@@ -1877,13 +2128,21 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
       if (auto* layer =
               layers.LayerByElementId(wire->backdrop_mask_element_id)) {
         if (layer->GetLayerType() != cc::mojom::LayerType::kTileDisplay) {
-          return base::unexpected(
-              "Invalid backdrop_mask_element_id: layer is not a "
-              "TileDisplayLayer");
+          return base::unexpected(base::StrCat(
+              {"Invalid backdrop_mask_element_id (",
+               base::NumberToString(
+                   wire->backdrop_mask_element_id.GetInternalValue()),
+               ") on effect node ", base::NumberToString(wire->id),
+               ": layer is not a TileDisplayLayer"}));
         }
       } else {
-        return base::unexpected(
-            "Invalid backdrop_mask_element_id: layer not found");
+        return base::unexpected(base::StrCat(
+            {"Invalid backdrop_mask_element_id (",
+             base::NumberToString(
+                 wire->backdrop_mask_element_id.GetInternalValue()),
+             ") on effect node ", base::NumberToString(wire->id),
+             ": layer not found. Total layers: ",
+             base::NumberToString(layers.NumLayers())}));
       }
     }
   }
@@ -1891,14 +2150,33 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
   if (update->local_surface_id_from_parent) {
     layers.SetLocalSurfaceIdFromParent(*update->local_surface_id_from_parent);
   }
-  host_impl_->set_current_local_surface_id_from_client(
-      update->current_local_surface_id);
-  if (update->target_local_surface_id) {
-    host_impl_->SetTargetLocalSurfaceId(*update->target_local_surface_id);
+
+  // Regular updates (non-flush) must provide a valid current LocalSurfaceId.
+  // During backgrounding (flush updates), this may be omitted if the renderer
+  // no longer has a valid ID.
+  if (!update->is_flush) {
+    RETURN_IF_FALSE(update->current_local_surface_id,
+                    "Missing current_local_surface_id in non-flush update");
+  }
+
+  if (update->current_local_surface_id) {
+    host_impl_->set_current_local_surface_id_from_client(
+        *update->current_local_surface_id);
   }
 
   RETURN_IF_FALSE(update->next_frame_token > 0, "invalid frame token");
   host_impl_->set_next_frame_token_from_client(update->next_frame_token);
+
+  host_impl_->set_tracked_element_rects_from_client(
+      std::move(update->tracked_element_rects));
+
+  for (const auto& latency : update->latency_info) {
+    if (latency.terminated()) {
+      return base::unexpected("Received already-terminated LatencyInfo");
+    }
+    layers.QueuePinnedSwapPromise(
+        std::make_unique<cc::LatencyInfoSwapPromise>(latency));
+  }
 
   host_impl_->set_send_frame_token_to_embedder(
       update->send_frame_token_to_embedder);
@@ -1911,6 +2189,12 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
   } else {
     layers.clear_delegated_ink_metadata();
   }
+
+  if (update->screenshot_destination) {
+    host_impl_->SetScreenshotDestinationToken(
+        update->screenshot_destination->value());
+  }
+
   host_impl_->SetMayThrottleIfUndrawnFrames(
       update->may_throttle_if_undrawn_frames);
   host_impl_->set_viewport_mobile_optimized(
@@ -1932,7 +2216,10 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
     }
   }
 
-  // This needs to happen before SetPageSvaleFactorAndLimitsForDisplayTree().
+  // Call UpdateViewportPropertyIds() to set layer properties (namely,
+  // is_inner_viewport_scroll_layer_). This needs to happen after
+  // CreateOrUpdateLayers() sets layer element IDs and before
+  // SetPageScaleFactorAndLimitsForDisplayTree().
   RETURN_IF_ERROR(UpdateViewportPropertyIds(layers, property_trees, *update));
 
   layers.set_background_color(update->background_color);
@@ -1977,21 +2264,23 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
       !std::isfinite(update->max_safe_area_inset_bottom)) {
     return base::unexpected("Invalid max safe area inset bottom");
   }
-  if (update->browser_controls_params.top_controls_height < 0 ||
-      !std::isfinite(update->browser_controls_params.top_controls_height) ||
-      update->browser_controls_params.top_controls_min_height < 0 ||
+  if (!std::isfinite(update->browser_controls_params.top_controls_height) ||
       !std::isfinite(update->browser_controls_params.top_controls_min_height) ||
-      update->browser_controls_params.bottom_controls_height < 0 ||
       !std::isfinite(update->browser_controls_params.bottom_controls_height) ||
-      update->browser_controls_params.bottom_controls_min_height < 0 ||
       !std::isfinite(
-          update->browser_controls_params.bottom_controls_min_height) ||
-      update->browser_controls_params.top_controls_min_height >
-          update->browser_controls_params.top_controls_height ||
-      update->browser_controls_params.bottom_controls_min_height >
-          update->browser_controls_params.bottom_controls_height) {
+          update->browser_controls_params.bottom_controls_min_height)) {
     return base::unexpected("Invalid browser controls params");
   }
+  update->browser_controls_params.top_controls_height =
+      std::max(0.f, update->browser_controls_params.top_controls_height);
+  update->browser_controls_params.top_controls_min_height =
+      std::clamp(update->browser_controls_params.top_controls_min_height, 0.f,
+                 update->browser_controls_params.top_controls_height);
+  update->browser_controls_params.bottom_controls_height =
+      std::max(0.f, update->browser_controls_params.bottom_controls_height);
+  update->browser_controls_params.bottom_controls_min_height =
+      std::clamp(update->browser_controls_params.bottom_controls_min_height,
+                 0.f, update->browser_controls_params.bottom_controls_height);
   layers.SetBrowserControlsParams(update->browser_controls_params);
   host_impl_->browser_controls_manager()->SetOffsetTagModifications(
       update->browser_controls_offset_tag_modifications);
@@ -2005,6 +2294,7 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
       update->top_controls_shown_ratio, update->bottom_controls_shown_ratio);
 
   host_impl_->SetViewportDamage(update->viewport_damage_rect);
+  host_impl_->SetRootLayerDamageRect(update->root_layer_damage_rect);
   host_impl_->SetDebugState(update->debug_state);
 
   for (auto& ui_resource_request : update->ui_resource_requests) {
@@ -2046,6 +2336,16 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
     }
   }
 
+  const bool viewport_deltas_changed =
+      property_trees.inner_viewport_container_bounds_delta() !=
+          update->inner_viewport_container_bounds_delta ||
+      property_trees.outer_viewport_container_bounds_delta() !=
+          update->outer_viewport_container_bounds_delta;
+  property_trees.SetInnerViewportContainerBoundsDelta(
+      update->inner_viewport_container_bounds_delta);
+  property_trees.SetOuterViewportContainerBoundsDelta(
+      update->outer_viewport_container_bounds_delta);
+
   property_trees.UpdateChangeTracking();
   property_trees.transform_tree_mutable().set_needs_update(
       transform_size_changed || transform_properties_changed ||
@@ -2058,31 +2358,39 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
       effect_size_changed || effect_nodes_changed ||
       property_trees.effect_tree().needs_update());
 
+  const bool any_tree_except_effect_size_changed =
+      viewport_deltas_changed || transform_size_changed ||
+      transform_nodes_changed || clip_size_changed || clip_nodes_changed ||
+      effect_nodes_changed || scroll_size_changed || scroll_nodes_changed;
   const bool any_tree_changed =
-      transform_size_changed || transform_nodes_changed || clip_size_changed ||
-      clip_nodes_changed || effect_size_changed || effect_nodes_changed ||
-      scroll_size_changed || scroll_nodes_changed;
+      any_tree_except_effect_size_changed || effect_size_changed;
   property_trees.set_changed(any_tree_changed);
   if (any_tree_changed) {
     property_trees.ResetCachedData();
-    layers.set_needs_update_draw_properties();
+
+    // Any property tree change normally requires a draw property update.
+    // However, if the only change is that some effect nodes were removed, we
+    // can defer the update until we determine if any render surfaces were
+    // removed. This is handled below.
+    if (any_tree_except_effect_size_changed || effect_size_increased) {
+      layers.set_needs_update_draw_properties();
+    }
   }
 
-  std::vector<std::unique_ptr<cc::RenderSurfaceImpl>> old_render_surfaces;
-  property_trees.effect_tree_mutable().TakeRenderSurfaces(&old_render_surfaces);
+  // Ensure all property tree and layer indices are valid.
+  RETURN_IF_ERROR(ValidateTreeIndices(layers));
+
   const bool render_surfaces_changed =
       property_trees.effect_tree_mutable().CreateOrReuseRenderSurfaces(
           &old_render_surfaces, &layers);
-  if (effect_size_changed || render_surfaces_changed) {
-    // TODO(rockot): Forcing draw property updates here isn't strictly necessary
-    // when `effect_size_changed` is true unless it's because we've removed at
-    // least one EffectNode that was inducing a render surface.
+  if (render_surfaces_changed) {
     layers.set_needs_update_draw_properties();
   }
   // Set this last, making sure renderer side state isn't overwritten by other
   // updates. As this is a transient property, we should set but not clear it.
   if (update->full_tree_damaged) {
     property_trees.set_full_tree_damaged(true);
+    layers.set_needs_update_draw_properties();
   }
 
   // Safe down-cast: AnimationHost is the only subclass of MutatorHost.
@@ -2095,10 +2403,11 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTree(
   // flagging draw properties as needing an update when no relevant properties
   // have changed.
   if (any_tree_changed || scroll_properties_changed ||
-      transform_layer_properties_changed) {
+      transform_layer_properties_changed || update->full_tree_damaged) {
     layers.MoveChangeTrackingToLayers();
   }
 
+  cleanup.ReplaceClosure(base::DoNothing());
   return base::ok();
 }
 
@@ -2199,6 +2508,24 @@ base::expected<void, std::string> LayerContextImpl::DoUpdateDisplayTiling(
                              static_cast<cc::TileDisplayLayerImpl&>(*layer),
                              *tiling);
   }
+  return base::ok();
+}
+
+void LayerContextImpl::SetTargetLocalSurfaceId(
+    const LocalSurfaceId& target_local_surface_id) {
+  CHECK(receiver_);
+  auto result = DoSetTargetLocalSurfaceId(target_local_surface_id);
+  if (!result.has_value()) {
+    HandleBadMojoMessage("SetTargetLocalSurfaceId", result.error());
+  }
+}
+
+base::expected<void, std::string> LayerContextImpl::DoSetTargetLocalSurfaceId(
+    const LocalSurfaceId& target_local_surface_id) {
+  if (!target_local_surface_id.is_valid()) {
+    return base::unexpected("Invalid target_local_surface_id");
+  }
+  host_impl_->SetTargetLocalSurfaceId(target_local_surface_id);
   return base::ok();
 }
 

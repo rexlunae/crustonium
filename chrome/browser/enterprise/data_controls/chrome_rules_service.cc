@@ -6,9 +6,11 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/enterprise/data_controls/core/browser/prefs.h"
 #include "components/prefs/pref_service.h"
+
+#include "chrome/browser/glic/host/guest_util.h"
 
 namespace data_controls {
 
@@ -32,24 +34,13 @@ Verdict ChromeRulesService::GetPrintVerdict(
 
 Verdict ChromeRulesService::GetPasteVerdict(
     const content::ClipboardEndpoint& source,
-    const content::ClipboardEndpoint& destination) const {
+    const content::ClipboardEndpoint& destination,
+    const ui::ClipboardMetadata& metadata) const {
   return GetVerdict(Rule::Restriction::kClipboard,
                     {
-                        .source = GetAsActionSource(source),
+                        .source = GetAsActionSource(source, metadata),
                         .destination = GetAsActionDestination(destination),
                     });
-}
-
-bool ChromeRulesService::BlockScreenshots(const GURL& url) const {
-  return GetVerdict(Rule::Restriction::kScreenshot,
-                    {
-                        .source =
-                            {
-                                .url = url,
-                                .incognito = incognito_profile(),
-                            },
-                    })
-             .level() == Rule::Level::kBlock;
 }
 
 bool ChromeRulesService::incognito_profile() const {
@@ -57,12 +48,20 @@ bool ChromeRulesService::incognito_profile() const {
 }
 
 ActionSource ChromeRulesService::GetAsActionSource(
-    const content::ClipboardEndpoint& endpoint) const {
+    const content::ClipboardEndpoint& endpoint,
+    const ui::ClipboardMetadata& metadata) const {
+  ActionSource action;
   if (!endpoint.browser_context()) {
-    return {.os_clipboard = true};
+    action.os_clipboard = true;
+  } else {
+    action = ExtractPasteActionContext<ActionSource>(endpoint);
   }
 
-  return ExtractPasteActionContext<ActionSource>(endpoint);
+  if (metadata.size.has_value()) {
+    action.content_size = base::saturated_cast<int64_t>(*metadata.size);
+  }
+
+  return action;
 }
 
 ActionDestination ChromeRulesService::GetAsActionDestination(
@@ -83,6 +82,10 @@ ActionSourceOrDestination ChromeRulesService::ExtractPasteActionContext(
     action.incognito = Profile::FromBrowserContext(endpoint.browser_context())
                            ->IsIncognitoProfile();
     action.other_profile = endpoint.browser_context() != profile_;
+  }
+  if (endpoint.web_contents() && (glic::IsGlicGuest(endpoint.web_contents()) ||
+                                  glic::IsGlicWebUI(endpoint.web_contents()))) {
+    action.gemini_in_chrome = true;
   }
   return action;
 }

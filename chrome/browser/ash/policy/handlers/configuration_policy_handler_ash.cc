@@ -31,7 +31,6 @@
 #include "chrome/browser/web_applications/policy/app_service_web_app_policy.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/components/onc/onc_signature.h"
 #include "chromeos/components/onc/onc_utils.h"
@@ -390,7 +389,7 @@ void PinnedLauncherAppsPolicyHandler::ApplyList(base::ListValue filtered_list,
         ChromeShelfPrefs::kPinnedAppsPrefAppIDKey, std::move(entry));
     pinned_apps_list.Append(std::move(app_dict));
   }
-  prefs->SetValue(prefs::kPolicyPinnedLauncherApps,
+  prefs->SetValue(ash::prefs::kPolicyPinnedLauncherApps,
                   base::Value(std::move(pinned_apps_list)));
 }
 
@@ -453,8 +452,8 @@ bool DefaultHandlersForFileExtensionsPolicyHandler::CheckPolicySettings(
   return true;
 }
 
-// Applies an inverse mapping to `prefs::kDefaultHandlersForFileExtensions`:
-// file_extension -> id.
+// Applies an inverse mapping to
+// `ash::prefs::kDefaultHandlersForFileExtensions`: file_extension -> id.
 void DefaultHandlersForFileExtensionsPolicyHandler::ApplyPolicySettings(
     const PolicyMap& policies,
     PrefValueMap* prefs) {
@@ -480,7 +479,7 @@ void DefaultHandlersForFileExtensionsPolicyHandler::ApplyPolicySettings(
     }
   }
 
-  prefs->SetValue(prefs::kDefaultHandlersForFileExtensions,
+  prefs->SetValue(ash::prefs::kDefaultHandlersForFileExtensions,
                   base::Value(std::move(pref_mapping)));
 }
 

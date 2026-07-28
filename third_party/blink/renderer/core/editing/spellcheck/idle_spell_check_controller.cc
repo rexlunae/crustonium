@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/scheduler/scripted_idle_task_controller.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 
 namespace blink {
@@ -69,7 +70,7 @@ IdleSpellCheckController::~IdleSpellCheckController() = default;
 
 void IdleSpellCheckController::Trace(Visitor* visitor) const {
   visitor->Trace(cold_mode_requester_);
-  visitor->Trace(spell_check_requeseter_);
+  visitor->Trace(spell_check_requester_);
   ExecutionContextLifecycleObserver::Trace(visitor);
 }
 
@@ -80,7 +81,7 @@ IdleSpellCheckController::IdleSpellCheckController(
       idle_callback_handle_(kInvalidHandle),
       cold_mode_requester_(
           MakeGarbageCollected<ColdModeSpellCheckRequester>(window)),
-      spell_check_requeseter_(requester) {}
+      spell_check_requester_(requester) {}
 
 LocalDOMWindow& IdleSpellCheckController::GetWindow() const {
   DCHECK(GetExecutionContext());
@@ -112,7 +113,21 @@ void IdleSpellCheckController::Deactivate() {
     cold_mode_timer_.Cancel();
   cold_mode_requester_->Deactivate();
   DisposeIdleCallback();
-  spell_check_requeseter_->Deactivate();
+  spell_check_requester_->Deactivate();
+
+  // Advance the undo step sequence so that a later hot mode invocation only
+  // checks undo steps registered after the controller was reactivated.
+  if (GetExecutionContext() &&
+      RuntimeEnabledFeatures::SkipStaleUndoStepsInIdleSpellCheckEnabled()) {
+    if (const LocalFrame* frame = GetWindow().GetFrame()) {
+      const auto undo_steps = frame->GetEditor().GetUndoStack().UndoSteps();
+      if (undo_steps.begin() != undo_steps.end()) {
+        last_processed_undo_step_sequence_ =
+            std::max(last_processed_undo_step_sequence_,
+                     (*undo_steps.begin())->SequenceNumber());
+      }
+    }
+  }
 }
 
 void IdleSpellCheckController::RespondToChangedSelection() {
@@ -125,7 +140,7 @@ void IdleSpellCheckController::RespondToChangedSelection() {
   // For more see:
   // https://explainers-by-googlers.github.io/user-dictionary-leaks/
   const Element* focused_element = GetDocument().FocusedElement();
-  if (focused_element && !focused_element->WasLastFocusFromUserGesture() &&
+  if ((!focused_element || !focused_element->WasLastFocusFromUserGesture()) &&
       !base::FeatureList::IsEnabled(
           features::kUnrestrictSpellingAndGrammarForTesting)) {
     Deactivate();
@@ -266,7 +281,7 @@ bool IdleSpellCheckController::NeedsHotModeCheckingUnderCurrentSelection()
   // already fully checked the current element.
   DCHECK(needs_invocation_for_changed_selection_);
   const Position& position =
-      GetWindow().GetFrame()->Selection().GetSelectionInDOMTree().Focus();
+      GetWindow().GetFrame()->Selection().GetSelectionInDomTree().Focus();
   const auto* element = DynamicTo<Element>(HighestEditableRoot(position));
   if (!element || !element->isConnected())
     return false;
@@ -279,11 +294,11 @@ void IdleSpellCheckController::HotModeInvocation(IdleDeadline* deadline) {
   // TODO(xiaochengh): Figure out if this has any performance impact.
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
 
-  HotModeSpellCheckRequester requester(*spell_check_requeseter_);
+  HotModeSpellCheckRequester requester(*spell_check_requester_);
 
   if (NeedsHotModeCheckingUnderCurrentSelection()) {
     requester.CheckSpellingAt(
-        GetWindow().GetFrame()->Selection().GetSelectionInDOMTree().Focus());
+        GetWindow().GetFrame()->Selection().GetSelectionInDomTree().Focus());
   }
 
   const uint64_t watermark = last_processed_undo_step_sequence_;
@@ -322,7 +337,7 @@ void IdleSpellCheckController::Invoke(IdleDeadline* deadline) {
   if (RuntimeEnabledFeatures::
           CheckForCanonicalPositionInIdleSpellCheckEnabled()) {
     Position selection_focus =
-        GetWindow().GetFrame()->Selection().GetSelectionInDOMTree().Focus();
+        GetWindow().GetFrame()->Selection().GetSelectionInDomTree().Focus();
     if (selection_focus) {
       GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
       if (CanonicalPositionOf(EphemeralRange(selection_focus).StartPosition())

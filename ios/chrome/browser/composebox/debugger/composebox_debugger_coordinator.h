@@ -5,7 +5,9 @@
 #ifndef IOS_CHROME_BROWSER_COMPOSEBOX_DEBUGGER_COMPOSEBOX_DEBUGGER_COORDINATOR_H_
 #define IOS_CHROME_BROWSER_COMPOSEBOX_DEBUGGER_COMPOSEBOX_DEBUGGER_COORDINATOR_H_
 
+#import "ios/chrome/browser/composebox/debugger/composebox_debugger_logger.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
+#import "ios/chrome/browser/tab_picker/public/tab_picker_logger.h"
 
 @protocol ComposeboxDebuggerCoordinatorDelegate <NSObject>
 
@@ -13,7 +15,8 @@
 
 @end
 
-@interface ComposeboxDebuggerCoordinator : ChromeCoordinator
+@interface ComposeboxDebuggerCoordinator
+    : ChromeCoordinator <ComposeboxDebuggerLogger, TabPickerLogger>
 
 @property(nonatomic, weak) id<ComposeboxDebuggerCoordinatorDelegate> delegate;
 

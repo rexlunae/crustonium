@@ -20,6 +20,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.content_public.browser.MessagePayload;
 import org.chromium.content_public.browser.MessagePort;
+import org.chromium.js_injection.mojom.DocumentInjectionTime;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -77,10 +78,6 @@ public class SharedWebViewChromium {
         return mAwContents.getRenderProcess();
     }
 
-    public void init(SharedWebViewContentsClientAdapter contentsClientAdapter) {
-        mContentsClientAdapter = contentsClientAdapter;
-    }
-
     public void initForReal(AwContents awContents) {
         assert ThreadUtils.runningOnUiThread();
 
@@ -89,6 +86,8 @@ public class SharedWebViewChromium {
                     "Cannot create multiple AwContents for the same SharedWebViewChromium");
         }
         mAwContents = awContents;
+        mContentsClientAdapter =
+                (SharedWebViewContentsClientAdapter) awContents.getContentsClient();
     }
 
     // Forbids later attempts to begin applying builder configuration on the WebView instance.
@@ -162,12 +161,35 @@ public class SharedWebViewChromium {
         mAwContents.addWebMessageListener(jsObjectName, allowedOriginRules, listener);
     }
 
+    public void addWebMessageListener(
+            final String jsObjectName,
+            final String[] allowedOriginRules,
+            final WebMessageListener listener,
+            final String worldName) {
+        if (checkNeedsPost()) {
+            mRunQueue.addTask(
+                    () ->
+                            addWebMessageListener(
+                                    jsObjectName, allowedOriginRules, listener, worldName));
+            return;
+        }
+        mAwContents.addWebMessageListener(jsObjectName, allowedOriginRules, listener, worldName);
+    }
+
     public void removeWebMessageListener(final String jsObjectName) {
         if (checkNeedsPost()) {
             mRunQueue.addTask(() -> removeWebMessageListener(jsObjectName));
             return;
         }
         mAwContents.removeWebMessageListener(jsObjectName);
+    }
+
+    public void removeWebMessageListener(final String jsObjectName, final String world) {
+        if (checkNeedsPost()) {
+            mRunQueue.addTask(() -> removeWebMessageListener(jsObjectName, world));
+            return;
+        }
+        mAwContents.removeWebMessageListener(jsObjectName, world);
     }
 
     public ScriptHandler addDocumentStartJavaScript(
@@ -177,6 +199,25 @@ public class SharedWebViewChromium {
                     () -> addDocumentStartJavaScript(script, allowedOriginRules));
         }
         return mAwContents.addDocumentStartJavaScript(script, allowedOriginRules);
+    }
+
+    public ScriptHandler addJavaScriptOnEvent(
+            final String script,
+            final @DocumentInjectionTime.EnumType int event,
+            final String[] allowedOriginRules,
+            final String world) {
+        if (checkNeedsPost()) {
+            return mRunQueue.runOnUiThreadBlocking(
+                    () -> addJavaScriptOnEvent(script, event, allowedOriginRules, world));
+        }
+        return mAwContents.addJavaScriptOnEvent(script, event, allowedOriginRules, world);
+    }
+
+    public int getJavaScriptWorld(final String name) {
+        if (checkNeedsPost()) {
+            return mRunQueue.runOnUiThreadBlocking(() -> getJavaScriptWorld(name));
+        }
+        return mAwContents.registerJavaScriptWorld(name);
     }
 
     public void setWebViewRendererClientAdapter(
@@ -243,6 +284,7 @@ public class SharedWebViewChromium {
     }
 
     public AwContents getAwContents() {
+        mAwInit.triggerAndWaitForChromiumStarted(CallSite.WEBVIEW_INSTANCE_GET_AW_CONTENTS);
         return mAwContents;
     }
 

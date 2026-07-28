@@ -40,7 +40,7 @@ export class ProductViewerAppElement extends CrLitElement {
   private commerceInternalsApi_: CommerceInternalsApiProxy =
       CommerceInternalsApiProxy.getInstance();
 
-  protected async loadProduct_() {
+  protected async onLoadProductClick_() {
     const productInfo = (await this.commerceInternalsApi_.getProductInfoForUrl(
                              this.$.productUrl.value))
                             .info;
@@ -49,6 +49,12 @@ export class ProductViewerAppElement extends CrLitElement {
     }
 
     this.product_ = productInfo;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'product-viewer-app': ProductViewerAppElement;
   }
 }
 

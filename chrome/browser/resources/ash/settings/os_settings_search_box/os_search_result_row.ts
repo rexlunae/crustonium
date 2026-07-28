@@ -193,12 +193,12 @@ export class OsSearchResultRowElement extends OsSearchResultRowElementBase {
     };
   }
 
-  selected: boolean;
-  override ariaLabel: string;
-  searchQuery: string;
-  searchResult: SearchResult;
-  listLength: number;
-  private resultText_: string;
+  declare selected: boolean;
+  declare ariaLabel: string;
+  declare searchQuery: string;
+  declare searchResult: SearchResult;
+  declare listLength: number;
+  declare private resultText_: string;
 
   private makeA11yAnnouncementIfSelectedAndUnfocused_(): void {
     if (!this.selected || this.lastFocused) {
@@ -570,12 +570,6 @@ export class OsSearchResultRowElement extends OsSearchResultRowElementBase {
       chrome.metricsPrivate.recordSparseValue(
           'ChromeOS.Settings.SearchResultPersonalizationSelected',
           this.searchResult.searchConceptId);
-      // Record entry point metric to Personalization Hub through Settings
-      // search.
-      chrome.metricsPrivate.recordEnumerationValue(
-          'Ash.Personalization.EntryPoint',
-          loadTimeData.getInteger('settingsSearchEntryPoint'),
-          loadTimeData.getInteger('entryPointEnumSize'));
       return;
     }
 

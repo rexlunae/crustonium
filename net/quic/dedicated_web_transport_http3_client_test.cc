@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/gmock_callback_support.h"
 #include "build/build_config.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
@@ -41,15 +42,6 @@ using ::testing::_;
 using ::testing::DoAll;
 using ::testing::Optional;
 using ::testing::SaveArg;
-
-// testing::InvokeArgument<N> does not work with base::OnceCallback. Use this
-// gmock action template to invoke base::OnceCallback. `k` is the k-th argument
-// and `T` is the callback's type.
-ACTION_TEMPLATE(InvokeCallbackArgument,
-                HAS_2_TEMPLATE_PARAMS(int, k, typename, T),
-                AND_1_VALUE_PARAMS(net_err)) {
-  std::move(const_cast<T&>(std::get<k>(args))).Run(net_err);
-}
 
 class MockVisitor : public WebTransportClientVisitor {
  public:
@@ -145,7 +137,7 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
           }
         });
     ON_CALL(visitor_, OnLocalNetworkAccessCheck(_, _, _))
-        .WillByDefault(InvokeCallbackArgument<2, CompletionOnceCallback>(OK));
+        .WillByDefault(base::test::RunOnceCallback<2>(OK));
   }
 
   // Use a URLRequestContextBuilder to set `context_`.
@@ -226,8 +218,8 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
 TEST_F(DedicatedWebTransportHttp3Test, Connect) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnBeforeConnect);
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -245,11 +237,11 @@ TEST_F(DedicatedWebTransportHttp3Test, Connect) {
 TEST_F(DedicatedWebTransportHttp3Test, ConnectLocalNetworkAccessCheckFail) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnLocalNetworkAccessCheck)
-      .WillOnce(InvokeCallbackArgument<2, CompletionOnceCallback>(
+      .WillOnce(base::test::RunOnceCallback<2>(
           ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS));
 
   WebTransportError error;
@@ -272,8 +264,8 @@ TEST_F(DedicatedWebTransportHttp3Test, ConnectViaProxy) {
           TRAFFIC_ANNOTATION_FOR_TESTS));
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   client_->Connect();
 }
@@ -287,8 +279,8 @@ TEST_F(DedicatedWebTransportHttp3Test, ConnectViaProxy) {
 TEST_F(DedicatedWebTransportHttp3Test, MAYBE_CloseTimeout) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
-      GetURL("/echo"), origin_, &visitor_, anonymization_key_, context_.get(),
-      WebTransportParameters());
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnBeforeConnect);
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -315,7 +307,7 @@ TEST_F(DedicatedWebTransportHttp3Test, CloseReason) {
   StartServer();
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
       GetURL("/session-close"), origin_, &visitor_, anonymization_key_,
-      context_.get(), WebTransportParameters());
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
 
   EXPECT_CALL(visitor_, OnBeforeConnect);
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
@@ -347,7 +339,7 @@ TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
   // protocols by default, and echoes it on a unidirectional stream.
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
       GetURL("/selected-subprotocol"), origin_, &visitor_, anonymization_key_,
-      context_.get(), parameters);
+      handles::kInvalidNetworkHandle, context_.get(), parameters);
 
   bool stream_received = false;
   EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());

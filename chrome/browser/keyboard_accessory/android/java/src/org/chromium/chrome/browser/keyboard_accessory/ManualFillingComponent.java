@@ -290,4 +290,25 @@ public interface ManualFillingComponent extends BackPressHandler {
      */
     MonotonicObservableSupplier<AccessorySheetVisualStateProvider>
             getAccessorySheetVisualStateProvider();
+
+    /**
+     * Returns a supplier indicating whether the accessory bar or sheet is currently requested to
+     * show.
+     */
+    NonNullObservableSupplier<Boolean> getIsAccessoryRequestedSupplier();
+
+    /**
+     * Informs the component whether an asynchronous action is pending. If true, the component might
+     * defer closing the soft keyboard. If false, it clears this state.
+     *
+     * @param waiting Whether an asynchronous action is pending.
+     */
+    void setWaitingForFetch(boolean waiting);
+
+    /**
+     * Dismisses the component only if it is currently waiting for an asynchronous fetch to
+     * complete. This allows consecutive calls to the component to interrupt and cancel this delayed
+     * dismiss.
+     */
+    void dismissIfWaitingForFetch();
 }

@@ -4,8 +4,12 @@
 
 #include "chrome/browser/ui/tabs/glic_tab_sub_menu_model.h"
 
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "chrome/browser/glic/public/glic_invoke_options.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -31,8 +35,8 @@ GlicTabSubMenuModel::GlicTabSubMenuModel(TabStripModel* tab_strip_model,
           l10n_util::GetStringUTF16(IDS_TAB_CXMENU_GLIC_CREATE_NEW_CHAT));
 
   recent_conversations_ =
-      glic_service->window_controller().GetRecentlyActiveInstances(
-          kMaxRecentConversations);
+      glic_service->instance_coordinator().GetRecentlyActiveInstances(
+          kMaxRecentConversations, base::TimeDelta::Max());
 
   if (!recent_conversations_.empty()) {
     AddSeparator(ui::NORMAL_SEPARATOR);
@@ -62,12 +66,13 @@ bool GlicTabSubMenuModel::IsCommandIdEnabled(int command_id) const {
 void GlicTabSubMenuModel::ExecuteCommand(int command_id, int event_flags) {
   std::vector<tabs::TabInterface*> tabs;
   if (tab_strip_model_->IsTabSelected(context_index_)) {
-    const auto& selected_tabs =
-        tab_strip_model_->selection_model().selected_tabs();
-    tabs.assign(selected_tabs.begin(), selected_tabs.end());
+    for (size_t index : tab_strip_model_->selection_model()
+                            .GetListSelectionModel()
+                            .selected_indices()) {
+      tabs.push_back(tab_strip_model_->GetTabAtIndex(index));
+    }
   } else {
-    tabs.push_back(tabs::TabInterface::GetFromContents(
-        tab_strip_model_->GetWebContentsAt(context_index_)));
+    tabs.push_back(tab_strip_model_->GetTabAtIndex(context_index_));
   }
 
   GlicKeyedService* service =
@@ -76,14 +81,38 @@ void GlicTabSubMenuModel::ExecuteCommand(int command_id, int event_flags) {
     return;
   }
 
-  if (command_id == TabStripModel::CommandGlicCreateNewChat) {
-    service->window_controller().CreateNewConversationForTabs(tabs);
-  } else if (command_id >= kMinRecentConversationCommandId &&
-             command_id <= kMaxRecentConversationCommandId) {
-    size_t conversation_index = command_id - kMinRecentConversationCommandId;
-    CHECK_LT(conversation_index, recent_conversations_.size());
-    service->window_controller().ShowInstanceForTabs(
-        tabs, recent_conversations_[conversation_index].instance_id);
+  if (command_id == TabStripModel::CommandGlicCreateNewChat ||
+      (command_id >= kMinRecentConversationCommandId &&
+       command_id <= kMaxRecentConversationCommandId)) {
+    tabs::TabInterface* target_tab = tabs::TabInterface::GetFromContents(
+        tab_strip_model_->GetWebContentsAt(context_index_));
+    if (!target_tab) {
+      return;
+    }
+
+    GlicInvokeOptions options(mojom::InvocationSource::kTabContextMenu);
+
+    if (command_id == TabStripModel::CommandGlicCreateNewChat) {
+      base::UmaHistogramCounts100(
+          "Glic.TabContextMenu.PinnedTabsToNewConversation", tabs.size());
+      options.target = Target(*target_tab, NewConversation());
+    } else {
+      size_t conversation_index = command_id - kMinRecentConversationCommandId;
+      CHECK_LT(conversation_index, recent_conversations_.size());
+      base::UmaHistogramCounts100(
+          "Glic.TabContextMenu.PinnedTabsToExistingConversation", tabs.size());
+      options.target = Target(
+          *target_tab, recent_conversations_[conversation_index].instance_id);
+    }
+
+    std::vector<tabs::TabHandle> tab_handles;
+    for (auto* t : tabs) {
+      tab_handles.push_back(t->GetHandle());
+    }
+    options.tab_sharing =
+        TabSharingOptions(tab_handles, GlicPinTrigger::kContextMenu);
+
+    service->instance_coordinator().Invoke(std::move(options));
   }
 }
 

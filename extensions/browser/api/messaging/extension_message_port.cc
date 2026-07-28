@@ -33,6 +33,7 @@
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/service_worker/service_worker_host.h"
+#include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
 #include "extensions/common/extension_id.h"
@@ -439,10 +440,10 @@ void ExtensionMessagePort::DispatchOnConnect(
     const std::set<base::UnguessableToken>& open_channel_tracking_ids) {
   mojom::TabConnectionInfoPtr source = mojom::TabConnectionInfo::New();
 
-  // Source document ID should exist if and only if there is a source tab.
-  DCHECK_EQ(!!source_tab, !!source_frame.document_id);
   if (source_tab) {
     source->tab = source_tab->Clone();
+  }
+  if (!source_frame.document_id.is_empty()) {
     source->document_id = source_frame.document_id.ToString();
     source->document_lifecycle = ToString(source_frame.document_lifecycle);
   }
@@ -538,16 +539,16 @@ void ExtensionMessagePort::DispatchOnConnect(
           "ForWorker",
           channel_type);
 
-      PortContext port_context =
-          PortContext::ForWorker(worker.thread_id, worker.version_id,
-                                 worker.render_process_id, worker.extension_id);
+      PortContext port_context = PortContext::ForWorker(
+          worker.thread_id, worker.version_id,
+          worker.render_process_id.GetUnsafeValue(), worker.extension_id);
       auto& receiver = service_workers_[worker];
       receiver.Bind(message_port.InitWithNewEndpointAndPassRemote());
       receiver.set_disconnect_handler(base::BindOnce(
           &ExtensionMessagePort::Prune, base::Unretained(this), port_context,
           open_channel_dispatch_for_worker_tracking_id));
       AddReceiver(message_port_host.InitWithNewEndpointAndPassReceiver(),
-                  worker.render_process_id, port_context);
+                  worker.render_process_id.GetUnsafeValue(), port_context);
 
       pending_contexts_to_respond_.insert(port_context);
 
@@ -606,7 +607,7 @@ void ExtensionMessagePort::DispatchOnDisconnect(
       std::ref(error_message)));
 }
 
-void ExtensionMessagePort::DispatchOnMessage(const Message& message) {
+void ExtensionMessagePort::DispatchOnMessage(Message message) {
   // We increment activity for every message that passes through the channel.
   // This is important for long-lived ports, which only keep an extension
   // alive so long as they are being actively used.
@@ -616,9 +617,9 @@ void ExtensionMessagePort::DispatchOnMessage(const Message& message) {
   asynchronous_reply_pending_ = false;
   SendToPort(base::BindRepeating(
       [](const Message& message, mojom::MessagePort* port) {
-        port->DeliverMessage(message);
+        port->DeliverMessage(message.Clone());
       },
-      std::ref(message)));
+      std::cref(message)));
   DecrementLazyKeepaliveCount(Activity::MESSAGE);
 }
 
@@ -808,7 +809,7 @@ void ExtensionMessagePort::UnregisterWorker(int render_process_id,
   // worker we are interested in. Since there will only be a handful of such
   // workers, this is OK.
   for (auto iter = service_workers_.begin(); iter != service_workers_.end();) {
-    if (iter->first.render_process_id == render_process_id &&
+    if (iter->first.render_process_id.GetUnsafeValue() == render_process_id &&
         iter->first.thread_id == worker_thread_id) {
       service_workers_.erase(iter);
       break;

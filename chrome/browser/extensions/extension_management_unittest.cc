@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/feature_list.h"
@@ -18,19 +19,20 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/extensions/extension_management_internal.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
-#include "chrome/browser/extensions/managed_installation_mode.h"
 #include "chrome/browser/extensions/standard_management_policy_provider.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/enterprise/browser/reporting/common_pref_names.h"
 #include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/managed_installation_mode.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_features.h"
@@ -533,8 +535,8 @@ TEST_F(ExtensionManagementServiceTest, LegacyInstallSources) {
 // handled well.
 TEST_F(ExtensionManagementServiceTest, LegacyAllowedTypes) {
   base::ListValue allowed_types_pref;
-  allowed_types_pref.Append(Manifest::TYPE_THEME);
-  allowed_types_pref.Append(Manifest::TYPE_USER_SCRIPT);
+  allowed_types_pref.Append(std::to_underlying(Manifest::Type::kTheme));
+  allowed_types_pref.Append(std::to_underlying(Manifest::Type::kUserScript));
 
   SetPref(true, pref_names::kAllowedTypes,
           base::Value(std::move(allowed_types_pref)));
@@ -542,9 +544,11 @@ TEST_F(ExtensionManagementServiceTest, LegacyAllowedTypes) {
   const std::vector<Manifest::Type>& allowed_types =
       *ReadGlobalSettings()->allowed_types;
   EXPECT_EQ(allowed_types.size(), 2u);
-  EXPECT_FALSE(std::ranges::contains(allowed_types, Manifest::TYPE_EXTENSION));
-  EXPECT_TRUE(std::ranges::contains(allowed_types, Manifest::TYPE_THEME));
-  EXPECT_TRUE(std::ranges::contains(allowed_types, Manifest::TYPE_USER_SCRIPT));
+  EXPECT_FALSE(
+      std::ranges::contains(allowed_types, Manifest::Type::kExtension));
+  EXPECT_TRUE(std::ranges::contains(allowed_types, Manifest::Type::kTheme));
+  EXPECT_TRUE(
+      std::ranges::contains(allowed_types, Manifest::Type::kUserScript));
 }
 
 // Verify that preference controlled by legacy ExtensionInstallBlocklist policy
@@ -792,8 +796,9 @@ TEST_F(ExtensionManagementServiceTest, PreferenceParsing) {
   const std::vector<Manifest::Type>& allowed_types =
       *ReadGlobalSettings()->allowed_types;
   EXPECT_EQ(allowed_types.size(), 2u);
-  EXPECT_TRUE(std::ranges::contains(allowed_types, Manifest::TYPE_THEME));
-  EXPECT_TRUE(std::ranges::contains(allowed_types, Manifest::TYPE_USER_SCRIPT));
+  EXPECT_TRUE(std::ranges::contains(allowed_types, Manifest::Type::kTheme));
+  EXPECT_TRUE(
+      std::ranges::contains(allowed_types, Manifest::Type::kUserScript));
 
   // Verifies blocked permission allowlist settings.
   APIPermissionSet api_permission_set;
@@ -992,13 +997,13 @@ TEST_F(ExtensionManagementServiceTest, NewInstallSources) {
 TEST_F(ExtensionManagementServiceTest, NewAllowedTypes) {
   // Set the legacy preference, and verifies that it works.
   base::ListValue allowed_types_pref;
-  allowed_types_pref.Append(Manifest::TYPE_USER_SCRIPT);
+  allowed_types_pref.Append(std::to_underlying(Manifest::Type::kUserScript));
   SetPref(true, pref_names::kAllowedTypes,
           base::Value(allowed_types_pref.Clone()));
   ASSERT_TRUE(ReadGlobalSettings()->allowed_types);
   EXPECT_EQ(ReadGlobalSettings()->allowed_types->size(), 1u);
   EXPECT_EQ(ReadGlobalSettings()->allowed_types.value()[0],
-            Manifest::TYPE_USER_SCRIPT);
+            Manifest::Type::kUserScript);
 
   // Set the new dictionary preference.
   {
@@ -1017,7 +1022,7 @@ TEST_F(ExtensionManagementServiceTest, NewAllowedTypes) {
   ASSERT_TRUE(ReadGlobalSettings()->allowed_types);
   EXPECT_EQ(ReadGlobalSettings()->allowed_types->size(), 1u);
   EXPECT_EQ(ReadGlobalSettings()->allowed_types.value()[0],
-            Manifest::TYPE_THEME);
+            Manifest::Type::kTheme);
 }
 
 // Tests functionality of new preference as to deprecate legacy
@@ -1195,7 +1200,7 @@ TEST_F(ExtensionManagementServiceTest,
        ExtensionsAreBlockedByDefaultForExtensionRequest) {
   // When extension request policy is set to true, all extensions are blocked by
   // default.
-  SetPref(true, prefs::kCloudExtensionRequestEnabled,
+  SetPref(true, enterprise_reporting::kCloudExtensionRequestEnabled,
           std::make_unique<base::Value>(true));
   EXPECT_TRUE(extension_management_->BlocklistedByDefault());
   EXPECT_EQ(ManagedInstallationMode::kBlocked,
@@ -1208,130 +1213,6 @@ TEST_F(ExtensionManagementServiceTest,
   })");
   EXPECT_EQ(ManagedInstallationMode::kRemoved,
             GetInstallationModeById(kTargetExtension));
-}
-
-TEST_F(ExtensionManagementServiceTest, ManifestV2Default) {
-  SetPref(true, pref_names::kManifestV2Availability,
-          base::Value(static_cast<int>(
-              internal::GlobalSettings::ManifestV2Setting::kDefault)));
-  bool is_manifest_v3_only = base::FeatureList::IsEnabled(
-      extensions_features::kExtensionsManifestV3Only);
-  EXPECT_EQ(!is_manifest_v3_only,
-            extension_management_->IsAllowedManifestVersion(
-                2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  // Note: MV3 extension isn't exempt by policy because it's not affected at
-  // all. It's not this class's responsibility to know about the rest of the
-  // criteria; only whether the extension is exempt by policy.
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-}
-
-TEST_F(ExtensionManagementServiceTest, ManifestV2Disabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      extensions_features::kExtensionsManifestV3Only);
-  SetPref(true, pref_names::kManifestV2Availability,
-          base::Value(static_cast<int>(
-              internal::GlobalSettings::ManifestV2Setting::kDisabled)));
-  EXPECT_FALSE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  // Note: MV3 extension isn't exempt by policy because it's not affected at
-  // all. It's not this class's responsibility to know about the rest of the
-  // criteria; only whether the extension is exempt by policy.
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-}
-
-TEST_F(ExtensionManagementServiceTest, ManifestV2Enabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      extensions_features::kExtensionsManifestV3Only);
-  SetPref(true, pref_names::kManifestV2Availability,
-          base::Value(static_cast<int>(
-              internal::GlobalSettings::ManifestV2Setting::kEnabled)));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-
-  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  // Note: MV3 extension isn't exempt by policy because it's not affected at
-  // all. It's not this class's responsibility to know about the rest of the
-  // criteria; only whether the extension is exempt by policy.
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-}
-
-TEST_F(ExtensionManagementServiceTest, ManifestV2EnabledForForceInstalled) {
-  SetPref(
-      true, pref_names::kManifestV2Availability,
-      base::Value(static_cast<int>(internal::GlobalSettings::ManifestV2Setting::
-                                       kEnabledForForceInstalled)));
-  EXPECT_FALSE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  // Note: MV3 extension isn't exempt by policy because it's not affected at
-  // all. It's not this class's responsibility to know about the rest of the
-  // criteria; only whether the extension is exempt by policy.
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-
-  base::DictValue forced_list_pref;
-  ExternalPolicyLoader::AddExtension(forced_list_pref, kTargetExtension,
-                                     kExampleUpdateUrl);
-  SetPref(true, pref_names::kInstallForceList, forced_list_pref.Clone());
-
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-
-  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  // Note: MV3 extension isn't exempt by policy because it's not affected at
-  // all. It's not this class's responsibility to know about the rest of the
-  // criteria; only whether the extension is exempt by policy.
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      3, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-}
-
-TEST_F(ExtensionManagementServiceTest, ManifestV2EnabledForExtensionOnly) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      extensions_features::kExtensionsManifestV3Only);
-  SetPref(true, pref_names::kManifestV2Availability,
-          base::Value(static_cast<int>(
-              internal::GlobalSettings::ManifestV2Setting::kEnabled)));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_LOGIN_SCREEN_EXTENSION));
-  EXPECT_FALSE(extension_management_->IsAllowedManifestVersion(
-      2, kTargetExtension, Manifest::Type::TYPE_HOSTED_APP));
-
-  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_EXTENSION));
-  EXPECT_TRUE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_LOGIN_SCREEN_EXTENSION));
-  // Despite being force-installed, hosted apps aren't included in the
-  // MV2 deprecation, so isn't exempt by policy.
-  EXPECT_FALSE(extension_management_->IsExemptFromMV2DeprecationByPolicy(
-      2, kTargetExtension, Manifest::Type::TYPE_HOSTED_APP));
 }
 
 // Verifies that extensions that do not update CWS are always allowed by
@@ -1493,13 +1374,13 @@ TEST_F(ExtensionManagementServiceTest, ToolbarPinModeParsing) {
   EXPECT_EQ(GetToolbarPinMode(kTargetExtension3),
             extensions::ManagedToolbarPinMode::kForcePinned);
 
-  // Test with no value set, should default to kDefaultUnpinned.
+  // Test with no value set. It should return kNotSet.
   SetExampleDictPref(base::StringPrintf(R"({
     "%s": {}
   })",
                                         kTargetExtension5));
   EXPECT_EQ(GetToolbarPinMode(kTargetExtension5),
-            extensions::ManagedToolbarPinMode::kDefaultUnpinned);
+            extensions::ManagedToolbarPinMode::kNotSet);
 }
 
 TEST_F(ExtensionManagementServiceTest, ToolbarPinModeParsingFailsForInvalid) {
@@ -1805,7 +1686,7 @@ TEST_F(ExtensionAdminPolicyTest, UserMayLoadAllowedTypes) {
   EXPECT_FALSE(
       UserMayLoad(nullptr, nullptr, &allowed_types, extension_.get(), nullptr));
 
-  allowed_types.Append(Manifest::TYPE_EXTENSION);
+  allowed_types.Append(std::to_underlying(Manifest::Type::kExtension));
   EXPECT_TRUE(
       UserMayLoad(nullptr, nullptr, &allowed_types, extension_.get(), nullptr));
 
@@ -1905,8 +1786,16 @@ TEST_F(ExtensionManagementDesktopAndroidTest, FeatureFlagOn) {
   // Use that profile to initialize an ExtensionManagement instance.
   ExtensionManagement management(profile.get());
 
-  // Extensions should be allowed because of the feature flag.
+  // Extensions should be allowed because this is a corp dogfood user and the
+  // feature flag is on.
   EXPECT_TRUE(management.ExtensionsEnabledForDesktopAndroid());
+
+  // Extensions should be allowed for non-corp managed profiles.
+  TestingProfile::Builder noncorp_builder;
+  noncorp_builder.SetProfileName("testuser@beyondcorp.org");
+  std::unique_ptr<TestingProfile> noncorp_profile = noncorp_builder.Build();
+  ExtensionManagement noncorp_management(noncorp_profile.get());
+  EXPECT_TRUE(noncorp_management.ExtensionsEnabledForDesktopAndroid());
 }
 
 // Tests that with kEnableExtensionsForCorpDesktopAndroid off, extensions are
@@ -1924,8 +1813,16 @@ TEST_F(ExtensionManagementDesktopAndroidTest, FeatureFlagOff) {
   // Use that profile to initialize an ExtensionManagement instance.
   ExtensionManagement management(profile.get());
 
-  // Extensions are blocked because this is a corp dogfood user.
+  // Extensions are blocked because this is a corp dogfood user and the feature
+  // flag is off.
   EXPECT_FALSE(management.ExtensionsEnabledForDesktopAndroid());
+
+    // Extensions should be allowed for non-corp managed profiles.
+  TestingProfile::Builder noncorp_builder;
+  noncorp_builder.SetProfileName("testuser@beyondcorp.org");
+  std::unique_ptr<TestingProfile> noncorp_profile = noncorp_builder.Build();
+  ExtensionManagement noncorp_management(noncorp_profile.get());
+  EXPECT_TRUE(noncorp_management.ExtensionsEnabledForDesktopAndroid());
 }
 
 #endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)

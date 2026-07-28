@@ -16,6 +16,7 @@
 #include "cc/paint/paint_image_generator.h"
 #include "cc/paint/paint_record.h"
 #include "cc/paint/skia_paint_image_generator.h"
+#include "cc/paint/texture_backing.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCPURecorder.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
@@ -47,6 +48,13 @@ ImageHeaderMetadata::ImageHeaderMetadata(const ImageHeaderMetadata& other) =
 ImageHeaderMetadata& ImageHeaderMetadata::operator=(
     const ImageHeaderMetadata& other) = default;
 ImageHeaderMetadata::ImageHeaderMetadata::~ImageHeaderMetadata() = default;
+
+AnimatedImageFrameIndexMap::AnimatedImageFrameIndexMap() = default;
+AnimatedImageFrameIndexMap::AnimatedImageFrameIndexMap(
+    base::sorted_unique_t sorted_unique,
+    const std::vector<std::pair<int, size_t>>& entries)
+    : base::flat_map<int, size_t>(sorted_unique, entries) {}
+AnimatedImageFrameIndexMap::~AnimatedImageFrameIndexMap() = default;
 
 PaintImage::PaintImage() = default;
 PaintImage::PaintImage(const PaintImage& other) = default;
@@ -195,6 +203,17 @@ gpu::Mailbox PaintImage::GetMailbox() const {
   return texture_backing_->GetMailbox();
 }
 
+void PaintImage::BindTextureBacking(
+    scoped_refptr<TextureBackingContext> context) const {
+  DCHECK(texture_backing_);
+  texture_backing_->Bind(std::move(context));
+}
+
+void PaintImage::UnbindTextureBacking() const {
+  DCHECK(texture_backing_);
+  texture_backing_->Unbind();
+}
+
 const scoped_refptr<PaintWorkletInput> PaintImage::GetPaintWorkletInput()
     const {
   if (!IsPaintWorklet()) {
@@ -226,6 +245,10 @@ void PaintImage::CreateSkImage() {
         std::make_unique<SkiaPaintImageGenerator>(paint_image_generator_,
                                                   kDefaultFrameIndex,
                                                   kDefaultGeneratorClientId));
+    if (reinterpret_as_srgb_) {
+      cached_sk_image_ =
+          cached_sk_image_->reinterpretColorSpace(SkColorSpace::MakeSRGB());
+    }
   }
 }
 

@@ -28,7 +28,8 @@ namespace device {
 // appropriate types unless only references or raw pointers are returned.
 class VRTestHook {
  public:
-  virtual void OnFrameSubmitted(const std::vector<ViewData>& frame_data) = 0;
+  virtual void OnFrameSubmitted(const std::vector<ViewData>& frame_data,
+                                const std::vector<LayerData>& layers) = 0;
   virtual DeviceConfig WaitGetDeviceConfig() = 0;
   virtual std::optional<gfx::Transform> WaitGetPresentingPose() = 0;
   virtual std::optional<gfx::Transform> WaitGetMagicWindowPose() = 0;
@@ -44,9 +45,14 @@ class VRTestHook {
   virtual void DetachCurrentThread() = 0;
 };
 
-class ServiceTestHook {
+class COMPONENT_EXPORT(VR_TEST_HOOK) ServiceTestHook {
  public:
   virtual void SetTestHook(VRTestHook*) = 0;
+
+  typedef bool (*InitializeOpenXrMockTrampolineFn)();
+  static void RegisterInitializeOpenXrMockTrampolineFn(
+      InitializeOpenXrMockTrampolineFn fn);
+  static void MaybeInitializeOpenXrMockTrampoline();
 };
 
 }  // namespace device

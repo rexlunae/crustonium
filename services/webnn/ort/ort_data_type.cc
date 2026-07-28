@@ -4,6 +4,8 @@
 
 #include "services/webnn/ort/ort_data_type.h"
 
+#include "base/notreached.h"
+
 namespace webnn::ort {
 
 ONNXTensorElementDataType WebnnToOnnxDataType(OperandDataType data_type) {
@@ -29,6 +31,29 @@ ONNXTensorElementDataType WebnnToOnnxDataType(OperandDataType data_type) {
     case OperandDataType::kUint4:
       return ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT4;
   }
+}
+
+OrtHardwareDeviceType WebnnToOrtDeviceType(mojom::Device device_type) {
+  switch (device_type) {
+    case mojom::Device::kCpu:
+      return OrtHardwareDeviceType_CPU;
+    case mojom::Device::kGpu:
+      return OrtHardwareDeviceType_GPU;
+    case mojom::Device::kNpu:
+      return OrtHardwareDeviceType_NPU;
+  }
+}
+
+mojom::Device OrtToWebnnDeviceType(OrtHardwareDeviceType device_type) {
+  switch (device_type) {
+    case OrtHardwareDeviceType_CPU:
+      return mojom::Device::kCpu;
+    case OrtHardwareDeviceType_GPU:
+      return mojom::Device::kGpu;
+    case OrtHardwareDeviceType_NPU:
+      return mojom::Device::kNpu;
+  }
+  NOTREACHED();
 }
 
 std::vector<int64_t> WebnnToOnnxShape(base::span<const uint32_t> shape) {

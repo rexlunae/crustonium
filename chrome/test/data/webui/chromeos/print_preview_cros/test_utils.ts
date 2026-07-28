@@ -9,7 +9,8 @@ import {PreviewTicketManager} from 'chrome://os-print/js/data/preview_ticket_man
 import {PRINT_REQUEST_FINISHED_EVENT, PRINT_TICKET_MANAGER_SESSION_INITIALIZED, PrintTicketManager} from 'chrome://os-print/js/data/print_ticket_manager.js';
 import {FAKE_PRINT_SESSION_CONTEXT_SUCCESSFUL} from 'chrome://os-print/js/fakes/fake_print_preview_page_handler.js';
 import {resetProvidersForTesting} from 'chrome://os-print/js/utils/mojo_data_providers.js';
-import {type Destination, PrinterStatusReason, PrinterType} from 'chrome://os-print/js/utils/print_preview_cros_app_types.js';
+import {PrinterStatusReason, PrinterType} from 'chrome://os-print/js/utils/print_preview_cros_app_types.js';
+import type {Destination} from 'chrome://os-print/js/utils/print_preview_cros_app_types.js';
 import type {MockTimer} from 'chrome://webui-test/mock_timer.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
@@ -49,7 +50,7 @@ export function resetDataManagersAndProviders(): void {
  * resolve fetch.
  */
 export function waitForInitialDestinationSet(
-    mockTimer: MockTimer|null = null, delay = 0): Promise<void> {
+    mockTimer: MockTimer|null = null, delay = 0): Promise<Event> {
   const destinationManager = DestinationManager.getInstance();
   const activeDestEvent = eventToPromise(
       DESTINATION_MANAGER_ACTIVE_DESTINATION_CHANGED, destinationManager);
@@ -70,7 +71,7 @@ export function waitForInitialDestinationSet(
  * resolve fetch.
  */
 export function waitForSendPrintRequestFinished(
-    mockTimer: MockTimer|null = null, delay = 0): Promise<void> {
+    mockTimer: MockTimer|null = null, delay = 0): Promise<Event> {
   const printTicketManager = PrintTicketManager.getInstance();
   assert(printTicketManager.isSessionInitialized());
   assert(!printTicketManager.isPrintRequestInProgress());
@@ -90,7 +91,7 @@ export function waitForSendPrintRequestFinished(
  * Initializes print ticket manager and returns a promise for the
  * PRINT_TICKET_MANAGER_SESSION_INITIALIZED event.
  */
-export function waitForPrintTicketManagerInitialized(): Promise<void> {
+export function waitForPrintTicketManagerInitialized(): Promise<Event> {
   const printTicketManager = PrintTicketManager.getInstance();
   const initEvent = eventToPromise(
       PRINT_TICKET_MANAGER_SESSION_INITIALIZED, printTicketManager);

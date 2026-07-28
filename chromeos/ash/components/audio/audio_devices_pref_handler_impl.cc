@@ -458,6 +458,16 @@ void AudioDevicesPrefHandlerImpl::SetVoiceIsolationPreferredEffect(
                            static_cast<int>(effect));
 }
 
+bool AudioDevicesPrefHandlerImpl::GetKrispNoiseCancellationState() {
+  return local_state_->GetBoolean(prefs::kInputKrispNoiseCancellationEnabled);
+}
+
+void AudioDevicesPrefHandlerImpl::SetKrispNoiseCancellationState(
+    bool krisp_noise_cancellation_state) {
+  local_state_->SetBoolean(prefs::kInputKrispNoiseCancellationEnabled,
+                           krisp_noise_cancellation_state);
+}
+
 bool AudioDevicesPrefHandlerImpl::GetNoiseCancellationState() {
   return local_state_->GetBoolean(prefs::kInputVoiceIsolationEnabled);
 }
@@ -539,6 +549,8 @@ void AudioDevicesPrefHandlerImpl::InitializePrefObservers() {
   pref_change_registrar_.Add(prefs::kInputVoiceIsolationEnabled,
                              callbackVoiceIsolation);
   pref_change_registrar_.Add(prefs::kInputVoiceIsolationPreferredEffect,
+                             callbackVoiceIsolation);
+  pref_change_registrar_.Add(prefs::kInputKrispNoiseCancellationEnabled,
                              callbackVoiceIsolation);
 }
 
@@ -709,6 +721,8 @@ void AudioDevicesPrefHandlerImpl::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kAudioDevicesState);
   registry->RegisterIntegerPref(prefs::kInputVoiceIsolationPreferredEffect, 0);
   registry->RegisterBooleanPref(prefs::kInputVoiceIsolationEnabled, false);
+  registry->RegisterBooleanPref(prefs::kInputKrispNoiseCancellationEnabled,
+                                false);
   registry->RegisterBooleanPref(prefs::kInputNoiseCancellationEnabled, false);
   registry->RegisterBooleanPref(prefs::kInputStyleTransferEnabled, false);
   registry->RegisterBooleanPref(prefs::kHandsFreeProfileInputSuperResolution,

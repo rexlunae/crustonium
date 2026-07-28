@@ -14,11 +14,13 @@
 #import "base/time/time.h"
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/test/mock_tracker.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/test/test_fullscreen_controller.h"
 #import "ios/chrome/browser/intelligence/bwg/coordinator/gemini_first_run_mediator.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_browser_agent.h"
-#import "ios/chrome/browser/intelligence/bwg/utils/bwg_constants.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_browser_agent.h"
+#import "ios/chrome/browser/intelligence/bwg/ui/gemini_first_run_wrapper_view_controller.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_test_utils.h"
@@ -28,13 +30,16 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
+#import "ios/chrome/test/ios_chrome_scoped_testing_variations_service.h"
 #import "ios/chrome/test/scoped_key_window.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/platform_test.h"
@@ -45,7 +50,6 @@ namespace {
 const CGFloat kPromoMaxImpressionCount = 3;
 
 const std::string kFirstProfileName = "FirstProfile";
-const std::string kSecondProfileName = "SecondProfile";
 
 std::unique_ptr<KeyedService> CreateTestTracker(ProfileIOS* context) {
   return std::make_unique<
@@ -61,12 +65,20 @@ class GeminiFirstRunCoordinatorTest : public PlatformTest {
         AuthenticationServiceFactory::GetInstance(),
         AuthenticationServiceFactory::GetFactoryWithDelegate(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(feature_engagement::TrackerFactory::GetInstance(),
                               base::BindOnce(&CreateTestTracker));
     builder.AddTestingFactory(
         OptimizationGuideServiceFactory::GetInstance(),
         OptimizationGuideServiceFactory::GetDefaultFactory());
+    builder.AddTestingFactory(
+        OptimizationGuideServiceFactory::GetInstance(),
+        OptimizationGuideServiceFactory::GetDefaultFactory());
     builder.SetName(kFirstProfileName);
+
+    // Set a default country for the variations service.
+    scoped_variations_service_.Get()->OverrideStoredPermanentCountry("us");
     ProfileIOS* profile =
         profile_manager_.AddProfileWithBuilder(std::move(builder));
 
@@ -74,15 +86,15 @@ class GeminiFirstRunCoordinatorTest : public PlatformTest {
     browser_list_ = BrowserListFactory::GetForProfile(profile);
     browser_list_->AddBrowser(browser_.get());
     TestFullscreenController::CreateForBrowser(browser_.get());
-    BwgBrowserAgent::CreateForBrowser(browser_.get());
+    GeminiBrowserAgent::CreateForBrowser(browser_.get());
 
     CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
-    mock_bwg_command_handler_ = OCMProtocolMock(@protocol(BWGCommands));
+    mock_gemini_handler_ = OCMProtocolMock(@protocol(GeminiCommands));
     mock_help_command_handler_ = OCMProtocolMock(@protocol(HelpCommands));
     id mock_scene_commands_handler = OCMProtocolMock(@protocol(SceneCommands));
 
-    [dispatcher startDispatchingToTarget:mock_bwg_command_handler_
-                             forProtocol:@protocol(BWGCommands)];
+    [dispatcher startDispatchingToTarget:mock_gemini_handler_
+                             forProtocol:@protocol(GeminiCommands)];
     [dispatcher startDispatchingToTarget:mock_help_command_handler_
                              forProtocol:@protocol(HelpCommands)];
     [dispatcher startDispatchingToTarget:mock_scene_commands_handler
@@ -99,6 +111,7 @@ class GeminiFirstRunCoordinatorTest : public PlatformTest {
         initWithBaseViewController:base_view_controller_
                            browser:browser_.get()
                     fromEntryPoint:entryPoint
+                      firstRunType:GeminiFirstRunType::kNewUser
                  completionHandler:nil];
     [coordinator_ start];
     // Wait for the view controller to be presented.
@@ -112,6 +125,7 @@ class GeminiFirstRunCoordinatorTest : public PlatformTest {
  protected:
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  IOSChromeScopedTestingVariationsService scoped_variations_service_;
   base::test::ScopedFeatureList feature_list_;
   TestProfileManagerIOS profile_manager_;
   std::unique_ptr<Browser> browser_;
@@ -119,7 +133,7 @@ class GeminiFirstRunCoordinatorTest : public PlatformTest {
   UIViewController* base_view_controller_;
   GeminiFirstRunCoordinator* coordinator_;
   id mock_help_command_handler_;
-  id mock_bwg_command_handler_;
+  id mock_gemini_handler_;
   std::unique_ptr<ScopedKeyWindow> scoped_window_;
 };
 
@@ -155,7 +169,7 @@ TEST_F(GeminiFirstRunCoordinatorTest, FullscreenNotExitedOnAIHubEntryPoint) {
 TEST_F(GeminiFirstRunCoordinatorTest, FullscreenExitedOnPromoEntryPoint) {
   feature_list_.InitWithFeatures(
       {feature_engagement::kIPHiOSGeminiFullscreenPromoFeature,
-       kGeminiNavigationPromo, kAskGeminiChip, kPageActionMenu},
+       kGeminiNavigationPromo, kPageActionMenu},
       {});
   auto* tracker = static_cast<feature_engagement::test::MockTracker*>(
       feature_engagement::TrackerFactory::GetForProfile(
@@ -245,45 +259,73 @@ TEST_F(GeminiFirstRunCoordinatorTest, AIHubIPHNotTriggered) {
   EXPECT_OCMOCK_VERIFY(mock_help_command_handler_);
 }
 
-// Tests that the other Gemini floaty instances are dismissed before when
-// starting a new one.
-TEST_F(GeminiFirstRunCoordinatorTest, DismissOtherWindows) {
-  // Build second profile.
-  TestProfileIOS::Builder second_builder;
-  second_builder.SetName(kSecondProfileName);
-  ProfileIOS* second_profile =
-      profile_manager_.AddProfileWithBuilder(std::move(second_builder));
-  std::unique_ptr<TestBrowser> second_browser_ =
-      std::make_unique<TestBrowser>(second_profile);
-  BrowserListFactory::GetForProfile(second_profile)
-      ->AddBrowser(second_browser_.get());
+// Tests that kGeminiExternalAppStoreEvent IPH triggers when the user is shown
+// the promo from an external App Store event.
+TEST_F(GeminiFirstRunCoordinatorTest, ExternalAppStoreEventIPHWasTriggered) {
+  OCMExpect([mock_help_command_handler_
+      presentInProductHelpWithType:InProductHelpType::
+                                       kGeminiExternalAppStoreEvent]);
 
-  id second_bwg_handler = OCMProtocolMock(@protocol(BWGCommands));
-  [second_browser_->GetCommandDispatcher()
-      startDispatchingToTarget:second_bwg_handler
-                   forProtocol:@protocol(BWGCommands)];
+  StartCoordinatorWithEntryPoint(gemini::EntryPoint::ExternalAppStoreEvent);
+  [coordinator_ stop];
 
-  OCMExpect([second_bwg_handler
-      dismissGeminiFlowWithCompletion:[OCMArg checkWithBlock:^BOOL(
-                                                  ProceduralBlock block) {
-        if (block) {
-          block();
-        }
-        return YES;
-      }]]);
+  EXPECT_OCMOCK_VERIFY(mock_help_command_handler_);
+}
 
-  StartCoordinatorWithEntryPoint(gemini::EntryPoint::Promo);
+// Tests that starting the coordinator with kLive starts the Live FRE.
+TEST_F(GeminiFirstRunCoordinatorTest, TestLiveFirstRunStarts) {
+  base_view_controller_ = [[UIViewController alloc] init];
+  scoped_window_ = std::make_unique<ScopedKeyWindow>();
+  [scoped_window_->Get() setRootViewController:base_view_controller_];
+  [scoped_window_->Get() makeKeyAndVisible];
 
-  // Emulate starting the floaty from the first window.
-  OCMStub([mock_bwg_command_handler_
-      dismissGeminiFlowWithCompletion:[OCMArg checkWithBlock:^(
-                                                  ProceduralBlock block) {
-        if (block) {
-          block();
-        }
-        return YES;
-      }]]);
+  coordinator_ = [[GeminiFirstRunCoordinator alloc]
+      initWithBaseViewController:base_view_controller_
+                         browser:browser_.get()
+                  fromEntryPoint:gemini::EntryPoint::AIHub
+                    firstRunType:GeminiFirstRunType::kLive
+               completionHandler:nil];
+  [coordinator_ start];
 
-  EXPECT_OCMOCK_VERIFY(mock_bwg_command_handler_);
-  EXPECT_OCMOCK_VERIFY(second_bwg_handler);
+  EXPECT_TRUE(
+      base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(5), ^bool {
+        return base_view_controller_.presentedViewController != nil;
+      }));
+
+  UIViewController* presented = base_view_controller_.presentedViewController;
+  EXPECT_TRUE(
+      [presented isKindOfClass:[GeminiFirstRunWrapperViewController class]]);
+
+  [coordinator_ stop];
+}
+
+// Tests that stopping the coordinator with a completion handler that
+// deallocates the coordinator synchronously does not crash.
+TEST_F(GeminiFirstRunCoordinatorTest, SynchronousDeallocOnStopDoesNotCrash) {
+  base::test::ScopedFeatureList local_feature_list;
+  local_feature_list.InitAndEnableFeature(kGeminiCoordinatorTeardownFix);
+
+  base_view_controller_ = [[UIViewController alloc] init];
+  scoped_window_ = std::make_unique<ScopedKeyWindow>();
+  [scoped_window_->Get() setRootViewController:base_view_controller_];
+  [scoped_window_->Get() makeKeyAndVisible];
+
+  __block GeminiFirstRunCoordinator* localCoordinator =
+      [[GeminiFirstRunCoordinator alloc]
+          initWithBaseViewController:base_view_controller_
+                             browser:browser_.get()
+                      fromEntryPoint:gemini::EntryPoint::AIHub
+                        firstRunType:GeminiFirstRunType::kNewUser
+                   completionHandler:^(BOOL success) {
+                     localCoordinator = nil;
+                   }];
+  [localCoordinator start];
+
+  EXPECT_TRUE(
+      base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(5), ^bool {
+        return base_view_controller_.presentedViewController != nil;
+      }));
+
+  [localCoordinator stopWithCompletion:nil];
+  EXPECT_EQ(localCoordinator, nil);
 }

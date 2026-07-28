@@ -29,7 +29,6 @@
 #include "chrome/browser/ui/ash/shelf/app_window_base.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
-#include "chrome/common/chrome_features.h"
 #include "chromeos/ash/components/borealis/borealis_util.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "components/exo/permission.h"
@@ -141,7 +140,7 @@ void AppServiceAppWindowCrostiniTracker::OnWindowVisibilityChanged(
   // one app is starting. It's safe to close all the spinners since their
   // respective apps take at most another few seconds to start.
   // Work is ongoing to make this occur as infrequently as possible.
-  // See https://crbug.com/854911.
+  // See https://crbug.com/41395833.
   if (guest_os::IsUnregisteredCrostiniShelfAppId(shelf_app_id)) {
     ChromeShelfController::instance()
         ->GetShelfSpinnerController()

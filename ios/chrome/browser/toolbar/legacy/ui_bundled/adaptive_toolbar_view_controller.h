@@ -7,6 +7,7 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_ui_updating.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/legacy_toolbar_consumer.h"
@@ -30,9 +31,10 @@
 // dismissed on such events. For example, the tools menu is closed upon
 // rotation.
 @interface AdaptiveToolbarViewController
-    : UIViewController <FullscreenUIElement,
-                        PopupMenuUIUpdating,
-                        LegacyToolbarConsumer>
+    : UIViewController <FullscreenBrowserAgentObserving,
+                        FullscreenUIElement,
+                        LegacyToolbarConsumer,
+                        PopupMenuUIUpdating>
 
 // Button factory.
 @property(nonatomic, strong) LegacyToolbarButtonFactory* buttonFactory;
@@ -82,8 +84,6 @@
 // Highlights the tab grid button if `highlight` is YES, resets to original
 // color if NO.
 - (void)IPHHighlightTabGridButton:(BOOL)highlight;
-// Sets the height of the location bar. Used when the omnibox is multiline.
-- (void)setLocationBarHeight:(CGFloat)height;
 // Used for any additional clean up on shutdown.
 - (void)disconnect;
 

@@ -9,6 +9,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_span.h"
@@ -46,6 +47,8 @@ class ExperimentBuilder {
         forcing_flag,
         hardware_classes,
         exclude_hardware_classes,
+        hardware_manufacturers,
+        exclude_hardware_manufacturers,
     };
   }
 
@@ -61,6 +64,8 @@ class ExperimentBuilder {
   const char* forcing_flag = nullptr;
   base::raw_span<const char*> hardware_classes = {};
   base::raw_span<const char*> exclude_hardware_classes = {};
+  base::raw_span<const char*> hardware_manufacturers = {};
+  base::raw_span<const char*> exclude_hardware_manufacturers = {};
 };
 
 // TODO(crbug.com/40742801): Remove when fake VariationsServiceClient created.
@@ -85,8 +90,6 @@ class TestVariationsServiceClient : public VariationsServiceClient {
     return false;
   }
   bool IsEnterprise() override { return false; }
-  void RemoveGoogleGroupsFromPrefsForDeletedProfiles(
-      PrefService* local_state) override {}
 
  private:
   // VariationsServiceClient:
@@ -299,7 +302,6 @@ TEST_F(FieldTrialUtilTest,
       Study::PLATFORM_ANDROID_WEBLAYER,
       Study::PLATFORM_ANDROID_WEBVIEW,
       Study::PLATFORM_CHROMEOS,
-      Study::PLATFORM_CHROMEOS_LACROS,
       Study::PLATFORM_FUCHSIA,
       Study::PLATFORM_IOS,
       Study::PLATFORM_LINUX,
@@ -765,7 +767,7 @@ TEST_F(
   // When both enable-benchmarking and 'disable_benchmarking' are set,
   // the trial should not be added.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableBenchmarking);
+      ::switches::kEnableBenchmarking);
   experiment_builder.disable_benchmarking = true;
 
   const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
@@ -805,7 +807,7 @@ TEST_F(
   // If enable-benchmarking is set, and the experiment doesn't set
   // 'disable_benchmarking', the trial should be added.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableBenchmarking);
+      ::switches::kEnableBenchmarking);
   experiment_builder.disable_benchmarking = false;
 
   const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
@@ -817,6 +819,82 @@ TEST_F(
 
   // The 'disable_benchmarking' field should prevent this trial from being
   // added.
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
+
+  std::map<std::string, std::string> params;
+  EXPECT_TRUE(base::GetFieldTrialParams("TestTrial", &params));
+  EXPECT_EQ(2U, params.size());
+  EXPECT_EQ("1", params["x"]);
+  EXPECT_EQ("2", params["y"]);
+
+  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(
+    FieldTrialUtilTest,
+    AssociateParamsFromFieldTrialConfigWithEnableFieldTrialConfigBenchmarkingAndDisableBenchmarking) {
+  const Study::Platform platform = Study::PLATFORM_WINDOWS;
+  const FieldTrialTestingExperimentParams array_kFieldTrialConfig_params[] = {
+      {"x", "1"}, {"y", "2"}};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = base::span_from_ref(platform);
+  experiment_builder.params = array_kFieldTrialConfig_params;
+
+  // When --enable-field-trial-config=benchmarking and 'disable_benchmarking'
+  // are set, the trial should not be added.
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kEnableFieldTrialTestingConfig, "benchmarking");
+  experiment_builder.disable_benchmarking = true;
+
+  const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
+      experiment_builder.Build(),
+  };
+  const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
+      {"TestTrial", array_kFieldTrialConfig_experiments}};
+  const FieldTrialTestingConfig kConfig = {array_kFieldTrialConfig_studies};
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
+
+  EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
+  EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "y"));
+
+  std::map<std::string, std::string> params;
+  EXPECT_FALSE(base::GetFieldTrialParams("TestTrial", &params));
+
+  EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(
+    FieldTrialUtilTest,
+    AssociateParamsFromFieldTrialConfigWithEnableFieldTrialConfigBenchmarkingAndNoDisableBenchmarking) {
+  const Study::Platform platform = Study::PLATFORM_WINDOWS;
+  const FieldTrialTestingExperimentParams array_kFieldTrialConfig_params[] = {
+      {"x", "1"}, {"y", "2"}};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = base::span_from_ref(platform);
+  experiment_builder.params = array_kFieldTrialConfig_params;
+
+  // If --enable-field-trial-config=benchmarking is set, and the experiment
+  // doesn't set 'disable_benchmarking', the trial should be added.
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kEnableFieldTrialTestingConfig, "benchmarking");
+  experiment_builder.disable_benchmarking = false;
+
+  const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
+      experiment_builder.Build(),
+  };
+  const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
+      {"TestTrial", array_kFieldTrialConfig_experiments}};
+  const FieldTrialTestingConfig kConfig = {array_kFieldTrialConfig_studies};
+
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
       kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
@@ -1048,5 +1126,146 @@ TEST_F(FieldTrialUtilTest,
   EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(FieldTrialUtilTest,
+       AssociateParamsFromFieldTrialConfigWithHardwareManufacturerMatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      hardware_manufacturer.c_str(),
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(FieldTrialUtilTest,
+       AssociateParamsFromFieldTrialConfigWithHardwareManufacturerMismatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(FieldTrialUtilTest,
+       AssociateParamsFromFieldTrialConfigWithExcludHardwareManufacturerMatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      hardware_manufacturer.c_str(),
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.exclude_hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(
+    FieldTrialUtilTest,
+    AssociateParamsFromFieldTrialConfigWithExcludHardwareManufacturerMismatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.exclude_hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace variations

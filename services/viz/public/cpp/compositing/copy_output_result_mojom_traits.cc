@@ -67,16 +67,14 @@ EnumTraits<viz::mojom::CopyOutputResultFormat, viz::CopyOutputResult::Format>::
 }
 
 // static
-bool EnumTraits<viz::mojom::CopyOutputResultFormat,
-                viz::CopyOutputResult::Format>::
-    FromMojom(viz::mojom::CopyOutputResultFormat input,
-              viz::CopyOutputResult::Format* out) {
+viz::CopyOutputResult::Format
+EnumTraits<viz::mojom::CopyOutputResultFormat, viz::CopyOutputResult::Format>::
+    FromMojom(viz::mojom::CopyOutputResultFormat input) {
   switch (input) {
     case viz::mojom::CopyOutputResultFormat::RGBA:
-      *out = viz::CopyOutputResult::Format::RGBA;
-      return true;
+      return viz::CopyOutputResult::Format::RGBA;
   }
-  return false;
+  NOTREACHED();
 }
 
 // static
@@ -93,19 +91,17 @@ EnumTraits<viz::mojom::CopyOutputResultDestination,
 }
 
 // static
-bool EnumTraits<viz::mojom::CopyOutputResultDestination,
-                viz::CopyOutputResult::Destination>::
-    FromMojom(viz::mojom::CopyOutputResultDestination input,
-              viz::CopyOutputResult::Destination* out) {
+viz::CopyOutputResult::Destination
+EnumTraits<viz::mojom::CopyOutputResultDestination,
+           viz::CopyOutputResult::Destination>::
+    FromMojom(viz::mojom::CopyOutputResultDestination input) {
   switch (input) {
     case viz::mojom::CopyOutputResultDestination::kSystemMemory:
-      *out = viz::CopyOutputResult::Destination::kSystemMemory;
-      return true;
+      return viz::CopyOutputResult::Destination::kSystemMemory;
     case viz::mojom::CopyOutputResultDestination::kSharedImage:
-      *out = viz::CopyOutputResult::Destination::kSharedImage;
-      return true;
+      return viz::CopyOutputResult::Destination::kSharedImage;
   }
-  return false;
+  NOTREACHED();
 }
 
 // static
@@ -125,25 +121,20 @@ viz::mojom::CopyOutputResultError EnumTraits<
 }
 
 // static
-bool EnumTraits<viz::mojom::CopyOutputResultError,
-                viz::CopyOutputResult::Error>::
-    FromMojom(viz::mojom::CopyOutputResultError input,
-              viz::CopyOutputResult::Error* out) {
+viz::CopyOutputResult::Error
+EnumTraits<viz::mojom::CopyOutputResultError, viz::CopyOutputResult::Error>::
+    FromMojom(viz::mojom::CopyOutputResultError input) {
   switch (input) {
     case viz::mojom::CopyOutputResultError::kNone:
-      *out = viz::CopyOutputResult::Error::kNone;
-      return true;
+      return viz::CopyOutputResult::Error::kNone;
     case viz::mojom::CopyOutputResultError::kUnknown:
-      *out = viz::CopyOutputResult::Error::kUnknown;
-      return true;
+      return viz::CopyOutputResult::Error::kUnknown;
     case viz::mojom::CopyOutputResultError::kTimeout:
-      *out = viz::CopyOutputResult::Error::kTimeout;
-      return true;
+      return viz::CopyOutputResult::Error::kTimeout;
     case viz::mojom::CopyOutputResultError::kEmbeddingTokenChanged:
-      *out = viz::CopyOutputResult::Error::kEmbeddingTokenChanged;
-      return true;
+      return viz::CopyOutputResult::Error::kEmbeddingTokenChanged;
   }
-  return false;
+  NOTREACHED();
 }
 
 // static
@@ -183,8 +174,9 @@ StructTraits<viz::mojom::CopyOutputResultDataView,
              std::unique_ptr<viz::CopyOutputResult>>::
     bitmap(const std::unique_ptr<viz::CopyOutputResult>& result) {
   if (result->destination() !=
-      viz::CopyOutputResult::Destination::kSystemMemory)
+      viz::CopyOutputResult::Destination::kSystemMemory) {
     return std::nullopt;
+  }
   auto scoped_bitmap = result->ScopedAccessSkBitmap();
   if (!scoped_bitmap.bitmap().readyToDraw()) {
     // During shutdown or switching to background on Android, Chrome will
@@ -250,6 +242,15 @@ StructTraits<viz::mojom::CopyOutputResultDataView,
 }
 
 // static
+const viz::TrackedElementRects&
+StructTraits<viz::mojom::CopyOutputResultDataView,
+             std::unique_ptr<viz::CopyOutputResult>>::
+    tracked_element_rects(
+        const std::unique_ptr<viz::CopyOutputResult>& result) {
+  return result->GetTrackedElementRects();
+}
+
+// static
 bool StructTraits<viz::mojom::CopyOutputResultDataView,
                   std::unique_ptr<viz::CopyOutputResult>>::
     Read(viz::mojom::CopyOutputResultDataView data,
@@ -281,8 +282,9 @@ bool StructTraits<viz::mojom::CopyOutputResultDataView,
       switch (destination) {
         case viz::CopyOutputResult::Destination::kSystemMemory: {
           std::optional<SkBitmap> bitmap_opt;
-          if (!data.ReadBitmap(&bitmap_opt))
+          if (!data.ReadBitmap(&bitmap_opt)) {
             return false;
+          }
           if (!bitmap_opt) {
             // During shutdown or switching to background on Android, Chrome
             // will release GPU context, it will release mapped GPU memory which
@@ -292,21 +294,30 @@ bool StructTraits<viz::mojom::CopyOutputResultDataView,
                 format, destination, error);
             return true;
           }
-          if (!bitmap_opt->readyToDraw())
+          if (!bitmap_opt->readyToDraw()) {
             return false;
+          }
+
+          viz::TrackedElementRects tracked_element_rects;
+          if (!data.ReadTrackedElementRects(&tracked_element_rects)) {
+            return false;
+          }
 
           *out_p = std::make_unique<viz::CopyOutputSkBitmapResult>(
               rect, std::move(*bitmap_opt));
+          (*out_p)->SetTrackedElementRects(std::move(tracked_element_rects));
           return true;
         }
 
         case viz::CopyOutputResult::Destination::kSharedImage: {
           std::optional<gpu::Mailbox> mailbox;
-          if (!data.ReadMailbox(&mailbox) || !mailbox)
+          if (!data.ReadMailbox(&mailbox) || !mailbox) {
             return false;
+          }
           std::optional<gfx::ColorSpace> color_space;
-          if (!data.ReadColorSpace(&color_space) || !color_space)
+          if (!data.ReadColorSpace(&color_space) || !color_space) {
             return false;
+          }
 
           if (mailbox->IsZero()) {
             // Returns an empty result.

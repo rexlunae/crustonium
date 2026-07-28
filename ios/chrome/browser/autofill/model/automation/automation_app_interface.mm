@@ -16,6 +16,7 @@
 #import "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#import "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #import "components/autofill/core/browser/field_types.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -80,8 +81,7 @@ NSError* PrepareAutofillProfileWithValues(
   autofill::AutofillProfile profile(
       autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
   autofill::CreditCard credit_card(
-      base::Uuid::GenerateRandomV4().AsLowercaseString(),
-      "https://www.example.com/");
+      base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   // For each type-value dictionary in the autofill profile list, validate it,
   // then add it to the appropriate profile.

@@ -116,7 +116,7 @@ class WebAppHeaderLayoutMediator
         mSetHeaderAsOverlayCallback = setHeaderAsOverlayCallback;
         mHeaderAsOverlay = mDisplayMode == DisplayMode.WINDOW_CONTROLS_OVERLAY;
         mOnTabUpdate = this::onTabUpdate;
-        mTabSupplier.addObserver(mOnTabUpdate);
+        mTabSupplier.addSyncObserverAndPostIfNonNull(mOnTabUpdate);
         mClientPackageName = clientPackageName;
 
         mScrimVisibilityObserver =
@@ -130,7 +130,9 @@ class WebAppHeaderLayoutMediator
                     }
                 };
         mScrimManager = scrimManager;
-        mScrimManager.getScrimVisibilitySupplier().addObserver(mScrimVisibilityObserver);
+        mScrimManager
+                .getScrimVisibilitySupplier()
+                .addSyncObserverAndPostIfNonNull(mScrimVisibilityObserver);
 
         mModel = model;
         // View should notify us about initial width.

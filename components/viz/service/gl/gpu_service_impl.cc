@@ -12,6 +12,7 @@
 #include "base/allocator/partition_alloc_support.h"
 #include "base/android/android_info.h"
 #include "base/command_line.h"
+#include "base/debug/asan_invalid_access.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -36,6 +37,7 @@
 #include "components/viz/common/features.h"
 #include "components/viz/common/resources/peak_gpu_memory_tracker_util.h"
 #include "components/viz/service/gl/gpu_log_message_manager.h"
+#include "components/vrp_flags/buildflags.h"
 #include "gpu/command_buffer/service/dawn_caching_interface.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/scheduler.h"
@@ -111,10 +113,6 @@
 #include "gpu/command_buffer/service/gpu_persistent_cache.h"
 #endif
 
-#if BUILDFLAG(SKIA_USE_METAL)
-#include "gpu/command_buffer/service/metal_context_provider.h"
-#endif
-
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)
 #include "base/test/clang_profiling.h"
 #endif
@@ -128,6 +126,11 @@
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/ozone/public/surface_factory_ozone.h"
 #endif  // BUILDFLAG(IS_OZONE)
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+#include "components/vrp_flags/vrp_flags.h"       // nogncheck
+#include "components/vrp_flags/vrp_flags_impl.h"  // nogncheck
+#endif                                            // BUILDFLAG(ENABLE_VRP_FLAGS)
 
 namespace viz {
 
@@ -172,6 +175,34 @@ GetPersistentCacheAsyncDiskWriteOpts() {
   return async_opts;
 }
 
+gpu::GpuPersistentCache::MetadataOpts GetPersistentCacheMetadataOpts() {
+  gpu::GpuPersistentCache::MetadataOpts metadata_options;
+
+  metadata_options.enabled =
+      base::FeatureList::IsEnabled(features::kGpuPersistentCacheMetadata);
+  metadata_options.preload_count =
+      features::kGpuPersistentCacheMetadataPreloadCount.Get();
+
+  return metadata_options;
+}
+
+void InduceMemoryInvalidAccessHelper(mojom::MemoryInvalidAccessType action) {
+  switch (action) {
+    case mojom::MemoryInvalidAccessType::kHeapOverflow:
+      base::debug::AsanHeapOverflow();
+      break;
+    case mojom::MemoryInvalidAccessType::kHeapUnderflow:
+      base::debug::AsanHeapUnderflow();
+      break;
+    case mojom::MemoryInvalidAccessType::kUseAfterFree:
+      base::debug::AsanHeapUseAfterFree();
+      break;
+    case mojom::MemoryInvalidAccessType::kMemberDereferenceAfterFree:
+      base::debug::AsanHeapMemberDereferenceAfterFree();
+      break;
+  }
+}
+
 }  // namespace
 
 GpuServiceImpl::GpuServiceImpl(
@@ -198,6 +229,7 @@ GpuServiceImpl::GpuServiceImpl(
 #endif
       persistent_caches_(
           /*max_in_memory_cache_size=*/gpu::GetDefaultGpuDiskCacheSize(),
+          /*metadata_options=*/GetPersistentCacheMetadataOpts(),
           /*async_write_options=*/GetPersistentCacheAsyncDiskWriteOpts()),
       clear_shader_cache_(base::FeatureList::IsEnabled(
           features::kClearGrShaderDiskCacheOnInvalidPrefix)) {
@@ -233,14 +265,14 @@ GpuServiceImpl::GpuServiceImpl(
       std::make_unique<gpu::webgpu::DawnCachingInterfaceFactory>();
 #endif
 
-  if (gpu_preferences_.gr_context_type == gpu::GrContextType::kGraphiteDawn) {
 #if BUILDFLAG(SKIA_USE_DAWN)
+  if (gpu_preferences_.gr_context_type == gpu::GrContextType::kGraphiteDawn) {
     dawn_context_provider_ = std::move(init_params.dawn_context_provider);
 
     if (dawn_context_provider_) {
       // GpuServiceImpl holds the instance of DawnContextProvider, so it
       // outlives the DawnContextProvider.
-      if (features::kSkiaGraphiteDawnUsePersistentCache.Get()) {
+      if (features::SkiaGraphiteUsesPersistentCache()) {
         auto persistent_cache =
             persistent_caches_.GetCache(gpu::kGraphiteDawnGpuDiskCacheHandle);
         dawn_context_provider_->SetCachingInterface(
@@ -261,16 +293,8 @@ GpuServiceImpl::GpuServiceImpl(
             std::move(dawn_caching_interface));
       }
     }
-#endif  // BUILDFLAG(SKIA_USE_DAWN)
-  } else if (gpu_preferences_.gr_context_type ==
-             gpu::GrContextType::kGraphiteMetal) {
-#if BUILDFLAG(SKIA_USE_METAL)
-    metal_context_provider_ = MetalContextProvider::Create();
-    if (!metal_context_provider_) {
-      DLOG(ERROR) << "Failed to create Metal context provider for Graphite.";
-    }
-#endif  // BUILDFLAG(SKIA_USE_METAL)
   }
+#endif  // BUILDFLAG(SKIA_USE_DAWN)
 
   weak_ptr_ = weak_ptr_factory_.GetWeakPtr();
 }
@@ -278,6 +302,7 @@ GpuServiceImpl::GpuServiceImpl(
 GpuServiceImpl::GpuServiceImpl()
     : persistent_caches_(
           /*max_in_memory_cache_size=*/gpu::GetDefaultGpuDiskCacheSize(),
+          /*metadata_options=*/GetPersistentCacheMetadataOpts(),
           /*async_write_options=*/GetPersistentCacheAsyncDiskWriteOpts()),
       clear_shader_cache_(base::FeatureList::IsEnabled(
           features::kClearGrShaderDiskCacheOnInvalidPrefix)) {}
@@ -352,8 +377,6 @@ void GpuServiceImpl::UpdateGPUInfo() {
   gpu_info_.initialization_time = now - start_time_;
   startup_metric_utils::GetGpu().RecordGpuInitialized(now);
 
-  // This metric code may be removed after the following investigation:
-  // crbug.com/1350257
   UMA_HISTOGRAM_CUSTOM_TIMES("GPU.GPUInitializationTime.V4",
                              gpu_info_.initialization_time,
                              base::Milliseconds(5), base::Seconds(90), 100);
@@ -482,9 +505,9 @@ void GpuServiceImpl::InitializeWithHostInternal(
       gpu_preferences_, this, watchdog_thread_.get(), main_runner_, io_runner_,
       scheduler_, sync_point_manager, shared_image_manager, gpu_feature_info_,
       &use_shader_cache_shm_count_->data, std::move(default_offscreen_surface),
-      vulkan_context_provider(), metal_context_provider(),
-      dawn_context_provider(), dawn_caching_interface_factory(),
-      gr_context_options_provider_, &persistent_caches_);
+      vulkan_context_provider(), dawn_context_provider(),
+      dawn_caching_interface_factory(), gr_context_options_provider_,
+      &persistent_caches_);
 
   media_gpu_channel_manager_ = std::make_unique<media::MediaGpuChannelManager>(
       gpu_channel_manager_.get());
@@ -643,31 +666,50 @@ void GpuServiceImpl::CreateVideoEncodeAcceleratorProvider(
 
 void GpuServiceImpl::BindWebNNContextProvider(
     mojo::PendingReceiver<webnn::mojom::WebNNContextProvider> pending_receiver,
-    int client_id) {
+    int client_id,
+    uint64_t client_tracing_id,
+    bool is_incognito) {
   if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&GpuServiceImpl::BindWebNNContextProvider, weak_ptr_,
-                       std::move(pending_receiver), client_id));
+        FROM_HERE, base::BindOnce(&GpuServiceImpl::BindWebNNContextProvider,
+                                  weak_ptr_, std::move(pending_receiver),
+                                  client_id, client_tracing_id, is_incognito));
     return;
   }
 
-  if (!webnn_context_provider_) {
-    scoped_refptr<gpu::SharedContextState> shared_context_state =
-        GetContextState();
-    // `shared_context_state` may be nullptr if there is no GPU acceleration.
-    // For such case, WebNN CPU backend, e.g. TFLite XNNPACK, is still useful.
-
-    // TODO(crbug.com/345352987): manage `WebNNContextProviderImpl` instance per
-    // `client_id` in order to support memory metrics.
-    webnn_context_provider_ = webnn::WebNNContextProviderImpl::Create(
-        std::move(shared_context_state), gpu_feature_info_, gpu_info_,
-        shared_image_manager(),
-        base::BindOnce(&GpuServiceImpl::LoseAllContexts, weak_ptr_),
-        main_runner(), GetGpuScheduler(), client_id, gpu_host_);
-  }
+  CreateWebNNContextProviderIfNeeded();
 
   webnn_context_provider_->BindWebNNContextProvider(
+      std::move(pending_receiver),
+      {is_incognito, client_id, client_tracing_id});
+}
+
+void GpuServiceImpl::CreateWebNNContextProviderIfNeeded() {
+  if (webnn_context_provider_) {
+    return;
+  }
+
+  webnn_context_provider_ = webnn::WebNNContextProviderImpl::Create(
+      gpu_feature_info_, gpu_info_, shared_image_manager(),
+      gpu_channel_manager_->peak_memory_monitor(),
+      base::BindOnce(&GpuServiceImpl::LoseAllContexts, weak_ptr_),
+      main_runner(), GetGpuScheduler(), gpu_host_);
+}
+
+void GpuServiceImpl::BindWebNNServiceIntrospection(
+    mojo::PendingReceiver<webnn::mojom::WebNNServiceIntrospection>
+        pending_receiver) {
+  if (!main_runner_->BelongsToCurrentThread()) {
+    main_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&GpuServiceImpl::BindWebNNServiceIntrospection,
+                       weak_ptr_, std::move(pending_receiver)));
+    return;
+  }
+
+  CreateWebNNContextProviderIfNeeded();
+
+  webnn_context_provider_->BindWebNNServiceIntrospection(
       std::move(pending_receiver));
 }
 
@@ -762,6 +804,7 @@ void GpuServiceImpl::DidLoseContext(gpu::error::ContextLostReason reason,
 }
 
 std::string GpuServiceImpl::GetShaderPrefixKey() {
+  base::AutoLock lock(shader_prefix_key_lock_);
   if (shader_prefix_key_.empty()) {
     const gpu::GPUInfo::GPUDevice& active_gpu = gpu_info_.active_gpu();
     std::string product =
@@ -848,12 +891,13 @@ bool GpuServiceImpl::IsExiting() const {
   return is_exiting_.IsSet();
 }
 
-void GpuServiceImpl::EstablishGpuChannel(int32_t client_id,
-                                         uint64_t client_tracing_id,
-                                         bool is_gpu_host,
-                                         bool enable_extra_handles_validation,
-                                         EstablishGpuChannelCallback callback) {
-  // This should always be called on the IO thread first.
+void GpuServiceImpl::EstablishGpuChannel(
+    int32_t client_id,
+    uint64_t client_tracing_id,
+    bool is_gpu_host,
+    bool enable_extra_handles_validation,
+    mojo::ScopedMessagePipeHandle channel_handle,
+    EstablishGpuChannelCallback callback) {
   if (io_runner_->BelongsToCurrentThread()) {
     if (IsExiting()) {
       // We are already exiting so there is no point in responding. Close the
@@ -863,48 +907,45 @@ void GpuServiceImpl::EstablishGpuChannel(int32_t client_id,
     }
 
     if (gpu::IsReservedClientId(client_id)) {
-      // This returns a null handle, which is treated by the client as a failure
-      // case.
-      std::move(callback).Run(mojo::ScopedMessagePipeHandle(), gpu::GPUInfo(),
+      std::move(callback).Run(/*success=*/false, gpu::GPUInfo(),
                               gpu::GpuFeatureInfo(),
                               gpu::SharedImageCapabilities());
       return;
     }
-
     EstablishGpuChannelCallback wrap_callback =
         base::BindPostTask(io_runner_, std::move(callback));
     main_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&GpuServiceImpl::EstablishGpuChannel,
-                                  weak_ptr_, client_id, client_tracing_id,
-                                  is_gpu_host, enable_extra_handles_validation,
-                                  std::move(wrap_callback)));
+        FROM_HERE,
+        base::BindOnce(&GpuServiceImpl::EstablishGpuChannel, weak_ptr_,
+                       client_id, client_tracing_id, is_gpu_host,
+                       enable_extra_handles_validation,
+                       std::move(channel_handle), std::move(wrap_callback)));
     return;
   }
 
   auto channel_token = base::UnguessableToken::Create();
   gpu::GpuChannel* gpu_channel = gpu_channel_manager_->EstablishChannel(
       channel_token, client_id, client_tracing_id, is_gpu_host,
-      enable_extra_handles_validation, gpu_extra_info_);
+      enable_extra_handles_validation, gpu_extra_info_, gpu_info_,
+      gpu_feature_info_);
 
   if (!gpu_channel) {
-    // This returns a null handle, which is treated by the client as a failure
-    // case.
-    std::move(callback).Run(mojo::ScopedMessagePipeHandle(), gpu::GPUInfo(),
+    std::move(callback).Run(/*success=*/false, gpu::GPUInfo(),
                             gpu::GpuFeatureInfo(),
                             gpu::SharedImageCapabilities());
     return;
   }
-  mojo::MessagePipe pipe;
+
   if (features::IsLegacyIpcDisabled()) {
-    gpu_channel->Start(std::move(pipe.handle0));
+    gpu_channel->Start(std::move(channel_handle));
   } else {
-    gpu_channel->Init(pipe.handle0.release(), shutdown_event_);
+    gpu_channel->Init(channel_handle.release(), shutdown_event_);
   }
 
   media_gpu_channel_manager_->AddChannel(client_id, channel_token);
 
   std::move(callback).Run(
-      std::move(pipe.handle1), gpu_info_, gpu_feature_info_,
+      /*success=*/true, gpu_info_, gpu_feature_info_,
       gpu_channel->shared_image_stub()->factory()->MakeCapabilities());
 }
 
@@ -1190,6 +1231,27 @@ void GpuServiceImpl::ThrowJavaException() {
   NOTREACHED() << "Java exception not supported on this platform.";
 #endif
 }
+
+void GpuServiceImpl::InduceMemoryInvalidAccess(
+    mojom::MemoryInvalidAccessType action) {
+  DCHECK(io_runner_->BelongsToCurrentThread());
+  main_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&InduceMemoryInvalidAccessHelper, action));
+}
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+void GpuServiceImpl::GetVrpFlags(GetVrpFlagsCallback callback) {
+  mojo::PendingRemote<vrp_flags::mojom::VrpFlags> remote;
+  if (!vrp_flags::IsEnabled()) {
+    std::move(callback).Run(std::move(remote));
+    return;
+  }
+
+  vrp_flags::VrpFlagsImpl::GetInstance()->Bind(
+      remote.InitWithNewPipeAndPassReceiver());
+  std::move(callback).Run(std::move(remote));
+}
+#endif
 
 void GpuServiceImpl::StartPeakMemoryMonitorOnMainThread(uint32_t sequence_num) {
   gpu_channel_manager_->StartPeakMemoryMonitor(sequence_num);

@@ -6,18 +6,33 @@
 
 #import "base/functional/callback_helpers.h"
 #import "base/metrics/histogram_functions.h"
+#import "base/values.h"
+#import "components/desktop_to_mobile_promos/desktop_to_mobile_promo_utils.h"
 #import "components/desktop_to_mobile_promos/pref_names.h"
 #import "components/desktop_to_mobile_promos/promos_types.h"
 #import "components/prefs/pref_service.h"
+#import "components/prefs/scoped_user_pref_update.h"
 #import "ios/chrome/browser/cross_platform_promos/model/cross_platform_promos_service.h"
 #import "ios/chrome/browser/cross_platform_promos/model/cross_platform_promos_service_factory.h"
 #import "ios/chrome/browser/push_notification/model/constants.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_client_id.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ui/base/l10n/l10n_util.h"
 
 CrossPlatformPromosNotificationClient::CrossPlatformPromosNotificationClient(
     ProfileIOS* profile)
     : PushNotificationClient(PushNotificationClientId::kCrossPlatformPromos,
-                             profile) {}
+                             profile) {
+  // Ensure cross-platform promos are enabled by default in the pref.
+  PrefService* prefs = profile->GetPrefs();
+  const base::DictValue& permissions =
+      prefs->GetDict(prefs::kFeaturePushNotificationPermissions);
+  if (!permissions.FindBool(kCrossPlatformPromosNotificationKey)) {
+    ScopedDictPrefUpdate update(prefs,
+                                prefs::kFeaturePushNotificationPermissions);
+    update->Set(kCrossPlatformPromosNotificationKey, true);
+  }
+}
 
 namespace {
 
@@ -100,6 +115,10 @@ CrossPlatformPromosNotificationClient::GetNotificationType(
         return NotificationType::kCrossPlatformPromoESB;
       case desktop_to_mobile_promos::PromoType::kLens:
         return NotificationType::kCrossPlatformPromoLens;
+      case desktop_to_mobile_promos::PromoType::kTabGroups:
+        return NotificationType::kCrossPlatformPromoTabGroups;
+      case desktop_to_mobile_promos::PromoType::kPriceTracking:
+        return NotificationType::kCrossPlatformPromoPriceTracking;
       case desktop_to_mobile_promos::PromoType::kAddress:
       case desktop_to_mobile_promos::PromoType::kPayment:
         // Promo types not supported for push notifications.
@@ -142,6 +161,12 @@ void CrossPlatformPromosNotificationClient::ShowPromo(
     case desktop_to_mobile_promos::PromoType::kLens:
       cross_platform_service->ShowLensPromo(browser);
       break;
+    case desktop_to_mobile_promos::PromoType::kTabGroups:
+      cross_platform_service->ShowTabGroupsPromo(browser);
+      break;
+    case desktop_to_mobile_promos::PromoType::kPriceTracking:
+      cross_platform_service->ShowPriceTrackingPromo(browser);
+      break;
     case desktop_to_mobile_promos::PromoType::kAddress:
     case desktop_to_mobile_promos::PromoType::kPayment:
       // Promo types not supported for push notifications.
@@ -159,4 +184,23 @@ void CrossPlatformPromosNotificationClient::ShowPromo(
 NSArray<UNNotificationCategory*>*
 CrossPlatformPromosNotificationClient::RegisterActionableNotifications() {
   return nil;
+}
+
+std::optional<ForcedNotificationPayload>
+CrossPlatformPromosNotificationClient::BuildForcedNotificationPayload(
+    int subtype,
+    NSMutableDictionary* user_info) {
+  auto promo_type = static_cast<desktop_to_mobile_promos::PromoType>(subtype);
+  desktop_to_mobile_promos::PromoNotificationStringIDs string_ids =
+      desktop_to_mobile_promos::GetPromoNotificationStringIDs(promo_type);
+
+  if (string_ids.title_id == 0 || string_ids.body_id == 0) {
+    return std::nullopt;
+  }
+
+  user_info[kDesktopToMobilePromoTypeKey] = @(subtype);
+
+  return ForcedNotificationPayload{
+      .title = l10n_util::GetNSString(string_ids.title_id),
+      .body = l10n_util::GetNSString(string_ids.body_id)};
 }

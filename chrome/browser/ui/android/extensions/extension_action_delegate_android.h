@@ -7,7 +7,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/android/extensions/extensions_toolbar_bridge.h"
+#include "chrome/browser/ui/android/extensions/extensions_toolbar_android.h"
 #include "chrome/browser/ui/extensions/extension_action_delegate.h"
 
 class BrowserWindowInterface;
@@ -20,9 +20,10 @@ class ExtensionViewHost;
 // action's popup and the context menu.
 class ExtensionActionDelegateAndroid : public ExtensionActionDelegate {
  public:
-  ExtensionActionDelegateAndroid(BrowserWindowInterface* browser,
-                                 const ToolbarActionsModel::ActionId& action_id,
-                                 extensions::ExtensionsToolbarBridge* bridge);
+  ExtensionActionDelegateAndroid(
+      BrowserWindowInterface* browser,
+      const ToolbarActionsModel::ActionId& action_id,
+      extensions::ExtensionsToolbarAndroid* toolbar_android);
   ExtensionActionDelegateAndroid(const ExtensionActionDelegateAndroid&) =
       delete;
   ExtensionActionDelegateAndroid& operator=(
@@ -37,13 +38,13 @@ class ExtensionActionDelegateAndroid : public ExtensionActionDelegate {
   void UnregisterCommand() override;
   bool IsShowingPopup() const override;
   void HidePopup() override;
-  gfx::NativeView GetPopupNativeView() override;
+  gfx::NativeView GetPopupNativeViewForTesting() override;
   void TriggerPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
                     PopupShowAction show_action,
                     bool by_user,
                     ShowPopupCallback callback) override;
   void ShowContextMenuAsFallback() override;
-  bool CloseOverflowMenuIfOpen() override;
+  void CloseExtensionsMenuIfOpen() override;
 
   // The corresponding browser window.
   const raw_ptr<BrowserWindowInterface> browser_;
@@ -52,7 +53,7 @@ class ExtensionActionDelegateAndroid : public ExtensionActionDelegate {
   const ToolbarActionsModel::ActionId action_id_;
 
   // The JNI bridge to communicate with the Java side.
-  const raw_ptr<extensions::ExtensionsToolbarBridge> toolbar_bridge_;
+  const raw_ptr<extensions::ExtensionsToolbarAndroid> toolbar_android_;
 
   // The platform-agnostic view model.
   raw_ptr<ExtensionActionViewModel> model_{nullptr};

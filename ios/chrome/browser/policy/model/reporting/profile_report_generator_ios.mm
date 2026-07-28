@@ -12,6 +12,7 @@
 #import "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #import "components/policy/core/common/cloud/user_cloud_policy_manager.h"
 #import "components/policy/proto/device_management_backend.pb.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/enterprise/identifiers/profile_id_service_factory_ios.h"
@@ -118,11 +119,8 @@ void ProfileReportGeneratorIOS::GetProfileName(
           IdentityManagerFactory::GetForProfile(profile_);
       AccountInfo extended_account_info =
           identity_manager->FindExtendedAccountInfo(*account_info);
-      if (!extended_account_info.full_name.empty()) {
-        report->set_name(extended_account_info.full_name);
-      } else {
-        report->set_name(account_info->email);
-      }
+      report->set_name(
+          extended_account_info.GetFullName().value_or(account_info->email));
     }
   } else {
     report->set_name(profile_->GetProfileName());

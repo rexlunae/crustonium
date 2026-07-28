@@ -41,10 +41,10 @@ CSSAnimationData::CSSAnimationData() : CSSTimingData(InitialDuration()) {
   composition_list_.push_back(InitialComposition());
   timeline_trigger_name_list_.push_back(InitialTimelineTriggerName());
   timeline_trigger_source_list_.push_back(InitialTimelineTriggerSource());
-  timeline_trigger_entry_range_start_list_.push_back(
-      InitialTimelineTriggerEntryRangeStart());
-  timeline_trigger_entry_range_end_list_.push_back(
-      InitialTimelineTriggerEntryRangeEnd());
+  timeline_trigger_activation_range_start_list_.push_back(
+      InitialTimelineTriggerActivationRangeStart());
+  timeline_trigger_activation_range_end_list_.push_back(
+      InitialTimelineTriggerActivationRangeEnd());
   timeline_trigger_active_range_start_list_.push_back(
       InitialTimelineTriggerActiveRangeStart());
   timeline_trigger_active_range_end_list_.push_back(
@@ -58,9 +58,11 @@ std::optional<double> CSSAnimationData::InitialDuration() {
   return std::nullopt;
 }
 
-const AtomicString& CSSAnimationData::InitialName() {
-  DEFINE_STATIC_LOCAL(const AtomicString, name, (""));
-  return name;
+bool CSSAnimationData::NamesMatch(const CSSAnimationData& other) const {
+  return std::ranges::equal(name_list_, other.name_list_,
+                            [](const auto& a, const auto& b) {
+                              return base::ValuesEquivalent(a, b);
+                            });
 }
 
 const StyleTimeline& CSSAnimationData::InitialTimeline() {
@@ -76,8 +78,7 @@ const StyleTimeline& CSSAnimationData::InitialTimelineTriggerSource() {
 
 bool CSSAnimationData::AnimationsMatchForStyleRecalc(
     const CSSAnimationData& other) const {
-  return name_list_ == other.name_list_ &&
-         timeline_list_ == other.timeline_list_ &&
+  return NamesMatch(other) && timeline_list_ == other.timeline_list_ &&
          play_state_list_ == other.play_state_list_ &&
          iteration_count_list_ == other.iteration_count_list_ &&
          direction_list_ == other.direction_list_ &&
@@ -104,15 +105,17 @@ const StyleTimeline& CSSAnimationData::GetTimeline(size_t index) const {
 
 const StyleTimeline& CSSAnimationData::GetTimelineTriggerSource(
     size_t index) const {
-  DCHECK_LT(index, timeline_trigger_source_list_.size());
+  DCHECK_LT(index, timeline_trigger_name_list_.size());
   return GetRepeated(timeline_trigger_source_list_, index);
 }
 
 const Member<const StyleTriggerAttachmentVector>
 CSSAnimationData::GetTriggerAttachments(size_t index) const {
   DCHECK_LT(index, name_list_.size());
+  // `index` is less than `trigger_attachments_list_.size()`, which
+  // is wtf_size_t.
   return (index < trigger_attachments_list_.size())
-             ? trigger_attachments_list_.at(index)
+             ? trigger_attachments_list_.at(static_cast<wtf_size_t>(index))
              : nullptr;
 }
 
@@ -137,10 +140,10 @@ bool CSSAnimationData::TriggersMatchForStyleRecalc(
     const CSSAnimationData& other) const {
   return TimelineTriggerNamesMatch(other) &&
          (other.TimelineTriggerSourceList() == TimelineTriggerSourceList()) &&
-         (other.TimelineTriggerEntryRangeStartList() ==
-          TimelineTriggerEntryRangeStartList()) &&
-         (other.TimelineTriggerEntryRangeEndList() ==
-          TimelineTriggerEntryRangeEndList()) &&
+         (other.TimelineTriggerActivationRangeStartList() ==
+          TimelineTriggerActivationRangeStartList()) &&
+         (other.TimelineTriggerActivationRangeEndList() ==
+          TimelineTriggerActivationRangeEndList()) &&
          (other.TimelineTriggerActiveRangeStartList() ==
           TimelineTriggerActiveRangeStartList()) &&
          (other.TimelineTriggerActiveRangeEndList() ==

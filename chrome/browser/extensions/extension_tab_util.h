@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/functional/callback.h"
 #include "base/types/expected.h"
 #include "base/values.h"
@@ -24,7 +25,6 @@
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
-class Browser;
 class BrowserWindowInterface;
 class GURL;
 class Profile;
@@ -34,10 +34,6 @@ class TabStripModel;
 namespace content {
 class BrowserContext;
 class WebContents;
-}
-
-namespace blink::mojom {
-class WindowFeatures;
 }
 
 namespace tab_groups {
@@ -97,10 +93,6 @@ class ExtensionTabUtil {
   static int GetWindowId(BrowserWindowInterface* browser);
   static int GetTabId(const content::WebContents* web_contents);
   static int GetWindowIdOfTab(const content::WebContents* web_contents);
-
-  static base::ListValue CreateTabList(BrowserWindowInterface* browser,
-                                       const Extension* extension,
-                                       mojom::ContextType context);
 
   static WindowController* GetControllerFromWindowID(
       const ChromeExtensionFunctionDetails& details,
@@ -259,10 +251,13 @@ class ExtensionTabUtil {
   static GURL ResolvePossiblyRelativeURL(const std::string& url_string,
                                          const Extension* extension);
 
-  // Navigates to a URL in a specific web contents.
+  // Navigates to a URL, triggered by a given `source_contents`. Navigation may
+  // be asynchronous and `done_callback` is invoked when the navigate has been
+  // fully initiated.
   static void NavigateToURL(WindowOpenDisposition disposition,
-                            content::WebContents* web_contents,
-                            const GURL& url);
+                            content::WebContents* source_contents,
+                            const GURL& url,
+                            base::OnceClosure done_callback);
 
   // Returns true if navigating to `url` could kill a page or the browser
   // itself, whether by simulating a crash, browser quit, thread hang, or
@@ -279,15 +274,6 @@ class ExtensionTabUtil {
       const Extension* extension,
       content::BrowserContext* browser_context);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Opens a tab for the specified `web_contents`.
-  static void CreateTab(std::unique_ptr<content::WebContents> web_contents,
-                        const std::string& extension_id,
-                        WindowOpenDisposition disposition,
-                        const blink::mojom::WindowFeatures& window_features,
-                        bool user_gesture);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
-
   // Executes the specified callback for all tabs in all browser windows.
   static void ForEachTab(
       base::RepeatingCallback<void(content::WebContents*)> callback);
@@ -302,15 +288,6 @@ class ExtensionTabUtil {
 
   static WindowController* GetWindowControllerOfTab(
       content::WebContents* web_contents);
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Open the extension's options page. Returns true if an options page was
-  // successfully opened (though it may not necessarily *load*, e.g. if the
-  // URL does not exist). This call to open the options page is initiated by
-  // the extension via chrome.runtime.openOptionsPage.
-  static bool OpenOptionsPageFromAPI(const Extension* extension,
-                                     content::BrowserContext* browser_context);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   // Open the extension's options page. Returns true if an options page was
   // successfully opened (though it may not necessarily *load*, e.g. if the
@@ -331,22 +308,20 @@ class ExtensionTabUtil {
   // contexts.
   static void ClearBackForwardCache();
 
-  // Check TabStripModel editability in every browser because a drag session
-  // could be running in another browser that reverts to the current browser. Or
-  // a drag could be mid-handoff if from one browser to another.
-  static bool IsTabStripEditable();
+  // Check TabStripModel editability in every browser in the given profile
+  // because a drag session could be running in another browser that reverts to
+  // the current browser or a drag could be mid-handoff if from one browser to
+  // another (but tabs can't be dragged between different profiles).
+  static bool IsTabStripEditable(Profile& profile);
 
   // Retrieve the corresponding TabListInterface for the specified `browser` if
   // and only if every browser's tab list is editable. See comments above
   // IsTabStripEditable() for details.
   static TabListInterface* GetEditableTabList(BrowserWindowInterface& browser);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Retrieve a TabStripModel only if every browser is editable.
-  // TODO(https://crbug.com/430344931): Remove this in favor of
-  // GetEditableTabList().
-  static TabStripModel* GetEditableTabStripModel(Browser* browser);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+  // Disables editing of the tab list for testing purposes. This will be reset
+  // when the returned AutoReset<> goes out of scope.
+  static base::AutoReset<bool> DisableTabListEditingForTesting();
 };
 
 }  // namespace extensions

@@ -34,12 +34,8 @@
 
 namespace blink {
 
+class LayoutSVGText;
 struct PaintInfo;
-
-using TrackedLayoutBoxLinkedHashSet = GCedHeapLinkedHashSet<Member<LayoutBox>>;
-using TrackedDescendantsMap =
-    GCedHeapHashMap<WeakMember<const LayoutBlock>,
-                    Member<TrackedLayoutBoxLinkedHashSet>>;
 
 // LayoutBlock is the class that is used by any LayoutObject
 // that is a containing block.
@@ -146,8 +142,8 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
 
   void RemovePositionedObjects(LayoutObject*);
 
-  void AddSvgTextDescendant(LayoutBox& svg_text);
-  void RemoveSvgTextDescendant(LayoutBox& svg_text);
+  void AddSvgTextDescendant(LayoutSVGText& svg_text);
+  void RemoveSvgTextDescendant(LayoutSVGText& svg_text);
 
   LayoutUnit TextIndentOffset() const;
 
@@ -195,9 +191,6 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
   void Paint(const PaintInfo&) const override;
 
   virtual bool HasLineIfEmpty() const;
-  // Returns baseline offset if we can get |SimpleFontData| from primary font.
-  // Or returns no value if we can't get font data.
-  std::optional<LayoutUnit> BaselineForEmptyLine() const;
 
   bool NodeAtPoint(HitTestResult&,
                    const HitTestLocation&,
@@ -205,9 +198,6 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
                    HitTestPhase) override;
 
  protected:
-  void StyleWillChange(StyleDifference,
-                       const ComputedStyle& new_style,
-                       StyleChangeContext&) override;
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
                       const StyleChangeContext&) override;
@@ -239,8 +229,6 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
     return true;
   }
 
-  virtual void RemoveLeftoverAnonymousBlock(LayoutBlock* child);
-
  protected:
   void InvalidatePaint(const PaintInvalidatorContext&) const override;
 
@@ -250,10 +238,6 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
   PhysicalRect LocalCaretRect(int caret_offset,
                               CaretShape caret_shape) const final;
   bool IsInlineBoxWrapperActuallyChild() const;
-
-  // End helper functions and structs used by layoutBlockChildren.
-
-  void RemoveFromGlobalMaps();
 
  protected:
   PositionWithAffinity PositionForPointIfOutsideAtomicInlineLevel(

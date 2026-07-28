@@ -85,7 +85,7 @@ class WebContentsViewRectProvider extends RectProvider {
         }
         mBrowserControlsSupplier = supplier;
         if (mBrowserControlsSupplier != null) {
-            mBrowserControlsSupplier.addObserver(mOnBrowserControlsChanged);
+            mBrowserControlsSupplier.addSyncObserverAndPostIfNonNull(mOnBrowserControlsChanged);
         }
         updateVisibleRectForPopup(
                 SupplierUtils.getOrNull(mBottomInsetSupplier),
@@ -111,7 +111,7 @@ class WebContentsViewRectProvider extends RectProvider {
         }
         mBottomInsetSupplier = supplier;
         if (mBottomInsetSupplier != null) {
-            mBottomInsetSupplier.addObserver(mOnBottomInsetChanged);
+            mBottomInsetSupplier.addSyncObserverAndPostIfNonNull(mOnBottomInsetChanged);
         }
         updateVisibleRectForPopup(
                 SupplierUtils.getOrNull(mBottomInsetSupplier),

@@ -16,8 +16,8 @@ export function getHtml(this: ExtensionsManagerElement) {
     ?is-child-account="${this.isChildAccount_}"
     ?dev-mode-controlled-by-policy="${this.devModeControlledByPolicy}"
     .delegate="${this.delegate}"
-    @cr-toolbar-menu-click="${this.onMenuButtonClick_}"
-    @search-changed="${this.onFilterChanged_}"
+    @cr-toolbar-menu-click="${this.onCrToolbarMenuClick_}"
+    @search-changed="${this.onSearchChanged_}"
     .extensions="${this.extensions_}"
     ?narrow="${this.narrow_}"
     @narrow-changed="${this.onNarrowChanged_}">
@@ -48,12 +48,13 @@ ${this.showDrawer_ ? html`
     </extensions-sidebar>
   </div>
   <cr-view-manager id="viewManager" role="main">
-    <extensions-item-list id="items-list" .delegate="${this.delegate}"
+    <extensions-item-list id="itemsList" .delegate="${this.delegate}"
         ?in-dev-mode="${this.inDevMode}"
         ?is-mv2-deprecation-notice-dismissed=
             "${this.isMv2DeprecationNoticeDismissed}"
         .filter="${this.filter}" ?hidden="${!this.didInitPage_}" slot="view"
         .apps="${this.apps_}" .extensions="${this.extensions_}"
+        ?extensions-pinned-by-default="${this.extensionsPinnedByDefault}"
         @show-install-warnings="${this.onShowInstallWarnings_}">
     </extensions-item-list>
     <cr-lazy-render-lit id="details-view" .template="${() => html`
@@ -63,12 +64,12 @@ ${this.showDrawer_ ? html`
             ?from-activity-log="${this.fromActivityLog_}"
             ?show-activity-log="${this.showActivityLog}"
             ?incognito-available="${this.incognitoAvailable_}"
-            .data="${this.detailViewItem_}">
+            .data="${this.detailViewItem_!}">
         </extensions-detail-view>`}">
     </cr-lazy-render-lit>
     <cr-lazy-render-lit id="activity-log" .template="${() => html`
         <extensions-activity-log .delegate="${this.delegate}" slot="view"
-            .extensionInfo="${this.activityLogItem_}">
+            .extensionInfo="${this.activityLogItem_!}">
         </extensions-activity-log>`}">
     </cr-lazy-render-lit>
     <cr-lazy-render-lit id="site-permissions" .template="${() => html`
@@ -106,7 +107,7 @@ ${this.showLoadErrorDialog_ ? html`
 ${this.showInstallWarningsDialog_ ? html`
   <extensions-install-warnings-dialog
       @close="${this.onInstallWarningsDialogClose_}"
-      .installWarnings="${this.installWarnings_}">
+      .installWarnings="${this.installWarnings_!}">
   </extensions-install-warnings-dialog>` : ''}
 <cr-toast-manager></cr-toast-manager>
 <!--_html_template_end_-->`;

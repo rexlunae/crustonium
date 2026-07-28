@@ -12,6 +12,7 @@
 
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -121,8 +122,8 @@ class PermissionRequest {
       bool format_origin_bold);
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
-  // Returns a weak pointer to this instance.
-  base::WeakPtr<PermissionRequest> GetWeakPtr();
+  // Returns a safe reference to this instance.
+  base::SafeRef<PermissionRequest> GetSafeRef();
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   // Returns whether displaying a confirmation chip for the request is
@@ -177,6 +178,11 @@ class PermissionRequest {
   // Returns true if the request has two origins and should use the two origin
   // prompt. Returns false otherwise.
   bool ShouldUseTwoOriginPrompt() const;
+
+  // Returns the type of geolocation prompt that should be shown for this
+  // request. Returns std::nullopt if the request is not for geolocation or if
+  // kApproximateGeolocationPermission is disabled.
+  std::optional<GeolocationPromptType> GetGeolocationPromptType() const;
 
   // Called when the user has granted the requested permission.
   // If |is_one_time| is true the permission will last until all tabs of

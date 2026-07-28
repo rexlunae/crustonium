@@ -10,6 +10,7 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/raw_ref.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -50,7 +51,6 @@
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
 #include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/color_transform.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/skia_span_util.h"
@@ -112,7 +112,7 @@ struct ReadbackTextureInfo {
 size_t GetRowBytesForColorType(int width, SkColorType color_type) {
   size_t row_bytes = width;
   switch (color_type) {
-    case kAlpha_8_SkColorType:
+    case kR8_unorm_SkColorType:
       break;
     case kR8G8_unorm_SkColorType:
       row_bytes *= 2;
@@ -137,7 +137,8 @@ void ReadbackTexturesOnGpuThread(
   }
 
   auto representation = shared_image_manager->ProduceSkia(
-      mailbox, context_state->memory_type_tracker(), context_state);
+      mailbox, context_state->memory_type_tracker(), context_state,
+      /*required_usages=*/{});
 
   SkSurfaceProps surface_props{0, kUnknown_SkPixelGeometry};
 
@@ -217,7 +218,7 @@ void ReadbackNV12Planes(TestGpuServiceHolder* gpu_service_holder,
                                   .get();
 
         std::vector<ReadbackTextureInfo> texture_infos;
-        texture_infos.emplace_back(texture_size, kAlpha_8_SkColorType,
+        texture_infos.emplace_back(texture_size, kR8_unorm_SkColorType,
                                    out_luma_plane);
         texture_infos.emplace_back(
             gfx::Size(texture_size.width() / 2, texture_size.height() / 2),
@@ -414,7 +415,8 @@ class ReadbackPixelTest : public VizPixelTest {
 
       renderer_->DrawFrame(
           &pass_list, 1.0f, gfx::Size(bitmap.width(), bitmap.height()),
-          gfx::DisplayColorSpaces(), std::move(surface_damage_rect_list));
+          gfx::DisplayColorSpaces(), std::move(surface_damage_rect_list),
+          TrackedElementRects());
       // Call SwapBuffersSkipped(), so the renderer can have a chance to release
       // resources.
       renderer_->SwapBuffersSkipped();
@@ -442,10 +444,11 @@ class ReadbackPixelTest : public VizPixelTest {
                          pixels.data(), pixels.size()));
       return shared_image;
     } else {
-      return sii->CreateSharedImage(
-          {format, size, color_space, gpu::SHARED_IMAGE_USAGE_DISPLAY_READ,
-           "TestLabels"},
-          pixels);
+      return sii->CreateSharedImage({format, size, color_space,
+                                     gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+                                         gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE,
+                                     "TestLabels"},
+                                    pixels);
     }
   }
 
@@ -983,7 +986,7 @@ TEST_P(ReadbackPixelTestNV12WithBlit, ExecutesCopyRequestWithBlit) {
     pixels[i] = (i == 0) ? GeneratePixels(plane_size_in_bytes, luma_pattern)
                          : GeneratePixels(plane_size_in_bytes, chromas_pattern);
 
-    auto color_type = i == 0 ? kAlpha_8_SkColorType : kR8G8_unorm_SkColorType;
+    auto color_type = i == 0 ? kR8_unorm_SkColorType : kR8G8_unorm_SkColorType;
     size_t row_bytes = plane_size.width() * (i == 0 ? 1 : 2);
     pixmaps[i] =
         SkPixmap(SkImageInfo::Make(plane_size.width(), plane_size.height(),
@@ -994,6 +997,7 @@ TEST_P(ReadbackPixelTestNV12WithBlit, ExecutesCopyRequestWithBlit) {
   auto shared_image = sii->CreateSharedImage(
       {MultiPlaneFormat::kNV12, source_size, gfx::ColorSpace::CreateREC709(),
        gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+           gpu::SHARED_IMAGE_USAGE_DISPLAY_WRITE |
            gpu::SHARED_IMAGE_USAGE_RASTER_WRITE,
        "TestLabels"},
       gpu::kNullSurfaceHandle);

@@ -5,13 +5,14 @@
 #ifndef PARTITION_ALLOC_ADDRESS_POOL_MANAGER_H_
 #define PARTITION_ALLOC_ADDRESS_POOL_MANAGER_H_
 
+#include <array>
 #include <bitset>
 #include <limits>
 
 #include "partition_alloc/address_pool_manager_types.h"
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
-#include "partition_alloc/partition_address_space.h"
+#include "partition_alloc/internal/partition_address_space_internal.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
 #include "partition_alloc/partition_alloc_base/thread_annotations.h"
@@ -181,7 +182,7 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
 
   PA_ALWAYS_INLINE Pool* GetPool(pool_handle handle) {
     PA_DCHECK(kNullPoolHandle < handle && handle <= kNumPools);
-    return &PA_UNSAFE_TODO(pools_[handle - 1]);
+    return &pools_[handle - 1];
   }
 
   // Gets the stats for the pool identified by `handle`, if
@@ -204,7 +205,7 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
-  Pool pools_[kNumPools];
+  std::array<Pool, kNumPools> pools_;
 
 #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
 

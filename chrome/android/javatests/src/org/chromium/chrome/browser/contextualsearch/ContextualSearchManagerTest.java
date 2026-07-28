@@ -9,7 +9,6 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper.waitForSecondChromeTabbedActivity;
 import static org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper.waitForTabs;
 
@@ -54,13 +53,13 @@ import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.MaxAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchBarControl;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchImageControl;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchQuickActionControl;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchBarControl;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchImageControl;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchPanel;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchQuickActionControl;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchInternalStateController.InternalState;
 import org.chromium.chrome.browser.contextualsearch.ResolvedSearchTerm.CardTag;
 import org.chromium.chrome.browser.findinpage.FindToolbar;
@@ -68,6 +67,7 @@ import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
+import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.tab.Tab;
@@ -76,14 +76,15 @@ import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+import org.chromium.chrome.browser.ui.signin.ForcedSigninStatusProvider;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.FullscreenTestUtils;
 import org.chromium.chrome.test.util.MenuUtils;
 import org.chromium.components.external_intents.ExternalNavigationHandler;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.ViewUtils;
@@ -95,6 +96,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // Explicitly not supported.
 // TODO(donnd): Create class with limited API to encapsulate the internals of simulations.
 
 /** Tests the Contextual Search Manager using instrumentation tests. */
@@ -102,10 +104,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 // NOTE: Disable online detection so we we'll default to online on test bots with no network.
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures(ChromeFeatureList.CONTEXTUAL_SEARCH_DISABLE_ONLINE_DETECTION)
-@Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+@DisableFeatures({ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING})
 @Batch(Batch.PER_CLASS)
 public class ContextualSearchManagerTest extends ContextualSearchInstrumentationBase {
     @Mock private EdgeToEdgeController mMockEdgeToEdgeController;
+    @Mock private ForcedSigninStatusProvider mMockForcedSigninStatusProvider;
 
     // DOM element IDs in our test page based on what functions they trigger.
     // TODO(donnd): add more, and also the associated Search Term, or build a similar mapping.
@@ -154,7 +157,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @SmallTest
     @Feature({"ContextualSearch"})
     @Restriction(DeviceFormFactor.PHONE)
-    @DisabledTest(message = "crbug.com/1373276")
+    @DisabledTest(message = "crbug.com/40871636")
     public void testSwipeExpand() throws Exception {
         // TODO(donnd): enable for all features.
         assertNoSearchesLoaded();
@@ -219,7 +222,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    // Previously flaky, disabled 4/2021.  https://crbug.com/1192285, https://crbug.com/1192561
+    // Previously flaky, disabled 4/2021.  https://crbug.com/40757167, https://crbug.com/40757310
     public void testResolveGestureSelects() throws Exception {
         simulateResolveSearch("intelligence");
         Assert.assertEquals("Intelligence", getSelectedText());
@@ -484,7 +487,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
      */
     @Test
     @SmallTest
-    // Previously flaky and disabled 4/2021. See https://crbug.com/1197102
+    // Previously flaky and disabled 4/2021. See https://crbug.com/40176751
     @Feature({"ContextualSearch"})
     @Restriction(DeviceFormFactor.PHONE)
     public void testTapContentAndExpandPanelInFullscreen() throws Exception {
@@ -510,8 +513,8 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    // Previously flaky on phones: https://crbug.com/765796
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
+    // Previously flaky on phones: https://crbug.com/40540341
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444937
     public void testPanelDismissedOnToggleFullscreen() throws Exception {
         // Simulate a resolving search and assert that the panel peeks.
         simulateResolveSearch("search");
@@ -623,7 +626,8 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
         Assert.assertEquals(
                 expectedCaptionStart,
                 barControl.getCaptionText().subSequence(0, expectedCaptionStart.length()));
-        // TODO(donnd): figure out why we get ~0.65 on Oreo rather than 1. https://crbug.com/818515.
+        // TODO(donnd): figure out why we get ~0.65 on Oreo rather than 1.
+        // https://crbug.com/40565628.
         Assert.assertTrue(0.5f < imageControl.getCustomImageVisibilityPercentage());
 
         CompositorAnimationHandler.setTestingMode(false);
@@ -633,7 +637,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    // Previously disabled: https://crbug.com/1315417
+    // Previously disabled: https://crbug.com/40221759
     public void testQuickActionIntent() throws Exception {
         // Add a new filter to the activity monitor that matches the intent that should be fired.
         IntentFilter quickActionFilter = new IntentFilter(Intent.ACTION_VIEW);
@@ -680,8 +684,8 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @SmallTest
     @Feature({"ContextualSearch"})
     // TODO(donnd): reenable - recent fixes as of 3/31/2023
-    @DisabledTest(message = "crbug.com/1075895")
-    // Previously disabled: https://crbug.com/1127796
+    @DisabledTest(message = "crbug.com/40687948")
+    // Previously disabled: https://crbug.com/40719243
     public void testQuickActionUrl() throws Exception {
         final String testUrl = mTestServer.getURL("/chrome/test/data/android/google.html");
 
@@ -734,7 +738,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    // Previously disabled: http://crbug.com/1296677
+    // Previously disabled: http://crbug.com/40821849
     public void testDictionaryDefinitions() throws Exception {
         runDictionaryCardTest(CardTag.CT_DEFINITION);
     }
@@ -746,7 +750,6 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
     public void testContextualDictionaryDefinitions() throws Exception {
         runDictionaryCardTest(CardTag.CT_CONTEXTUAL_DEFINITION);
     }
@@ -778,7 +781,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
         // Store the original value in a temp, and mark the first run as not completed
         // for this test case.
         // Getting value from shared preference rather than FirstRunStatus#getFirstRunFlowComplete
-        // to get rid of the impact from commandline switch. See https://crbug.com/1158467
+        // to get rid of the impact from commandline switch. See https://crbug.com/40736982
         boolean originalIsFirstRunComplete =
                 ChromeSharedPreferences.getInstance()
                         .readBoolean(ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE, false);
@@ -798,6 +801,27 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
         FirstRunStatus.setFirstRunFlowComplete(originalIsFirstRunComplete);
     }
 
+    /**
+     * Tests when the forced signin screen is being displayed: Tap and Long-press don't activate CS.
+     */
+    @Test
+    @SmallTest
+    @Feature({"ContextualSearch"})
+    public void testForcedSigninIsDisplayed() throws Exception {
+        ForcedSigninStatusProvider.setInstanceForTesting(mMockForcedSigninStatusProvider);
+        when(mMockForcedSigninStatusProvider.isForcedSigninShowing()).thenReturn(true);
+
+        // Simulate a tap that resolves to show the Bar.
+        clickNode("intelligence");
+        assertNoWebContents();
+        assertNoSearchesLoaded();
+
+        // Simulate a Long-press.
+        longPressNodeWithoutWaiting("states");
+        assertNoWebContents();
+        assertNoSearchesLoaded();
+    }
+
     // ============================================================================================
     // Internal State Controller tests, which ensure that the internal logic flows as expected for
     // each type of triggering gesture.
@@ -809,7 +833,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    // Previously flaky and disabled 4/2021.  https://crbug.com/1058297
+    // Previously flaky and disabled 4/2021.  https://crbug.com/40121079
     public void testAllInternalStatesVisitedResolvingTap() throws Exception {
         // Set up a tracking version of the Internal State Controller.
         ContextualSearchInternalStateControllerWrapper internalStateControllerWrapper =
@@ -872,7 +896,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    // Previously flaky and disabled 4/2021.  https://crbug.com/1192285
+    // Previously flaky and disabled 4/2021.  https://crbug.com/40757167
     @DisabledTest(
             message = "TODO(donnd): reenable after unifying resolving and non-resolving longpress.")
     public void testAllInternalStatesVisitedNonResolveLongpress() throws Exception {
@@ -905,8 +929,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Feature({"ContextualSearch"})
     // TODO(crbug.com/473893732): Update the test for lock top control or use restriction.
     @DisableFeatures(ChromeFeatureList.LOCK_TOP_CONTROLS_ON_LARGE_TABLETS_V2)
-    // Previously flaky and disabled 4/2021.  https://crbug.com/1180304
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
+    // Previously flaky and disabled 4/2021.  https://crbug.com/40750236
     public void testTriggeringContextualSearchHidesFindInPageOverlay() throws Exception {
         MenuUtils.invokeCustomMenuActionSync(
                 InstrumentationRegistry.getInstrumentation(),
@@ -946,7 +969,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @LargeTest
     @Feature({"ContextualSearch"})
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_TAB_MERGING_FOR_TESTING)
-    @MaxAndroidSdkLevel(value = Build.VERSION_CODES.R, reason = "crbug.com/1301017")
+    @MaxAndroidSdkLevel(value = Build.VERSION_CODES.R, reason = "crbug.com/40216504")
     public void testTabReparenting() throws Exception {
         // Move our "tap_test" tab to another activity.
         final ChromeActivity ca = mActivityTestRule.getActivity();
@@ -1016,7 +1039,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
 
     /** Monitor user action UMA recording operations. */
     private static class UserActionMonitor extends UserActionTester {
-        // TODO(donnd): merge into UserActionTester. See https://crbug.com/1103757.
+        // TODO(donnd): merge into UserActionTester. See https://crbug.com/40704780.
         private final Set<String> mUserActionPrefixes;
         private final Map<String, Integer> mUserActionCounts;
 
@@ -1054,10 +1077,10 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisabledTest(message = "https://crbug.com/1048827, https://crbug.com/1181088")
+    @DisabledTest(message = "https://crbug.com/40117401, https://crbug.com/40750667")
     public void testLongpressExtendingSelectionExactResolve() throws Exception {
         // Set up UserAction monitoring.
-        Set<String> userActions = new HashSet();
+        Set<String> userActions = new HashSet<>();
         userActions.add("ContextualSearch.SelectionEstablished");
         userActions.add("ContextualSearch.ManualRefine");
         UserActionMonitor userActionMonitor = new UserActionMonitor(userActions);
@@ -1086,6 +1109,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
+    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/522362839
     public void testPeekStateHeight() throws Exception {
         final float defaultHeight = 70;
         longPressNode("states");

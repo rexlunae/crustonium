@@ -12,7 +12,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_detail_text_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_multi_line_text_edit_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_button_item.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 
@@ -26,12 +25,15 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
   AimDebuggerItemPolicy,
   AimDebuggerItemDSE,
   AimDebuggerItemServer,
+  AimDebuggerItemCobrowse,
+  AimDebuggerItemFusebox,
   AimDebuggerItemSource,
   AimDebuggerItemResponse,
   AimDebuggerItemActionRequest,
+  AimDebuggerItemActionApply,
+  AimDebuggerItemActionCopy,
   AimDebuggerItemActionView,
   AimDebuggerItemActionDraft,
-  AimDebuggerItemActionApply,
 };
 
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_multi_line_text_edit_item_delegate.h"
@@ -79,6 +81,10 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
 
 - (void)didTapApplyButton {
   [self.mutator didTapApplyResponse:_base64Response];
+}
+
+- (void)didTapCopyButton {
+  [self.mutator didTapCopyResponse:_base64Response];
 }
 
 - (void)didTapCopyViewLinkButton {
@@ -132,9 +138,8 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
   BOOL eligible = _eligibilityStatus.Has(AimEligibilityCheck::kIsEligible);
   statusItem.detailText = eligible ? @"Eligible" : @"Not Eligible";
   statusItem.iconImage =
-      eligible
-          ? DefaultSymbolTemplateWithPointSize(kCheckmarkCircleFillSymbol, 18)
-          : DefaultSymbolTemplateWithPointSize(kXMarkCircleFillSymbol, 18);
+      eligible ? SymbolTemplateWithPointSize(SymbolCheckmarkCircleFill, 18)
+               : SymbolTemplateWithPointSize(SymbolXMarkCircleFill, 18);
   statusItem.iconTintColor = eligible ? [UIColor colorNamed:kGreenColor]
                                       : [UIColor colorNamed:kRedColor];
   [snapshot appendItemsWithIdentifiers:@[ statusItem ]
@@ -148,8 +153,8 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
         _eligibilityStatus.Has(AimEligibilityCheck::kIsEligibleByPolicy);
     policyItem.detailText = allowed ? @"Allowed" : @"Not Allowed";
     policyItem.iconImage =
-        allowed ? DefaultSymbolTemplateWithPointSize(kCheckmarkSymbol, 18)
-                : DefaultSymbolTemplateWithPointSize(kXMarkSymbol, 18);
+        allowed ? SymbolTemplateWithPointSize(SymbolCheckmark, 18)
+                : SymbolTemplateWithPointSize(SymbolXMark, 18);
     policyItem.iconTintColor = allowed ? [UIColor colorNamed:kGreenColor]
                                        : [UIColor colorNamed:kRedColor];
 
@@ -158,9 +163,9 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
     dseItem.text = @"Default Search Engine";
     BOOL google = _eligibilityStatus.Has(AimEligibilityCheck::kIsEligibleByDse);
     dseItem.detailText = google ? @"Google" : @"Other";
-    dseItem.iconImage =
-        google ? DefaultSymbolTemplateWithPointSize(kCheckmarkSymbol, 18)
-               : DefaultSymbolTemplateWithPointSize(kXMarkSymbol, 18);
+    dseItem.iconImage = google
+                            ? SymbolTemplateWithPointSize(SymbolCheckmark, 18)
+                            : SymbolTemplateWithPointSize(SymbolXMark, 18);
     dseItem.iconTintColor = google ? [UIColor colorNamed:kGreenColor]
                                    : [UIColor colorNamed:kRedColor];
 
@@ -171,13 +176,41 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
         _eligibilityStatus.Has(AimEligibilityCheck::kIsEligibleByServer);
     serverItem.detailText = serverEligible ? @"Eligible" : @"Not Eligible";
     serverItem.iconImage =
-        serverEligible
-            ? DefaultSymbolTemplateWithPointSize(kCheckmarkSymbol, 18)
-            : DefaultSymbolTemplateWithPointSize(kXMarkSymbol, 18);
+        serverEligible ? SymbolTemplateWithPointSize(SymbolCheckmark, 18)
+                       : SymbolTemplateWithPointSize(SymbolXMark, 18);
     serverItem.iconTintColor = serverEligible ? [UIColor colorNamed:kGreenColor]
                                               : [UIColor colorNamed:kRedColor];
 
-    [snapshot appendItemsWithIdentifiers:@[ policyItem, dseItem, serverItem ]
+    TableViewDetailIconItem* cobrowseItem =
+        [[TableViewDetailIconItem alloc] initWithType:AimDebuggerItemCobrowse];
+    cobrowseItem.text = @"Co-Browse Eligible";
+    BOOL cobrowseEligible =
+        _eligibilityStatus.Has(AimEligibilityCheck::kIsCobrowseEligible);
+    cobrowseItem.detailText = cobrowseEligible ? @"Eligible" : @"Not Eligible";
+    cobrowseItem.iconImage =
+        cobrowseEligible
+            ? DefaultSymbolTemplateWithPointSize(kCheckmarkSymbol, 18)
+            : DefaultSymbolTemplateWithPointSize(kXMarkSymbol, 18);
+    cobrowseItem.iconTintColor = cobrowseEligible
+                                     ? [UIColor colorNamed:kGreenColor]
+                                     : [UIColor colorNamed:kRedColor];
+
+    TableViewDetailIconItem* fuseboxItem =
+        [[TableViewDetailIconItem alloc] initWithType:AimDebuggerItemFusebox];
+    fuseboxItem.text = @"Fusebox Eligibility";
+    BOOL fuseboxEligible =
+        _eligibilityStatus.Has(AimEligibilityCheck::kIsFuseboxEligible);
+    fuseboxItem.detailText = fuseboxEligible ? @"Eligible" : @"Not Eligible";
+    fuseboxItem.iconImage =
+        fuseboxEligible ? SymbolTemplateWithPointSize(SymbolCheckmark, 18)
+                        : SymbolTemplateWithPointSize(SymbolXMark, 18);
+    fuseboxItem.iconTintColor = fuseboxEligible
+                                    ? [UIColor colorNamed:kGreenColor]
+                                    : [UIColor colorNamed:kRedColor];
+
+    [snapshot appendItemsWithIdentifiers:@[
+      policyItem, dseItem, serverItem, cobrowseItem, fuseboxItem
+    ]
                intoSectionWithIdentifier:@(AimDebuggerSectionStatus)];
   }
 
@@ -199,6 +232,14 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
       initWithType:AimDebuggerItemActionRequest];
   requestItem.buttonText = @"Request";
 
+  TableViewTextButtonItem* saveItem =
+      [[TableViewTextButtonItem alloc] initWithType:AimDebuggerItemActionApply];
+  saveItem.buttonText = @"Apply";
+
+  TableViewTextButtonItem* copyItem =
+      [[TableViewTextButtonItem alloc] initWithType:AimDebuggerItemActionCopy];
+  copyItem.buttonText = @"Copy Response";
+
   TableViewTextButtonItem* viewItem =
       [[TableViewTextButtonItem alloc] initWithType:AimDebuggerItemActionView];
   viewItem.buttonText = @"Copy View Link";
@@ -207,12 +248,9 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
       [[TableViewTextButtonItem alloc] initWithType:AimDebuggerItemActionDraft];
   draftItem.buttonText = @"Copy Draft Link";
 
-  TableViewTextButtonItem* saveItem =
-      [[TableViewTextButtonItem alloc] initWithType:AimDebuggerItemActionApply];
-  saveItem.buttonText = @"Apply";
-
   [snapshot appendItemsWithIdentifiers:@[
-    sourceItem, responseItem, requestItem, viewItem, draftItem, saveItem
+    sourceItem, responseItem, requestItem, saveItem, copyItem, viewItem,
+    draftItem
   ]
              intoSectionWithIdentifier:@(AimDebuggerSectionDetails)];
 
@@ -227,16 +265,17 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
     case AimDebuggerItemResponse: {
       TableViewMultiLineTextEditCell* cell =
           DequeueTableViewCell<TableViewMultiLineTextEditCell>(tableView);
-      [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+      [item configureCell:cell];
       return cell;
     }
     case AimDebuggerItemActionRequest:
+    case AimDebuggerItemActionCopy:
     case AimDebuggerItemActionView:
     case AimDebuggerItemActionDraft:
     case AimDebuggerItemActionApply: {
       TableViewTextButtonCell* cell =
           DequeueTableViewCell<TableViewTextButtonCell>(tableView);
-      [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+      [item configureCell:cell];
       cell.button.userInteractionEnabled = NO;
       return cell;
     }
@@ -244,11 +283,13 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
     case AimDebuggerItemPolicy:
     case AimDebuggerItemDSE:
     case AimDebuggerItemServer:
+    case AimDebuggerItemCobrowse:
+    case AimDebuggerItemFusebox:
     case AimDebuggerItemSource:
     default: {
       LegacyTableViewCell* cell =
           DequeueTableViewCell<LegacyTableViewCell>(tableView);
-      [item configureCell:cell withStyler:[[ChromeTableViewStyler alloc] init]];
+      [item configureCell:cell];
       return cell;
     }
   }
@@ -263,6 +304,9 @@ typedef NS_ENUM(NSUInteger, AimDebuggerItemType) {
   switch (itemType) {
     case AimDebuggerItemActionRequest:
       [self didTapRequestButton];
+      break;
+    case AimDebuggerItemActionCopy:
+      [self didTapCopyButton];
       break;
     case AimDebuggerItemActionView:
       [self didTapCopyViewLinkButton];

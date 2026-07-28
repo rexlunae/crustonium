@@ -10,16 +10,20 @@
 #include "base/android/jni_android.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "chrome/browser/autofill/android/mock_autofill_ai_save_update_entity_prompt_view.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/web_contents.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -27,6 +31,10 @@ namespace autofill {
 namespace {
 
 using ::testing::_;
+using ::testing::AllOf;
+using ::testing::Eq;
+using ::testing::Field;
+using ::testing::Optional;
 
 class AutofillAiSaveUpdateEntityPromptControllerTest
     : public ChromeRenderViewHostTestHarness {
@@ -47,17 +55,23 @@ class AutofillAiSaveUpdateEntityPromptControllerTest
   void CreateController(EntityInstance::RecordType record_type =
                             EntityInstance::RecordType::kLocal,
                         bool entity_updated = false) {
-    std::unique_ptr<MockAutofillAiSaveUpdateEntityPromptView> prompt_view =
-        std::make_unique<MockAutofillAiSaveUpdateEntityPromptView>();
-    prompt_view_ = prompt_view.get();
-    controller_ = std::make_unique<AutofillAiSaveUpdateEntityPromptController>(
-        web_contents(), std::move(prompt_view),
+    CreateControllerWithEntity(
         test::GetPassportEntityInstance(
             {.name = u"Jon doe", .record_type = record_type}),
         (entity_updated ? std::optional(test::GetPassportEntityInstance(
                               {.name = u"Seb doe", .record_type = record_type}))
-                        : std::nullopt),
-        "en-US", prompt_closed_callback_.Get());
+                        : std::nullopt));
+  }
+
+  void CreateControllerWithEntity(
+      EntityInstance entity_instance,
+      std::optional<EntityInstance> old_entity_instance = std::nullopt) {
+    std::unique_ptr<MockAutofillAiSaveUpdateEntityPromptView> prompt_view =
+        std::make_unique<MockAutofillAiSaveUpdateEntityPromptView>();
+    prompt_view_ = prompt_view.get();
+    controller_ = std::make_unique<AutofillAiSaveUpdateEntityPromptController>(
+        web_contents(), std::move(prompt_view), std::move(entity_instance),
+        std::move(old_entity_instance), "en-US", prompt_closed_callback_.Get());
   }
 
   void SigninUser(const std::string& email,
@@ -104,11 +118,31 @@ TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
   prompt_controller().DisplayPrompt();
 
   EXPECT_CALL(prompt_closed_callback(),
-              Run(AutofillClient::AutofillAiBubbleResult::kAccepted));
+              Run(AutofillClient::AutofillAiBubbleResult::kAccepted,
+                  Eq(std::nullopt), _));
   // Both `OnUserAccepted` and `OnPromptDismissed` are called when the user
   // clicks the positive button.
   prompt_controller().OnUserAccepted(env());
   prompt_controller().OnPromptDismissed(env());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       DisplayPrompt_UserEdited) {
+  CreateController();
+  EXPECT_CALL(prompt_view(), Show(&prompt_controller()));
+  prompt_controller().DisplayPrompt();
+
+  EntityInstance edited_entity = test::GetPassportEntityInstance(
+      {.name = u"Bob Doe", .record_type = EntityInstance::RecordType::kLocal});
+  EntityInstanceAndroid edited_entity_android(
+      edited_entity, /*is_enabled=*/true,
+      /*is_eligible_for_wallet_storage=*/true,
+      /*requires_reauth_to_see=*/false);
+
+  EXPECT_CALL(prompt_closed_callback(),
+              Run(AutofillClient::AutofillAiBubbleResult::kEditAccepted,
+                  Optional(edited_entity), _));
+  prompt_controller().OnUserEdited(env(), edited_entity_android);
 }
 
 TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
@@ -118,7 +152,8 @@ TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
   prompt_controller().DisplayPrompt();
 
   EXPECT_CALL(prompt_closed_callback(),
-              Run(AutofillClient::AutofillAiBubbleResult::kCancelled));
+              Run(AutofillClient::AutofillAiBubbleResult::kCancelled,
+                  Eq(std::nullopt), _));
   // Both `OnUserDeclined` and `OnPromptDismissed` are called when the user
   // clicks the negative button.
   prompt_controller().OnUserDeclined(env());
@@ -132,15 +167,78 @@ TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
   prompt_controller().DisplayPrompt();
 
   EXPECT_CALL(prompt_closed_callback(),
-              Run(AutofillClient::AutofillAiBubbleResult::kNotInteracted));
+              Run(AutofillClient::AutofillAiBubbleResult::kNotInteracted,
+                  Eq(std::nullopt), _));
   prompt_controller().OnPromptDismissed(env());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       DisplayPrompt_UserDeclined_EmptyUiContext) {
+  CreateController();
+  EXPECT_CALL(prompt_view(), Show(&prompt_controller()));
+  prompt_controller().DisplayPrompt();
+
+  EXPECT_CALL(
+      prompt_closed_callback(),
+      Run(AutofillClient::AutofillAiBubbleResult::kCancelled, Eq(std::nullopt),
+          AllOf(Field(&AutofillClient::EntityImportUIContext::
+                          accepted_consent_string_id,
+                      Eq(std::nullopt)),
+                Field(&AutofillClient::EntityImportUIContext::
+                          accept_button_string_id,
+                      Eq(std::nullopt)))));
+  prompt_controller().OnUserDeclined(env());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       PopulatesUiContext_LocalEntity) {
+  CreateController(EntityInstance::RecordType::kLocal);
+
+  EXPECT_CALL(
+      prompt_closed_callback(),
+      Run(AutofillClient::AutofillAiBubbleResult::kAccepted, Eq(std::nullopt),
+          AllOf(
+              Field(
+                  &AutofillClient::EntityImportUIContext::
+                      accepted_consent_string_id,
+                  Optional(
+                      IDS_AUTOFILL_AI_SAVE_OR_UPDATE_LOCAL_ENTITY_SOURCE_NOTICE)),
+              Field(
+                  &AutofillClient::EntityImportUIContext::
+                      accept_button_string_id,
+                  Optional(
+                      IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_SAVE_DIALOG_SAVE_BUTTON)))));
+
+  prompt_controller().OnUserAccepted(env());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       PopulatesUiContext_WalletEntity) {
+  CreateController(EntityInstance::RecordType::kServerWallet);
+
+  EXPECT_CALL(
+      prompt_closed_callback(),
+      Run(AutofillClient::AutofillAiBubbleResult::kAccepted, Eq(std::nullopt),
+          AllOf(
+              Field(
+                  &AutofillClient::EntityImportUIContext::
+                      accepted_consent_string_id,
+                  Optional(
+                      IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_IN_WALLET_SOURCE_NOTICE)),
+              Field(
+                  &AutofillClient::EntityImportUIContext::
+                      accept_button_string_id,
+                  Optional(
+                      IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_SAVE_DIALOG_SAVE_BUTTON)))));
+
+  prompt_controller().OnUserAccepted(env());
 }
 
 TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
        PromptUiStrings_SaveLocalEntity) {
   CreateController();
   EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE),
+                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID),
             prompt_controller().GetTitle());
   EXPECT_EQ(l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_SAVE_DIALOG_SAVE_BUTTON),
@@ -160,7 +258,7 @@ TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
   CreateController(EntityInstance::RecordType::kLocal,
                    /*entity_updated=*/true);
   EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE),
+                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID),
             prompt_controller().GetTitle());
   EXPECT_EQ(l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_SAVE_DIALOG_SAVE_BUTTON),
@@ -181,7 +279,7 @@ TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
              signin::ConsentLevel::kSignin);
   CreateController(EntityInstance::RecordType::kServerWallet);
   EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE),
+                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID),
             prompt_controller().GetTitle());
   EXPECT_EQ(l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_SAVE_DIALOG_SAVE_BUTTON),
@@ -195,9 +293,61 @@ TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   EXPECT_EQ(l10n_util::GetStringFUTF16(
                 IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_IN_WALLET_SOURCE_NOTICE,
-                google_wallet,
+                google_wallet, google_wallet,
                 base::UTF8ToUTF16(TestingProfile::kDefaultProfileUserName)),
             prompt_controller().GetSourceNotice());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       PromptUiStrings_UpdateWalletEntity) {
+  SigninUser(TestingProfile::kDefaultProfileUserName,
+             signin::ConsentLevel::kSignin);
+  CreateController(EntityInstance::RecordType::kServerWallet,
+                   /*entity_updated=*/true);
+  EXPECT_EQ(l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID),
+            prompt_controller().GetTitle());
+
+  const std::u16string google_wallet =
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
+                IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_IN_WALLET_SOURCE_NOTICE,
+                google_wallet, google_wallet,
+                base::UTF8ToUTF16(TestingProfile::kDefaultProfileUserName)),
+            prompt_controller().GetSourceNotice());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       PromptUiStrings_SaveWalletEntity_Branding2026) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillAiWalletPassBranding2026};
+  SigninUser(TestingProfile::kDefaultProfileUserName,
+             signin::ConsentLevel::kSignin);
+  CreateController(EntityInstance::RecordType::kServerWallet);
+
+  // Prompt title should be BRANDED because it is a modal/bottom sheet prompt
+  // (is_banner_prompt is false).
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID_BRANDED),
+      prompt_controller().GetTitle());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityPromptControllerTest,
+       PromptUiStrings_UpdateWalletEntity_Branding2026) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillAiWalletPassBranding2026};
+  SigninUser(TestingProfile::kDefaultProfileUserName,
+             signin::ConsentLevel::kSignin);
+  CreateController(EntityInstance::RecordType::kServerWallet,
+                   /*entity_updated=*/true);
+
+  // Prompt title should be BRANDED because it is a modal/bottom sheet prompt
+  // (is_banner_prompt is false).
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID_BRANDED),
+      prompt_controller().GetTitle());
 }
 
 }  // namespace

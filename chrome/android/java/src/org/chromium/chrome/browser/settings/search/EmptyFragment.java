@@ -7,9 +7,6 @@ package org.chromium.chrome.browser.settings.search;
 import android.app.Activity;
 import android.content.Context;
 import android.os.Bundle;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.style.ForegroundColorSpan;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -17,20 +14,21 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.window.layout.WindowMetricsCalculator;
 
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
+import org.chromium.ui.widget.ButtonCompat;
 
 /** Empty Fragment used to clear the settings screen and display guiding information. */
 @NullMarked
-public class EmptyFragment extends Fragment {
+public class EmptyFragment extends Fragment implements EmbeddableSettingsPage {
     private static final String KEY_IMAGE_SRC = "ImageSrc";
 
     private int mImageSrc;
@@ -56,7 +54,7 @@ public class EmptyFragment extends Fragment {
     }
 
     @Override
-    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
         if (savedInstanceState != null) mImageSrc = savedInstanceState.getInt(KEY_IMAGE_SRC);
         if (mImageSrc == 0) {
@@ -76,17 +74,15 @@ public class EmptyFragment extends Fragment {
         content.setLayoutParams(lp);
 
         TextView guideMsg = view.findViewById(R.id.empty_state_text_title);
-        TextView linkHelpCenter = view.findViewById(R.id.empty_state_text_description);
+        ButtonCompat linkHelpCenter = view.findViewById(R.id.empty_state_text_description);
         int guideMsgId = R.string.search_in_settings_zero_state;
         int linkVisibility = View.GONE;
         Context context = view.getContext();
         if (mImageSrc == R.drawable.settings_no_match) {
             guideMsgId = R.string.search_in_settings_no_match;
             linkVisibility = View.VISIBLE;
-            linkHelpCenter.setText(getHelpCenterString(context));
+            linkHelpCenter.setText(context.getString(R.string.search_in_settings_help_center));
             linkHelpCenter.setOnClickListener(v -> mOpenHelpCenter.run());
-            linkHelpCenter.setFocusable(true);
-            linkHelpCenter.setClickable(true);
         } else {
             assert mImageSrc == R.drawable.settings_zero_state
                     : "Invalid fragment resource: " + mImageSrc;
@@ -95,12 +91,16 @@ public class EmptyFragment extends Fragment {
         linkHelpCenter.setVisibility(linkVisibility);
     }
 
-    private static SpannableString getHelpCenterString(Context context) {
-        String helpCenter = context.getString(R.string.search_in_settings_help_center);
-        var ss = new SpannableString(helpCenter);
-        var fcs = new ForegroundColorSpan(SemanticColorUtils.getDefaultTextColorLink(context));
-        ss.setSpan(fcs, 0, helpCenter.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        return ss;
+    @Override
+    public MonotonicObservableSupplier<String> getPageTitle() {
+        // Page Title Supplier is shared among search-related fragments so that
+        // they will display a single entry in the title breadcrumb.
+        return SearchResultsPreferenceFragment.getSharedPageTitle(getActivity());
+    }
+
+    @Override
+    public @AnimationType int getAnimationType() {
+        return AnimationType.PROPERTY;
     }
 
     @Override

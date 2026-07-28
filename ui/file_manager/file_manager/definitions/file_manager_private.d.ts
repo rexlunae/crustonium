@@ -105,12 +105,6 @@ declare global {
         FAILED = 'failed',
       }
 
-      export enum InstallLinuxPackageStatus {
-        STARTED = 'started',
-        FAILED = 'failed',
-        INSTALL_ALREADY_ACTIVE = 'install_already_active',
-      }
-
       export enum FileWatchEventType {
         CHANGED = 'changed',
         ERROR = 'error',
@@ -549,7 +543,6 @@ declare global {
       export interface Preferences {
         driveEnabled: boolean;
         driveSyncEnabledOnMeteredNetwork: boolean;
-        searchSuggestEnabled: boolean;
         use24hourClock: boolean;
         timezone: string;
         arcEnabled: boolean;
@@ -620,13 +613,6 @@ declare global {
       export interface FileSystemProviderAction {
         id: string;
         title?: string;
-      }
-
-      export interface LinuxPackageInfo {
-        name: string;
-        version: string;
-        summary?: string;
-        description?: string;
       }
 
       export interface CrostiniEvent {
@@ -797,13 +783,16 @@ declare global {
         emptiedQueue: boolean;
       }
 
-      export interface MaterializedView {
-        viewId: number;
+      export interface FileSystemData {
         name: string;
+        rootUrl: string;
       }
 
       export interface EntryData {
         entryUrl: string;
+        isDirectory: boolean;
+        name: string;
+        filesystem: FileSystemData;
       }
 
       export function cancelDialog(): void;
@@ -1052,11 +1041,6 @@ declare global {
           callback: (progress: BulkPinProgress) => void): void;
 
       export function calculateBulkPinRequiredSpace(callback: () => void): void;
-
-      export function getMaterializedViews(): Promise<MaterializedView[]>;
-
-      export function readMaterializedView(viewId: number):
-          Promise<EntryData[]>;
 
       export const onMountCompleted:
           ChromeEvent<(event: MountCompletedEvent) => void>;

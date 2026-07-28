@@ -30,7 +30,6 @@ import android.app.Activity;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
-import android.os.Build;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.style.ForegroundColorSpan;
@@ -70,10 +69,7 @@ import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
-import org.chromium.base.test.util.DisableIf;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
-import org.chromium.components.browser_ui.modaldialog.test.R;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.DualControlLayout;
 import org.chromium.components.browser_ui.widget.ModalDialogViewUtils;
@@ -332,6 +328,45 @@ public class ModalDialogViewTest {
                                 (v) -> callbackHelper.notifyCalled()));
 
         onView(allOf(withId(R.id.title_back), isDisplayed())).perform(click());
+        callbackHelper.waitForCallback(0);
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"ModalDialog"})
+    public void testTitleCloseButton_Visibility() {
+        PropertyModel model =
+                createModel(
+                        mModelBuilder
+                                .with(ModalDialogProperties.TITLE, "Test Title")
+                                .with(ModalDialogProperties.TITLE_CLOSE_BUTTON_VISIBLE, true));
+
+        onView(allOf(withId(R.id.title_close_button), isDisplayed())).check(matches(isDisplayed()));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    model.set(ModalDialogProperties.TITLE_CLOSE_BUTTON_VISIBLE, false);
+                });
+
+        onView(allOf(withId(R.id.title_close_button), withParent(withId(R.id.title_container))))
+                .check(matches(not(isDisplayed())));
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"ModalDialog"})
+    public void testTitleCloseButton_ClickListener() throws Exception {
+        final CallbackHelper callbackHelper = new CallbackHelper();
+        createModel(
+                mModelBuilder
+                        .with(ModalDialogProperties.TITLE, "Test Title")
+                        .with(ModalDialogProperties.TITLE_CLOSE_BUTTON_VISIBLE, true)
+                        .with(
+                                ModalDialogProperties.TITLE_CLOSE_BUTTON_CLICK_LISTENER,
+                                (v) -> callbackHelper.notifyCalled()));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mModalDialogView.findViewById(R.id.title_close_button).performClick());
         callbackHelper.waitForCallback(0);
     }
 
@@ -624,7 +659,8 @@ public class ModalDialogViewTest {
                 model.get(ModalDialogProperties.CHECKBOX_CHECKED));
 
         // Perform a click to check the box.
-        onView(withId(R.id.modal_dialog_checkbox)).perform(click());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mModalDialogView.findViewById(R.id.modal_dialog_checkbox).performClick());
 
         // Verify that the view is now checked AND the model property has been updated.
         onView(withId(R.id.modal_dialog_checkbox)).check(matches(isChecked()));
@@ -634,7 +670,8 @@ public class ModalDialogViewTest {
         Mockito.verify(mMockController, times(1)).onCheckboxChecked(true);
 
         // Perform another click to uncheck the box.
-        onView(withId(R.id.modal_dialog_checkbox)).perform(click());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mModalDialogView.findViewById(R.id.modal_dialog_checkbox).performClick());
 
         // Verify that the view is now unchecked AND the model property has been updated.
         onView(withId(R.id.modal_dialog_checkbox)).check(matches(isNotChecked()));
@@ -728,7 +765,6 @@ public class ModalDialogViewTest {
     @Test
     @MediumTest
     @Feature({"ModalDialog"})
-    @DisabledTest(message = "crbug.com/329163841")
     public void testButtonGroupIsScrollable() throws InterruptedException {
         ModalDialogProperties.ModalDialogButtonSpec[] buttonSpecList =
                 new ModalDialogButtonSpec[20];
@@ -1265,9 +1301,6 @@ public class ModalDialogViewTest {
     @Test
     @MediumTest
     @Feature({"ModalDialog"})
-    @DisableIf.Build(
-            sdk_is_greater_than = Build.VERSION_CODES.VANILLA_ICE_CREAM,
-            message = "https://crbug.com/437920264")
     public void testMenuItem_Callback() throws Exception {
         final CallbackHelper callbackHelper = new CallbackHelper();
         final String text = "Menu Item with Callback";
@@ -1277,7 +1310,12 @@ public class ModalDialogViewTest {
 
         createModel(mModelBuilder.with(ModalDialogProperties.MENU_ITEMS, menuItems));
 
-        onView(withText(text)).perform(click());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    LinearLayout menuItemsContainer =
+                            mModalDialogView.findViewById(R.id.menu_items_container);
+                    menuItemsContainer.getChildAt(0).performClick();
+                });
         callbackHelper.waitForCallback(0);
     }
 

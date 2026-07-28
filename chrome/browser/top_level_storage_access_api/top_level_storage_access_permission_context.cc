@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "chrome/browser/bad_message.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/first_party_sets/first_party_sets_policy_service.h"
 #include "chrome/browser/first_party_sets/first_party_sets_policy_service_factory.h"
@@ -36,6 +37,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-shared.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
 
 namespace {
 
@@ -70,6 +72,16 @@ void TopLevelStorageAccessPermissionContext::DecidePermission(
     std::unique_ptr<permissions::PermissionRequestData> request_data,
     permissions::BrowserPermissionCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kStorageAccessAPIRelatedWebsiteSets)) {
+    RecordOutcomeSample(
+        TopLevelStorageAccessRequestOutcome::kDeniedByPrerequisites);
+    std::move(callback).Run(content::PermissionResult(
+        blink::mojom::PermissionStatus::DENIED,
+        content::PermissionStatusSource::UNSPECIFIED));
+    return;
+  }
+
   content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
       request_data->id.global_render_frame_host_id());
   CHECK(rfh);
@@ -85,10 +97,26 @@ void TopLevelStorageAccessPermissionContext::DecidePermission(
     return;
   }
 
-  if (!request_data->user_gesture ||
+  net::SchemefulSite embedding_site(request_data->embedding_origin);
+  net::SchemefulSite requesting_site(request_data->requesting_origin);
+
+  if (requesting_site == embedding_site) {
+    // Well-behaved renderers don't send same-site permissions requests, since
+    // there is no privacy boundary within a site. This must be a compromised
+    // renderer.
+    bad_message::ReceivedBadMessage(
+        rfh->GetProcess(), bad_message::BadMessageReason::
+                               TLSAPC_INVALID_PERMISSION_REQUEST_CONTEXT);
+    std::move(callback).Run(content::PermissionResult(
+        blink::mojom::PermissionStatus::DENIED,
+        content::PermissionStatusSource::UNSPECIFIED));
+    return;
+  }
+
+  if (!request_data->user_gesture || !rfh->HasTransientUserActivation() ||
       !request_data->requesting_origin.is_valid() ||
       !request_data->embedding_origin.is_valid()) {
-    if (!request_data->user_gesture) {
+    if (!request_data->user_gesture || !rfh->HasTransientUserActivation()) {
       rfh->AddMessageToConsole(
           blink::mojom::ConsoleMessageLevel::kError,
           "requestStorageAccessFor: Must be handling a user gesture to use.");
@@ -100,9 +128,6 @@ void TopLevelStorageAccessPermissionContext::DecidePermission(
         content::PermissionStatusSource::UNSPECIFIED));
     return;
   }
-
-  net::SchemefulSite embedding_site(request_data->embedding_origin);
-  net::SchemefulSite requesting_site(request_data->requesting_origin);
 
   first_party_sets::FirstPartySetsPolicyServiceFactory::GetForBrowserContext(
       browser_context())
@@ -190,6 +215,7 @@ void TopLevelStorageAccessPermissionContext::NotifyPermissionSet(
     const permissions::PermissionRequestData& request_data,
     permissions::BrowserPermissionCallback callback,
     bool persist,
+    const content::PermissionResult* permission_result,
     const permissions::PermissionPromptDecision& decision) {
   CHECK(decision.overall_decision != PermissionDecision::kAllowThisTime);
   CHECK(decision.is_final);
@@ -289,11 +315,10 @@ void TopLevelStorageAccessPermissionContext::NotifyPermissionSetInternal(
       ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS, top_level_grants, barrier);
 }
 
-void TopLevelStorageAccessPermissionContext::UpdateContentSetting(
+void TopLevelStorageAccessPermissionContext::UpdateSetting(
     const permissions::PermissionRequestData& request_data,
-    ContentSetting content_setting,
+    const PermissionSetting& setting,
     bool is_one_time) {
-  CHECK(!is_one_time);
   // We need to notify the network service of content setting updates before we
   // run our callback. As a result we do our updates when we're notified of a
   // permission being set and should not be called here.

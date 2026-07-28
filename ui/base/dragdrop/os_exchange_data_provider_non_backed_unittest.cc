@@ -7,11 +7,15 @@
 #include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
+#include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/image/image_skia.h"
 #include "url/gurl.h"
 
 namespace ui {
@@ -23,7 +27,8 @@ const char16_t kUrlTitle[] = u"example";
 const char kFileName[] = "file.pdf";
 const base::FilePath::CharType kFileContentsFileName[] =
     FILE_PATH_LITERAL("file.jpg");
-const char kFileContents[] = "test data";
+const base::span<const uint8_t> kFileContents =
+    base::byte_span_from_cstring("test data");
 const char16_t kHtml[] = u"<h1>Random Title</h1>";
 const char kBaseUrl[] = "www.example2.com";
 }  // namespace
@@ -42,7 +47,7 @@ TEST(OSExchangeDataProviderNonBackedTest, CloneTest) {
   original.SetPickledData(ClipboardFormatType::PlainTextType(),
                           original_pickle);
   original.SetFileContents(base::FilePath(kFileContentsFileName),
-                           std::string(kFileContents));
+                           kFileContents);
   original.SetHtml(kHtml, GURL(kBaseUrl));
   original.MarkRendererTaintedFromOrigin(url::Origin());
   GURL url("https://www.example.com");
@@ -70,7 +75,7 @@ TEST(OSExchangeDataProviderNonBackedTest, CloneTest) {
   ASSERT_TRUE(copy_file_contents.has_value());
   EXPECT_EQ(base::FilePath(kFileContentsFileName),
             copy_file_contents->filename);
-  EXPECT_EQ(std::string(kFileContents), copy_file_contents->file_contents);
+  EXPECT_EQ(kFileContents, copy_file_contents->file_contents);
 
   std::optional<OSExchangeDataProvider::HtmlInfo> html_content =
       copy->GetHtml();
@@ -84,6 +89,22 @@ TEST(OSExchangeDataProviderNonBackedTest, CloneTest) {
   EXPECT_TRUE(data_endpoint);
   EXPECT_TRUE(data_endpoint->IsUrlType());
   EXPECT_EQ(url, *data_endpoint->GetURL());
+}
+
+TEST(OSExchangeDataProviderNonBackedTest, DragImageCloneTest) {
+  OSExchangeDataProviderNonBacked original;
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(10, 10);
+  bitmap.eraseColor(SK_ColorRED);
+  gfx::ImageSkia image = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
+  gfx::Vector2d offset(5, 5);
+  original.SetDragImage(image, offset);
+
+  std::unique_ptr<OSExchangeDataProvider> copy = original.Clone();
+  EXPECT_FALSE(copy->GetDragImage().isNull());
+  EXPECT_EQ(copy->GetDragImage().width(), 10);
+  EXPECT_EQ(copy->GetDragImage().height(), 10);
+  EXPECT_EQ(copy->GetDragImageOffset(), offset);
 }
 
 TEST(OSExchangeDataProviderNonBackedTest, FileNameCloneTest) {

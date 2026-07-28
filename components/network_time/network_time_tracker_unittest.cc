@@ -19,7 +19,7 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "components/client_update_protocol/ecdsa.h"
+#include "components/client_update_protocol/cup.h"
 #include "components/network_time/network_time_pref_names.h"
 #include "components/network_time/network_time_test_utils.h"
 #include "components/prefs/testing_pref_service.h"
@@ -746,6 +746,22 @@ TEST_F(NetworkTimeTrackerTest, CustomFetchBehaviorTest) {
   Reset(NetworkTimeTracker::FetchBehavior::FETCHES_IN_BACKGROUND_ONLY);
   EXPECT_EQ(NetworkTimeTracker::FetchBehavior::FETCHES_IN_BACKGROUND_ONLY,
             tracker_->GetFetchBehavior());
+}
+
+TEST_F(NetworkTimeTrackerTest, UncertaintyHistogram) {
+  base::HistogramTester histogram_tester;
+
+  // Verify that the histogram counts are empty initially.
+  histogram_tester.ExpectTotalCount("NetworkTime.NetworkTimeUncertainty", 0);
+
+  UpdateNetworkTime(clock_->Now(), resolution_, latency_,
+                    tick_clock_->NowTicks());
+
+  // Verify that updating the network time logs the uncertainty correctly.
+  histogram_tester.ExpectTotalCount("NetworkTime.NetworkTimeUncertainty", 1);
+  histogram_tester.ExpectTimeBucketCount("NetworkTime.NetworkTimeUncertainty",
+                                         resolution_ + latency_ + adjustment_,
+                                         1);
 }
 
 TEST_F(NetworkTimeTrackerTest, ObserverTest) {

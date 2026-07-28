@@ -6,6 +6,8 @@ package org.chromium.chrome.browser.media.document_picture_in_picture_header;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -16,10 +18,13 @@ import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
+import android.text.TextUtils;
+import android.view.ContextThemeWrapper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.TextView;
 
 import androidx.core.graphics.Insets;
 import androidx.test.core.app.ApplicationProvider;
@@ -31,8 +36,10 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+import org.chromium.url.JUnitTestGURLs;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,19 +50,39 @@ public class DocumentPictureInPictureHeaderViewBinderUnitTest {
     private Context mContext;
     private ViewGroup mHeaderView;
     private ImageView mBackToTabButton;
+    private ImageView mSecurityIcon;
+    private TextView mUrlBar;
     private PropertyModel mModel;
 
     @Before
     public void setUp() {
-        mContext = ApplicationProvider.getApplicationContext();
+        mContext =
+                new ContextThemeWrapper(
+                        ApplicationProvider.getApplicationContext(),
+                        R.style.Theme_BrowserUI_DayNight);
         mHeaderView = spy(new FrameLayout(mContext));
         mHeaderView.setLayoutParams(
                 new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0));
 
+        mSecurityIcon = mock(ImageView.class);
         mBackToTabButton = mock(ImageView.class);
+        mUrlBar = mock(TextView.class);
+        doReturn(mSecurityIcon)
+                .when(mHeaderView)
+                .findViewById(R.id.document_picture_in_picture_header_security_icon);
         doReturn(mBackToTabButton)
                 .when(mHeaderView)
                 .findViewById(R.id.document_picture_in_picture_header_back_to_tab);
+        doReturn(mUrlBar)
+                .when(mHeaderView)
+                .findViewById(R.id.document_picture_in_picture_header_url_bar);
+
+        ViewGroup.LayoutParams securityIconLayoutParams = new ViewGroup.LayoutParams(0, 0);
+        ViewGroup.LayoutParams backToTabButtonLayoutParams = new ViewGroup.LayoutParams(0, 0);
+        ViewGroup.LayoutParams urlBarLayoutParams = new ViewGroup.LayoutParams(0, 0);
+        doReturn(securityIconLayoutParams).when(mSecurityIcon).getLayoutParams();
+        doReturn(backToTabButtonLayoutParams).when(mBackToTabButton).getLayoutParams();
+        doReturn(urlBarLayoutParams).when(mUrlBar).getLayoutParams();
 
         mModel =
                 new PropertyModel.Builder(DocumentPictureInPictureHeaderProperties.ALL_KEYS)
@@ -92,6 +119,7 @@ public class DocumentPictureInPictureHeaderViewBinderUnitTest {
         mModel.set(DocumentPictureInPictureHeaderProperties.TINT_COLOR_LIST, tint);
 
         verify(mBackToTabButton).setImageTintList(tint);
+        verify(mSecurityIcon).setImageTintList(tint);
     }
 
     @Test
@@ -146,5 +174,65 @@ public class DocumentPictureInPictureHeaderViewBinderUnitTest {
 
         mModel.set(DocumentPictureInPictureHeaderProperties.IS_BACK_TO_TAB_SHOWN, false);
         verify(mBackToTabButton).setVisibility(View.GONE);
+    }
+
+    @Test
+    @SmallTest
+    public void testSecurityIcon() {
+        int iconRes = 123;
+        mModel.set(DocumentPictureInPictureHeaderProperties.SECURITY_ICON, iconRes);
+        verify(mSecurityIcon).setImageResource(iconRes);
+    }
+
+    @Test
+    @SmallTest
+    public void testSecurityIconClickListener() {
+        View.OnClickListener listener = v -> {};
+        mModel.set(
+                DocumentPictureInPictureHeaderProperties.ON_SECURITY_ICON_CLICK_LISTENER, listener);
+        verify(mSecurityIcon).setOnClickListener(listener);
+    }
+
+    @Test
+    @SmallTest
+    public void testUrlHost() {
+        String host = JUnitTestGURLs.EXAMPLE_URL.getHost();
+        mModel.set(DocumentPictureInPictureHeaderProperties.URL_STRING, host);
+        verify(mUrlBar).setText(host);
+        verify(mUrlBar).setTooltipText(host);
+    }
+
+    @Test
+    @SmallTest
+    public void testBrandedColorScheme() {
+        mModel.set(
+                DocumentPictureInPictureHeaderProperties.BRANDED_COLOR_SCHEME,
+                BrandedColorScheme.APP_DEFAULT);
+        verify(mUrlBar).setTextColor(anyInt());
+    }
+
+    @Test
+    @SmallTest
+    public void testUrlEllipsizeBehavior() {
+        mModel.set(
+                DocumentPictureInPictureHeaderProperties.URL_ELLIPSIZE_BEHAVIOR,
+                TextUtils.TruncateAt.START);
+        verify(mUrlBar).setEllipsize(TextUtils.TruncateAt.START);
+
+        mModel.set(
+                DocumentPictureInPictureHeaderProperties.URL_ELLIPSIZE_BEHAVIOR,
+                TextUtils.TruncateAt.END);
+        verify(mUrlBar).setEllipsize(TextUtils.TruncateAt.END);
+    }
+
+    @Test
+    @SmallTest
+    public void testComponentSize() {
+        int size = 42;
+        mModel.set(DocumentPictureInPictureHeaderProperties.COMPONENT_SIZE, size);
+
+        verify(mBackToTabButton).setLayoutParams(any());
+        verify(mSecurityIcon).setLayoutParams(any());
+        verify(mUrlBar).setLayoutParams(any());
     }
 }

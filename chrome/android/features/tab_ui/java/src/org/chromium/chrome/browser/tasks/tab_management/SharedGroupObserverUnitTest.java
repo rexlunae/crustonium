@@ -25,12 +25,12 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.components.collaboration.CollaborationService;
 import org.chromium.components.data_sharing.DataSharingService;
 import org.chromium.components.data_sharing.GroupData;
@@ -56,6 +56,11 @@ public class SharedGroupObserverUnitTest {
 
     @Captor private ArgumentCaptor<TabGroupSyncService.Observer> mSyncObserverCaptor;
     @Captor private ArgumentCaptor<DataSharingService.Observer> mSharingObserverCaptor;
+
+    @SafeVarargs
+    private static <T> void safeClearInvocations(T... mocks) {
+        Mockito.clearInvocations(mocks);
+    }
 
     @Test
     public void testDestroy() {
@@ -195,11 +200,12 @@ public class SharedGroupObserverUnitTest {
                         mDataSharingService,
                         mCollaborationService);
 
-        observer.getGroupSharedStateSupplier().addObserver(mOnSharedGroupStateChanged);
-        ShadowLooper.runUiThreadTasks();
+        observer.getGroupSharedStateSupplier()
+                .addSyncObserverAndPostIfNonNull(mOnSharedGroupStateChanged);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mOnSharedGroupStateChanged).onResult(GroupSharedState.NOT_SHARED);
         assertNull(observer.getGroupMembersSupplier().get());
-        Mockito.clearInvocations(mOnSharedGroupStateChanged);
+        safeClearInvocations(mOnSharedGroupStateChanged);
 
         savedTabGroup.collaborationId = COLLABORATION_ID1;
         verify(mDataSharingService).addObserver(mSharingObserverCaptor.capture());

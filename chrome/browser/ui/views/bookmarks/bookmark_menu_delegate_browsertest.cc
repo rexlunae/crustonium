@@ -9,6 +9,8 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -33,6 +35,7 @@
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 #include "ui/views/controls/menu/menu_item_view.h"
@@ -58,16 +61,6 @@ MATCHER_P(BookmarkVariantMatcher, node, "") {
   }
 }
 
-// Returns number of menu items in |folder| assuming it is
-// a root folder (no other bookmark folder contains it). This is
-// because we add two new menu items to such folders, see
-// BookmarkMenuDelegate::CreateMenu for more details.
-int RootFolderSizeOffset() {
-  if (base::FeatureList::IsEnabled(features::kTabGroupMenuImprovements)) {
-    return 2;
-  }
-  return 0;
-}
 
 }  // namespace
 
@@ -81,7 +74,7 @@ class BookmarkMenuDelegateTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
 
     // Set managed bookmarks.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     ASSERT_FALSE(prefs->HasPrefPath(bookmarks::prefs::kManagedBookmarks));
     prefs->SetList(bookmarks::prefs::kManagedBookmarks,
                    base::ListValue().Append(
@@ -146,7 +139,7 @@ class BookmarkMenuDelegateTest : public InProcessBrowserTest {
 
   void NewAndBuildFullMenuWithBookmarksTitle() {
     // Remove the managed bookmarks node.
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         bookmarks::prefs::kManagedBookmarks, base::ListValue());
     root_menu_ = std::make_unique<views::MenuItemView>();
     root_menu_->CreateSubmenu();
@@ -188,16 +181,16 @@ class BookmarkMenuDelegateTest : public InProcessBrowserTest {
   }
 
   BookmarkModel* model() {
-    return BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+    return BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   }
 
   BookmarkMergedSurfaceService* bookmark_service() {
     return BookmarkMergedSurfaceServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   const BookmarkNode* managed_node() {
-    return ManagedBookmarkServiceFactory::GetForProfile(browser()->profile())
+    return ManagedBookmarkServiceFactory::GetForProfile(browser()->GetProfile())
         ->managed_node();
   }
 
@@ -340,44 +333,81 @@ IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest, RemoveBookmarks) {
   bookmark_menu_delegate_->DidRemoveBookmarks();
 }
 
-// Verifies WillRemoveBookmarks() doesn't attempt to access MenuItemViews that
-// have since been deleted.
+// Verifies ShouldCloseOnRemove() for account bookmark bar, bookmark bar
+// (regular vs overflow menu), and the last item in "other bookmarks".
 IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest, CloseOnRemove) {
   NewDelegate();
   EXPECT_FALSE(ShouldCloseOnRemove(model()->account_bookmark_bar_node()));
 
   BookmarkParentFolder bookmark_bar_folder(
       BookmarkParentFolder::BookmarkBarFolder());
+  const BookmarkParentFolder other_folder(BookmarkParentFolder::OtherFolder());
 
-  const BookmarkNode* f1 =
+  const BookmarkNode* initial_f1 =
       bookmark_service()->GetNodeAtIndex(bookmark_bar_folder, 1u);
+  const BookmarkNode* bookmark_bar_node_to_remove =
+      bookmark_service()->GetNodeAtIndex(bookmark_bar_folder, 2u);
   bookmark_menu_delegate_->SetActiveMenu(
-      BookmarkParentFolder::FromFolderNode(f1), 0);
-  // Any nodes on the bookmark bar should close on remove.
-  EXPECT_TRUE(ShouldCloseOnRemove(
-      bookmark_service()->GetNodeAtIndex(bookmark_bar_folder, 2u)));
+      BookmarkParentFolder::FromFolderNode(initial_f1), 0);
+  // Nodes on the bookmark bar should close on remove when shown from a
+  // non-overflow menu.
+  EXPECT_TRUE(ShouldCloseOnRemove(bookmark_bar_node_to_remove));
 
   // Descendants of the bookmark should not close on remove.
-  EXPECT_FALSE(ShouldCloseOnRemove(f1->children()[0].get()));
-
-  BookmarkParentFolderChildren other_folder_children =
-      bookmark_service()->GetChildren(BookmarkParentFolder::OtherFolder());
-  EXPECT_FALSE(ShouldCloseOnRemove(other_folder_children[0]));
-
-  // Make it so the other node only has one child.
-  // Destroy the current delegate so that it doesn't have any references to
-  // deleted nodes.
+  EXPECT_FALSE(ShouldCloseOnRemove(initial_f1->children()[0].get()));
+  EXPECT_FALSE(ShouldCloseOnRemove(
+      bookmark_service()->GetNodeAtIndex(other_folder, 0u)));
   DestroyDelegate();
-  while (other_folder_children.size() > 1) {
-    model()->Remove(other_folder_children[other_folder_children.size() - 1],
+
+  NewDelegate();
+  bookmark_menu_delegate_->SetActiveMenu(bookmark_bar_folder, 1u);
+  // Nodes shown from the bookmark bar overflow menu should not close on remove.
+  EXPECT_FALSE(ShouldCloseOnRemove(bookmark_bar_node_to_remove));
+  DestroyDelegate();
+
+  // Remove "other bookmarks" children until only one remains.
+  // Keep no delegate alive while removing nodes.
+  for (size_t other_folder_children_count =
+           bookmark_service()->GetChildrenCount(other_folder);
+       other_folder_children_count > 1u; --other_folder_children_count) {
+    const size_t last_index = other_folder_children_count - 1u;
+    const BookmarkNode* last_other_folder_child =
+        bookmark_service()->GetNodeAtIndex(other_folder, last_index);
+    model()->Remove(last_other_folder_child,
                     bookmarks::metrics::BookmarkEditSource::kOther, FROM_HERE);
   }
 
   NewDelegate();
+  const BookmarkNode* f1_after_other_folder_removals =
+      bookmark_service()->GetNodeAtIndex(bookmark_bar_folder, 1u);
   bookmark_menu_delegate_->SetActiveMenu(
-      BookmarkParentFolder::FromFolderNode(f1), 0);
-  // Any nodes on the bookmark bar should close on remove.
-  EXPECT_TRUE(ShouldCloseOnRemove(other_folder_children[0]));
+      BookmarkParentFolder::FromFolderNode(f1_after_other_folder_removals), 0);
+  const BookmarkNode* last_other_folder_child =
+      bookmark_service()->GetNodeAtIndex(other_folder, 0u);
+  // The only remaining node in "other bookmarks" should close on remove.
+  EXPECT_TRUE(ShouldCloseOnRemove(last_other_folder_child));
+  DestroyDelegate();
+}
+
+// Verifies ShouldCloseOnRemove() stays correct when the active bookmark-bar
+// menu toggles between regular and overflow via start-index updates.
+IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest, CloseOnRemoveStateContinuity) {
+  NewDelegate();
+
+  const BookmarkParentFolder bookmark_bar_folder(
+      BookmarkParentFolder::BookmarkBarFolder());
+  const BookmarkNode* node_to_remove =
+      bookmark_service()->GetNodeAtIndex(bookmark_bar_folder, 2u);
+
+  bookmark_menu_delegate_->SetActiveMenu(bookmark_bar_folder, 0u);
+  EXPECT_TRUE(ShouldCloseOnRemove(node_to_remove));
+
+  bookmark_menu_delegate_->SetMenuStartIndex(bookmark_bar_folder, 1u);
+  EXPECT_FALSE(ShouldCloseOnRemove(node_to_remove));
+
+  bookmark_menu_delegate_->SetMenuStartIndex(bookmark_bar_folder, 0u);
+  EXPECT_TRUE(ShouldCloseOnRemove(node_to_remove));
+  DestroyDelegate();
 }
 
 // Tests that the "Bookmarks" title and separator are removed from the parent
@@ -462,8 +492,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest, DragAndDropAfterNode) {
   ui::DropTargetEvent target_event(drop_data, gfx::PointF(menu_loc),
                                    gfx::PointF(menu_loc),
                                    ui::DragDropTypes::DRAG_COPY);
-  auto* f1a_item =
-      root_item->GetSubmenu()->GetMenuItemAt(0 + RootFolderSizeOffset());
+  auto* f1a_item = root_item->GetSubmenu()->GetMenuItemAt(0);
   EXPECT_TRUE(bookmark_menu_delegate_->CanDrop(f1a_item, drop_data));
   EXPECT_EQ(f1->children().size(), 2u);
 
@@ -501,8 +530,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest, DragAndDropOnNode) {
   ui::DropTargetEvent target_event(drop_data, gfx::PointF(menu_loc),
                                    gfx::PointF(menu_loc),
                                    ui::DragDropTypes::DRAG_COPY);
-  auto* f11_item =
-      root_item->GetSubmenu()->GetMenuItemAt(1 + RootFolderSizeOffset());
+  auto* f11_item = root_item->GetSubmenu()->GetMenuItemAt(1);
   const BookmarkNode* f11_node = f1->children()[1].get();
   EXPECT_TRUE(bookmark_menu_delegate_->CanDrop(f11_item, drop_data));
   EXPECT_EQ(f11_node->children().size(), 1u);
@@ -541,8 +569,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest, DragAndDropBeforeNode) {
   ui::DropTargetEvent target_event(drop_data, gfx::PointF(menu_loc),
                                    gfx::PointF(menu_loc),
                                    ui::DragDropTypes::DRAG_COPY);
-  auto* f11_item =
-      root_item->GetSubmenu()->GetMenuItemAt(1 + RootFolderSizeOffset());
+  auto* f11_item = root_item->GetSubmenu()->GetMenuItemAt(1);
   EXPECT_TRUE(bookmark_menu_delegate_->CanDrop(f11_item, drop_data));
   EXPECT_EQ(f1->children().size(), 2u);
 
@@ -1074,3 +1101,4 @@ IN_PROC_BROWSER_TEST_F(BookmarkMenuDelegateTest,
   bookmark_menu_delegate_->SetMenuStartIndex(bookmark_bar_folder, 2u);
   EXPECT_EQ(menu(), nullptr);
 }
+

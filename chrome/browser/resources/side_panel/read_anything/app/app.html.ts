@@ -7,13 +7,18 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AppElement} from './app.js';
 
 export function getHtml(this: AppElement) {
-  const immersiveClass = this.isImmersiveEnabled_ ? 'immersive' : '';
   // clang-format off
   return html`<!--_html_template_start_-->
-<immersive-mode-header id="immersiveHeader"
-    ?hidden="${!this.isImmersiveMode()}">
-</immersive-mode-header>
-<div id="appFlexParent" class="${immersiveClass}">
+<div id="appFlexParent"
+    class="${this.getImmersiveClass_()} ${
+        this.hasValidSelection_ ? 'has-selection' : ''}">
+  <!-- Overlay to prevent cursor from interacting with background elements when
+  the settings menu is open. -->
+  <div id="settingsOverlay" class="settings-overlay"></div>
+  <div id="lineFocus"
+      class="${this.getLineFocusClass_()}"
+      ?hidden="${!this.computeHasContent()}">
+  </div>
   <div id="toolbar-container">
     <read-anything-toolbar
         .presentationState="${this.presentationState_}"
@@ -27,6 +32,11 @@ export function getHtml(this: AppElement) {
         .previewVoicePlaying="${this.previewVoicePlaying_}"
         .localeToDisplayName="${this.localeToDisplayName_}"
         .pageLanguage="${this.pageLanguage_}"
+        .isImmersiveMode="${this.isImmersiveMode()}"
+        .lineFocusStyle="${this.lineFocusStyle_}"
+        .lineFocusEnabled="${this.lineFocusEnabled_}"
+        .lineFocusMovement="${this.lineFocusMovement_}"
+        .isLineFocusShowing="${this.computeIsLineFocusShowing_()}"
         @select-voice="${this.onSelectVoice_}"
         @voice-language-toggle="${this.onVoiceLanguageToggle_}"
         @preview-voice="${this.onPreviewVoice_}"
@@ -38,10 +48,11 @@ export function getHtml(this: AppElement) {
         @rate-change="${this.onSpeechRateChange_}"
         @next-granularity-click="${this.onNextGranularityClick_}"
         @previous-granularity-click="${this.onPreviousGranularityClick_}"
-        @links-toggle="${this.updateLinks_}"
-        @images-toggle="${this.updateImages_}"
+        @links-toggle="${this.onLinksToggle_}"
+        @images-toggle="${this.onImagesToggle_}"
         @letter-spacing-change="${this.onLetterSpacingChange_}"
         @theme-change="${this.onThemeChange_}"
+        @presentation-change="${this.onPresentationChange_}"
         @line-spacing-change="${this.onLineSpacingChange_}"
         @highlight-change="${this.onHighlightChange_}"
         @reset-toolbar="${this.onResetToolbar_}"
@@ -49,17 +60,21 @@ export function getHtml(this: AppElement) {
         @language-menu-open="${this.onLanguageMenuOpen_}"
         @language-menu-close="${this.onLanguageMenuClose_}"
         @line-focus-style-change="${this.onLineFocusStyleChange_}"
+        @line-focus-toggle-change="${this.onLineFocusToggleChange_}"
         @line-focus-movement-change="${this.onLineFocusMovementChange_}"
-        @close-all-menus="${this.onAllMenusClose_}"
+        @close-all-menus="${this.onCloseAllMenus_}"
+        @settings-opened="${this.onSettingsOpened_}"
+        @settings-closed="${this.onSettingsClosed_}"
         id="toolbar">
     </read-anything-toolbar>
   </div>
   <div id="containerParent" class="sp-card"
       ?hidden="${!this.computeHasContent()}">
-    <div id="lineFocus"></div>
     <div id="containerScroller" class="sp-scroller"
         @scroll="${this.onContainerScroll_}"
-        @scrollend="${this.onContainerScrollEnd_}">
+        @scrollend="${this.onContainerScrollend_}"
+        @mousemove="${this.onScrollerMousemove_}"
+        @mouseleave="${this.onScrollerMouseleave_}">
       <div id="container"
         class=
           "user-select-disabled-when-speech-active-${this.isSpeechActive_}">
@@ -72,7 +87,11 @@ export function getHtml(this: AppElement) {
       Load More
     </cr-button>
   </div>
-  <div id="empty-state-container" ?hidden="${this.computeHasContent()}">
+  <div id="empty-state-container"
+      class="sp-scroller"
+      @mousemove="${this.onScrollerMousemove_}"
+      @mouseleave="${this.onScrollerMouseleave_}"
+      ?hidden="${this.computeHasContent()}">
     <sp-empty-state image-path="${this.contentState_.imagePath}"
         dark-image-path="${this.contentState_.darkImagePath}"
         heading="${this.contentState_.heading}"

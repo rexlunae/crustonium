@@ -15,7 +15,7 @@ import {createCustomEvent} from 'chrome://os-print/js/utils/event_utils.js';
 import {getDestinationProvider} from 'chrome://os-print/js/utils/mojo_data_providers.js';
 import type {Destination} from 'chrome://os-print/js/utils/print_preview_cros_app_types.js';
 import {PrinterStatusReason, PrinterType} from 'chrome://os-print/js/utils/print_preview_cros_app_types.js';
-import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {MockController} from 'chrome://webui-test/chromeos/mock_controller.m.js';
 import {MockTimer} from 'chrome://webui-test/mock_timer.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
@@ -50,7 +50,7 @@ suite('DestinationManager', () => {
     mockController.reset();
   });
 
-  function waitForInitialActiveDestinationSet(): Promise<void> {
+  function waitForInitialActiveDestinationSet(): Promise<Event> {
     const activeDestChanged = eventToPromise(
         DESTINATION_MANAGER_ACTIVE_DESTINATION_CHANGED, instance);
     instance.initializeSession(FAKE_PRINT_SESSION_CONTEXT_SUCCESSFUL);
@@ -58,7 +58,7 @@ suite('DestinationManager', () => {
     return activeDestChanged;
   }
 
-  function waitForPrintTicketManagerInitialized(): Promise<void> {
+  function waitForPrintTicketManagerInitialized(): Promise<Event> {
     const printTicketManager = PrintTicketManager.getInstance();
     const initEvent = eventToPromise(
         PRINT_TICKET_MANAGER_SESSION_INITIALIZED, printTicketManager);

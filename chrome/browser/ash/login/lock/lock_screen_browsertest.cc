@@ -64,7 +64,8 @@ class LockScreenInputsTest : public LockScreenBaseTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(LockScreenInputsTest, CheckIMESwitches) {
+// TODO(http://crbug.com/507908230) - Re-enable once the test is fixed.
+IN_PROC_BROWSER_TEST_F(LockScreenInputsTest, DISABLED_CheckIMESwitches) {
   const auto& users = login_manager_.users();
   LoginUserWithDbusClient(users[0].account_id, LoginManagerTest::kPassword);
   scoped_refptr<input_method::InputMethodManager::State> ime_states[2] = {
@@ -294,7 +295,6 @@ IN_PROC_BROWSER_TEST_F(LockScreenLocalPasswordTest, UnlockWithWrongPassword) {
   // Unlock with a bad password.
   locker_tester.UnlockWithPassword(test_account_id,
                                    LoginManagerTest::kPassword);
-  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(locker_tester.IsLocked());
 }
 

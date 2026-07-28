@@ -11,15 +11,22 @@
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/feature_list.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/theme_source.h"
+#include "chrome/common/chrome_features.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/url_utils.h"
 #include "third_party/blink/public/mojom/loader/local_resource_loader_config.mojom.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_provider.h"
+#include "ui/color/color_provider_manager.h"
+#include "ui/native_theme/native_theme.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -39,10 +46,7 @@ void ThemeColorsSourceManager::PopulateLocalResourceLoaderConfig(
     blink::mojom::LocalResourceLoaderConfig* config,
     const url::Origin& requesting_origin,
     content::WebContents* web_contents) {
-  CHECK(web_contents);
   const ui::ColorProvider* color_provider = nullptr;
-  // TODO(crbug.com/457618790): Ensure we have ColorProviders available early in
-  // View init separately.
   if (color_provider_for_testing_) {
     CHECK_IS_TEST();
     color_provider = color_provider_for_testing_.get();
@@ -55,18 +59,19 @@ void ThemeColorsSourceManager::PopulateLocalResourceLoaderConfig(
     if (browser_window) {
       color_provider = browser_window->GetColorProvider();
     }
+
     // Fallback to ThemeService if we couldn't get the ColorProvider from the
-    // BrowserWindow. We prioritize the BrowserWindow's ColorProvider to ensure
-    // consistency with the native window's theme, but during early platform
-    // initialization, e.g. before the native view is fully attached, the
-    // BrowserWindow might not be available yet.
+    // BrowserWindow or prewarming sequence. We prioritize the BrowserWindow's
+    // ColorProvider to ensure consistency with the native window's theme, but
+    // during early platform initialization, e.g. before the native view is
+    // fully attached, it might not be available yet.
     if (!color_provider) {
       auto* theme_service = ThemeServiceFactory::GetForProfile(profile_);
-      if (theme_service) {
-        color_provider = theme_service->GetColorProvider();
-        // Should not happen in normal operation.
-        base::debug::DumpWithoutCrashing();
-      }
+      ui::ColorProviderKey key = theme_service->GetColorProviderKey(
+          ui::NativeTheme::GetInstanceForNativeUi()->GetColorProviderKey(
+              nullptr),
+          profile_);
+      color_provider = ui::ColorProviderManager::Get().GetColorProviderFor(key);
     }
   }
   CHECK(color_provider);
@@ -110,6 +115,11 @@ void ThemeColorsSourceManager::PopulateLocalResourceLoaderConfig(
   auto resource_path = std::string(theme_url.path());
   if (!resource_path.empty() && resource_path[0] == '/') {
     resource_path = resource_path.substr(1);
+  }
+
+  std::string canonical_query = content::GetCanonicalQuery(theme_url);
+  if (!canonical_query.empty()) {
+    base::StrAppend(&resource_path, {"?", canonical_query});
   }
 
   source->path_to_resource_map[resource_path] =

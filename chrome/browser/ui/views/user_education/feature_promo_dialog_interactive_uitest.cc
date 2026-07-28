@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "base/auto_reset.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -18,6 +17,7 @@
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
@@ -25,17 +25,15 @@
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
-#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
@@ -83,9 +81,7 @@ class FeaturePromoDialogTest : public TestBase {
   FeaturePromoDialogTest()
       // Specifying features to enable is not important because a mock
       // FeatureEngagementTracker is used.
-      : TestBase(UseMockTracker()),
-        update_dialog_scope_(web_app::SetIdentityUpdateDialogActionForTesting(
-            web_app::AppIdentityUpdate::kSkipped)) {
+      : TestBase(UseMockTracker()) {
     feature_ = GetFeatureForTest();
     scoped_feature_list_.InitWithFeatures(
         /* enabled_features =*/{*feature_},
@@ -102,12 +98,12 @@ class FeaturePromoDialogTest : public TestBase {
   }
   void SetUpOnMainThread() override {
     TestBase::SetUpOnMainThread();
-    browser()->window()->Activate();
+    browser()->GetWindow()->Activate();
     ui_test_utils::BrowserActivationWaiter(browser()).WaitForActivation();
   }
 
   void TearDownOnMainThread() override {
-    Profile* const profile = browser()->profile();
+    Profile* const profile = browser()->GetProfile();
     web_app::WebAppRegistrar& registrar =
         web_app::WebAppProvider::GetForTest(profile)->registrar_unsafe();
     for (const auto& app_id : registrar.GetAppIds()) {
@@ -125,7 +121,8 @@ class FeaturePromoDialogTest : public TestBase {
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     auto* const promo_controller =
-        UserEducationServiceFactory::GetForBrowserContext(browser()->profile())
+        UserEducationServiceFactory::GetForBrowserContext(
+            browser()->GetProfile())
             ->GetFeaturePromoControllerForTesting();
     auto const context = BrowserUserEducationInterface::From(browser())
                              ->GetUserEducationContextForTesting();
@@ -172,8 +169,6 @@ class FeaturePromoDialogTest : public TestBase {
 
   raw_ptr<const base::Feature> feature_ = nullptr;
   base::test::ScopedFeatureList scoped_feature_list_;
-  base::AutoReset<std::optional<web_app::AppIdentityUpdate>>
-      update_dialog_scope_;
 };
 
 // Adding new tests for your promo
@@ -221,12 +216,14 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_DesktopPwaInstall) {
         ->page_action_controller()
         ->HideSuggestionChip(kActionInstallPwa);
   }
-  EXPECT_TRUE(BrowserView::GetBrowserViewForBrowser(browser())
-                  ->toolbar_button_provider()
-                  ->GetPageActionView(kActionInstallPwa)
+  auto* provider = BrowserView::GetBrowserViewForBrowser(browser())
+                       ->toolbar_button_provider();
+  EXPECT_TRUE(page_actions::GetIconLabelBubbleViewForTesting(
+                  provider->GetPageActionViewInterface(kActionInstallPwa),
+                  kActionInstallPwa)
                   ->GetVisible());
 
-  browser()->window()->Activate();
+  browser()->GetWindow()->Activate();
   ui_test_utils::BrowserActivationWaiter(browser()).WaitForActivation();
 
   ShowAndVerifyUi();
@@ -238,11 +235,6 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_ProfileSwitch) {
   ShowAndVerifyUi();
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-
-IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_TabSearch) {
-  set_baseline("2991858");
-  ShowAndVerifyUi();
-}
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest,
                        InvokeUi_IPH_DesktopSharedHighlighting) {

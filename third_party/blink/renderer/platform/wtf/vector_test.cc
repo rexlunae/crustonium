@@ -611,14 +611,14 @@ TEST(VectorTest, AppendContainers) {
   Vector<int> other_vector({1, 2});
   std::array<int, 3> other_array = {{3, 4, 5}};
   int other_c_array[4] = {6, 7, 8, 9};
-  result.AppendVector(other_vector);
-  result.AppendRange(other_array.begin(), other_array.end());
-  result.AppendSpan(base::span(other_c_array));
+  result.append_range(other_vector);
+  result.Append(other_array.begin(), other_array.end());
+  result.append_range(base::span(other_c_array));
   EXPECT_THAT(result, ::testing::ElementsAre(1, 2, 3, 4, 5, 6, 7, 8, 9));
 
-  result.AppendVector(empty_vector);
-  result.AppendRange(other_array.end(), other_array.end());
-  result.AppendSpan(base::span(other_c_array).subspan<4>());
+  result.append_range(empty_vector);
+  result.Append(other_array.end(), other_array.end());
+  result.append_range(base::span(other_c_array).subspan<4>());
   EXPECT_THAT(result, ::testing::ElementsAre(1, 2, 3, 4, 5, 6, 7, 8, 9));
 }
 
@@ -852,6 +852,43 @@ static_assert(VectorTraits<UnknownType*>::kCanCopyWithMemcpy,
 
 static_assert(!IsTraceable<Vector<int>>::value,
               "Vector<int> must not be traceable.");
+
+#if DCHECK_IS_ON()
+TEST(VectorTest, MutationDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  EXPECT_EQ(*it, 1);
+  vector.push_back(4);
+  EXPECT_DEATH_IF_SUPPORTED([[maybe_unused]] int val = *it,
+                            "Vector modified while being iterated.");
+}
+
+TEST(VectorTest, NoMutationDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  EXPECT_EQ(*it, 1);
+  it = std::next(it);
+  EXPECT_EQ(*it, 2);
+}
+
+TEST(VectorTest, NestedIteration) {
+  Vector<int> vector = {1, 2, 3};
+  for ([[maybe_unused]] int& i : vector) {
+    for ([[maybe_unused]] int& j : vector) {
+      // This should be fine.
+    }
+  }
+}
+
+TEST(VectorTest, EraseDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  EXPECT_EQ(*it, 1);
+  vector.EraseAt(1);
+  EXPECT_DEATH_IF_SUPPORTED([[maybe_unused]] int val = *it,
+                            "Vector modified while being iterated.");
+}
+#endif
 
 }  // anonymous namespace
 

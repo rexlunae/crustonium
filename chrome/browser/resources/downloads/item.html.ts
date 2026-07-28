@@ -11,13 +11,13 @@ export function getHtml(this: DownloadsItemElement) {
   return html`<!--_html_template_start_-->
 <div id="date" role="heading" aria-level="2">${this.computeDate_()}</div>
 
-<div id="content" @dragstart="${this.onDragStart_}"
+<div id="content" @dragstart="${this.onDragstart_}"
     class="${this.computeClass_()}" focus-row-container>
   <div id="main-content">
     <div id="file-icon-wrapper" class="icon-wrapper" role="img"
         aria-label="${this.computeIconAriaLabel_()}"
         aria-hidden="${this.computeIconAriaHidden_()}">
-      <img class="icon" id="file-icon" alt="" ?hidden="${!this.useFileIcon_}"
+      <img class="icon" id="fileIcon" alt="" ?hidden="${!this.useFileIcon_}"
           icon-color="${this.computeIconColor_()}">
       <cr-icon class="icon" ?hidden="${this.useFileIcon_}"
           .icon="${this.computeIcon_()}"
@@ -28,7 +28,7 @@ export function getHtml(this: DownloadsItemElement) {
     <div id="details">
       <div id="title-area" role="gridcell"><!--
         Can't have any line breaks.
-        --><a is="action-link" id="file-link"
+        --><a is="action-link" id="fileLink"
             href="${this.data?.url || ''}"
             @click="${this.onFileLinkClick_}" focus-row-control
             focus-type="fileLink"
@@ -77,14 +77,17 @@ export function getHtml(this: DownloadsItemElement) {
           </cr-button>
         </span>
       </div>
-      <div id="controlled-by" ?hidden="${this.isDangerous_}"><!--
+      <div id="controlledBy" ?hidden="${this.isDangerous_}"><!--
         Text populated dynamically.
       --></div>
     </div>
-    <div class="more-options">
+    <div role="gridcell" class="more-options">
       <!-- Menu and/or quick action(s). -->
-      <div role="gridcell" id="action-icon-buttons">
-        <cr-icon-button id="copy-download-link" iron-icon="downloads:link"
+      <div id="action-icon-buttons">
+        <cr-icon-button id="copy-download-link"
+            iron-icon="${this.webuiRoundedIconsEnabled_
+                ? 'downloads:link'
+                : 'downloads:link-old'}"
             ?hidden="${!this.computeShowCopyDownloadLink_()}"
             title="$i18n{controlCopyDownloadLink}"
             aria-label="$i18n{controlCopyDownloadLink}"
@@ -166,7 +169,7 @@ export function getHtml(this: DownloadsItemElement) {
           ${this.computeSaveDangerousLabel_()}
         </button>
       </cr-action-menu>
-      <div id="incognito" title="$i18n{inIncognito}"
+      <div id="incognito" role="img" title="$i18n{inIncognito}"
           ?hidden="${!this.data?.otr}">
       </div>
     </div>

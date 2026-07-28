@@ -30,7 +30,8 @@ BrowserWindowPropertyManager::BrowserWindowPropertyManager(
     : view_(view), hwnd_(hwnd) {
   // At this point, the HWND is unavailable from BrowserView.
   DCHECK(hwnd);
-  profile_pref_registrar_.Init(view_->browser()->profile()->GetPrefs());
+  profile_pref_registrar_.Init(
+      const_cast<Profile*>(view_->browser()->GetProfile())->GetPrefs());
 
   // Monitor the profile icon version on Windows so that we can set the browser
   // relaunch icon when the version changes (e.g on initial icon creation).
@@ -47,19 +48,22 @@ BrowserWindowPropertyManager::~BrowserWindowPropertyManager() {
 
 void BrowserWindowPropertyManager::UpdateWindowProperties() {
   const Browser* browser = view_->browser();
-  Profile* profile = browser->profile();
+  Profile* profile = const_cast<Profile*>(browser->GetProfile());
 
   // Set the app user model id for this application to that of the application
-  // name. See http://crbug.com/7028.
+  // name. See http://crbug.com/41308099.
   std::wstring app_id =
-      browser->is_type_app() || browser->is_type_app_popup() ||
-              browser->is_type_devtools()
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+              browser->is_type_app_popup() || browser->is_type_devtools() ||
+              (browser->is_type_picture_in_picture() &&
+               !browser->app_name().empty())
           ? shell_integration::win::GetAppUserModelIdForApp(
                 base::UTF8ToWide(browser->app_name()), profile->GetPath())
           : shell_integration::win::GetAppUserModelIdForBrowser(
                 profile->GetPath());
   // Apps set their relaunch details based on app's details.
-  if (browser->is_type_app() || browser->is_type_app_popup()) {
+  if (browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+      browser->is_type_app_popup()) {
     ExtensionRegistry* registry = ExtensionRegistry::Get(profile);
     const extensions::Extension* extension = registry->GetExtensionById(
         web_app::GetAppIdFromApplicationName(browser->app_name()),

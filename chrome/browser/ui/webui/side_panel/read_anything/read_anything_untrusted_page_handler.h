@@ -16,13 +16,14 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "chrome/browser/ui/read_anything/read_anything_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
-#include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_screenshotter.h"
+#include "chrome/common/read_anything/distillation_evaluator.mojom.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
 #include "components/dom_distiller/core/task_tracker.h"
 #include "components/translate/core/browser/translate_client.h"
@@ -46,6 +47,7 @@ using ash::language_packs::PackResult;
 #endif
 
 namespace content {
+class NavigationHandle;
 class ScopedAccessibilityMode;
 }
 
@@ -112,6 +114,8 @@ class ReadAnythingWebContentsObserver : public content::WebContentsObserver {
   void WebContentsDestroyed() override;
   void DidStopLoading() override;
   void DidUpdateAudioMutingState(bool muted) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
 
   // base::SafeRef used since the lifetime of ReadAnythingWebContentsObserver is
   // completely contained by page_handler_. See
@@ -144,6 +148,7 @@ class ReadAnythingUntrustedPageHandler :
     public ReadAnythingLifecycleObserver,
     public PinnedToolbarActionsModel::Observer,
     public translate::TranslateDriver::LanguageDetectionObserver {
+
  public:
   ReadAnythingUntrustedPageHandler(
       mojo::PendingRemote<read_anything::mojom::UntrustedPage> page,
@@ -173,6 +178,7 @@ class ReadAnythingUntrustedPageHandler :
 
   static const int kMaxWordsDistilled = 25000;
   static const int kWordsDistilledBuckets = 100;
+  static const int kMaxNodesForDistillationQualityEvaluation = 5000;
   static constexpr base::TimeDelta kReadingModeHiddenAckTimeout =
       base::Seconds(2);
 
@@ -184,6 +190,7 @@ class ReadAnythingUntrustedPageHandler :
   void DidStopLoading();
   void DidUpdateAudioMutingState(bool muted);
   void WebContentsDestroyed();
+  void DidFinishNavigation(content::NavigationHandle* navigation_handle);
   void OnActiveAXTreeIDChanged();
   bool CheckForPdfContentAfterLoad();
 
@@ -203,11 +210,14 @@ class ReadAnythingUntrustedPageHandler :
   void OnFontChange(const std::string& font) override;
   void OnFontSizeChange(double font_size) override;
   void OnLinksEnabledChanged(bool enabled) override;
+  void OnTranslationRequested() override;
   void OnImagesEnabledChanged(bool enabled) override;
   void OnColorChange(read_anything::mojom::Colors color) override;
   void OnHighlightGranularityChanged(
       read_anything::mojom::HighlightGranularity granularity) override;
-  void OnLineFocusChanged(read_anything::mojom::LineFocus line_focus) override;
+  void OnLineFocusChanged(
+      read_anything::mojom::LineFocus current_line_focus,
+      read_anything::mojom::LineFocus last_non_disabled_line_focus) override;
   void GetVoicePackInfo(const std::string& language) override;
   void InstallVoicePack(const std::string& language) override;
   void UninstallVoice(const std::string& language) override;
@@ -221,6 +231,8 @@ class ReadAnythingUntrustedPageHandler :
   }
   void OnDistillationStateChanged(
       read_anything::mojom::ReadAnythingDistillationState new_state) override;
+  void OnSpeechEngineStalled() override;
+  void RequestReadabilityDistillation() override;
 
   // PinnedToolbarModel::Observer
   void OnActionsChanged() override;
@@ -236,10 +248,14 @@ class ReadAnythingUntrustedPageHandler :
 
   // ReadAnythingLifecycleObserver:
   void OnDestroyed() override;
-  void OnTabWillDetach() override;
-  void Activate(bool active,
-                std::optional<ReadAnythingOpenTrigger> open_trigger) override;
+  void Activate(
+      bool active,
+      ReadAnythingOpenTrigger open_trigger,
+      std::optional<base::TimeDelta> completed_session_duration) override;
   void OnReadingModePresenterChanged() override;
+
+  void OnTabWillDetach(tabs::TabInterface* tab,
+                       tabs::TabInterface::DetachReason reason);
 
   // Logs the extension installation state. Intended to get more information
   // on system voice usage.
@@ -287,6 +303,14 @@ class ReadAnythingUntrustedPageHandler :
   void SendNextLanguageRequest();
   void OnInstallPackResponse(const PackResult& pack_result);
 #endif
+  // Callback for when the tab's web contents are discarded.
+  void OnTabDiscarded(tabs::TabInterface* tab,
+                      content::WebContents* old_contents,
+                      content::WebContents* new_contents);
+
+  // Used to verify that an incoming action request is for the currently
+  // observed tree. If it's not, it may be a malicious request.
+  bool IsObservingTree(const ui::AXTreeID& tree_id) const;
 
   // ui::AXActionHandlerObserver:
   void TreeRemoved(ui::AXTreeID ax_tree_id) override;
@@ -295,7 +319,6 @@ class ReadAnythingUntrustedPageHandler :
   void GetDependencyParserModel(
       GetDependencyParserModelCallback callback) override;
   void OnCopy() override;
-
   void OnLinkClicked(const ui::AXTreeID& target_tree_id,
                      ui::AXNodeID target_node_id) override;
   void ScrollToTargetNode(const ui::AXTreeID& target_tree_id,
@@ -308,7 +331,6 @@ class ReadAnythingUntrustedPageHandler :
                          ui::AXNodeID focus_node_id,
                          int focus_offset) override;
   void OnCollapseSelection() override;
-  void OnScreenshotRequested() override;
 
   void SetDefaultLanguageCode(const std::string& code);
 
@@ -317,6 +339,7 @@ class ReadAnythingUntrustedPageHandler :
   void SetLanguageCode(const std::string& code);
 
   void SetUpPdfObserver();
+  void CheckIfActiveAXTreeChangedToPdf();
 
   void OnGetPresentationState();
   ReadAnythingController* GetReadAnythingController();
@@ -330,10 +353,18 @@ class ReadAnythingUntrustedPageHandler :
   // Logs the current visual settings values.
   void LogTextStyle();
 
+  void LogDistillationQualityMetrics(
+      const reading_mode::mojom::DistillationMetricsPtr& metrics);
+
+  // Restores settings from preferences.
+  void RestoreSettingsFromPrefs();
+
   void PerformActionInTargetTree(const ui::AXActionData& data);
 
   bool AreInnerContentsPdfContent(
       std::vector<content::WebContents*> inner_contents);
+
+  content::WebContents* GetWebContents() const;
 
   void OnScreenAIServiceInitialized(bool successful);
 
@@ -360,6 +391,13 @@ class ReadAnythingUntrustedPageHandler :
   void ProcessDistilledArticle(
       const dom_distiller::DistilledArticleProto* article_proto);
 
+  void EvaluateDistillationQuality(const std::string& distilled_html);
+  void OnQualityMetricsEvaluated(
+      base::expected<reading_mode::mojom::DistillationMetricsPtr,
+                     reading_mode::mojom::EvaluationStatus> result);
+  void OnAXTreeSnapshotReceived(const std::string& distilled_html,
+                                ui::AXTreeUpdate& snapshot);
+
   // The Reading Mode controller for both immersive and side-panel reading mode,
   // used when the immersive reading mode flag is enabled.
   raw_ptr<ReadAnythingController> read_anything_controller_;
@@ -379,10 +417,6 @@ class ReadAnythingUntrustedPageHandler :
   // contained.
   std::unique_ptr<ReadAnythingWebContentsObserver> pdf_observer_;
 
-  // `web_screenshotter_` is used to capture a screenshot of the main web
-  // contents requested.
-  std::unique_ptr<ReadAnythingScreenshotter> web_screenshotter_;
-
   // Private implementation for dom_distiller::ViewRequestDelegate, not part of
   // the public API.
   class DistillerDelegate;
@@ -391,7 +425,8 @@ class ReadAnythingUntrustedPageHandler :
   const mojo::Receiver<read_anything::mojom::UntrustedPageHandler> receiver_;
   const mojo::Remote<read_anything::mojom::UntrustedPage> page_;
 
-  std::optional<ReadAnythingOpenTrigger> last_open_trigger_;
+  ReadAnythingOpenTrigger last_open_trigger_ =
+      ReadAnythingOpenTrigger::kUnknown;
 
   // Whether the Read Anything feature is currently active. The feature is
   // active when it is currently shown in the Side Panel.
@@ -418,10 +453,18 @@ class ReadAnythingUntrustedPageHandler :
                           ui::AXActionHandlerObserver>
       ax_action_handler_observer_{this};
 
-  // Whether the currently distilled page is recognized as a pdf. This allows
-  // the page handler to trigger distillation if the page would now be
-  // recognized as a pdf after it finishes loading.
-  bool is_pdf_ = false;
+  // Whether the currently distilled page is recognized as a pdf and the pdf
+  // frame has loaded. This allows the page handler to trigger distillation if
+  // the page would now be recognized as a pdf after it finishes loading.
+  bool is_pdf_with_frame_ = false;
+  // When the current distilled page is recognized as a pdf, the pdf frame
+  // itself has not necessarily loaded in yet, so wait for that frame before
+  // notifying of the new tree using the info from the pdf frame itself.
+  bool is_waiting_for_pdf_frame_ = false;
+
+  // Subscription for tab discard events.
+  base::CallbackListSubscription tab_discard_subscription_;
+  base::CallbackListSubscription tab_detach_subscription_;
 
   // This manages the life cycle of the pinned toolbar observer. We observe
   // the pinned toolbar to ensure capture user pin changes in the toolbar ui.
@@ -454,6 +497,9 @@ class ReadAnythingUntrustedPageHandler :
   // Hold DOM distiller distillation results.
   std::optional<std::string> dom_distiller_title_;
   std::optional<std::string> dom_distiller_content_;
+
+  mojo::Remote<reading_mode::mojom::DistillationEvaluator>
+      distillation_evaluator_;
 
   read_anything::mojom::ReadAnythingDistillationState distillation_state_ =
       read_anything::mojom::ReadAnythingDistillationState::kUndefined;

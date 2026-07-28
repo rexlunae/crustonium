@@ -19,6 +19,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "components/printing/common/print.mojom-test-utils.h"
 #include "components/printing/common/print.mojom.h"
@@ -358,9 +359,9 @@ class TestPrintManagerHost
     std::move(callback).Run(std::move(settings));
   }
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
-  void UpdatePrintSettings(base::DictValue job_settings,
-                           UpdatePrintSettingsCallback callback) override {
+  void GetPrintPreviewParams(GetPrintPreviewParamsCallback callback) override {
     // Check and make sure the required settings are all there.
+    const base::DictValue& job_settings = job_settings_;
     std::optional<int> margins_type = job_settings.FindInt(kSettingMarginsType);
     if (!margins_type.has_value() ||
         !job_settings.FindBool(kSettingLandscape) ||
@@ -371,7 +372,7 @@ class TestPrintManagerHost
         !job_settings.FindString(kSettingDeviceName) ||
         !job_settings.FindInt(kSettingDuplexMode) ||
         !job_settings.FindInt(kSettingCopies) ||
-        !job_settings.FindInt(kPreviewUIID) ||
+        !job_settings.FindString(kPreviewUIID) ||
         !job_settings.FindInt(kPreviewRequestID)) {
       std::move(callback).Run(nullptr);
       return;
@@ -401,10 +402,10 @@ class TestPrintManagerHost
     is_setup_scripted_print_preview_ = true;
     std::move(callback).Run();
   }
-  void ShowScriptedPrintPreview(bool source_is_modifiable) override {}
+  void ShowScriptedPrintPreview() override {}
   void RequestPrintPreview(
       mojom::RequestPrintPreviewParamsPtr params) override {}
-  void CheckForCancel(int32_t preview_ui_id,
+  void CheckForCancel(const base::UnguessableToken& preview_ui_id,
                       int32_t request_id,
                       CheckForCancelCallback callback) override {
     // Waits until other mojo messages are handled before checking if
@@ -449,7 +450,11 @@ class TestPrintManagerHost
   void set_preview_ui(FakePrintPreviewUI* preview_ui) {
     preview_ui_ = preview_ui;
   }
-#endif
+
+  void set_job_settings(const base::DictValue& settings) {
+    job_settings_ = settings.Clone();
+  }
+#endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
 
   int accessibility_tree_set_count() const {
     return accessibility_tree_set_count_;
@@ -478,6 +483,7 @@ class TestPrintManagerHost
   raw_ptr<MockPrinter> printer_;
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
   raw_ptr<FakePrintPreviewUI> preview_ui_;
+  base::DictValue job_settings_;
 #endif
   base::OnceClosure quit_closure_;
   bool is_printing_enabled_ = true;
@@ -570,7 +576,7 @@ class PrintRenderFrameHelperTestBase : public content::RenderViewTest {
 
   void OnPrintPagesInFrame(std::string_view frame_name) {
     blink::WebFrame* frame =
-        GetMainFrame()->FindFrameByName(blink::WebString::FromUTF8(frame_name));
+        GetMainFrame()->FindFrameByName(blink::WebString::FromUtf8(frame_name));
     ASSERT_TRUE(frame);
     content::RenderFrame* render_frame =
         content::RenderFrame::FromWebFrame(frame->ToWebLocalFrame());
@@ -1685,7 +1691,7 @@ TEST_F(MAYBE_PrintRenderFrameHelperTest, PrintWithIframe) {
   // the printout should only contain the contents of that frame.
   WebFrame* sub1_frame =
       web_view_->MainFrame()->ToWebLocalFrame()->FindFrameByName(
-          WebString::FromUTF8("sub1"));
+          WebString("sub1"));
   ASSERT_TRUE(sub1_frame);
   web_view_->SetFocusedFrame(sub1_frame);
   ASSERT_NE(web_view_->FocusedFrame(), web_view_->MainFrame());
@@ -1735,6 +1741,7 @@ class PrintRenderFrameHelperPreviewTest
   }
 
   void OnPrintPreview() {
+    print_manager()->set_job_settings(print_settings());
     PrintRenderFrameHelper* print_render_frame_helper =
         GetPrintRenderFrameHelper();
     print_render_frame_helper->InitiatePrintPreview(
@@ -1742,7 +1749,7 @@ class PrintRenderFrameHelperPreviewTest
         mojo::NullAssociatedRemote(),
 #endif
         /*has_selection=*/false);
-    print_render_frame_helper->PrintPreview(print_settings_.Clone());
+    print_render_frame_helper->PrintPreview(print_settings().Clone());
     preview_ui()->WaitUntilPreviewUpdate();
 
 #if defined(MOCK_PRINTER_SUPPORTS_PAGE_IMAGES)
@@ -1756,8 +1763,9 @@ class PrintRenderFrameHelperPreviewTest
   }
 
   void OnPrintPreviewRerender() {
+    print_manager()->set_job_settings(print_settings());
     preview_ui()->ResetPreviewStatus();
-    GetPrintRenderFrameHelper()->PrintPreview(print_settings_.Clone());
+    GetPrintRenderFrameHelper()->PrintPreview(print_settings().Clone());
     preview_ui()->WaitUntilPreviewUpdate();
   }
 
@@ -1769,6 +1777,7 @@ class PrintRenderFrameHelperPreviewTest
     content::RenderFrame* render_frame =
         content::RenderFrame::FromWebFrame(frame);
     BindPrintManagerHost(render_frame);
+    print_manager(render_frame)->set_job_settings(print_settings());
     PrintRenderFrameHelper* print_render_frame_helper =
         GetPrintRenderFrameHelperForFrame(render_frame);
     print_render_frame_helper->SetPrintPreviewUI(preview_ui->BindReceiver());
@@ -1890,7 +1899,7 @@ class PrintRenderFrameHelperPreviewTest
             .Set(kSettingDeviceName, "dummy")
             .Set(kSettingDpiHorizontal, 72)
             .Set(kSettingDpiVertical, 72)
-            .Set(kPreviewUIID, 4)
+            .Set(kPreviewUIID, base::UnguessableToken::Create().ToString())
             .Set(kSettingRasterizePdf, false)
             .Set(kPreviewRequestID, 12345)
             .Set(kSettingScaleFactor, 100)

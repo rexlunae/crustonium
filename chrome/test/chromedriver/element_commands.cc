@@ -8,11 +8,10 @@
 
 #include <cmath>
 #include <memory>
-#include <set>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
+#include "base/containers/fixed_flat_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
@@ -36,62 +35,62 @@
 #include "third_party/selenium-atoms/atoms.h"
 
 const int kFlickTouchEventsPerSecond = 30;
-const std::set<std::string> kTextControlTypes = {"text", "search", "tel", "url",
-                                                 "password"};
-const std::set<std::string> kInputControlTypes = {
-    "text",           "search", "url",   "tel",   "email",
-    "password",       "date",   "month", "week",  "time",
-    "datetime-local", "number", "range", "color", "file"};
+constexpr auto kTextControlTypes = base::MakeFixedFlatSet<std::string_view>(
+    {"text", "search", "tel", "url", "password"});
+constexpr auto kInputControlTypes = base::MakeFixedFlatSet<std::string_view>(
+    {"text", "search", "url", "tel", "email", "password", "date", "month",
+     "week", "time", "datetime-local", "number", "range", "color", "file"});
 
-const std::set<std::string> kNontypeableControlTypes = {"color"};
+constexpr auto kNontypeableControlTypes =
+    base::MakeFixedFlatSet<std::string_view>({"color"});
 
-const std::unordered_set<std::string> kBooleanAttributes = {
-    "allowfullscreen",
-    "allowpaymentrequest",
-    "allowusermedia",
-    "async",
-    "autofocus",
-    "autoplay",
-    "checked",
-    "compact",
-    "complete",
-    "controls",
-    "declare",
-    "default",
-    "defaultchecked",
-    "defaultselected",
-    "defer",
-    "disabled",
-    "ended",
-    "formnovalidate",
-    "hidden",
-    "indeterminate",
-    "iscontenteditable",
-    "ismap",
-    "itemscope",
-    "loop",
-    "multiple",
-    "muted",
-    "nohref",
-    "nomodule",
-    "noresize",
-    "noshade",
-    "novalidate",
-    "nowrap",
-    "open",
-    "paused",
-    "playsinline",
-    "pubdate",
-    "readonly",
-    "required",
-    "reversed",
-    "scoped",
-    "seamless",
-    "seeking",
-    "selected",
-    "truespeed",
-    "typemustmatch",
-    "willvalidate"};
+constexpr auto kBooleanAttributes =
+    base::MakeFixedFlatSet<std::string_view>({"allowfullscreen",
+                                              "allowpaymentrequest",
+                                              "allowusermedia",
+                                              "async",
+                                              "autofocus",
+                                              "autoplay",
+                                              "checked",
+                                              "compact",
+                                              "complete",
+                                              "controls",
+                                              "declare",
+                                              "default",
+                                              "defaultchecked",
+                                              "defaultselected",
+                                              "defer",
+                                              "disabled",
+                                              "ended",
+                                              "formnovalidate",
+                                              "hidden",
+                                              "indeterminate",
+                                              "iscontenteditable",
+                                              "ismap",
+                                              "itemscope",
+                                              "loop",
+                                              "multiple",
+                                              "muted",
+                                              "nohref",
+                                              "nomodule",
+                                              "noresize",
+                                              "noshade",
+                                              "novalidate",
+                                              "nowrap",
+                                              "open",
+                                              "paused",
+                                              "playsinline",
+                                              "pubdate",
+                                              "readonly",
+                                              "required",
+                                              "reversed",
+                                              "scoped",
+                                              "seamless",
+                                              "seeking",
+                                              "selected",
+                                              "truespeed",
+                                              "typemustmatch",
+                                              "willvalidate"});
 
 namespace {
 
@@ -108,8 +107,19 @@ Status FocusToElement(
         session, web_view, element_id, true, &is_displayed);
     if (status.IsError())
       return status;
-    if (is_displayed)
+    if (is_displayed) {
+      // Check if the element is already the active element so we can
+      // skip the unnecessary kFocusScript call below, which disrupts
+      // selection state in contenteditable elements.
+      // We compare against document.activeElement directly rather than
+      // using IsElementFocused(), because the latter gates on
+      // document.hasFocus() which returns false in headless mode.
+      status = IsElementActive(session, web_view, element_id, &is_focused);
+      if (status.IsError()) {
+        return status;
+      }
       break;
+    }
     status = IsElementFocused(session, web_view, element_id, &is_focused);
     if (status.IsError())
       return status;
@@ -322,6 +332,16 @@ Status ExecuteClickElement(Session* session,
                   "frame was destroyed before click completion"};
   }
 
+  // `containing_web_view` may be a child OOPIF WebViewImpl owned by the
+  // page's FrameTracker. The outer ExecuteWindowCommand holder only locks the
+  // page-level view and its ancestors, so the inner WebViewImplHolder created
+  // by each CallFunctionWithTimeout below would be the *first* lock on the
+  // child and could free it in its destructor if the target detaches
+  // mid-call, leaving this raw pointer dangling. Hold it explicitly for the
+  // remainder of this function.
+  std::unique_ptr<WebViewHolder> containing_holder =
+      containing_web_view->GetHolder();
+
   WebPoint relative_location;
   status = GetElementClickableLocation(session, containing_web_view, element_id,
                                        &relative_location);
@@ -480,8 +500,7 @@ Status ExecuteClearElement(Session* session,
     if (get_element_type->is_string())
       element_type = base::ToLowerASCII(get_element_type->GetString());
 
-    is_input_control =
-        kInputControlTypes.find(element_type) != kInputControlTypes.end();
+    is_input_control = kInputControlTypes.contains(element_type);
   }
 
   bool is_text = tag_name == "textarea";
@@ -580,8 +599,7 @@ Status ExecuteSendKeysToElement(Session* session,
   if (get_element_type->is_string())
     element_type = base::ToLowerASCII(get_element_type->GetString());
   bool is_file = element_type == "file";
-  bool is_nontypeable = kNontypeableControlTypes.find(element_type) !=
-                        kNontypeableControlTypes.end();
+  bool is_nontypeable = kNontypeableControlTypes.contains(element_type);
 
   if (is_input && is_file) {
     if (session->strict_file_interactability) {
@@ -667,8 +685,7 @@ Status ExecuteSendKeysToElement(Session* session,
 
   // If element_type is in kTextControlTypes, sendKeys should append
   bool is_text_control_type =
-      is_input &&
-      kTextControlTypes.find(element_type) != kTextControlTypes.end();
+      is_input && kTextControlTypes.contains(element_type);
   // If the element is a textarea, sendKeys should also append
   bool is_textarea = false;
   status = IsElementAttributeEqualToIgnoreCase(
@@ -678,13 +695,14 @@ Status ExecuteSendKeysToElement(Session* session,
   bool is_text = is_text_control_type || is_textarea;
 
   if (get_content_editable->is_bool() && get_content_editable->GetBool()) {
-    // If element is contentEditable
-    // check if element is focused
+    // If element is contentEditable check if element is focused.
+    // We check against the active element directly rather than using
+    // IsElementFocused(), because the latter gates on document.hasFocus() which
+    // returns false in headless mode.
     bool is_focused = false;
-    status = IsElementFocused(session, web_view, element_id, &is_focused);
+    status = IsElementActive(session, web_view, element_id, &is_focused);
     if (status.IsError())
       return status;
-
     // Get top level contentEditable element
     std::unique_ptr<base::Value> result;
     status = web_view->CallFunction(session->GetCurrentFrameId(),
@@ -709,7 +727,7 @@ Status ExecuteSendKeysToElement(Session* session,
     // check if top level contentEditable element is focused
     bool is_top_focused = false;
     status =
-        IsElementFocused(session, web_view, *top_element_id, &is_top_focused);
+        IsElementActive(session, web_view, *top_element_id, &is_top_focused);
     if (status.IsError())
       return status;
     // If is_text we want to send keys to the element
@@ -1046,7 +1064,7 @@ Status ExecuteGetElementAttribute(Session* session,
   args.Append(*attribute_name);
   return web_view->CallFunction(
       session->GetCurrentFrameId(),
-      kBooleanAttributes.count(base::ToLowerASCII(*attribute_name))
+      kBooleanAttributes.contains(base::ToLowerASCII(*attribute_name))
           ? "(elem, attribute) => elem.hasAttribute(attribute) ? 'true' : null"
           : "(elem, attribute) => elem.getAttribute(attribute)",
       args, value);

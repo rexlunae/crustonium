@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <algorithm>
 #include <memory>
 #include <variant>
 
@@ -12,14 +11,12 @@
 #include "base/time/time.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
-#include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
@@ -27,6 +24,7 @@
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/permissions/chip/chip_controller.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_chip_theme.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_chip.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/chrome_features.h"
@@ -54,17 +52,16 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/permissions_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "net/dns/mock_host_resolver.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
-#include "ui/accessibility/ax_action_data.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/test_event.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/toggle_button.h"
-#include "ui/views/test/ax_event_counter.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/views_test_utils.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 
@@ -93,9 +90,9 @@ constexpr char kRequestNotifications[] = R"(
       })
       )";
 
-class ChipExpansionObserver : PermissionChipView::Observer {
+class ChipExpansionObserver : public PermissionChipInterface::Observer {
  public:
-  explicit ChipExpansionObserver(PermissionChipView* chip) {
+  explicit ChipExpansionObserver(PermissionChipInterface* chip) {
     observation_.Observe(chip);
   }
 
@@ -103,7 +100,8 @@ class ChipExpansionObserver : PermissionChipView::Observer {
 
   void OnExpandAnimationEnded() override { loop_.Quit(); }
 
-  base::ScopedObservation<PermissionChipView, PermissionChipView::Observer>
+  base::ScopedObservation<PermissionChipInterface,
+                          PermissionChipInterface::Observer>
       observation_{this};
   base::RunLoop loop_;
 };
@@ -172,16 +170,20 @@ class PermissionChipInteractiveUITest : public InProcessBrowserTest {
     return browser_view->toolbar()->location_bar_view();
   }
 
-  PermissionChipView* GetChip() {
-    return GetLocationBarView()->GetChipController()->chip();
-  }
-
   ChipController* GetChipController() {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
     LocationBar* lb = browser_view->toolbar()->location_bar();
 
     return lb->GetChipController();
+  }
+
+  PermissionChipView* GetChip() {
+    return views::AsViewClass<PermissionChipView>(
+        views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+            PermissionChipView::kPermissionRequestChipElementId,
+            views::ElementTrackerViews::GetContextForView(
+                BrowserView::GetBrowserViewForBrowser(browser()))));
   }
 
   void ClickOnChip(PermissionChipView* chip) {
@@ -1259,8 +1261,8 @@ IN_PROC_BROWSER_TEST_F(QuietChipFailFastInteractiveTest,
 // `PermissionStatus.onchange` and `PermissionStatus.addEventListener`. There
 // are two ways of removing the listener: `PermissionStatus.onchange = null`,
 // `PermissionStatus.removeEventListener`. Any of the listeners should
-// initialize internal subscribtion map. We should remove the internal
-// subscribtion only if there is no `change` event listener left.
+// initialize internal subscription map. We should remove the internal
+// subscription only if there is no `change` event listener left.
 IN_PROC_BROWSER_TEST_F(QuietChipFailFastInteractiveTest,
                        EventListenerRemovedTest) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -1421,7 +1423,19 @@ IN_PROC_BROWSER_TEST_F(QuietChipFailFastInteractiveTest,
   }
 }
 
-IN_PROC_BROWSER_TEST_F(PermissionChipInteractiveUITest,
+class PermissionChipGestureGatedDisabledInteractiveUITest
+    : public PermissionChipInteractiveUITest {
+ public:
+  PermissionChipGestureGatedDisabledInteractiveUITest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        permissions::features::kPermissionsGestureGatedPrompts);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(PermissionChipGestureGatedDisabledInteractiveUITest,
                        PermissionChipWithAndWithoutUserGesture) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/title1.html"));
@@ -1620,7 +1634,7 @@ class GeolocationUsageObserverBrowsertest : public InProcessBrowserTest {
                      ContentSetting setting,
                      const GURL url) {
     HostContentSettingsMap* map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
     map->SetContentSettingDefaultScope(url, url, type, setting);
   }

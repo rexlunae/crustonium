@@ -25,15 +25,16 @@ import {getToastManager} from 'chrome://resources/cr_elements/cr_toast/cr_toast_
 import {FocusRowMixinLit} from 'chrome://resources/cr_elements/focus_row_mixin_lit.js';
 import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
+import type {SubstitutedStringPiece} from 'chrome://resources/js/load_time_data.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {htmlEscape} from 'chrome://resources/js/util.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserProxy} from './browser_proxy.js';
 import type {MojomData} from './data.js';
-import type {PageHandlerInterface} from './downloads.mojom-webui.js';
+import {browserProxyFactory} from './downloads.mojom-webui.js';
+import type {BrowserProxy} from './downloads.mojom-webui.js';
 import {DangerType, SafeBrowsingState, State, TailoredWarningType} from './downloads.mojom-webui.js';
 import {IconLoaderImpl} from './icon_loader.js';
 import {getCss} from './item.css.js';
@@ -41,9 +42,9 @@ import {getHtml} from './item.html.js';
 
 export interface DownloadsItemElement {
   $: {
-    'controlled-by': HTMLElement,
-    'file-icon': HTMLImageElement,
-    'file-link': HTMLAnchorElement,
+    controlledBy: HTMLElement,
+    fileIcon: HTMLImageElement,
+    fileLink: HTMLAnchorElement,
   };
 }
 
@@ -77,6 +78,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
   static override get properties() {
     return {
+      webuiRoundedIconsEnabled_: {type: Boolean},
       data: {type: Object},
       completelyOnDisk_: {type: Boolean},
       shouldLinkFilename_: {type: Boolean},
@@ -104,7 +106,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   // <if expr="_google_chrome">
   accessor showEsbPromotion: boolean = false;
   // </if>
-  private mojoHandler_: PageHandlerInterface|null = null;
+  private browserProxy_: BrowserProxy = browserProxyFactory.getInstance();
   protected accessor isDangerous_: boolean = false;
   protected accessor isReviewable_: boolean = false;
   protected accessor pauseOrResumeText_: string = '';
@@ -117,12 +119,9 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   private accessor displayType_: DisplayType = DisplayType.NORMAL;
   private accessor completelyOnDisk_: boolean = true;
   protected accessor shouldLinkFilename_: boolean = true;
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
   override overrideCustomEquivalent: boolean = true;
-
-  override firstUpdated() {
-    this.setAttribute('role', 'row');
-    this.mojoHandler_ = BrowserProxy.getInstance().handler;
-  }
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -140,6 +139,10 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
       this.showOpenAnyway_ = this.computeShowOpenAnyway_();
       this.displayType_ = this.computeDisplayType_();
     }
+  }
+
+  override firstUpdated() {
+    this.setAttribute('role', 'row');
   }
 
   override updated(changedProperties: PropertyValues<this>) {
@@ -167,7 +170,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   }
 
   getFileIcon(): HTMLImageElement {
-    return this.$['file-icon'];
+    return this.$.fileIcon;
   }
 
   getMoreActionsButton(): CrIconButtonElement|null {
@@ -676,7 +679,9 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
     if (this.data) {
       switch (this.displayType_) {
         case DisplayType.DANGEROUS:
-          return 'downloads:dangerous';
+          return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'downloads:dangerous-filled' :
+              'downloads:dangerous-old';
         case DisplayType.INSECURE:
         case DisplayType.UNVERIFIED:
         case DisplayType.SUSPICIOUS:
@@ -742,7 +747,9 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
       }
     }
     if (this.isDangerous_) {
-      return 'downloads:dangerous';
+      return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+          'downloads:dangerous-filled' :
+          'downloads:dangerous-old';
     }
     if (!this.useFileIcon_) {
       return 'cr:insert-drive-file';
@@ -1023,9 +1030,9 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
   private updateControlledBy_() {
     const controlledBy = this.computeControlledBy_();
-    this.$['controlled-by'].innerHTML = sanitizeInnerHtml(controlledBy);
+    this.$.controlledBy.innerHTML = sanitizeInnerHtml(controlledBy);
     if (controlledBy) {
-      const link = this.shadowRoot.querySelector('#controlled-by a');
+      const link = this.shadowRoot.querySelector('#controlledBy a');
       link!.setAttribute('focus-row-control', '');
       link!.setAttribute('focus-type', 'controlledBy');
     }
@@ -1041,7 +1048,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
   private updateUiForStateChange_() {
     const removeFileUrlLinks = () => {
-      this.$['file-link'].removeAttribute('href');
+      this.$.fileLink.removeAttribute('href');
     };
 
     if (!this.data) {
@@ -1070,7 +1077,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
     const path = this.data.filePath;
     IconLoaderImpl.getInstance()
-        .loadIcon(this.$['file-icon'], path)
+        .loadIcon(this.$.fileIcon, path)
         .then(success => {
           if (!!this.data && path === this.data.filePath &&
               this.data.state !== State.kAsyncScanning) {
@@ -1083,8 +1090,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
   // <if expr="_google_chrome">
   protected onEsbPromotionClick_() {
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.openEsbSettings();
+    this.browserProxy_.handler.openEsbSettings();
   }
   // </if>
 
@@ -1122,16 +1128,14 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
   protected onCancelClick_() {
     this.restoreFocusAfterCancel_ = true;
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.cancel(this.dataId_());
+    this.browserProxy_.handler.cancel(this.dataId_());
     getAnnouncerInstance().announce(
         loadTimeData.getString('screenreaderCanceled'));
     this.getMoreActionsMenu().close();
   }
 
   protected onDiscardDangerousClick_(e: Event) {
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.discardDangerous(this.dataId_());
+    this.browserProxy_.handler.discardDangerous(this.dataId_());
     this.displayRemovedToast_(/*canUndo=*/ false, e);
     this.getMoreActionsMenu().close();
   }
@@ -1141,33 +1145,33 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   }
 
   protected onDeepScanClick_() {
-    this.mojoHandler_!.deepScan(this.dataId_());
+    this.browserProxy_.handler.deepScan(this.dataId_());
     this.getMoreActionsMenu().close();
   }
 
   protected onBypassDeepScanClick_() {
-    this.mojoHandler_!.bypassDeepScanRequiringGesture(this.dataId_());
+    this.browserProxy_.handler.bypassDeepScanRequiringGesture(this.dataId_());
     this.getMoreActionsMenu().close();
   }
 
   protected onReviewDangerousClick_() {
-    this.mojoHandler_!.reviewDangerousRequiringGesture(this.dataId_());
+    this.browserProxy_.handler.reviewDangerousRequiringGesture(this.dataId_());
     this.getMoreActionsMenu().close();
   }
 
   protected onOpenAnywayClick_() {
-    this.mojoHandler_!.openFileRequiringGesture(this.dataId_());
+    this.browserProxy_.handler.openFileRequiringGesture(this.dataId_());
     this.getMoreActionsMenu().close();
   }
 
-  protected onDragStart_(e: Event) {
+  protected onDragstart_(e: Event) {
     e.preventDefault();
-    this.mojoHandler_!.drag(this.dataId_());
+    this.browserProxy_.handler.drag(this.dataId_());
   }
 
   protected onFileLinkClick_(e: Event) {
     e.preventDefault();
-    this.mojoHandler_!.openFileRequiringGesture(this.dataId_());
+    this.browserProxy_.handler.openFileRequiringGesture(this.dataId_());
   }
 
   protected onUrlClick_() {
@@ -1179,15 +1183,13 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   }
 
   private doPause_() {
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.pause(this.dataId_());
+    this.browserProxy_.handler.pause(this.dataId_());
     getAnnouncerInstance().announce(
         loadTimeData.getString('screenreaderPaused'));
   }
 
   private doResume_() {
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.resume(this.dataId_());
+    this.browserProxy_.handler.resume(this.dataId_());
     getAnnouncerInstance().announce(
         loadTimeData.getString('screenreaderResumed'));
   }
@@ -1206,10 +1208,20 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
       return;
     }
     if (copied) {
-      const pieces = loadTimeData.getSubstitutedStringPieces(
-                         loadTimeData.getString('toastCopiedDownloadLink'),
-                         this.data.url) as unknown as
-          Array<{collapsible: boolean, value: string, arg: string}>;
+      type Piece = SubstitutedStringPiece&{collapsible: boolean};
+
+      let pieces: Piece[];
+      if (this.data.url.startsWith('data:')) {
+        pieces = [{
+          collapsible: false,
+          value: loadTimeData.getString('toastCopiedLink'),
+          arg: '',
+        }];
+      } else {
+        pieces = loadTimeData.getSubstitutedStringPieces(
+                     loadTimeData.getString('toastCopiedDownloadLink'),
+                     this.data.url) as unknown as Piece[];
+      }
       pieces.forEach(p => {
         p.collapsible = !!p.arg;
       });
@@ -1225,6 +1237,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   }
 
   private displayRemovedToast_(canUndo: boolean, e: Event) {
+    type Piece = SubstitutedStringPiece&{collapsible: boolean};
     const templateStringId =
         (this.displayType_ === DisplayType.NORMAL && this.completelyOnDisk_) ?
         'toastDeletedFromHistoryStillOnDevice' :
@@ -1232,7 +1245,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
     const filename = this.data ? this.data.fileName : '';
     const pieces = loadTimeData.getSubstitutedStringPieces(
                        loadTimeData.getString(templateStringId), filename) as
-        unknown as Array<{collapsible: boolean, value: string, arg?: string}>;
+        unknown as Piece[];
 
     pieces.forEach(p => {
       // Make the file name collapsible.
@@ -1246,25 +1259,20 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
   }
 
   protected onRemoveClick_(e: Event) {
-    assert(!!this.mojoHandler_);
     assert(this.data);
-    this.mojoHandler_.remove(this.data.id);
+    this.browserProxy_.handler.remove(this.data.id);
     const canUndo = !this.data.isDangerous && !this.data.isInsecure;
     this.displayRemovedToast_(canUndo, e);
     this.getMoreActionsMenu().close();
   }
 
   protected onRetryClick_() {
-    this.mojoHandler_!.retryDownload(this.dataId_());
+    this.browserProxy_.handler.retryDownload(this.dataId_());
     this.getMoreActionsMenu().close();
   }
 
   private notifySaveDangerousClick_() {
-    this.dispatchEvent(new CustomEvent('save-dangerous-click', {
-      bubbles: true,
-      composed: true,
-      detail: {id: this.dataId_()},
-    }));
+    this.fire('save-dangerous-click', {id: this.dataId_()});
   }
 
   protected onSaveDangerousClick_() {
@@ -1285,8 +1293,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
     ]);
     assert(SAVED_FROM_PAGE_TYPES_ANNOUNCEMENTS.has(this.displayType_));
     assert(this.data);
-    assert(!!this.mojoHandler_);
-    this.mojoHandler_.saveSuspiciousRequiringGesture(this.data.id);
+    this.browserProxy_.handler.saveSuspiciousRequiringGesture(this.data.id);
     const announcement = loadTimeData.getString(
         SAVED_FROM_PAGE_TYPES_ANNOUNCEMENTS.get(this.displayType_) as string);
     getAnnouncerInstance().announce(announcement);
@@ -1294,7 +1301,7 @@ export class DownloadsItemElement extends DownloadsItemElementBase {
 
   protected onShowClick_() {
     assert(this.data);
-    this.mojoHandler_!.show(this.data.id);
+    this.browserProxy_.handler.show(this.data.id);
     this.getMoreActionsMenu().close();
   }
 

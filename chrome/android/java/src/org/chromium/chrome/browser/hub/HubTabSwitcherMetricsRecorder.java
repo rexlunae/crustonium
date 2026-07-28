@@ -4,10 +4,7 @@
 
 package org.chromium.chrome.browser.hub;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import org.chromium.base.Callback;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
@@ -15,7 +12,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
@@ -55,7 +51,7 @@ public class HubTabSwitcherMetricsRecorder {
         mTabModelSelector = tabModelSelector;
 
         mHubVisibilitySupplier = hubVisibilitySupplier;
-        hubVisibilitySupplier.addObserver(mOnHubVisiblityChanged);
+        hubVisibilitySupplier.addSyncObserverAndPostIfNonNull(mOnHubVisiblityChanged);
 
         mFocusedPaneSupplier = focusedPaneSupplier;
     }
@@ -82,24 +78,17 @@ public class HubTabSwitcherMetricsRecorder {
                 RecordUserAction.record("MobileTabReturnedToCurrentTab.TabGrid");
 
                 RecordUserAction.record("MobileTabReturnedToCurrentTab");
-                RecordHistogram.recordSparseHistogram("Tabs.TabOffsetOfSwitch.GridTabSwitcher", 0);
             } else {
-                TabGroupModelFilter filter = mTabModelSelector.getCurrentTabGroupModelFilter();
-                assumeNonNull(filter);
-                int previousIndex = filter.representativeIndexOf(previousTab);
-                int currentIndex = filter.representativeIndexOf(tab);
+                int previousIndex = tabModel.representativeIndexOf(previousTab);
+                int currentIndex = tabModel.representativeIndexOf(tab);
                 if (previousIndex != currentIndex) {
-                    if (!filter.isTabInTabGroup(tab)) {
+                    if (!tabModel.isTabInTabGroup(tab)) {
                         RecordUserAction.record("MobileTabSwitched.GridTabSwitcher");
                     }
-                    // The sign on this metric is inverted from the direction of travel in the tab
-                    // switcher and tab model. This was a pre-existing issue in TabSwitcherMediator.
-                    RecordHistogram.recordSparseHistogram(
-                            "Tabs.TabOffsetOfSwitch.GridTabSwitcher", previousIndex - currentIndex);
                 }
             }
         } else {
-            int currentIndex = TabModelUtils.getTabIndexById(tabModel, tab.getId());
+            int currentIndex = tabModel.indexOf(tab);
             if (currentIndex == mIndexInModelWhenSwitched) {
                 // TabModelImpl logs this action only when a different index is set within a
                 // TabModelImpl. If we switch between normal tab model and incognito tab model and
@@ -109,9 +98,7 @@ public class HubTabSwitcherMetricsRecorder {
                 RecordUserAction.record("MobileTabSwitched");
             }
 
-            TabGroupModelFilter filter = mTabModelSelector.getCurrentTabGroupModelFilter();
-            assumeNonNull(filter);
-            if (!filter.isTabInTabGroup(tab)) {
+            if (!tabModel.isTabInTabGroup(tab)) {
                 RecordUserAction.record("MobileTabSwitched.GridTabSwitcher");
             }
         }
@@ -134,7 +121,9 @@ public class HubTabSwitcherMetricsRecorder {
         mTabModelWhenShown = tabModel;
         mTabIdWhenShown = TabModelUtils.getCurrentTabId(tabModel);
 
-        mTabModelSelector.getCurrentTabModelSupplier().addObserver(mOnTabModelChanged);
+        mTabModelSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mOnTabModelChanged);
         mTabModelSelector.getModel(true).addObserver(mTabModelObserver);
         mTabModelSelector.getModel(false).addObserver(mTabModelObserver);
     }

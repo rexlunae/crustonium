@@ -116,7 +116,21 @@ class NetworkHandler : public DevToolsDomainHandler,
   static void SetCookies(
       StoragePartition* storage_partition,
       std::unique_ptr<protocol::Array<Network::CookieParam>> cookies,
+      DevToolsAgentHostClient& client,
+      bool is_webui,
       base::OnceCallback<void(bool)> callback);
+
+  static void ClearCookies(
+      StoragePartition* storage_partition,
+      DevToolsAgentHostClient& client,
+      base::RepeatingCallback<bool(const net::CanonicalCookie&)> filter,
+      base::OnceClosure callback);
+
+  static bool CanAccessCookie(DevToolsAgentHostClient& client,
+                              bool is_webui,
+                              const net::CanonicalCookie& cookie);
+
+  bool CanAccessCookie(const net::CanonicalCookie& cookie) const;
 
   void Wire(UberDispatcher* dispatcher) override;
   void SetRenderer(int render_process_id,
@@ -128,6 +142,11 @@ class NetworkHandler : public DevToolsDomainHandler,
                   std::optional<bool> report_direct_socket_traffic,
                   std::optional<bool> enable_durable_messages) override;
   Response Disable() override;
+
+  // Used to set a storage partition for a service worker agent host
+  // before the service worker agent host has a renderer. The storage
+  // partition will be updated via SetRenderer once the renderer is available.
+  void SetStoragePartition(StoragePartition* storage_partition);
 
 #if BUILDFLAG(ENABLE_REPORTING)
   void OnReportAdded(const net::ReportingReport& report) override;
@@ -151,6 +170,8 @@ class NetworkHandler : public DevToolsDomainHandler,
 #endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
   Response EnableDeviceBoundSessions(bool enable) override;
+  Response DeleteDeviceBoundSession(
+      std::unique_ptr<protocol::Network::DeviceBoundSessionKey> key) override;
 
   Response FetchSchemefulSite(const std::string& origin,
                               std::string* schemeful_site) override;
@@ -213,7 +234,8 @@ class NetworkHandler : public DevToolsDomainHandler,
       std::optional<int> packet_queue_length,
       std::optional<bool> packet_reordering) override;
   Response EmulateNetworkConditionsByRule(
-      bool offline,
+      std::optional<bool> offline,
+      std::optional<bool> emulate_offline_service_worker,
       std::unique_ptr<protocol::Array<protocol::Network::NetworkConditions>>
           matched_network_conditions,
       std::unique_ptr<protocol::Array<String>>* rule_ids_result) override;
@@ -315,6 +337,17 @@ class NetworkHandler : public DevToolsDomainHandler,
                     const network::mojom::URLResponseHeadDevToolsInfo&>>
           redirect_info);
 
+  void PrefetchActivationBeaconWillBeSent(
+      const std::string& request_id,
+      const network::ResourceRequest& request,
+      const GURL& initiator_url,
+      std::optional<std::string> frame_token,
+      base::TimeTicks timestamp,
+      std::optional<
+          std::pair<const GURL&,
+                    const network::mojom::URLResponseHeadDevToolsInfo&>>
+          redirect_info);
+
   void OnSignedExchangeReceived(
       std::optional<const base::UnguessableToken> devtools_navigation_token,
       const GURL& outer_request_url,
@@ -374,13 +407,11 @@ class NetworkHandler : public DevToolsDomainHandler,
       std::unique_ptr<LoadNetworkResourceCallback> callback) override;
 
   DispatchResponse SetCookieControls(
-      bool enable_third_party_cookie_restriction,
-      bool disable_third_party_cookie_metadata,
-      bool disable_third_party_cookie_heuristics) override;
+      bool enable_third_party_cookie_restriction) override;
 
   // Protocol builders.
-  static String BuildPrivateNetworkRequestPolicy(
-      network::mojom::PrivateNetworkRequestPolicy policy);
+  static String BuildLocalNetworkAccessRequestPolicy(
+      network::mojom::LocalNetworkAccessRequestPolicy policy);
   static protocol::Network::IPAddressSpace BuildIpAddressSpace(
       network::mojom::IPAddressSpace space);
   static std::unique_ptr<protocol::Network::ClientSecurityState>
@@ -403,6 +434,24 @@ class NetworkHandler : public DevToolsDomainHandler,
       base::TimeTicks timestamp);
 
  private:
+  void RequestWillBeSent(
+      const std::string& request_id,
+      const std::string& loader_id,
+      const network::ResourceRequest& request,
+      const GURL& initiator_url,
+      const std::string& initiator_type,
+      const std::string& resource_type,
+      std::optional<std::string> frame_token,
+      base::TimeTicks timestamp,
+      std::optional<
+          std::pair<const GURL&,
+                    const network::mojom::URLResponseHeadDevToolsInfo&>>
+          redirect_info = std::nullopt,
+      const std::string& initiator_devtools_request_id = "",
+      std::vector<base::expected<std::vector<uint8_t>, std::string>>
+          request_bodies = {},
+      std::optional<std::string> mixed_content_type = std::nullopt);
+
   void OnLoadNetworkResourceFinished(DevToolsNetworkResourceLoader* loader,
                                      const net::HttpResponseHeaders* rh,
                                      bool success,
@@ -441,8 +490,6 @@ class NetworkHandler : public DevToolsDomainHandler,
   raw_ptr<RenderFrameHostImpl> host_;
   bool enabled_ = false;
   bool enable_third_party_cookie_restriction_ = false;
-  bool disable_third_party_cookie_metadata_ = false;
-  bool disable_third_party_cookie_heuristics_ = false;
   bool enable_durable_messages_ = false;
   int durable_message_max_total_size_ = 0;
 
@@ -468,6 +515,8 @@ class NetworkHandler : public DevToolsDomainHandler,
   bool did_modifications_ = false;
   base::OnceClosure cleanup_after_modifications_callback_;
   const raw_ref<DevToolsSession> root_session_;
+  const base::UnguessableToken throttling_client_id_;
+  bool network_conditions_configured_ = false;
   base::WeakPtrFactory<NetworkHandler> weak_factory_{this};
 };
 

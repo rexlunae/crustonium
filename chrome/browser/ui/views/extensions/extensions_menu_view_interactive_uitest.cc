@@ -17,7 +17,9 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/extensions/extension_install_ui.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
+#include "chrome/browser/ui/views/controls/hover_button_controller.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_item_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_view.h"
@@ -25,7 +27,6 @@
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_interactive_uitest.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/hover_button_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
@@ -35,18 +36,14 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
-#include "extensions/browser/extension_system.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions_manager.h"
-#include "extensions/browser/pref_names.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/test/permissions_manager_waiter.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/views/animation/ink_drop.h"
-#include "ui/views/bubble/bubble_dialog_model_host.h"
-#include "ui/views/layout/animating_layout_manager.h"
 #include "ui/views/layout/animating_layout_manager_test_util.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view_class_properties.h"
@@ -62,8 +59,9 @@ class ExtensionsMenuViewInteractiveUITest : public ExtensionsToolbarUITest {
     // still being tested.
     // TODO(crbug.com/40857680): Remove all these tests once
     // kExtensionsMenuAccessControl is fully enabled.
-    scoped_feature_list_.InitAndDisableFeature(
-        extensions_features::kExtensionsMenuAccessControl);
+    scoped_feature_list_.InitWithFeatures(
+        {}, {extensions_features::kExtensionsMenuAccessControl,
+             features::kExtensionsPinnedByDefault});
   }
 
   static base::flat_set<raw_ptr<ExtensionMenuItemView, CtnExperimental>>
@@ -305,7 +303,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
   ASSERT_NE(std::nullopt, action_id);
   ASSERT_EQ(1u, GetVisibleToolbarActionViews().size());
 
-  extensions::ExtensionRegistrar::Get(browser()->profile())
+  extensions::ExtensionRegistrar::Get(browser()->GetProfile())
       ->DisableExtension(action_id.value(),
                          {extensions::disable_reason::DISABLE_USER_ACTION});
 
@@ -313,7 +311,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
   EXPECT_TRUE(GetVisibleToolbarActionViews().empty());
 }
 
-// Test for crbug.com/1099456.
+// Test for crbug.com/40702475.
 IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
                        RemoveMultipleExtensionsWhileShowingPopup) {
   auto& id1 = LoadTestExtension("extensions/simple_with_popup")->id();
@@ -327,7 +325,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
   ASSERT_NE(std::nullopt, extensions_container->GetPoppedOutActionId());
 
   auto* extension_registrar =
-      extensions::ExtensionRegistrar::Get(browser()->profile());
+      extensions::ExtensionRegistrar::Get(browser()->GetProfile());
   extension_registrar->DisableExtension(
       id1, {extensions::disable_reason::DISABLE_USER_ACTION});
   extension_registrar->DisableExtension(
@@ -371,8 +369,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
   DismissUi();
 }
 
-// Failing on Mac. https://crbug.com/1176703
-// Flaky on Linux. https://crbug.com/1202112
+// Failing on Mac. https://crbug.com/40748082
+// Flaky on Linux. https://crbug.com/40762721
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #define MAYBE_PinningDisabledInIncognito DISABLED_PinningDisabledInIncognito
 #else
@@ -479,7 +477,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
   // extensions and dialogs are actually showing.
   WaitForAnimation();
 
-  // Verify extension is visible and tbere is a popped out action.
+  // Verify extension is visible and there is a popped out action.
   auto visible_icons = GetVisibleToolbarActionViews();
   ASSERT_EQ(1u, visible_icons.size());
   EXPECT_NE(std::nullopt, extensions_container->GetPoppedOutActionId());
@@ -695,12 +693,14 @@ IN_PROC_BROWSER_TEST_P(ActivateWithReloadExtensionsMenuInteractiveUITest,
       extensions::ExtensionActionRunner::GetForWebContents(web_contents);
 
   EXPECT_TRUE(action_runner->WantsToRun(extension.get()));
-  extensions::SitePermissionsHelper permissions_helper(browser()->profile());
+  extensions::SitePermissionsHelper permissions_helper(browser()->GetProfile());
   // A refresh should be needed in order to run the actions and inject the
   // content script.
   EXPECT_TRUE(permissions_helper.PageNeedsRefreshToRun(
       action_runner->GetBlockedActions(extension->id())));
 
+  extensions::PermissionsManagerWaiter waiter(
+      extensions::PermissionsManager::Get(browser()->GetProfile()));
   TriggerSingleExtensionButton();
 
   auto* const action_bubble =
@@ -724,6 +724,14 @@ IN_PROC_BROWSER_TEST_P(ActivateWithReloadExtensionsMenuInteractiveUITest,
     EXPECT_FALSE(action_runner->WantsToRun(extension.get()));
   } else {
     action_bubble->CancelDialog();
+
+    // We use `WaitForActiveTabPermissionGranted` even though the extension
+    // manifest doesn't ask for "active tab" permission.  This is because
+    // `ActiveTabPermissionGranter` is responsible for granting the requested
+    // host permissions - see
+    // https://source.chromium.org/chromium/chromium/src/+/main:extensions/browser/permissions/active_tab_permission_granter.cc;l=148-178;drc=409b77a78792667eb4583c52aa9faf7fa321f4b8
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+
     EXPECT_FALSE(web_contents->IsLoading());
     // The extension permission should have been applied at this point, but the
     // extension's script and blocked actions should not inject/run since a

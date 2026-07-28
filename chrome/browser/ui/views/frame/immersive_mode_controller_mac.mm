@@ -13,6 +13,7 @@
 #include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/feature_list.h"
+#include "chrome/browser/glic/widget/glic_widget.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
-#include "chrome/common/chrome_features.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/remote_cocoa/app_shim/features.h"
 #include "ui/gfx/geometry/insets.h"
@@ -34,10 +34,6 @@
 #include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 #include "ui/views/focus/focus_search.h"
 #include "ui/views/widget/native_widget.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/widget/glic_widget.h"
-#endif
 
 namespace {
 
@@ -81,10 +77,9 @@ ImmersiveModeControllerMac::RevealedLock::~RevealedLock() {
 }
 
 ImmersiveModeControllerMac::ImmersiveModeControllerMac(
-    BrowserWindowInterface* browser,
+    ui::UnownedUserDataHost& host,
     bool separate_tab_strip)
-    : ImmersiveModeController(browser),
-      separate_tab_strip_(separate_tab_strip) {}
+    : ImmersiveModeController(host), separate_tab_strip_(separate_tab_strip) {}
 
 ImmersiveModeControllerMac::~ImmersiveModeControllerMac() {
   CHECK(!views::WidgetObserver::IsInObserverList());
@@ -198,6 +193,11 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
       browser_view_->tab_overlay_widget()->Hide();
       browser_view_->tab_strip_view()->SetBorder(nullptr);
     }
+    // Reset tab widget state so that re-entering fullscreen with a different
+    // tab layout (e.g. vertical tabs) does not carry over stale values from a
+    // previous horizontal-tab fullscreen session.
+    tab_native_widget_id_ = 0;
+    tab_widget_height_ = 0;
     top_container_observation_.Reset();
     overlay_widget_observation_.Reset();
 
@@ -440,9 +440,7 @@ bool ImmersiveModeControllerMac::ShouldMoveChild(views::Widget* child) {
       child->GetNativeWindowProperty(views::kWidgetIdentifierKey);
   if (widget_identifier ==
           constrained_window::kConstrainedWindowWidgetIdentifier
-#if BUILDFLAG(ENABLE_GLIC)
       || widget_identifier == glic::kGlicWidgetIdentifier
-#endif
   ) {
     return true;
   }

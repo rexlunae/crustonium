@@ -12,6 +12,7 @@
 #import "base/memory/singleton.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/supervised_user/core/browser/family_link_settings_service.h"
 #import "components/supervised_user/core/browser/supervised_user_service.h"
@@ -40,7 +41,7 @@ namespace {
 supervised_user::FamilyLinkSettingsState::Services
 GetSupervisedUserServicesForProfile(ProfileIOS* profile) {
   supervised_user::SupervisedUserService* supervised_user_service =
-      SupervisedUserServiceFactory::GetForProfile(profile);
+      supervised_user::SupervisedUserServiceFactory::GetForProfile(profile);
   supervised_user::SupervisedUserUrlFilteringService* url_filtering_service =
       supervised_user::SupervisedUserUrlFilteringServiceFactory::GetForProfile(
           profile);
@@ -49,7 +50,9 @@ GetSupervisedUserServicesForProfile(ProfileIOS* profile) {
   CHECK(url_filtering_service);
   return {*supervised_user_service, *url_filtering_service,
           *profile->GetPrefs(),
-          *ios::HostContentSettingsMapFactory::GetForProfile(profile)};
+          *ios::HostContentSettingsMapFactory::GetForProfile(profile),
+          *supervised_user::FamilyLinkSettingsServiceFactory::GetForProfile(
+              profile)};
 }
 
 // Helper class that holds a instance of the Family Link State.

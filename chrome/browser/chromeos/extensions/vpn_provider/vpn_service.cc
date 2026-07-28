@@ -15,9 +15,9 @@
 #include "base/task/sequenced_task_runner_helpers.h"
 #include "base/uuid.h"
 #include "base/values.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/extensions/api/vpn_provider.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/shill/shill_third_party_vpn_driver_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_third_party_vpn_observer.h"
 #include "chromeos/ash/components/network/network_configuration_handler.h"
@@ -253,8 +253,9 @@ void VpnService::CreateConfiguration(const std::string& extension_id,
   const ash::NetworkProfile* profile =
       ash::NetworkHandler::Get()
           ->network_profile_handler()
-          ->GetProfileForUserhash(ash::ProfileHelper::GetUserIdHashFromProfile(
-              ProfileManager::GetPrimaryUserProfile()));
+          ->GetProfileForUserhash(
+              ash::BrowserContextHelper::GetUserIdHashFromBrowserContext(
+                  ProfileManager::GetPrimaryUserProfile()));
   if (!profile) {
     std::move(failure).Run(
         /*error_name=*/"",
@@ -263,7 +264,7 @@ void VpnService::CreateConfiguration(const std::string& extension_id,
   }
 
   VpnService::VpnConfiguration* configuration =
-      CreateConfigurationInternal(extension_id, configuration_name);
+      GetOrCreateConfigurationInternal(extension_id, configuration_name);
 
   auto properties =
       base::DictValue()
@@ -333,7 +334,7 @@ void VpnService::OnGetShillProperties(
   }
 
   VpnService::VpnConfiguration* configuration =
-      CreateConfigurationInternal(*extension_id, *configuration_name);
+      GetOrCreateConfigurationInternal(*extension_id, *configuration_name);
   RegisterConfiguration(configuration, service_path);
 }
 
@@ -504,9 +505,14 @@ void VpnService::DestroyConfigurationsForExtension(
   }
 }
 
-VpnService::VpnConfiguration* VpnService::CreateConfigurationInternal(
+VpnService::VpnConfiguration* VpnService::GetOrCreateConfigurationInternal(
     const std::string& extension_id,
     const std::string& configuration_name) {
+  if (auto* configuration =
+          LookupConfiguration(extension_id, configuration_name)) {
+    return configuration;
+  }
+
   const std::string key = GetKey(extension_id, configuration_name);
   auto configuration = std::make_unique<VpnConfiguration>(
       extension_id, configuration_name, key, this);
@@ -527,6 +533,12 @@ void VpnService::OnCreateConfigurationSuccess(
 void VpnService::RegisterConfiguration(
     VpnService::VpnConfiguration* configuration,
     const std::string& service_path) {
+  if (VpnConfiguration* existing_configuration =
+          LookupConfiguration(service_path)) {
+    CHECK_EQ(existing_configuration, configuration);
+    return;
+  }
+
   configuration->set_service_path(service_path);
   auto [_, inserted] =
       service_path_to_configuration_map_.emplace(service_path, configuration);

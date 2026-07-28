@@ -6,7 +6,6 @@
 
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "build/branding_buildflags.h"
 #include "chrome/installer/util/shell_util.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -51,12 +50,16 @@ TEST_F(TaskbarManagerTest, ShouldOfferToPin) {
 
   got_result_.Run();
   EXPECT_FALSE(result_);
+  int expected_bucket_count =
+      browser_util::PinLimitedAccessFeatureAvailable() ? 0 : 1;
   histogram_tester_.ExpectBucketCount(
       kShouldPinResultMetric,
-      browser_util::PinResultMetric::kFeatureNotAvailable, 1);
+      browser_util::PinResultMetric::kFeatureNotAvailable,
+      expected_bucket_count);
   histogram_tester_.ExpectBucketCount(
       kInfobarShouldPinResultMetric,
-      browser_util::PinResultMetric::kFeatureNotAvailable, 1);
+      browser_util::PinResultMetric::kFeatureNotAvailable,
+      expected_bucket_count);
   histogram_tester_.ExpectBucketCount(
       kSettingsShouldPinResultMetric,
       browser_util::PinResultMetric::kFeatureNotAvailable, 0);
@@ -70,13 +73,17 @@ TEST_F(TaskbarManagerTest, PinToTaskbar) {
                      base::Unretained(this)));
 
   got_result_.Run();
+  int expected_bucket_count =
+      browser_util::PinLimitedAccessFeatureAvailable() ? 0 : 1;
   histogram_tester_.ExpectBucketCount(
-      kPinResultMetric, browser_util::PinResultMetric::kFeatureNotAvailable, 1);
+      kPinResultMetric, browser_util::PinResultMetric::kFeatureNotAvailable,
+      expected_bucket_count);
   histogram_tester_.ExpectBucketCount(
       kInfobarPinResultMetric,
       browser_util::PinResultMetric::kFeatureNotAvailable, 0);
   histogram_tester_.ExpectBucketCount(
       kSettingsPinResultMetric,
-      browser_util::PinResultMetric::kFeatureNotAvailable, 1);
+      browser_util::PinResultMetric::kFeatureNotAvailable,
+      expected_bucket_count);
   EXPECT_FALSE(result_);
 }

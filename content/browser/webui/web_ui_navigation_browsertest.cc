@@ -7,13 +7,14 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/frame.mojom.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/webui_config_map.h"
 #include "content/public/common/bindings_policy.h"
@@ -1063,6 +1064,39 @@ IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest,
   TestWebUISubframeNewWindowToWebAllowed(kWebUIBindingsPolicySet);
 }
 
+// Verify that adding a sandboxed iframe to a WebUI page doesn't lead to a
+// CANNOT_COMMIT_URL failure when verifying the committing URL. See
+// https://crbug.com/382005745.
+IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest, SandboxedFrameInWebUI) {
+  // Navigate to a WebUI page.
+  GURL chrome_url(GetWebUIURL("web-ui/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), chrome_url));
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+
+  // Create sandboxed same-origin child frame with frame-ancestors that allows
+  // it to load.
+  GURL iframe_url(GetWebUIURL("web-ui/title1.html?frameancestors=" +
+                              GetWebUIURLString("web-ui")));
+  {
+    std::string js_str = base::StringPrintf(
+        "var frame = document.createElement('iframe'); "
+        "frame.id = 'sandboxed_webui'; "
+        "frame.sandbox = ''; "
+        "frame.src = '%s'; "
+        "document.body.appendChild(frame);",
+        iframe_url.spec().c_str());
+    EXPECT_TRUE(ExecJs(shell(), js_str));
+    ASSERT_TRUE(WaitForLoadStop(shell()->web_contents()));
+  }
+  FrameTreeNode* child = root->child_at(0);
+  scoped_refptr<SiteInstanceImpl> child_instance =
+      child->current_frame_host()->GetSiteInstance();
+  EXPECT_TRUE(child_instance->GetSecurityPrincipal().IsSandboxed());
+  EXPECT_EQ(iframe_url, child->current_frame_host()->GetLastCommittedURL());
+}
+
 IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest,
                        WebUIOriginsRequireDedicatedProcess) {
   // chrome:// URLs should require a dedicated process.
@@ -1199,12 +1233,20 @@ class AdditionalSchemesWebUINavigationBrowserTest : public ContentBrowserTest {
   }
 
   void SetUpOnMainThread() override {
+    // Since this test injects a custom WebUI scheme below, ensure that the
+    // list of WebUI schemes isn't cached. Otherwise, early initialization
+    // of WebContents (like the initial empty document) may trigger caching
+    // before the custom WebUI scheme is registered, causing the custom WebUI
+    // scheme to never be seen and process locks not to be correctly applied.
+    URLDataManagerBackend::SetDisallowWebUISchemeCachingForTesting(true);
     test_content_browser_client_ = std::make_unique<TestContentBrowserClient>();
     factory_.SetSupportedScheme(kAdditionalScheme);
   }
 
-  void TearDownOnMainThread() override { test_content_browser_client_.reset(); }
-
+  void TearDownOnMainThread() override {
+    test_content_browser_client_.reset();
+    URLDataManagerBackend::SetDisallowWebUISchemeCachingForTesting(false);
+  }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kTestRegisterStandardScheme,

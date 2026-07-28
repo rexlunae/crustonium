@@ -4,14 +4,16 @@
 
 package org.chromium.chrome.test.transit.page;
 
+import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
+
+import static org.hamcrest.CoreMatchers.allOf;
 
 import static org.chromium.base.test.transit.ViewSpec.viewSpec;
 
 import android.app.Activity;
 import android.os.SystemClock;
 import android.view.View;
-import android.widget.ImageButton;
 
 import org.chromium.base.test.transit.OptionalViewElement;
 import org.chromium.base.test.transit.TripBuilder;
@@ -27,7 +29,6 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.browser.toolbar.top.ToggleTabStackButton;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
 import org.chromium.chrome.test.transit.ChromeTriggers;
 import org.chromium.chrome.test.transit.SoftKeyboardFacility;
@@ -51,9 +52,10 @@ import java.util.function.Supplier;
 public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
     public static final ViewSpec<UrlBar> URL_BAR = viewSpec(UrlBar.class, withId(R.id.url_bar));
     public final OptionalViewElement<View> homeButtonElement;
-    public final ViewElement<ToolbarControlContainer> toolbarElement;
-    public final ViewElement<ToggleTabStackButton> tabSwitcherButtonElement;
-    public final ViewElement<ImageButton> menuButtonElement;
+    // TODO(crbug.com/477035792): Temporarily nullable while the toolbar is being migrated.
+    public final @Nullable ViewElement<ToolbarControlContainer> toolbarElement;
+    public final ViewElement<View> tabSwitcherButtonElement;
+    public final ViewElement<View> menuButtonElement;
 
     /** Prefer the CtaPageStation's subclass |newBuilder()|. */
     public static Builder<CtaPageStation> newGenericBuilder() {
@@ -76,18 +78,25 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
                         ToolbarControlContainer.class,
                         withId(R.id.control_container),
                         ViewElement.unscopedOption());
+        // These should be unscoped because they can be present in both the top toolbar and the
+        // bottom bar.
         tabSwitcherButtonElement =
                 declareView(
-                        ToggleTabStackButton.class,
-                        withId(R.id.tab_switcher_button),
+                        View.class,
+                        allOf(withId(R.id.tab_switcher_button), isDisplayed()),
                         ViewElement.unscopedOption());
+
         menuButtonElement =
                 declareView(
-                        ImageButton.class, withId(R.id.menu_button), ViewElement.unscopedOption());
+                        View.class,
+                        allOf(withId(R.id.menu_button), isDisplayed()),
+                        ViewElement.unscopedOption());
 
         // The home button may not appear in tablets if the available screen size is too small.
         homeButtonElement =
-                declareOptionalView(withId(R.id.home_button), ViewElement.unscopedOption());
+                declareOptionalView(
+                        allOf(withId(R.id.home_button), isDisplayed()),
+                        ViewElement.unscopedOption());
     }
 
     /** Long presses the tab switcher button to open the action menu. */

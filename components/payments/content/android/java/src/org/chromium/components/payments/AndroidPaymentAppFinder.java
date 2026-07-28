@@ -87,11 +87,11 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
     /**
      * The app stores that supports app-store billing methods.
      *
-     * key: the app-store app's package name, e.g., "com.google.vendor" (Google Play Store).
+     * <p>key: the app-store app's package name, e.g., "com.google.vendor" (Google Play Store).
      * value: the app-store app's billing method identifier, e.g.,
      * "https://play.google.com/billing". Only valid GURLs are allowed.
      */
-    private final Map<String, GURL> mAppStores = new HashMap();
+    private final Map<String, GURL> mAppStores = new HashMap<>();
 
     /**
      * A mapping from an Android package name to the payment app with that package name. The apps
@@ -99,7 +99,7 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
      * have been validated. The package names are used for identification because they are unique on
      * Android. Example contents:
      *
-     * {"com.bobpay.app.v1": androidPaymentApp1, "com.alicepay.app.v1": androidPaymentApp2}
+     * <p>{"com.bobpay.app.v1": androidPaymentApp1, "com.alicepay.app.v1": androidPaymentApp2}
      */
     private final Map<String, AndroidPaymentApp> mValidApps = new HashMap<>();
 
@@ -366,13 +366,9 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
                     String.join(", ", getActivityPackageNames(allInstalledPaymentApps)));
         }
 
-        boolean isReadyToPayQueryRestricted =
-                !mFactoryDelegate.getParams().prefsCanMakePayment()
-                        && PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
-                                PaymentFeatureList.RESTRICT_IS_READY_TO_PAY_QUERY);
         if (mIsOffTheRecord) {
             Log.i(TAG, "Off the record, skipping isReadyToPay service registration.");
-        } else if (isReadyToPayQueryRestricted) {
+        } else if (!mFactoryDelegate.getParams().prefsCanMakePayment()) {
             Log.i(
                     TAG,
                     "Payment app checking disabled, skipping isReadyToPay service registration.");
@@ -579,6 +575,7 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
             if (!mDownloader.isInitialized()) {
                 mDownloader.initialize(
                         mFactoryDelegate.getParams().getWebContents(),
+                        mFactoryDelegate.getParams().getRenderFrameHost(),
                         mFactoryDelegate.getParams().getCSPChecker());
             }
 
@@ -825,12 +822,12 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
                 isReadyToPay);
 
         app.setHasEnrolledInstrument(isReadyToPay);
-        if (isReadyToPay
-                || PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
-                        PaymentFeatureList.ALLOW_SHOW_WITHOUT_READY_TO_PAY)) {
-            onCanMakePaymentCalculated(true);
-            mFactoryDelegate.onPaymentAppCreated(app);
-        }
+
+        // Whether or not the underlying app reports that it has an enrolled instrument, we should
+        // still register the app. It is up to the website to ultimately decide if it wants to
+        // invoke the payment app via show().
+        onCanMakePaymentCalculated(true);
+        mFactoryDelegate.onPaymentAppCreated(app);
 
         if (--mPendingIsReadyToPayQueries == 0) {
             mFactoryDelegate.onDoneCreatingPaymentApps(mFactory);
@@ -911,8 +908,6 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
                             mIsOffTheRecord,
                             webAppIdCanDeduped,
                             appSupportedDelegations,
-                            PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
-                                    PaymentFeatureList.ALLOW_SHOW_WITHOUT_READY_TO_PAY),
                             PaymentFeatureList.isEnabled(
                                     PaymentFeatureList.SHOW_READY_TO_PAY_DEBUG_INFO),
                             /* removeDeprecatedFields= */ PaymentFeatureList

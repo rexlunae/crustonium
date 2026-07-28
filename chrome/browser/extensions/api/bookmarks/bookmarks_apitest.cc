@@ -10,7 +10,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/extensions/api/bookmarks/bookmarks_api.h"
@@ -136,31 +135,18 @@ MATCHER_P(IsRemoveEventForNodeWithIndex, remove_info, "") {
   return true;
 }
 
-// TODO(crbug.com/414844449): The API test extension:
-// - heavily relies on desktop bookmarks behavior (bookmarks bar and other
-//   bookmarks folders are visible when empty)
-// - uses a global state that gets carried over between sub-tests
-// The easiest way to re-enable the test for desktop Android is to modernize and
-// rewrite it.
-#if !BUILDFLAG(IS_ANDROID)
-class BookmarksApiTest : public ExtensionApiTest,
-                         public testing::WithParamInterface<ContextType> {
+// TODO(crbug.com/414844449): The API test extension uses a global state that
+// gets carried over between sub-tests. Consider rewriting the test into
+// independent sub-tests to make it easier to understand.
+class BookmarksApiTest : public ExtensionApiTest {
  public:
-  BookmarksApiTest() : ExtensionApiTest(GetParam()) {}
+  BookmarksApiTest() = default;
   ~BookmarksApiTest() override = default;
   BookmarksApiTest(const BookmarksApiTest&) = delete;
   BookmarksApiTest& operator=(const BookmarksApiTest&) = delete;
 };
 
-INSTANTIATE_TEST_SUITE_P(EventPage,
-                         BookmarksApiTest,
-                         ::testing::Values(ContextType::kEventPage));
-
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         BookmarksApiTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-
-IN_PROC_BROWSER_TEST_P(BookmarksApiTest, Bookmarks) {
+IN_PROC_BROWSER_TEST_F(BookmarksApiTest, Bookmarks) {
   // Add test managed bookmarks to verify that the bookmarks API can read them
   // and can't modify them.
   BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile());
@@ -190,7 +176,7 @@ IN_PROC_BROWSER_TEST_P(BookmarksApiTest, Bookmarks) {
   ASSERT_TRUE(RunExtensionTest("bookmarks")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(BookmarksApiTest, RootNodeId) {
+IN_PROC_BROWSER_TEST_F(BookmarksApiTest, RootNodeId) {
   ExtensionTestMessageListener listener;
 
   ASSERT_TRUE(RunExtensionTest("bookmarks_root_node_id"));
@@ -198,14 +184,12 @@ IN_PROC_BROWSER_TEST_P(BookmarksApiTest, RootNodeId) {
 
   EXPECT_EQ(base::NumberToString(bookmarks::kRootNodeId), listener.message());
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // TODO(crbug.com/414844449): The tests below depend on which permanent folders
 // are visible when empty. This behaviour is currently different on Android
 // Desktop vs. other Desktop platforms.
 // Once it has been decided what the intended behaviour is for Android Desktop,
 // these tests (or at least a subset) should be re-enabled.
-#if !BUILDFLAG(IS_ANDROID)
 class BookmarksApiEventsTest : public ExtensionApiTest {
  public:
   BookmarksApiEventsTest() = default;
@@ -499,6 +483,5 @@ IN_PROC_BROWSER_TEST_F(BookmarksApiEventsTest,
   EXPECT_THAT(event_observer()->all_events()[3].get(),
               IsRemoveEventForNodeWithIndex(&account_bookmark_bar_info));
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions

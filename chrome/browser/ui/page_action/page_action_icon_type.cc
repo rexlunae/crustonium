@@ -7,93 +7,55 @@
 #include "base/feature_list.h"
 #include "chrome/browser/ui/ui_features.h"
 
-namespace {
-
-const base::FeatureParam<bool>* GetPageActionsMigrationParam(
-    PageActionIconType page_action) {
-  switch (page_action) {
-    case PageActionIconType::kLensOverlay:
-      return &features::kPageActionsMigrationLensOverlay;
-    case PageActionIconType::kMemorySaver:
-      return &features::kPageActionsMigrationMemorySaver;
-    case PageActionIconType::kTranslate:
-      return &features::kPageActionsMigrationTranslate;
-    case PageActionIconType::kIntentPicker:
-      return &features::kPageActionsMigrationIntentPicker;
-    case PageActionIconType::kZoom:
-      return &features::kPageActionsMigrationZoom;
-    case PageActionIconType::kPaymentsOfferNotification:
-      return &features::kPageActionsMigrationOfferNotification;
-    case PageActionIconType::kFileSystemAccess:
-      return &features::kPageActionsMigrationFileSystemAccess;
-    case PageActionIconType::kPwaInstall:
-      return &features::kPageActionsMigrationPwaInstall;
-    case PageActionIconType::kPriceInsights:
-      return &features::kPageActionsMigrationPriceInsights;
-    case PageActionIconType::kDiscounts:
-      return &features::kPageActionsMigrationDiscounts;
-    case PageActionIconType::kManagePasswords:
-      return &features::kPageActionsMigrationManagePasswords;
-    case PageActionIconType::kCookieControls:
-      return &features::kPageActionsMigrationCookieControls;
-    case PageActionIconType::kAutofillAddress:
-      return &features::kPageActionsMigrationAutofillAddress;
-    case PageActionIconType::kFind:
-      return &features::kPageActionsMigrationFind;
-    case PageActionIconType::kCollaborationMessaging:
-      return &features::kPageActionsMigrationCollaborationMessaging;
-    case PageActionIconType::kPriceTracking:
-      return &features::kPageActionsMigrationPriceTracking;
-    case PageActionIconType::kMandatoryReauth:
-      return &features::kPageActionsMigrationAutofillMandatoryReauth;
-    case PageActionIconType::kClickToCall:
-      return &features::kPageActionsMigrationClickToCall;
-    case PageActionIconType::kSharingHub:
-      return &features::kPageActionsMigrationSharingHub;
-    case PageActionIconType::kAiMode:
-      return &features::kPageActionsMigrationAiMode;
-    case PageActionIconType::kVirtualCardEnroll:
-      return &features::kPageActionsMigrationVirtualCard;
-    case PageActionIconType::kFilledCardInformation:
-      return &features::kPageActionsMigrationFilledCardInformation;
-    case PageActionIconType::kReadingMode:
-      return &features::kPageActionsMigrationReadingMode;
-    case PageActionIconType::kSaveIban:
-    case PageActionIconType::kSaveCard:
-      return &features::kPageActionsMigrationSavePayments;
-    case PageActionIconType::kLensOverlayHomework:
-      return &features::kPageActionsMigrationLensOverlayHomework;
-    case PageActionIconType::kBookmarkStar:
-      return &features::kPageActionsMigrationBookmarkStar;
-    default:
-      return nullptr;
-  }
-}
-
-}  // namespace
-
 bool IsPageActionMigrated(PageActionIconType page_action) {
   if (!base::FeatureList::IsEnabled(features::kPageActionsMigration)) {
     return false;
   }
 
-  // Page actions on the new framework that don't have an implementation on the legacy path
-  // and don't have a feature param.
-  if (page_action == PageActionIconType::kContextualSidePanel ||
-      page_action == PageActionIconType::kJsOptimizations) {
-    return true;
+  // Page actions on the new framework that don't have an implementation on the
+  // legacy path and don't have a feature param.
+  switch (page_action) {
+    case PageActionIconType::kAnchoredContextualCue:
+    case PageActionIconType::kCollaborationMessaging:
+    case PageActionIconType::kGlic:
+    case PageActionIconType::kLensOverlay:
+    case PageActionIconType::kMemorySaver:
+    case PageActionIconType::kTranslate:
+    case PageActionIconType::kFind:
+    case PageActionIconType::kPwaInstall:
+    case PageActionIconType::kAutofillAddress:
+    case PageActionIconType::kPaymentsOfferNotification:
+    case PageActionIconType::kContextualSidePanel:
+    case PageActionIconType::kJsOptimizations:
+    case PageActionIconType::kIndigo:
+    case PageActionIconType::kMultistepFilter:
+    case PageActionIconType::kRecordReplay:
+    case PageActionIconType::kPriceInsights:
+    case PageActionIconType::kDiscounts:
+    case PageActionIconType::kFederation:
+    case PageActionIconType::kCookieControls:
+    case PageActionIconType::kManagePasswords:
+    case PageActionIconType::kZoom:
+    case PageActionIconType::kWebAuthnAmbientSignin:
+    case PageActionIconType::kFileSystemAccess:
+    case PageActionIconType::kBookmarkStar:
+    case PageActionIconType::kAiMode:
+    case PageActionIconType::kSaveIban:
+    case PageActionIconType::kSaveCard:
+    case PageActionIconType::kReadingMode:
+    case PageActionIconType::kAutofillPayment:
+    case PageActionIconType::kMandatoryReauth:
+    case PageActionIconType::kPaymentsChurnedUsers:
+    case PageActionIconType::kLensOverlayHomework:
+    case PageActionIconType::kFakePageActionForDebug:
+    case PageActionIconType::kFilledCardInformation:
+    case PageActionIconType::kVirtualCardEnroll:
+    case PageActionIconType::kIntentPicker:
+    case PageActionIconType::kOptimizationGuide:
+      return true;
+    default:
+      break;
   }
 
-  const auto* feature_param = GetPageActionsMigrationParam(page_action);
-  if (feature_param == nullptr) {
-    return false;
-  }
-
-  // For developer manual testing only, allow all migrated page actions to be
-  // enabled through a single switch.
-  if (features::kPageActionsMigrationEnableAll.Get()) {
-    return true;
-  }
-
-  return feature_param->Get();
+  return false;
 }

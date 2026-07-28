@@ -5,10 +5,14 @@
 #ifndef REMOTING_HOST_DESKTOP_SESSION_CONNECTOR_H_
 #define REMOTING_HOST_DESKTOP_SESSION_CONNECTOR_H_
 
+#include <string_view>
+
 #include "base/process/process.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/system/message_pipe.h"
+#include "remoting/base/errors.h"
+#include "remoting/base/source_location.h"
 #include "remoting/host/mojom/remoting_host.mojom.h"
 
 namespace remoting {
@@ -50,19 +54,25 @@ class DesktopSessionConnector : public mojom::DesktopSessionConnectionEvents {
   virtual bool BindConnectionEventsReceiver(
       mojo::ScopedInterfaceEndpointHandle handle) = 0;
 
+  // If set to a non-empty value, the login user of the desktop session must
+  // match `username`. This can only be set when there are no active
+  // connections.
+  virtual void SetRequiredUsername(std::string_view username) = 0;
+
 #if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_LINUX)
   // Notifies the network process that |terminal_id| is now attached to
-  // a desktop integration process. |session_id| is the id of the desktop
-  // session being attached. |desktop_pipe| is the client end of the pipe opened
-  // by the desktop process.
+  // a desktop integration process. |desktop_pipe| is the client end of the pipe
+  // opened by the desktop process.
   virtual void OnDesktopSessionAgentAttached(
       int terminal_id,
-      int session_id,
       mojo::ScopedMessagePipeHandle desktop_pipe) = 0;
 
   // Notifies the network process that the daemon has disconnected the desktop
   // session from the associated desktop environment.
-  virtual void OnTerminalDisconnected(int terminal_id) = 0;
+  virtual void OnTerminalDisconnected(int terminal_id,
+                                      ErrorCode error_code,
+                                      const std::string& error_details,
+                                      const SourceLocation& error_location) = 0;
 #endif
 };
 

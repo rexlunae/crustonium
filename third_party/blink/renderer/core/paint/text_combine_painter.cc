@@ -84,6 +84,7 @@ void TextCombinePainter::Paint(const PaintInfo& paint_info,
   if (has_text_decoration) {
     decoration_info.emplace(
         text_frame_rect.offset, text_frame_rect.InlineSize(), style,
+        UsedFont(*style.GetFont(), 1.0f),
         /* inline_context */ nullptr, TextDecorationLine::kNone, Color());
     decoration_painter.emplace(text_painter, /* inline_context */ nullptr,
                                paint_info, style, text_style, text_frame_rect,
@@ -112,10 +113,12 @@ bool TextCombinePainter::ShouldPaint(const LayoutTextCombine& text_combine) {
          style.GetTextEmphasisMark() != TextEmphasisMark::kNone;
 }
 
-void TextCombinePainter::ClipDecorationLine(const DecorationGeometry&,
-                                            float ink_skip_offset,
-                                            const TextFragmentPaintInfo&) {
-  // Nothing to do.
+void TextCombinePainter::ClipDecorationLine(
+    const DecorationGeometry& geometry,
+    float baseline,
+    const TextFragmentPaintInfo& fragment_paint_info,
+    ETextDecorationSkipInk skip_ink) {
+  // Combined text does not support decoration line clipping.
 }
 
 void TextCombinePainter::PaintEmphasisMark(const TextPaintStyle& text_style,

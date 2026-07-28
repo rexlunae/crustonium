@@ -29,6 +29,7 @@
 #include "chrome/browser/ui/views/overlay/simple_overlay_window_image_button.h"
 #include "chrome/browser/ui/views/overlay/toggle_camera_button.h"
 #include "chrome/browser/ui/views/overlay/toggle_microphone_button.h"
+#include "chrome/browser/ui/views/overlay/toggle_mute_button.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/global_media_controls/public/views/media_progress_view.h"
@@ -45,6 +46,8 @@
 #include "services/media_session/public/cpp/media_position.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/test/test_screen.h"
 #include "ui/events/base_event_utils.h"
@@ -52,6 +55,7 @@
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/vector2d.h"
+#include "ui/native_theme/mock_os_settings_provider.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/widget_fade_animator.h"
 #include "ui/views/controls/button/label_button.h"
@@ -139,6 +143,8 @@ class TestVideoPictureInPictureWindowController
   void ToggleMicrophone() override {}
   void ToggleCamera() override {}
   void HangUp() override {}
+  void RequestMute(bool mute) override {}
+  bool GetMuteStatus() override { return false; }
   MOCK_METHOD(void, SeekTo, (base::TimeDelta time));
   const gfx::Rect& GetSourceBounds() const override { return source_bounds_; }
   void GetMediaImage(
@@ -158,6 +164,7 @@ class TestVideoPictureInPictureWindowController
     return std::nullopt;
   }
   std::optional<url::Origin> GetOrigin() override { return std::nullopt; }
+  MOCK_METHOD(bool, IsImmersive, (), (const, override));
   void SetOnWindowCreatedNotifyObserversCallback(base::OnceClosure) override {}
 
  private:
@@ -488,7 +495,7 @@ TEST_F(VideoOverlayWindowViewsTest, HitTestFrameView) {
 // With pillarboxing, the close button doesn't cover the video area. Make sure
 // hovering the button doesn't get handled like normal mouse exit events
 // causing the controls to hide.
-// TODO(http://crbug/1509791): Fix and re-enable.
+// TODO(http://crbug.com/41482397): Fix and re-enable.
 TEST_F(VideoOverlayWindowViewsTest, DISABLED_NoMouseExitWithinWindowBounds) {
   overlay_window().UpdateNaturalSize({10, 400});
   WaitForMove();
@@ -596,7 +603,7 @@ TEST_F(VideoOverlayWindowViewsTest, SmallDisplayWorkAreaDoesNotCrash) {
             overlay_window().video_layer_for_testing()->size());
 }
 
-// TODO(http://crbug/1509791): Fix and re-enable.
+// TODO(http://crbug.com/41482397): Fix and re-enable.
 TEST_F(VideoOverlayWindowViewsTest, DISABLED_ControlsAreHiddenDuringMove) {
   // Set the initial position.
   overlay_window().SetBounds({0, 0, 100, 100});
@@ -1009,6 +1016,32 @@ TEST_F(VideoOverlayWindowViewsTest,
 }
 #endif  // BUILDFLAG(IS_MAC)
 
+TEST_F(VideoOverlayWindowViewsTest, ReplayAndForward10SecondsOnKeyPress) {
+  overlay_window().ForceControlsVisibleForTesting(true);
+  media_session::MediaPosition media_position(/*playback_rate=*/0,
+                                              /*duration=*/base::Seconds(100),
+                                              /*position=*/base::Seconds(42),
+                                              /*end_of_media=*/false);
+  overlay_window().SetMediaPosition(media_position);
+
+  ui::KeyEvent left_event(ui::EventType::kKeyPressed, ui::VKEY_LEFT,
+                          ui::EF_NONE);
+  ui::KeyEvent right_event(ui::EventType::kKeyPressed, ui::VKEY_RIGHT,
+                           ui::EF_NONE);
+
+  // The left arrow key should seek the video backwards 10 seconds.
+  PictureInPictureWindowManager::GetInstance()
+      ->set_window_controller_for_testing(&pip_window_controller());
+  EXPECT_CALL(pip_window_controller(), SeekTo(base::Seconds(32)));
+  overlay_window().OnKeyEvent(&left_event);
+  testing::Mock::VerifyAndClearExpectations(&pip_window_controller());
+
+  // The right arrow key should seek the video forwards 10 seconds.
+  EXPECT_CALL(pip_window_controller(), SeekTo(base::Seconds(52)));
+  overlay_window().OnKeyEvent(&right_event);
+  testing::Mock::VerifyAndClearExpectations(&pip_window_controller());
+}
+
 TEST_F(VideoOverlayWindowViewsTest, DisplaysFavicon) {
   overlay_window().ForceControlsVisibleForTesting(true);
   views::ImageView* favicon_view = overlay_window().favicon_view_for_testing();
@@ -1019,8 +1052,10 @@ TEST_F(VideoOverlayWindowViewsTest, DisplaysFavicon) {
   {
     ui::ImageModel image_model = favicon_view->GetImageModel();
     EXPECT_TRUE(image_model.IsVectorIcon());
-    EXPECT_EQ(image_model.GetVectorIcon().vector_icon(),
-              &vector_icons::kGlobeIcon);
+    EXPECT_EQ(
+        image_model.GetVectorIcon().vector_icon(),
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kGlobeIcon
+                                            : vector_icons::kGlobeOldIcon));
   }
 
   // Setting the favicon should use that instead.
@@ -1048,8 +1083,10 @@ TEST_F(VideoOverlayWindowViewsTest, DisplaysFavicon) {
     overlay_window().SetFaviconImages({});
     ui::ImageModel image_model = favicon_view->GetImageModel();
     EXPECT_TRUE(image_model.IsVectorIcon());
-    EXPECT_EQ(image_model.GetVectorIcon().vector_icon(),
-              &vector_icons::kGlobeIcon);
+    EXPECT_EQ(
+        image_model.GetVectorIcon().vector_icon(),
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kGlobeIcon
+                                            : vector_icons::kGlobeOldIcon));
   }
 }
 
@@ -1542,6 +1579,32 @@ TEST_F(VideoOverlayWindowViewsTest, MouseHoverShowsAllControls) {
   EXPECT_TRUE(overlay_window().AreControlsVisible());
 }
 
+TEST_F(VideoOverlayWindowViewsTest, PlaybackControlsContainerVisibility) {
+  overlay_window().ShowInactive();
+  overlay_window().ForceControlsVisibleForTesting(true);
+  overlay_window().SetPlayPauseButtonVisibility(true);
+  WaitForLayout();
+
+  views::View* playback_controls_container =
+      overlay_window().playback_controls_container_for_testing();
+  ASSERT_NE(nullptr, playback_controls_container);
+
+  // Initially, the playback_controls_container should be drawn.
+  EXPECT_TRUE(playback_controls_container->IsDrawn());
+
+  // Verify that the playback_controls_container is hidden.
+  overlay_window().SetPlaybackControlsVisibility(false);
+  WaitForLayout();
+  EXPECT_FALSE(playback_controls_container->IsDrawn());
+
+  // Providing a new surface should restore the playback_controls_container.
+  const viz::SurfaceId surface_id(viz::FrameSinkId(1, 1),
+                                  viz::LocalSurfaceId());
+  overlay_window().SetSurfaceId(surface_id);
+  WaitForLayout();
+  EXPECT_TRUE(playback_controls_container->IsDrawn());
+}
+
 TEST_F(VideoOverlayWindowViewsTest, TopControlsAreAlwaysOnTheRight) {
   const gfx::Rect work_area(0, 0, 4000, 4000);
   SetDisplayWorkArea(work_area);
@@ -1600,7 +1663,6 @@ class VideoOverlayWindowWithShowAnimationTest
     : public VideoOverlayWindowViewsTest {
  public:
   void SetUp() override {
-    AddEnabledFeature(media::kPictureInPictureShowWindowAnimation);
     VideoOverlayWindowViewsTest::SetUp();
 #if BUILDFLAG(IS_WIN)
     GTEST_SKIP() << "Fade in animation is disabled on Windows.";
@@ -1686,4 +1748,94 @@ TEST_F(VideoOverlayWindowWithShowAnimationTest,
 
   // Destroying the widget during the animation should not crash.
   DestroyOverlayWindow();
+}
+
+// Test fixture with kPictureInPictureMuteControl enabled.
+class VideoOverlayWindowWithMuteControlTest
+    : public VideoOverlayWindowViewsTest {
+ public:
+  void SetUp() override {
+    AddEnabledFeature(media::kPictureInPictureMuteControl);
+    VideoOverlayWindowViewsTest::SetUp();
+  }
+};
+
+// When the feature is disabled (default), the mute button should not be
+// created and SetMediaMuted should be a no-op.
+TEST_F(VideoOverlayWindowViewsTest, ToggleMuteButton_FeatureFlagDisabled) {
+  EXPECT_EQ(nullptr, overlay_window().toggle_mute_button_for_testing());
+
+  // Calling SetMediaMuted with no button should not crash.
+  overlay_window().SetMediaMuted(true);
+  overlay_window().SetMediaMuted(false);
+}
+
+// When the feature is enabled, the mute button should be created.
+TEST_F(VideoOverlayWindowWithMuteControlTest,
+       ToggleMuteButton_FeatureFlagEnabled) {
+  ToggleMuteButton* toggle_mute_button =
+      overlay_window().toggle_mute_button_for_testing();
+  ASSERT_NE(nullptr, toggle_mute_button);
+}
+
+// The mute button should be visible in playback mode but hidden when video
+// conferencing controls are shown.
+TEST_F(VideoOverlayWindowWithMuteControlTest, ToggleMuteButton_Visibility) {
+  ToggleMuteButton* toggle_mute_button =
+      overlay_window().toggle_mute_button_for_testing();
+  ASSERT_NE(nullptr, toggle_mute_button);
+
+  // Trigger a controls layout update so the mute button gets positioned and
+  // made visible for playback mode.
+  overlay_window().SetPlayPauseButtonVisibility(true);
+  overlay_window().ForceControlsVisibleForTesting(true);
+  WaitForLayout();
+
+  // In playback mode, the mute button should be drawn.
+  EXPECT_TRUE(toggle_mute_button->IsDrawn());
+
+  // When VC controls are shown, the mute button should be hidden.
+  overlay_window().SetHangUpButtonVisibility(true);
+  WaitForLayout();
+  EXPECT_FALSE(toggle_mute_button->IsDrawn());
+
+  // When VC controls are hidden again, the mute button should reappear.
+  overlay_window().SetHangUpButtonVisibility(false);
+  WaitForLayout();
+  EXPECT_TRUE(toggle_mute_button->IsDrawn());
+}
+
+// SetMediaMuted should update the button's muted state.
+TEST_F(VideoOverlayWindowWithMuteControlTest, ToggleMuteButton_StateToggle) {
+  ToggleMuteButton* toggle_mute_button =
+      overlay_window().toggle_mute_button_for_testing();
+  ASSERT_NE(nullptr, toggle_mute_button);
+
+  // Initially unmuted.
+  EXPECT_FALSE(toggle_mute_button->is_muted_for_testing());
+
+  overlay_window().SetMediaMuted(true);
+  EXPECT_TRUE(toggle_mute_button->is_muted_for_testing());
+
+  overlay_window().SetMediaMuted(false);
+  EXPECT_FALSE(toggle_mute_button->is_muted_for_testing());
+}
+
+// The mute button should participate in hit testing.
+TEST_F(VideoOverlayWindowWithMuteControlTest, ToggleMuteButton_HitTest) {
+  ToggleMuteButton* toggle_mute_button =
+      overlay_window().toggle_mute_button_for_testing();
+  ASSERT_NE(nullptr, toggle_mute_button);
+
+  // Trigger a controls layout so the mute button is positioned and visible.
+  overlay_window().SetPlayPauseButtonVisibility(true);
+  overlay_window().ForceControlsVisibleForTesting(true);
+  WaitForLayout();
+  ASSERT_TRUE(toggle_mute_button->IsDrawn());
+
+  const gfx::Rect mute_button_bounds =
+      overlay_window().GetToggleMuteButtonBounds();
+  EXPECT_FALSE(mute_button_bounds.IsEmpty());
+  EXPECT_TRUE(overlay_window().ControlsHitTestContainsPoint(
+      mute_button_bounds.CenterPoint()));
 }

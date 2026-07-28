@@ -8,28 +8,20 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <set>
 #include <string>
 
-#include "base/functional/callback.h"
-#include "base/functional/callback_forward.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "components/safe_search_api/url_checker.h"
 #include "components/supervised_user/core/browser/family_link_settings_service.h"
-#include "components/supervised_user/core/browser/supervised_user_error_page.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
-#include "components/supervised_user/core/common/supervised_user_constants.h"
-#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 class PrefService;
-
-namespace version_info {
-enum class Channel;
-}
 
 namespace supervised_user {
 
@@ -114,13 +106,6 @@ class FamilyLinkUrlFilter : public UrlFilteringDelegate {
     virtual bool SupportsWebstoreURL(const GURL& url) const = 0;
   };
 
-  class Observer {
-   public:
-    // Called whenever a check started via
-    // GetFilteringBehaviorWithAsyncChecks completes.
-    virtual void OnURLChecked(WebFilteringResult result) {}
-  };
-
   FamilyLinkUrlFilter(
       FamilyLinkSettingsService& family_link_settings_service,
       const PrefService& user_prefs,
@@ -156,9 +141,6 @@ class FamilyLinkUrlFilter : public UrlFilteringDelegate {
   // Returns summary of url filtering settings.
   Statistics GetFilteringStatistics() const;
 
-  void AddObserver(Observer* observer);
-  void RemoveObserver(Observer* observer);
-
   // Substitutes the URL filter for testing. For use where TestingFactory cant
   // substitute the checker client.
   void SetURLCheckerClientForTesting(
@@ -187,6 +169,7 @@ class FamilyLinkUrlFilter : public UrlFilteringDelegate {
       const GURL& main_frame_url,
       WebFilteringResult::Callback callback,
       const WebFilterMetricsOptions& options) override;
+  std::string_view GetName() const override;
 
  private:
   // Allows proxying deprecated calls to the filter for the time of migration.
@@ -194,32 +177,15 @@ class FamilyLinkUrlFilter : public UrlFilteringDelegate {
 
   bool IsExemptedFromGuardianApproval(const GURL& effective_url) const;
 
-  virtual bool RunAsyncChecker(const GURL& url,
-                               WebFilteringResult::Callback callback);
+  void RunAsyncChecker(const GURL& url, WebFilteringResult::Callback callback);
 
   FilteringBehavior GetManualFilteringBehaviorForURL(const GURL& url) const;
-
-  // `requested_url` is the system's input, and `checked_url` is what was sent
-  // to the remote async service. Since synchronous checks use the same
-  // normalization methods but report actual requested url as filtered, the
-  // async checks will behave the same. Normalized url that is sent to async
-  // services is implementation detail.
-  void CheckCallback(WebFilteringResult::Callback callback,
-                     const GURL& requested_url,
-                     const GURL& checked_url,
-                     safe_search_api::Classification classification,
-                     safe_search_api::ClassificationDetails details) const;
-
-  void NotifyCallerAndObservers(WebFilteringResult::Callback callback,
-                                WebFilteringResult result) const;
 
   // Calculates a URL that should unblock the filtering result but without the
   // normalization it (eg. stripping username, password, query params, ref).
   GURL GetUnnormalizedEffectiveUrlToUnblock(WebFilteringResult result) const;
 
   void OnFamilyLinkSettingsChanged(const base::DictValue& settings);
-
-  base::ObserverList<Observer>::Unchecked observers_;
 
   // Maps from a URL to whether it is manually allowed (true) or blocked
   // (false).

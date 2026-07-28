@@ -23,7 +23,6 @@
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/history/core/browser/history_service_observer.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/safe_browsing/core/common/safebrowsing_switches.h"
@@ -142,10 +141,10 @@ base::DictValue CreateDictionaryFromVerdict(
 void GeneratePathVariantsWithoutQuery(const GURL& url,
                                       std::vector<std::string>* paths) {
   std::string canonical_path;
-  V4ProtocolManagerUtil::CanonicalizeUrl(
+  SBProtocolManagerUtil::CanonicalizeUrl(
       url, /*canonicalized_hostname=*/nullptr, &canonical_path,
       /*canonicalized_query=*/nullptr);
-  V4ProtocolManagerUtil::GeneratePathVariantsToCheck(canonical_path,
+  SBProtocolManagerUtil::GeneratePathVariantsToCheck(canonical_path,
                                                      std::string(), paths);
 }
 
@@ -343,7 +342,7 @@ std::optional<base::Value> GetMostMatchingCachedVerdictEntryWithPathMatching(
   GeneratePathVariantsWithoutQuery(url, &paths);
 
   std::string root_path;
-  V4ProtocolManagerUtil::CanonicalizeUrl(
+  SBProtocolManagerUtil::CanonicalizeUrl(
       url, /*canonicalized_hostname*/ nullptr, &root_path,
       /*canonicalized_query*/ nullptr);
 
@@ -391,10 +390,10 @@ GetMostMatchingCachedVerdictEntryWithHostAndPathMatching(
   MatchParams match_params;
 
   std::string root_host, root_path;
-  V4ProtocolManagerUtil::CanonicalizeUrl(url, &root_host, &root_path,
+  SBProtocolManagerUtil::CanonicalizeUrl(url, &root_host, &root_path,
                                          /*canonicalized_query*/ nullptr);
   std::vector<std::string> host_variants;
-  V4ProtocolManagerUtil::GenerateHostVariantsToCheck(root_host, &host_variants);
+  SBProtocolManagerUtil::GenerateHostVariantsToCheck(root_host, &host_variants);
   int max_path_depth = -1;
   for (const auto& host : host_variants) {
     int depth = static_cast<int>(GetHostDepth(host));
@@ -487,7 +486,6 @@ VerdictCacheManager::VerdictCacheManager(
   }
   CacheArtificialUnsafeRealTimeUrlVerdictFromSwitch();
   CacheArtificialUnsafePhishGuardVerdictFromSwitch();
-  CacheArtificialUnsafeHashRealTimeLookupVerdictFromSwitch();
   CacheArtificialEnterpriseBlockedVerdictFromSwitch();
   CacheArtificialEnterpriseWarnedVerdictFromSwitch();
 }
@@ -803,20 +801,6 @@ ChromeUserPopulation::PageLoadToken VerdictCacheManager::GetPageLoadToken(
   return has_expired ? ChromeUserPopulation::PageLoadToken() : token;
 }
 
-void VerdictCacheManager::CacheHashPrefixRealTimeLookupResults(
-    const std::vector<std::string>& requested_hash_prefixes,
-    const std::vector<V5::FullHash>& response_full_hashes,
-    const V5::Duration& cache_duration) {
-  hash_realtime_cache_->CacheSearchHashesResponse(
-      requested_hash_prefixes, response_full_hashes, cache_duration);
-}
-
-std::unordered_map<std::string, std::vector<V5::FullHash>>
-VerdictCacheManager::GetCachedHashPrefixRealTimeLookupResults(
-    const std::set<std::string>& hash_prefixes) {
-  return hash_realtime_cache_->SearchCache(hash_prefixes);
-}
-
 void VerdictCacheManager::ScheduleNextCleanUpAfterInterval(
     base::TimeDelta interval) {
   cleanup_timer_.Stop();
@@ -833,7 +817,6 @@ void VerdictCacheManager::CleanUpExpiredVerdicts() {
   CleanUpExpiredPhishGuardVerdicts();
   CleanUpExpiredRealTimeUrlCheckVerdicts();
   CleanUpExpiredPageLoadTokens();
-  CleanUpExpiredHashPrefixRealTimeLookupResults();
   ScheduleNextCleanUpAfterInterval(base::Seconds(kCleanUpIntervalSecond));
 }
 
@@ -958,10 +941,6 @@ void VerdictCacheManager::CleanUpAllPageLoadTokens(ClearReason reason) {
   base::UmaHistogramEnumeration("SafeBrowsing.PageLoadToken.ClearReason",
                                 reason);
   page_load_token_map_.clear();
-}
-
-void VerdictCacheManager::CleanUpExpiredHashPrefixRealTimeLookupResults() {
-  hash_realtime_cache_->ClearExpiredResults();
 }
 
 // Overridden from history::HistoryServiceObserver.
@@ -1235,7 +1214,7 @@ void VerdictCacheManager::CacheArtificialRealTimeUrlVerdict(
   }
   threat_info->set_cache_duration_sec(3000);
   threat_info->set_cache_expression_using_match_type(
-      artificial_url.GetContent());
+      artificial_url.GetContentPiece());
   threat_info->set_cache_expression_match_type(
       RTLookupResponse::ThreatInfo::EXACT_MATCH);
   RemoveContentSettingsOnURLsDeleted(/*all_history=*/false,
@@ -1264,54 +1243,11 @@ void VerdictCacheManager::CacheArtificialUnsafePhishGuardVerdictFromSwitch() {
 
   LoginReputationClientResponse verdict;
   verdict.set_verdict_type(LoginReputationClientResponse::PHISHING);
-  verdict.set_cache_expression(artificial_unsafe_url.GetContent());
+  verdict.set_cache_expression(artificial_unsafe_url.GetContentPiece());
   verdict.set_cache_duration_sec(3000);
   CachePhishGuardVerdict(LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
                          reused_password_account_type, verdict,
                          base::Time::Now());
-}
-
-void VerdictCacheManager::CacheArtificialHashRealTimeLookupVerdict(
-    const std::string& url_spec,
-    bool is_unsafe) {
-  if (url_spec.empty()) {
-    return;
-  }
-
-  GURL artificial_unsafe_url(url_spec);
-  if (!artificial_unsafe_url.is_valid()) {
-    return;
-  }
-
-  has_artificial_cached_url_ = true;
-
-  std::vector<FullHashStr> full_hashes;
-  V4ProtocolManagerUtil::UrlToFullHashes(artificial_unsafe_url, &full_hashes);
-  std::vector<std::string> hash_prefixes;
-  for (const auto& full_hash : full_hashes) {
-    auto hash_prefix = hash_realtime_utils::GetHashPrefix(full_hash);
-    hash_prefixes.emplace_back(hash_prefix);
-  }
-  FullHashStr sample_full_hash = full_hashes[0];
-  V5::FullHash full_hash_object;
-  full_hash_object.set_full_hash(sample_full_hash);
-  if (is_unsafe) {
-    auto* details = full_hash_object.add_full_hash_details();
-    details->set_threat_type(V5::ThreatType::SOCIAL_ENGINEERING);
-  }
-  V5::Duration cache_duration;
-  cache_duration.set_seconds(3000);
-  CacheHashPrefixRealTimeLookupResults(hash_prefixes, {full_hash_object},
-                                       cache_duration);
-}
-
-void VerdictCacheManager::
-    CacheArtificialUnsafeHashRealTimeLookupVerdictFromSwitch() {
-  std::string phishing_url_string =
-      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kArtificialCachedHashPrefixRealTimeVerdictFlag);
-  CacheArtificialHashRealTimeLookupVerdict(phishing_url_string,
-                                           /*is_unsafe=*/true);
 }
 
 void VerdictCacheManager::CacheArtificialEnterpriseBlockedVerdictFromSwitch() {

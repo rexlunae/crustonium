@@ -5,13 +5,13 @@
 package org.chromium.chrome.browser.ui.browser_window;
 
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import org.jni_zero.CalledByNative;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.ui.base.ActivityWindowAndroid;
 
 /**
  * Supports {@code android_browser_window_unittest.cc}.
@@ -37,8 +37,12 @@ final class AndroidBrowserWindowNativeUnitTestSupport {
     private AndroidBrowserWindowNativeUnitTestSupport(
             @BrowserWindowType int browserWindowType, Profile profile) {
         mMockChromeAndroidTask = mock(ChromeAndroidTask.class);
-        when(mMockChromeAndroidTask.getBrowserWindowType()).thenReturn(browserWindowType);
-        mAndroidBrowserWindow = new AndroidBrowserWindow(mMockChromeAndroidTask, profile);
+        mAndroidBrowserWindow =
+                new AndroidBrowserWindow(
+                        mMockChromeAndroidTask,
+                        profile,
+                        browserWindowType,
+                        mock(ActivityWindowAndroid.class));
 
         ProfileManager.setLastUsedProfileForTesting(profile);
     }
@@ -49,18 +53,23 @@ final class AndroidBrowserWindowNativeUnitTestSupport {
     }
 
     @CalledByNative
+    private long invokeGetNativePtr() {
+        return mAndroidBrowserWindow.getNativePtr();
+    }
+
+    @CalledByNative
     private long invokeGetOrCreateNativeBaseWindowPtr() {
         return mAndroidBrowserWindow.getOrCreateNativeBaseWindowPtr();
     }
 
     @CalledByNative
-    private long invokeGetNativePtrForTesting() {
-        return mAndroidBrowserWindow.getNativePtrForTesting();
+    private long invokeGetNativeBaseWindowPtrForTesting() {
+        return mAndroidBrowserWindow.getNativeBaseWindowPtrForTesting();
     }
 
     @CalledByNative
-    private long invokeGetNativeBaseWindowPtrForTesting() {
-        return mAndroidBrowserWindow.getNativeBaseWindowPtrForTesting();
+    private boolean invokeIsDeleteScheduled() {
+        return mAndroidBrowserWindow.isDeleteScheduled();
     }
 
     @CalledByNative

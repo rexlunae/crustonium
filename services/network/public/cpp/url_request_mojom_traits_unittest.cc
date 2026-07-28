@@ -90,7 +90,6 @@ TEST(URLRequestMojomTraitsTest, Roundtrips_ResourceRequest) {
   original.expected_public_keys = {};
   original.keepalive = true;
   original.browsing_topics = true;
-  original.ad_auction_headers = true;
   original.shared_storage_writable_eligible = true;
   original.has_user_gesture = false;
   original.enable_load_timing = true;
@@ -98,6 +97,7 @@ TEST(URLRequestMojomTraitsTest, Roundtrips_ResourceRequest) {
   original.do_not_prompt_for_login = true;
   original.is_outermost_main_frame = true;
   original.transition_type = 0;
+  original.is_reload_navigation = true;
   original.previews_state = 0;
   original.upgrade_if_insecure = true;
   original.is_revalidating = false;
@@ -200,11 +200,33 @@ TEST(URLRequestMojomTraitsTest, Roundtrips_TrustedParams) {
       network::mojom::WebClientHintsType::kUAPlatform,
       network::mojom::WebClientHintsType::kUAModel,
   };
+
+  mojo::ScopedDataPipeProducerHandle producer;
+  mojo::ScopedDataPipeConsumerHandle consumer;
+  ASSERT_EQ(MOJO_RESULT_OK, mojo::CreateDataPipe(nullptr, producer, consumer));
+  original.response_body_stream =
+      base::MakeRefCounted<SharedDataPipeProducerHandle>(std::move(producer));
+
+  // Store validity before serialization, as original.response_body_stream->pipe
+  // will be moved during serialization.
+  bool original_pipe_valid_before_serialize =
+      original.response_body_stream->pipe.is_valid();
+  ASSERT_TRUE(original_pipe_valid_before_serialize);
+
   network::ResourceRequest::TrustedParams copied;
   EXPECT_TRUE(
       mojo::test::SerializeAndDeserialize<mojom::TrustedUrlRequestParams>(
           original, copied));
   EXPECT_TRUE(original.EqualsForTesting(copied));
+
+  // After serialization, the original's underlying pipe should be invalid as
+  // it's moved. The scoped_refptr itself is still valid, but its internal pipe
+  // handle isn't.
+  EXPECT_FALSE(original.response_body_stream->pipe.is_valid());
+
+  // Verify that the data pipe handle was correctly round-tripped.
+  ASSERT_TRUE(copied.response_body_stream);
+  EXPECT_TRUE(copied.response_body_stream->pipe.is_valid());
 }
 
 TEST(URLRequestMojomTraitsTest, Roundtrips_TrustedParams_NullOpt) {

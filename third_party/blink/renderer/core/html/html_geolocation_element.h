@@ -13,17 +13,22 @@
 #include "third_party/blink/renderer/core/geolocation/geolocation_position_error.h"
 #include "third_party/blink/renderer/core/geolocation/geolocation_watchers.h"
 #include "third_party/blink/renderer/core/geolocation/geoposition.h"
-#include "third_party/blink/renderer/core/html/html_permission_element.h"
+#include "third_party/blink/renderer/core/html/html_capability_element_base.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/timer.h"
 
 namespace blink {
 
-class CORE_EXPORT HTMLGeolocationElement final : public HTMLPermissionElement {
+class CORE_EXPORT HTMLGeolocationElement final
+    : public HTMLCapabilityElementBase {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
   explicit HTMLGeolocationElement(Document&);
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLGeolocationElement;
+  }
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(location, kLocation)
 
@@ -61,8 +66,9 @@ class CORE_EXPORT HTMLGeolocationElement final : public HTMLPermissionElement {
   FRIEND_TEST_ALL_PREFIXES(HTMLGeolocationElementTest,
                            GeolocationRequestInProgress);
 
-  // HTMLPermissionElement:
+  // HTMLCapabilityElementBase:
   void UpdateAppearance() override;
+  void UpdateIcon(mojom::blink::PermissionName permission) override;
   void UpdatePermissionStatusAndAppearance() override;
   mojom::blink::EmbeddedPermissionRequestDescriptorPtr
   CreateEmbeddedPermissionRequestDescriptor() override;
@@ -71,6 +77,7 @@ class CORE_EXPORT HTMLGeolocationElement final : public HTMLPermissionElement {
   void OnPermissionStatusChange(mojom::blink::PermissionName,
                                 mojom::blink::PermissionStatus) override;
   void DidFinishLifecycleUpdate(const LocalFrameView&) override;
+  void DidAddUserAgentShadowRoot(ShadowRoot&) override;
 
   void OnActivated();
   void GetCurrentPosition();

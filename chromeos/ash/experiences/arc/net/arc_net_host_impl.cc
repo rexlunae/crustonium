@@ -16,13 +16,12 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "chromeos/ash/components/dbus/patchpanel/patchpanel_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
-#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/client_cert_util.h"
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
@@ -43,7 +42,10 @@
 #include "chromeos/ash/experiences/arc/net/passpoint_dialog_view.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "components/device_event_log/device_event_log.h"
+#include "components/onc/onc_constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "dbus/object_path.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
@@ -52,6 +54,14 @@
 namespace {
 
 constexpr int kGetNetworksListLimit = 100;
+
+std::string GetPrimaryUserHash() {
+  const AccountId& account_id =
+      session_manager::SessionManager::Get()->GetPrimarySession()->account_id();
+  return user_manager::UserManager::Get()
+      ->FindUser(account_id)
+      ->username_hash();
+}
 
 ash::NetworkStateHandler* GetStateHandler() {
   return ash::NetworkHandler::Get()->network_state_handler();
@@ -75,7 +85,7 @@ ash::NetworkProfileHandler* GetNetworkProfileHandler() {
 
 const ash::NetworkProfile* GetNetworkProfile() {
   return GetNetworkProfileHandler()->GetProfileForUserhash(
-      ash::LoginState::Get()->primary_user_hash());
+      GetPrimaryUserHash());
 }
 
 std::vector<const ash::NetworkState*> GetHostActiveNetworks() {
@@ -244,11 +254,12 @@ class ArcNetHostImplFactory
   static constexpr const char* kName = "ArcNetHostImplFactory";
 
   static ArcNetHostImplFactory* GetInstance() {
-    return base::Singleton<ArcNetHostImplFactory>::get();
+    static base::NoDestructor<ArcNetHostImplFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcNetHostImplFactory>;
+  friend base::NoDestructor<ArcNetHostImplFactory>;
   ArcNetHostImplFactory() = default;
   ~ArcNetHostImplFactory() override = default;
 };
@@ -425,6 +436,16 @@ void ArcNetHostImpl::CreateNetwork(mojom::WifiConfigurationPtr cfg,
                                    std::move(empty_eap));
     return;
   }
+  // b/511757251
+  if (cfg->eap->password.has_value() &&
+      cfg->eap->password.value() ==
+          onc::substitutes::kPasswordPlaceholderVerbatim) {
+    NET_LOG(ERROR) << __func__ << ": \""
+                   << onc::substitutes::kPasswordPlaceholderVerbatim
+                   << "\" password literal is forbidden";
+    std::move(callback).Run(std::string());
+    return;
+  }
   mojom::EapCredentialsPtr eap = cfg->eap.Clone();
   TranslateEapCredentialsToDict(
       std::move(eap),
@@ -528,12 +549,11 @@ void ArcNetHostImpl::CreateNetworkWithEapTranslated(
                    std::move(ipconfig_dict));
   }
 
-  std::string user_id_hash = ash::LoginState::Get()->primary_user_hash();
   // TODO(crbug.com/40524549): Remove SplitOnceCallback() by updating
   // the callee interface.
   auto split_callback = base::SplitOnceCallback(std::move(callback));
   GetManagedConfigurationHandler()->CreateConfiguration(
-      user_id_hash, properties,
+      GetPrimaryUserHash(), properties,
       base::BindOnce(&ArcNetHostImpl::CreateNetworkSuccessCallback,
                      weak_factory_.GetWeakPtr(),
                      std::move(split_callback.first)),
@@ -807,11 +827,9 @@ base::DictValue ArcNetHostImpl::TranslateVpnConfigurationToOnc(
 
 void ArcNetHostImpl::AndroidVpnConnected(
     mojom::AndroidVpnConfigurationPtr cfg) {
-  std::string user_id_hash = ash::LoginState::Get()->primary_user_hash();
-
   // TODO(b/333809009): Skip ONC translation step.
   GetManagedConfigurationHandler()->CreateConfiguration(
-      user_id_hash, TranslateVpnConfigurationToOnc(*cfg),
+      GetPrimaryUserHash(), TranslateVpnConfigurationToOnc(*cfg),
       base::BindOnce(&ArcNetHostImpl::ConnectArcVpn,
                      weak_factory_.GetWeakPtr()),
       base::BindOnce(&ArcVpnErrorCallback, "connecting new ARC VPN"));
@@ -1045,7 +1063,15 @@ void ArcNetHostImpl::TranslatePasspointCredentialsToDict(
                    << ": mojom::PasspointCredentials has no EAP properties";
     return;
   }
-
+  // b/511757251
+  if (cred->eap->password.has_value() &&
+      cred->eap->password.value() ==
+          onc::substitutes::kPasswordPlaceholderVerbatim) {
+    NET_LOG(ERROR) << __func__ << ": \""
+                   << onc::substitutes::kPasswordPlaceholderVerbatim
+                   << "\" password literal is forbidden";
+    return;
+  }
   mojom::EapCredentialsPtr eap = cred->eap.Clone();
   TranslateEapCredentialsToDict(
       std::move(eap),

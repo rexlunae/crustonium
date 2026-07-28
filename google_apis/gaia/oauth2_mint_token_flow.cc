@@ -16,6 +16,7 @@
 #include "base/command_line.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
@@ -28,6 +29,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "google_apis/gaia/gaia_features.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_api_call_flow.h"
@@ -75,6 +77,10 @@ constexpr char kTokenBindingChallengeHeader[] =
     "X-Chrome-Auth-Token-Binding-Challenge";
 constexpr char kTokenBindingResponseKey[] = "tokenBindingResponse";
 constexpr char kDirectedResponseKey[] = "directedResponse";
+
+constexpr std::array kDefaultAlgorithms = {
+    crypto::SignatureVerifier::ECDSA_SHA256,
+    crypto::SignatureVerifier::RSA_PKCS1_SHA256};
 
 constexpr auto kOAuth2ResponseByErrorReason =
     base::MakeFixedFlatMap<std::string_view, OAuth2Response>({
@@ -205,8 +211,7 @@ OAuth2ErrorDetails ParseErrorResponse(
     const network::mojom::URLResponseHead* head,
     std::optional<std::string> body) {
   if (net_error == net::ERR_ABORTED) {
-    return {GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED),
-            std::nullopt};
+    return {GoogleServiceAuthError::CreateRequestCanceled(), std::nullopt};
   }
 
   if (net_error != net::OK || !head || !head->headers) {
@@ -258,6 +263,26 @@ void RecordApiCallMetrics(OAuth2MintTokenApiCallResult result,
   }
 }
 
+std::optional<crypto::SignatureVerifier::SignatureAlgorithm>
+ParseSignatureAlgorithm(std::string_view algo_str) {
+  if (base::EqualsCaseInsensitiveASCII(algo_str, "ES256")) {
+    return crypto::SignatureVerifier::ECDSA_SHA256;
+  }
+  if (base::EqualsCaseInsensitiveASCII(algo_str, "RS256")) {
+    return crypto::SignatureVerifier::RSA_PKCS1_SHA256;
+  }
+  return std::nullopt;
+}
+
+GoogleServiceAuthError CreateUnexpectedResponseBodyError(
+    const std::string& error_message) {
+  if (base::FeatureList::IsEnabled(
+          gaia::features::kOAuth2MintTokenUnexpectedResponseBodyIsTransient)) {
+    return GoogleServiceAuthError::FromServiceUnavailable(error_message);
+  }
+  return GoogleServiceAuthError::FromUnexpectedServiceResponse(error_message);
+}
+
 }  // namespace
 
 RemoteConsentResolutionData::RemoteConsentResolutionData() = default;
@@ -304,7 +329,8 @@ OAuth2MintTokenFlow::Parameters::CreateForClientFlow(
     std::string_view version,
     std::string_view channel,
     std::string_view device_id,
-    std::string_view bound_oauth_token) {
+    std::string_view bound_oauth_token,
+    bool use_mtls_endpoints) {
   Parameters parameters;
   parameters.client_id = client_id;
   parameters.scopes = std::vector<std::string>(scopes.begin(), scopes.end());
@@ -313,6 +339,7 @@ OAuth2MintTokenFlow::Parameters::CreateForClientFlow(
   parameters.channel = channel;
   parameters.device_id = device_id;
   parameters.bound_oauth_token = bound_oauth_token;
+  parameters.use_mtls_endpoints = use_mtls_endpoints;
   return parameters;
 }
 
@@ -367,7 +394,18 @@ void OAuth2MintTokenFlow::ReportFailure(
 }
 
 GURL OAuth2MintTokenFlow::CreateApiCallUrl() {
-  return GaiaUrls::GetInstance()->oauth2_issue_token_url();
+  return parameters_.use_mtls_endpoints
+             ? GaiaUrls::GetInstance()->mtls_oauth2_issue_token_url()
+             : GaiaUrls::GetInstance()->oauth2_issue_token_url();
+}
+
+network::mojom::CredentialsMode OAuth2MintTokenFlow::GetCredentialsMode()
+    const {
+  // `CredentialsMode::kInclude` is required for enabling client mTLS
+  // certificates.
+  return parameters_.use_mtls_endpoints
+             ? network::mojom::CredentialsMode::kInclude
+             : OAuth2ApiCallFlow::GetCredentialsMode();
 }
 
 net::HttpRequestHeaders OAuth2MintTokenFlow::CreateApiCallHeaders() {
@@ -421,6 +459,9 @@ std::string OAuth2MintTokenFlow::CreateApiCallBody() {
         kOAuth2IssueTokenBodyFormatConsentResultAddendum,
         base::EscapeUrlEncodedData(parameters_.consent_result, true).c_str()));
   }
+  if (parameters_.check_bound_token_upgrade_eligibility) {
+    body.append("&check_bound_token_upgrade_eligibility=true");
+  }
   return body;
 }
 
@@ -443,7 +484,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
   if (!dict) {
     RecordApiCallMetrics(OAuth2MintTokenApiCallResult::kParseJsonFailure,
                          OAuth2Response::kOkUnexpectedFormat);
-    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+    ReportFailure(CreateUnexpectedResponseBodyError(
         "Not able to parse a JSON object from a service response."));
     return;
   }
@@ -453,7 +494,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
     RecordApiCallMetrics(
         OAuth2MintTokenApiCallResult::kIssueAdviceKeyNotFoundFailure,
         OAuth2Response::kOkUnexpectedFormat);
-    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+    ReportFailure(CreateUnexpectedResponseBodyError(
         "Not able to find an issueAdvice in a service response."));
     return;
   }
@@ -468,7 +509,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
       RecordApiCallMetrics(
           OAuth2MintTokenApiCallResult::kParseRemoteConsentFailure,
           OAuth2Response::kOkUnexpectedFormat);
-      ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+      ReportFailure(CreateUnexpectedResponseBodyError(
           "Not able to parse the contents of remote consent from a service "
           "response."));
     }
@@ -483,7 +524,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
   } else {
     RecordApiCallMetrics(OAuth2MintTokenApiCallResult::kParseMintTokenFailure,
                          OAuth2Response::kOkUnexpectedFormat);
-    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+    ReportFailure(CreateUnexpectedResponseBodyError(
         "Not able to parse the contents of access token "
         "from a service response."));
   }
@@ -549,6 +590,34 @@ OAuth2MintTokenFlow::ParseMintTokenResponse(const base::DictValue& dict) {
   result.is_token_encrypted =
       token_binding_response &&
       token_binding_response->FindDict(kDirectedResponseKey);
+
+  const std::string* challenge =
+      dict.FindStringByDottedPath("boundTokenUpgradeInfo.challenge");
+  if (challenge) {
+    result.bound_token_upgrade_challenge = *challenge;
+  }
+
+  const base::ListValue* supported_algorithms =
+      dict.FindListByDottedPath("boundTokenUpgradeInfo.supportedAlgorithms");
+  if (!supported_algorithms) {
+    result.bound_token_upgrade_supported_algorithms =
+        base::ToVector(kDefaultAlgorithms);
+  } else {
+    // TODO(crbug.com/514242898): Unify this string-to-enum parser with similar
+    // conversion functions in the codebase (e.g. into //crypto).
+    for (const auto& value : *supported_algorithms) {
+      const std::string* algo_str = value.GetIfString();
+      if (!algo_str) {
+        continue;
+      }
+
+      std::optional<crypto::SignatureVerifier::SignatureAlgorithm> algo =
+          ParseSignatureAlgorithm(*algo_str);
+      if (algo.has_value()) {
+        result.bound_token_upgrade_supported_algorithms.push_back(*algo);
+      }
+    }
+  }
 
   return result;
 }
@@ -640,8 +709,8 @@ bool OAuth2MintTokenFlow::ParseRemoteConsentResponse(
 
 net::PartialNetworkTrafficAnnotationTag
 OAuth2MintTokenFlow::GetNetworkTrafficAnnotationTag() {
-  return net::DefinePartialNetworkTrafficAnnotation(
-      "oauth2_mint_token_flow", "oauth2_api_call_flow", R"(
+  return net::DefinePartialNetworkTrafficAnnotation("oauth2_mint_token_flow",
+                                                    "oauth2_api_call_flow", R"(
       semantics {
         sender: "Chrome Identity API"
         description:
@@ -658,9 +727,8 @@ OAuth2MintTokenFlow::GetNetworkTrafficAnnotationTag() {
           "This feature cannot be disabled by settings, however the request is "
           "made only for signed-in users."
         chrome_policy {
-          SigninAllowed {
-            policy_options {mode: MANDATORY}
-            SigninAllowed: false
+          BrowserSignin {
+            BrowserSignin: 0
           }
         }
       })");

@@ -49,7 +49,6 @@ import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.OtrProfileId;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileKey;
-import org.chromium.chrome.browser.profiles.ProfileKeyUtil;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.components.download.DownloadCollectionBridge;
 import org.chromium.components.download.DownloadState;
@@ -109,7 +108,7 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
     /** Generic interface for notifying external UI components about downloads and their states. */
     public interface DownloadObserver extends DownloadSharedPreferenceHelper.Observer {
         /** Called in response to {@link DownloadManagerService#getAllDownloads(OtrProfileId)}. */
-        void onAllDownloadsRetrieved(final List<DownloadItem> list, ProfileKey profileKey);
+        void onAllDownloadsRetrieved(List<DownloadItem> list, ProfileKey profileKey);
 
         /** Called when a download is created. */
         void onDownloadItemCreated(DownloadItem item);
@@ -128,7 +127,6 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
 
     private final ObserverList<DownloadObserver> mDownloadObservers = new ObserverList<>();
 
-    private final OMADownloadHandler mOMADownloadHandler;
     private final DownloadSnackbarController mDownloadSnackbarController;
     private DownloadMessageUiController mMessageUiController;
     private long mNativeDownloadManagerService;
@@ -209,14 +207,11 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
     @VisibleForTesting
     protected DownloadManagerService(
             DownloadNotifier downloadNotifier, Handler handler, long updateDelayInMillis) {
-        Context applicationContext = ContextUtils.getApplicationContext();
         mDownloadNotifier = downloadNotifier;
         mUpdateDelayInMillis = updateDelayInMillis;
         mHandler = handler;
         mDownloadSnackbarController = new DownloadSnackbarController();
-        mOMADownloadHandler = new OMADownloadHandler(applicationContext);
         DownloadCollectionBridge.setDownloadDelegate(new DownloadDelegateImpl());
-        mOMADownloadHandler.clearPendingOMADownloads();
     }
 
     /** Initializes download related systems for background task. */
@@ -267,10 +262,9 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
     public void onActivityLaunched(DownloadMessageUiController.Delegate delegate) {
         if (mMessageUiController == null) {
             mMessageUiController = DownloadMessageUiControllerFactory.create(delegate);
-
-            DownloadManagerService.getDownloadManagerService()
-                    .checkForExternallyRemovedDownloads(
-                            ProfileKeyUtil.getLastUsedRegularProfileKey());
+            // Initialize native download manager service so that resumption handler will be
+            // created.
+            getNativeDownloadManagerService();
         }
     }
 
@@ -410,10 +404,7 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
                 new AsyncTask<>() {
                     @Override
                     public Boolean doInBackground() {
-                        boolean canResolve =
-                                MimeUtils.isOMADownloadDescription(
-                                                assumeNonNull(item.getDownloadInfo()).getMimeType())
-                                        || canResolveDownloadItem(item, isSupportedMimeType);
+                        boolean canResolve = canResolveDownloadItem(item, isSupportedMimeType);
                         return canResolve;
                     }
 
@@ -436,27 +427,15 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
         }
     }
 
-    @CalledByNative
-    private void handleOMADownload(DownloadItem download, long systemDownloadId) {
-        mOMADownloadHandler.handleOMADownload(
-                assertNonNull(download.getDownloadInfo()), systemDownloadId);
-    }
-
     /**
-     * Handle auto opennable files after download completes.
-     * TODO(qinmin): move this to DownloadManagerBridge.
+     * Handle auto opennable files after download completes. TODO(qinmin): move this to
+     * DownloadManagerBridge.
      *
      * @param download A download item.
      */
     private void handleAutoOpenAfterDownload(DownloadItem download) {
-        if (MimeUtils.isOMADownloadDescription(
-                assumeNonNull(download.getDownloadInfo()).getMimeType())) {
-            mOMADownloadHandler.handleOMADownload(
-                    download.getDownloadInfo(), download.getSystemDownloadId());
-            return;
-        }
         openDownloadedContent(
-                download.getDownloadInfo(),
+                assumeNonNull(download.getDownloadInfo()),
                 download.getSystemDownloadId(),
                 DownloadOpenSource.AUTO_OPEN);
     }
@@ -1197,16 +1176,6 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
                         IncognitoUtils.getProfileKeyFromOtrProfileId(otrProfileId));
     }
 
-    /**
-     * Checks if the files associated with any downloads have been removed by an external action.
-     *
-     * @param profileKey The {@link ProfileKey} to check the downloads for the the given profile.
-     */
-    public void checkForExternallyRemovedDownloads(ProfileKey profileKey) {
-        DownloadManagerServiceJni.get()
-                .checkForExternallyRemovedDownloads(getNativeDownloadManagerService(), profileKey);
-    }
-
     // Deprecated after new download backend.
     @CalledByNative
     private List<DownloadItem> createDownloadItemList() {
@@ -1389,9 +1358,7 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
                         assumeNonNull(info);
                         boolean isSupportedMimeType = isSupportedMimeType(info.getMimeType());
                         boolean canResolve =
-                                MimeUtils.isOMADownloadDescription(info.getMimeType())
-                                        || canResolveDownloadItem(
-                                                downloadItem, isSupportedMimeType);
+                                canResolveDownloadItem(downloadItem, isSupportedMimeType);
                         return canResolve
                                 && MimeUtils.canAutoOpenMimeType(info.getMimeType())
                                 && info.hasUserGesture();
@@ -1616,9 +1583,6 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
                 ProfileKey profileKey);
 
         void getAllDownloads(long nativeDownloadManagerService, ProfileKey profileKey);
-
-        void checkForExternallyRemovedDownloads(
-                long nativeDownloadManagerService, ProfileKey profileKey);
 
         void updateLastAccessTime(
                 long nativeDownloadManagerService,

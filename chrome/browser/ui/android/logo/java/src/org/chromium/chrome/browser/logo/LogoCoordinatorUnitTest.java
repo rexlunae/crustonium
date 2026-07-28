@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.logo;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,9 +16,10 @@ import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.view.ContextThemeWrapper;
+import android.view.ViewGroup;
+import android.view.ViewStub;
 
 import androidx.annotation.ColorInt;
 import androidx.test.core.app.ApplicationProvider;
@@ -38,12 +41,19 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.logo.LogoBridge.Logo;
+import org.chromium.chrome.browser.logo.LogoUtils.DoodleSize;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
-import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.ntp_customization.policy.NtpCustomizationPolicyManager;
-import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorFromHexInfo;
+import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo;
+import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
+import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorUtils;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.content_public.browser.LoadUrlParams;
+
+import java.util.function.Supplier;
 
 /** Unit tests for the {@link LogoCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -51,12 +61,15 @@ import org.chromium.content_public.browser.LoadUrlParams;
 public class LogoCoordinatorUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private LogoView mLogoView;
+    @Mock private LogoContainerView mLogoContainerView;
+    @Mock private LegacyLogoView mLegacyLogoView;
+    @Mock private ViewGroup mParentView;
     @Mock private Callback<LoadUrlParams> mLogoClickedCallback;
     @Mock private Callback<Logo> mOnLogoAvailableCallback;
     @Mock private LogoCoordinator.VisibilityObserver mVisibilityObserver;
     @Mock private LogoMediator mLogoMediator;
     @Mock private NtpCustomizationConfigManager mNtpCustomizationConfigManager;
+    @Mock private Supplier<Boolean> mIsInMultiWindowModeSupplier;
 
     @Captor
     private ArgumentCaptor<NtpCustomizationConfigManager.HomepageStateListener>
@@ -72,23 +85,22 @@ public class LogoCoordinatorUnitTest {
                         ApplicationProvider.getApplicationContext(),
                         R.style.Theme_BrowserUI_DayNight);
         NtpCustomizationConfigManager.setInstanceForTesting(mNtpCustomizationConfigManager);
+        when(mParentView.findViewById(R.id.logo_container_view)).thenReturn(mLogoContainerView);
+        when(mParentView.findViewById(R.id.search_provider_logo)).thenReturn(mLegacyLogoView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(false);
+        ViewStub mockStub = mock(ViewStub.class);
+        when(mParentView.findViewById(R.id.logo_view_stub)).thenReturn(mockStub);
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
+    @DisableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
     public void testMaybeInitHomepageStateListener_featuresDisabled() {
         createLogoCoordinator();
         verify(mNtpCustomizationConfigManager, never()).addListener(any(), any(), anyBoolean());
     }
 
     @Test
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
     public void testMaybeInitHomepageStateListener_disabledByPolicy() {
         NtpCustomizationPolicyManager policyManager = mock(NtpCustomizationPolicyManager.class);
         NtpCustomizationPolicyManager.setInstanceForTesting(policyManager);
@@ -99,10 +111,7 @@ public class LogoCoordinatorUnitTest {
     }
 
     @Test
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
     public void testMaybeInitHomepageStateListener_featuresEnabled() {
         createLogoCoordinator();
         verify(mNtpCustomizationConfigManager)
@@ -110,11 +119,8 @@ public class LogoCoordinatorUnitTest {
     }
 
     @Test
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
-    public void testHomepageStateListener_logoNotShown() {
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
+    public void testHomepageStateListener_GoogleLogoNotShown() {
         Bitmap bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
         BackgroundImageInfo backgroundImageInfo = mock(BackgroundImageInfo.class);
 
@@ -129,17 +135,14 @@ public class LogoCoordinatorUnitTest {
                         bitmap,
                         backgroundImageInfo,
                         false,
-                        NtpBackgroundImageType.DEFAULT,
-                        NtpBackgroundImageType.IMAGE_FROM_DISK);
+                        NtpBackgroundType.DEFAULT,
+                        NtpBackgroundType.IMAGE_FROM_DISK);
 
         verify(mLogoMediator, never()).updateDefaultGoogleLogo(any());
     }
 
     @Test
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
     public void testHomepageStateListener_onBackgroundImageChanged() {
         Bitmap bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
         BackgroundImageInfo backgroundImageInfo = mock(BackgroundImageInfo.class);
@@ -155,45 +158,130 @@ public class LogoCoordinatorUnitTest {
                         bitmap,
                         backgroundImageInfo,
                         false,
-                        NtpBackgroundImageType.DEFAULT,
-                        NtpBackgroundImageType.IMAGE_FROM_DISK);
+                        NtpBackgroundType.DEFAULT,
+                        NtpBackgroundType.IMAGE_FROM_DISK);
+
+        verify(mLogoMediator).updateDefaultGoogleLogo(any(Drawable.class));
+
+        // Test case that another image is selected.
+        clearInvocations(mLogoMediator);
+        mHomepageStateListenerCaptor
+                .getValue()
+                .onBackgroundImageChanged(
+                        Bitmap.createBitmap(20, 20, Bitmap.Config.ARGB_8888),
+                        backgroundImageInfo,
+                        false,
+                        NtpBackgroundType.IMAGE_FROM_DISK,
+                        NtpBackgroundType.THEME_COLLECTION);
+
+        verify(mLogoMediator, never()).updateDefaultGoogleLogo(any(Drawable.class));
+    }
+
+    @Test
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
+    public void testHomepageStateListener_onBackgroundColorChanged() {
+        when(mLogoMediator.isDefaultGoogleLogoShown()).thenReturn(true);
+        @NtpThemeColorId int colorInfoId = NtpThemeColorId.NTP_COLORS_BLUE;
+        NtpThemeColorInfo colorInfo =
+                NtpThemeColorUtils.createNtpThemeColorInfo(mContext, colorInfoId);
+        NtpBackgroundDataColor dataColor =
+                new NtpBackgroundDataColor(
+                        PlatformType.ANDROID,
+                        /* isChromeColorDailyRefreshEnabled= */ false,
+                        colorInfo);
+        @ColorInt
+        int backgroundColor =
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(mContext, dataColor);
+
+        createLogoCoordinator();
+        verify(mNtpCustomizationConfigManager)
+                .addListener(mHomepageStateListenerCaptor.capture(), eq(mContext), eq(true));
+
+        // Test case that a new color is selected.
+        mHomepageStateListenerCaptor
+                .getValue()
+                .onBackgroundColorChanged(
+                        colorInfo,
+                        backgroundColor,
+                        false,
+                        NtpBackgroundType.CHROME_COLOR,
+                        NtpBackgroundType.DEFAULT);
+
+        verify(mLogoMediator).updateDefaultGoogleLogo(any(Drawable.class));
+
+        // Test case that the newly selected color matches the old logo color.
+        clearInvocations(mLogoMediator);
+        mHomepageStateListenerCaptor
+                .getValue()
+                .onBackgroundColorChanged(
+                        colorInfo,
+                        backgroundColor,
+                        false,
+                        NtpBackgroundType.CHROME_COLOR,
+                        NtpBackgroundType.CHROME_COLOR);
+
+        verify(mLogoMediator, never()).updateDefaultGoogleLogo(any(Drawable.class));
+
+        colorInfoId = NtpThemeColorId.NTP_COLORS_VIOLET;
+        colorInfo = NtpThemeColorUtils.createNtpThemeColorInfo(mContext, colorInfoId);
+        dataColor =
+                new NtpBackgroundDataColor(
+                        PlatformType.ANDROID,
+                        /* isChromeColorDailyRefreshEnabled= */ false,
+                        colorInfo);
+        backgroundColor =
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(mContext, dataColor);
+
+        // Test case that the newly selected color doesn't match the old logo color.
+        clearInvocations(mLogoMediator);
+        mHomepageStateListenerCaptor
+                .getValue()
+                .onBackgroundColorChanged(
+                        colorInfo,
+                        backgroundColor,
+                        false,
+                        NtpBackgroundType.CHROME_COLOR,
+                        NtpBackgroundType.CHROME_COLOR);
 
         verify(mLogoMediator).updateDefaultGoogleLogo(any(Drawable.class));
     }
 
     @Test
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
-    public void testHomepageStateListener_onBackgroundColorChanged() {
-        @ColorInt int backgroundColor = Color.RED;
-        @ColorInt int primaryColor = Color.BLUE;
-        NtpThemeColorFromHexInfo colorFromHexInfo =
-                new NtpThemeColorFromHexInfo(mContext, backgroundColor, primaryColor);
-        when(mLogoMediator.isDefaultGoogleLogoShown()).thenReturn(true);
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
+    public void testHomepageStateListener_onBackgroundReset() {
+        Bitmap bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+        BackgroundImageInfo backgroundImageInfo = mock(BackgroundImageInfo.class);
 
+        when(mLogoMediator.isDefaultGoogleLogoShown()).thenReturn(true);
         createLogoCoordinator();
         verify(mNtpCustomizationConfigManager)
                 .addListener(mHomepageStateListenerCaptor.capture(), eq(mContext), eq(true));
 
         mHomepageStateListenerCaptor
                 .getValue()
-                .onBackgroundColorChanged(
-                        colorFromHexInfo,
-                        backgroundColor,
+                .onBackgroundImageChanged(
+                        bitmap,
+                        backgroundImageInfo,
                         false,
-                        NtpBackgroundImageType.DEFAULT,
-                        NtpBackgroundImageType.COLOR_FROM_HEX);
-
+                        NtpBackgroundType.DEFAULT,
+                        NtpBackgroundType.IMAGE_FROM_DISK);
         verify(mLogoMediator).updateDefaultGoogleLogo(any(Drawable.class));
+
+        // When oldType is not DEFAULT.
+        clearInvocations(mLogoMediator);
+        mHomepageStateListenerCaptor
+                .getValue()
+                .onBackgroundReset(NtpBackgroundType.IMAGE_FROM_DISK);
+        verify(mLogoMediator).updateDefaultGoogleLogo(any(Drawable.class));
+
+        // When oldType is DEFAULT.
+        clearInvocations(mLogoMediator);
+        mHomepageStateListenerCaptor.getValue().onBackgroundReset(NtpBackgroundType.DEFAULT);
+        verify(mLogoMediator, never()).updateDefaultGoogleLogo(any(Drawable.class));
     }
 
     @Test
-    @EnableFeatures({
-        ChromeFeatureList.ANDROID_LOGO_VIEW_REFACTOR,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2
-    })
+    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
     public void testDestroyRemovesListener() {
         mLogoCoordinator = createLogoCoordinator();
         verify(mNtpCustomizationConfigManager)
@@ -203,15 +291,171 @@ public class LogoCoordinatorUnitTest {
                 .removeListener(mHomepageStateListenerCaptor.getValue());
     }
 
+    @Test
+    public void testUpdateDoodleOnTablet_setDoodleSize() {
+        mLogoCoordinator = createLogoCoordinator();
+        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        verifyDoodleSize(
+                /* isInMultiWindowMode= */ true,
+                /* showingNonStandardGoogleLogo= */ false,
+                DoodleSize.TABLET_SPLIT_SCREEN);
+
+        // Tablet transitions back to regular mode.
+        verifyDoodleSize(
+                /* isInMultiWindowMode= */ false,
+                /* showingNonStandardGoogleLogo= */ false,
+                DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        verifyDoodleSize(
+                /* isInMultiWindowMode= */ true,
+                /* showingNonStandardGoogleLogo= */ true,
+                DoodleSize.TABLET_SPLIT_SCREEN);
+
+        // Tablet transitions back to regular mode.
+        verifyDoodleSize(
+                /* isInMultiWindowMode= */ false,
+                /* showingNonStandardGoogleLogo= */ true,
+                DoodleSize.REGULAR);
+    }
+
+    @Test
+    public void testUpdateDoodleOnTablet_setLayoutParams() {
+        mLogoCoordinator = createLogoCoordinator();
+        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        clearInvocations(mLogoContainerView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ true);
+        verify(mLogoContainerView).setLogoHeight(anyInt());
+        verify(mLogoContainerView).setLogoTopMargin(anyInt());
+    }
+
+    @Test
+    public void testUpdateDoodleOnTablet_sameMode() {
+        mLogoCoordinator = createLogoCoordinator();
+        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet mode doesn't change.
+        clearInvocations(mLogoContainerView);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
+        verify(mLogoContainerView, never()).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        clearInvocations(mLogoContainerView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
+        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
+
+        // Tablet mode doesn't change.
+        clearInvocations(mLogoContainerView);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
+        verify(mLogoContainerView, never()).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
+    }
+
     private LogoCoordinator createLogoCoordinator() {
         LogoCoordinator coordinator =
                 new LogoCoordinator(
                         mContext,
                         mLogoClickedCallback,
-                        mLogoView,
+                        mParentView,
                         mOnLogoAvailableCallback,
-                        mVisibilityObserver);
+                        mVisibilityObserver,
+                        mIsInMultiWindowModeSupplier);
         coordinator.setMediatorForTesting(mLogoMediator);
         return coordinator;
+    }
+
+    private void verifyDoodleSize(
+            boolean isInMultiWindowMode,
+            boolean showingNonStandardGoogleLogo,
+            int expectedDoodleSize) {
+        clearInvocations(mLogoContainerView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(isInMultiWindowMode);
+        mLogoCoordinator.updateDoodleOnTablet(showingNonStandardGoogleLogo);
+
+        verify(mLogoContainerView).setDoodleSize(expectedDoodleSize);
+    }
+
+    private void verifyDoodleSize_logoViewRefactorFlagDisabled(
+            boolean isInMultiWindowMode,
+            boolean showingNonStandardGoogleLogo,
+            int expectedDoodleSize) {
+        clearInvocations(mLegacyLogoView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(isInMultiWindowMode);
+        mLogoCoordinator.updateDoodleOnTablet(showingNonStandardGoogleLogo);
+
+        verify(mLegacyLogoView).setDoodleSize(expectedDoodleSize);
+    }
+
+    @Test
+    @DisableFeatures({ChromeFeatureList.LOGO_VIEW_REFACTOR})
+    public void testUpdateDoodleOnTablet_setDoodleSize_logoViewRefactorFlagDisabled() {
+        mLogoCoordinator = createLogoCoordinator();
+        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        verifyDoodleSize_logoViewRefactorFlagDisabled(
+                /* isInMultiWindowMode= */ true,
+                /* showingNonStandardGoogleLogo= */ false,
+                DoodleSize.TABLET_SPLIT_SCREEN);
+
+        // Tablet transitions back to regular mode.
+        verifyDoodleSize_logoViewRefactorFlagDisabled(
+                /* isInMultiWindowMode= */ false,
+                /* showingNonStandardGoogleLogo= */ false,
+                DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        verifyDoodleSize_logoViewRefactorFlagDisabled(
+                /* isInMultiWindowMode= */ true,
+                /* showingNonStandardGoogleLogo= */ true,
+                DoodleSize.TABLET_SPLIT_SCREEN);
+
+        // Tablet transitions back to regular mode.
+        verifyDoodleSize_logoViewRefactorFlagDisabled(
+                /* isInMultiWindowMode= */ false,
+                /* showingNonStandardGoogleLogo= */ true,
+                DoodleSize.REGULAR);
+    }
+
+    @Test
+    @DisableFeatures({ChromeFeatureList.LOGO_VIEW_REFACTOR})
+    public void testUpdateDoodleOnTablet_setLayoutParams_logoViewRefactorFlagDisabled() {
+        mLogoCoordinator = createLogoCoordinator();
+        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        clearInvocations(mLegacyLogoView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ true);
+        verify(mLegacyLogoView).setLogoHeight(anyInt());
+        verify(mLegacyLogoView).setLogoTopMargin(anyInt());
+    }
+
+    @Test
+    @DisableFeatures({ChromeFeatureList.LOGO_VIEW_REFACTOR})
+    public void testUpdateDoodleOnTablet_sameMode_logoViewRefactorFlagDisabled() {
+        mLogoCoordinator = createLogoCoordinator();
+        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet mode doesn't change.
+        clearInvocations(mLegacyLogoView);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
+        verify(mLegacyLogoView, never()).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+
+        // Tablet transitions to multi-window mode.
+        clearInvocations(mLegacyLogoView);
+        when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
+        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
+
+        // Tablet mode doesn't change.
+        clearInvocations(mLegacyLogoView);
+        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
+        verify(mLegacyLogoView, never()).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
     }
 }

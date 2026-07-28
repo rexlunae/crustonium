@@ -8,6 +8,7 @@
 #ifndef CHROME_COMMON_CHROME_SWITCHES_H_
 #define CHROME_COMMON_CHROME_SWITCHES_H_
 
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/common/buildflags.h"
 #include "extensions/buildflags/buildflags.h"
@@ -43,16 +44,14 @@ extern const char kAllowCrossOriginAuthPrompt[];
 extern const char kAllowHttpScreenCapture[];
 extern const char kAllowRunningInsecureContent[];
 extern const char kAllowSilentPush[];
+extern const char kAllowUnpackedPerfettoExtension[];
+extern const char kAllowUnsafeDevToolsRemoteFileLoading[];
 extern const char kApp[];
 extern const char kAppId[];
 extern const char kAppLaunchUrlForShortcutsMenuItem[];
-extern const char kAppModeAuthCode[];
-extern const char kAppModeOAuth2Token[];
 extern const char kAppRunOnOsLoginMode[];
 extern const char kAppShim[];
-extern const char kAppsGalleryDownloadURL[];
 extern const char kAppsGalleryUpdateURL[];
-extern const char kAppsGalleryURL[];
 extern const char kAuthServerAllowlist[];
 extern const char kAutoOpenDevToolsForTabs[];
 extern const char kAutoSelectDesktopCaptureSource[];
@@ -64,12 +63,12 @@ extern const char kBypassAccountAlreadyUsedByAnotherProfileCheck[];
 extern const char kCaptureAutoReject[];
 extern const char kCheckForUpdateIntervalSec[];
 extern const char kCipherSuiteBlacklist[];
-extern const char kCrashOnHangThreads[];
 extern const char kCreateBrowserOnStartupForTests[];
 extern const char kCredits[];
 extern const char kCustomDevtoolsFrontend[];
 extern const char kDebugPackedApps[];
 extern const char kDevToolsFlags[];
+extern const char kDevToolsNavigationGatingRules[];
 extern const char kDiagnostics[];
 extern const char kDiagnosticsFormat[];
 extern const char kDiagnosticsRecovery[];
@@ -88,6 +87,7 @@ extern const char kDisableLazyLoading[];
 extern const char kDisablePrintPreview[];
 extern const char kDisablePromptOnRepost[];
 extern const char kDisableStackProfiler[];
+extern const char kDisableUpdaterScheduler[];
 extern const char kDisableZeroBrowsersOpenForTests[];
 extern const char kDiskCacheDir[];
 extern const char kDiskCacheSize[];
@@ -99,16 +99,13 @@ extern const char kDumpBrowserHistograms[];
 extern const char kEnableAudioDebugRecordingsFromExtension[];
 extern const char kEnableAutoReload[];
 extern const char kEnableBookmarkUndo[];
-extern const char kEnableCloudPrintProxy[];
 extern const char kEnableDomainReliability[];
-extern const char kEnableDevToolsGreenDevUi[];
 #if BUILDFLAG(IS_CHROMEOS)
 extern const char kEnableDevToolsPwaHandler[];
 #endif
 extern const char kEnableDownloadWarningImprovements[];
 extern const char kEnableExtensionActivityLogging[];
 extern const char kEnableExtensionActivityLogTesting[];
-extern const char kEnableUnsafeExtensionDebugging[];
 extern const char kEnableHangoutServicesExtensionForTesting[];
 extern const char kEnableNetBenchmarking[];
 extern const char kEnablePotentiallyAnnoyingSecurityFeatures[];
@@ -120,9 +117,6 @@ extern const char kExtensionContentVerificationBootstrap[];
 extern const char kExtensionContentVerificationEnforce[];
 extern const char kExtensionContentVerificationEnforceStrict[];
 extern const char kExtensionExperimentalActor[];
-extern const char kExtensionsToolbarZeroStateVariation[];
-extern const char kExtensionsToolbarZeroStateSingleWebStoreLink[];
-extern const char kExtensionsToolbarZeroStateExploreExtensionsByCategory[];
 extern const char kForceAppMode[];
 #if BUILDFLAG(IS_CHROMEOS)
 extern const char kForceDevToolsAvailable[];
@@ -133,6 +127,7 @@ extern const char kForceWhatsNew[];
 extern const char kHideCrashRestoreBubble[];
 extern const char kHomePage[];
 #if !BUILDFLAG(IS_ANDROID)
+extern const char kSimulateLockScreenSmartRestart[];
 extern const char kImportPasswords[];
 #endif
 extern const char kIncognito[];
@@ -148,7 +143,6 @@ extern const char kKioskModePrinting[];
 extern const char kLaunchInProcessSimpleBrowserSwitch[];
 extern const char kLaunchSimpleBrowserSwitch[];
 extern const char kMakeDefaultBrowser[];
-extern const char kMonitoringDestinationID[];
 extern const char kNativeMessagingConnectHost[];
 extern const char kNativeMessagingConnectExtension[];
 extern const char kNativeMessagingConnectId[];
@@ -157,8 +151,8 @@ extern const char kNoExperiments[];
 extern const char kNoFirstRun[];
 extern const char kNoPings[];
 extern const char kNoProxyServer[];
-extern const char kNoServiceAutorun[];
 extern const char kNoStartupWindow[];
+extern const char kNotebookHomeURL[];
 extern const char kOnTheFlyMhtmlHashComputation[];
 extern const char kOpenInNewWindow[];
 extern const char kFocus[];
@@ -187,7 +181,6 @@ extern const char kSilentDebuggerExtensionAPI[];
 extern const char kSilentLaunch[];
 extern const char kSimulateBrowsingDataLifetime[];
 extern const char kSimulateCriticalUpdate[];
-extern const char kSimulateElevatedRecovery[];
 extern const char kSimulateOutdated[];
 extern const char kSimulateOutdatedNoAU[];
 extern const char kSimulateUpgrade[];
@@ -201,13 +194,12 @@ extern const char kStartStackProfiler[];
 extern const char kStartStackProfilerBrowserTest[];
 extern const char kStoragePressureNotificationInterval[];
 extern const char kSystemAudioCaptureDefaultChecked[];
-extern const char kSystemLogUploadFrequency[];
 extern const char kTabCaptureAudioDefaultUnchecked[];
 extern const char kThisTabCaptureAutoAccept[];
 extern const char kThisTabCaptureAutoReject[];
 extern const char kTestMemoryLogDelayInMinutes[];
-extern const char kTestName[];
 extern const char kTrustedDownloadSources[];
+extern const char kTtcBundleUrl[];
 extern const char kUnlimitedStorage[];
 extern const char kUnsafelyDisableDevToolsSelfXssWarnings[];
 extern const char kUserDataDir[];
@@ -227,9 +219,9 @@ extern const char kWinHttpProxyResolver[];
 extern const char kWinJumplistAction[];
 
 #if BUILDFLAG(IS_ANDROID)
+extern const char kAndroidEntraSsoAllowDebugBrokers[];
 extern const char kAuthAndroidNegotiateAccountType[];
 extern const char kDisableDefaultBrowserPromo[];
-extern const char kForceDeviceOwnership[];
 extern const char kForceEnableNightMode[];
 extern const char kForceShowUpdateMenuBadge[];
 extern const char kForceShowUpdateMenuItemCustomSummary[];
@@ -287,6 +279,8 @@ extern const char kSourceShortcut[];
 extern const char kStartupForegroundLaunch[];
 extern const char kUninstall[];
 extern const char kUninstallAppId[];
+extern const char kIsolated[];
+extern const char kWaitForParentHandle[];
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW) && !defined(OFFICIAL_BUILD)
@@ -295,14 +289,14 @@ extern const char kDebugPrint[];
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
-extern const char kEnableNewAppMenuIcon[];
 extern const char kGuest[];
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC)
 extern const char kGlicGuestURL[];
+extern const char kGlicGeminiEnterpriseSettingsOverride[];
 extern const char kGlicAlwaysOpenFre[];
-extern const char kGlicFreURL[];
+extern const char kGlicAlwaysSkipFre[];
+extern const char kGlicExperimentalFreURL[];
 extern const char kGlicShortcutsLearnMoreURL[];
 extern const char kGlicOpenOnStartup[];
 extern const char kGlicAllowedOrigins[];
@@ -312,12 +306,10 @@ extern const char kGlicSkipReloadAfterNavigation[];
 extern const char kGlicHostLogging[];
 extern const char kGlicAdminRedirectPatterns[];
 extern const char kGlicAlwaysShowWebActuationToggle[];
-extern const char kGlicResetMultiInstanceEnabledByTier[];
-extern const char kGlicForceG1StatusForMultiInstance[];
 extern const char kGlicGuestUrlPresetAutopush[];
+extern const char kGlicGuestUrlPresetStaging[];
 extern const char kGlicGuestUrlPresetPreprod[];
 extern const char kGlicGuestUrlPresetProd[];
-#endif
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 extern const char kListApps[];
@@ -335,6 +327,10 @@ extern const char kUseSystemDefaultPrinter[];
 
 #if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
 extern const char kUserDataMigrated[];
+#endif
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+extern const char kEnterpriseSigninDialogBehaviorForTesting[];
 #endif
 
 // DON'T ADD RANDOM STUFF HERE. Put it in the main section above in

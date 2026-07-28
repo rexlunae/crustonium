@@ -4,13 +4,16 @@
 
 #include "components/on_device_ai/ai_utils.h"
 
+#include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "third_party/blink/public/mojom/ai/model_streaming_responder.mojom.h"
 
 using optimization_guide::OnDeviceError;
 
-blink::mojom::ModelStreamingResponseStatus AIUtils::ConvertOnDeviceError(
+namespace on_device_ai {
+
+blink::mojom::ModelStreamingResponseStatus ConvertOnDeviceError(
     OnDeviceError error) {
   switch (error) {
     case OnDeviceError::kInvalidRequest:
@@ -29,55 +32,47 @@ blink::mojom::ModelStreamingResponseStatus AIUtils::ConvertOnDeviceError(
     case OnDeviceError::kResponseLowQuality:
       return blink::mojom::ModelStreamingResponseStatus::
           kErrorResponseLowQuality;
+    case OnDeviceError::kResponseParsingFailed:
+      return blink::mojom::ModelStreamingResponseStatus::
+          kErrorResponseParsingFailed;
+    case OnDeviceError::kFailedToRunSafety:
+      return blink::mojom::ModelStreamingResponseStatus::
+          kErrorFailedToRunSafety;
   }
 }
 
-// static
-int64_t AIUtils::NormalizeModelDownloadProgress(int64_t bytes_so_far,
-                                                int64_t total_bytes) {
-  // If `bytes_so_far` is zero, we should have downloaded zero bytes
-  // out of zero meaning we're at 100%. So set it to
-  // `kNormalizedDownloadProgressMax` to avoid dividing by zero.
-  if (total_bytes == 0) {
-    CHECK_EQ(bytes_so_far, 0);
-    return AIUtils::kNormalizedDownloadProgressMax;
-  }
-
-  double raw_progress_fraction =
-      bytes_so_far / static_cast<double>(total_bytes);
-
-  return raw_progress_fraction * AIUtils::kNormalizedDownloadProgressMax;
-}
-
-// static
-base::flat_set<std::string_view> AIUtils::RestrictSupportedLanguagesForFeature(
-    const base::flat_set<std::string_view>& supported,
+// Returns nullopt if all languages are enabled.
+std::optional<base::flat_set<std::string>> GetEnabledLanguagesForFeature(
+    const base::flat_set<std::string>& default_supported,
     const base::FeatureParam<std::string>& feature_param) {
   if (feature_param.Get() == "*") {
-    return base::MakeFlatSet<std::string_view>(supported);
+    return std::nullopt;
   }
 
   std::vector<std::string> enabled_languages =
       base::SplitString(feature_param.Get(), ",", base::TRIM_WHITESPACE,
                         base::SPLIT_WANT_NONEMPTY);
+  std::sort(enabled_languages.begin(), enabled_languages.end());
 
   std::vector<std::string> difference;
   std::set_difference(enabled_languages.begin(), enabled_languages.end(),
-                      supported.begin(), supported.end(),
+                      default_supported.begin(), default_supported.end(),
                       std::back_inserter(difference));
   if (!difference.empty()) {
     LOG(WARNING) << "Enabled languages (" << base::JoinString(difference, ", ")
                  << ") are not supported for " << feature_param.feature->name;
   }
 
-  base::flat_set<std::string_view> supported_languages;
-  std::set_intersection(
-      supported.begin(), supported.end(), enabled_languages.begin(),
-      enabled_languages.end(),
-      std::inserter(supported_languages, supported_languages.end()));
+  base::flat_set<std::string> all_enabled_languages(default_supported.begin(),
+                                                    default_supported.end());
+  for (const auto& lang : enabled_languages) {
+    all_enabled_languages.insert(lang);
+  }
 
-  LOG_IF(WARNING, supported_languages.empty())
+  LOG_IF(WARNING, all_enabled_languages.empty())
       << "Supported languages is empty: " << feature_param.feature->name;
 
-  return supported_languages;
+  return all_enabled_languages;
 }
+
+}  // namespace on_device_ai

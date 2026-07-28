@@ -283,10 +283,9 @@ TEST_F(ComponentLoaderTest, LoadAll) {
 class ComponentLoaderExtensionServiceTest
     : public ExtensionServiceUserTestBase {
  public:
-  // testing::Test:
   void SetUp() override {
-    ExtensionServiceUserTestBase::InitializeEmptyExtensionService();
     ExtensionServiceUserTestBase::SetUp();
+    ExtensionServiceUserTestBase::InitializeEmptyExtensionService();
   }
 
   // Test that certain histograms are emitted for user and non-user profiles
@@ -319,7 +318,7 @@ TEST_F(ComponentLoaderExtensionServiceTest, LoadAll_NonUserEmitHistograms) {
                             /*user_expected_total_count=*/0);
 }
 
-// Test is flaky. https://crbug.com/1306983
+// Test is flaky. https://crbug.com/40828122
 TEST_F(ComponentLoaderTest, DISABLED_AddOrReplace) {
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile());
   ExtensionUnloadedObserver unload_observer(registry);

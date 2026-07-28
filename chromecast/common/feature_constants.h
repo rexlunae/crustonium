@@ -17,6 +17,7 @@ extern const char kEnableTrackControlAppRendererFeatureUse[];
 extern const char kEnablePlayready[];
 
 extern const char kKeyAppId[];
+extern const char kExtendedInputSupported[];
 
 // If dev mode is enabled, kDevModeOrigin will be set with origin url
 extern const char kEnableDevMode[];
@@ -39,8 +40,7 @@ extern const char kDisableBackgroundTabTimerThrottle[];
 // false.
 extern const char kDisableBackgroundSuspend[];
 
-// Enable sending/receiving messages to/from libassistant
-extern const char kEnableAssistantMessagePipe[];
+
 
 // Enable a standalone demo app to control privileged features.
 extern const char kEnableDemoStandaloneMode[];

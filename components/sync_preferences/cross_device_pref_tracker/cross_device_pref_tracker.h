@@ -59,9 +59,11 @@ class CrossDevicePrefTracker : public KeyedService {
     kSyncNotConfigured = 2,
     // `LocalDeviceInfo` (Cache GUID) is not yet initialized.
     kLocalDeviceInfoMissing = 3,
-    // Both `LocalDeviceInfo` is missing and Sync is not configured for writes.
+    // `LocalDeviceInfo` is missing and Sync is not configured for writes.
     kSyncNotConfiguredAndLocalDeviceInfoMissing = 4,
-    kMaxValue = kSyncNotConfiguredAndLocalDeviceInfoMissing,
+    // Sync is configured but initial preferences have not been downloaded.
+    kWaitingForInitialSync = 5,
+    kMaxValue = kWaitingForInitialSync,
   };
   // Note: The UMA XML enum is named "CrossDevicePrefTrackerAvailabilityAtQuery"
   // for legacy reasons.
@@ -125,6 +127,8 @@ class CrossDevicePrefTracker : public KeyedService {
 #if BUILDFLAG(IS_ANDROID)
   // Return the Java object that allows access to the CrossDevicePrefTracker.
   virtual base::android::ScopedJavaLocalRef<jobject> GetJavaObject() = 0;
+  // Returns the current status of the service.
+  virtual int GetServiceStatus(JNIEnv* env) const = 0;
   // Java versions of query methods.
   // `pref_name` can be either the tracked pref name or the cross-device pref
   // name.

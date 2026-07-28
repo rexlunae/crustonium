@@ -11,6 +11,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
@@ -119,7 +120,8 @@ void PlayerCompositorDelegate::Initialize(
   TRACE_EVENT0("paint_preview", "PlayerCompositorDelegate::Initialize");
   TRACE_EVENT_BEGIN("paint_preview",
                     "PlayerCompositorDelegate CreateCompositor",
-                    perfetto::Track::FromPointer(this));
+                    perfetto::NamedTrack::FromPointer(
+                        "paint_preview::PlayerCompositorDelegate", this));
   paint_preview_compositor_service_ =
       WarmCompositor::GetInstance()->GetOrStartCompositorService(base::BindOnce(
           &PlayerCompositorDelegate::OnCompositorServiceDisconnected,
@@ -308,7 +310,8 @@ void PlayerCompositorDelegate::OnCompositorClientCreated(
     const DirectoryKey& key) {
   TRACE_EVENT_END("paint_preview",
                   /* PlayerCompositorDelegate CreateCompositor */
-                  perfetto::Track::FromPointer(this));
+                  perfetto::NamedTrack::FromPointer(
+                      "paint_preview::PlayerCompositorDelegate", this));
   if (!capture_result_) {
     paint_preview_service_->GetFileMixin()->GetCapturedPaintPreviewProto(
         key, std::nullopt,

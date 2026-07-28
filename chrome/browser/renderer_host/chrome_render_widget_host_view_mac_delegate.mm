@@ -10,11 +10,12 @@
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/actor/ui/actor_overlay_ui.h"
 #include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/glic/host/guest_util.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/profiles/profile.h"
 #import "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/inactive_window_mouse_event_controller.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/common/url_constants.h"
@@ -35,11 +36,6 @@
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/public/glic_enabling.h"
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#endif
 
 @interface ChromeRenderWidgetHostViewMacDelegate () <HistorySwiperDelegate>
 
@@ -385,7 +381,7 @@
   DCHECK(browserWindow);
 
   // If the browser window is already key, there's nothing to do.
-  if (browserWindow.isKeyWindow) {
+  if (browserWindow.keyWindow) {
     return;
   }
 
@@ -454,17 +450,13 @@
     return AcceptMouseEvents::kWhenInActiveApp;
   }
 
-#if BUILDFLAG(ENABLE_GLIC)
   // WebContents managed by glic should be allowed to accept mouse events while
   // inactive, aligning with the expected behavior of native chrome dialogs.
   // TODO(crbug.com/399119513): Consider making this a single WebContents
   // scoped setting, allowing this behavior to be configured by feature code.
-  glic::GlicKeyedService* glic_service = glic::GlicKeyedService::Get(
-      Profile::FromBrowserContext(webContents->GetBrowserContext()));
-  if (glic_service && glic_service->IsActiveWebContents(webContents)) {
+  if (glic::GetGlicGuestWebContents(webContents) != nullptr) {
     return AcceptMouseEvents::kWhenInActiveApp;
   }
-#endif
 
   // If the WebContents are from the ActorOverlayUI WebUIController, we should
   // accept mouse events when any part of the application is active.
@@ -489,6 +481,21 @@
   }
 
   return AcceptTooltipEvents::kWhenInKeyWindow;
+}
+
+- (BOOL)shouldBecomeFirstResponderOnRightClick {
+  content::WebContents* webContents = self.webContents;
+  if (!webContents) {
+    return NO;
+  }
+
+  // For Top Chrome WebUIs, allow right click to make the view first responder.
+  if (IsTopChromeWebUIURL(webContents->GetVisibleURL()) ||
+      IsTopChromeUntrustedWebUIURL(webContents->GetVisibleURL())) {
+    return YES;
+  }
+
+  return NO;
 }
 
 @end

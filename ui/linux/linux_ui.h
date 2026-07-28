@@ -13,6 +13,7 @@
 #include "base/command_line.h"
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation_traits.h"
 #include "build/buildflag.h"
@@ -57,6 +58,7 @@ class SelectFileDialog;
 class SelectFilePolicy;
 class WindowButtonOrderObserver;
 class WindowFrameProvider;
+enum class FrameType;
 enum class TextEditCommand;
 
 // Adapter class with targets to render like different toolkits. Set by any
@@ -231,7 +233,8 @@ class COMPONENT_EXPORT(LINUX_UI) LinuxUi {
     int argc = 0;
 
     // Contains C-strings that point into `args`.  `argv.size()` >= `argc`.
-    std::vector<char*> argv;
+    // RAW_PTR_EXCLUSION: Qt API operates directly on the buffer of char*.
+    RAW_PTR_EXCLUSION std::vector<char*> argv;
 
     // `argv` concatenated with NUL characters.
     std::vector<char> args;
@@ -319,14 +322,16 @@ class COMPONENT_EXPORT(LINUX_UI) LinuxUiTheme {
 
   // Returns a new NavButtonProvider, or nullptr if the underlying
   // toolkit does not support drawing client-side navigation buttons.
-  virtual std::unique_ptr<NavButtonProvider> CreateNavButtonProvider() = 0;
+  virtual std::unique_ptr<NavButtonProvider> CreateNavButtonProvider(
+      FrameType type) = 0;
 
   // Returns a WindowFrameProvider, or nullptr if the underlying toolkit does
   // not support drawing client-side window decorations. |solid_frame| indicates
   // if transparency is unsupported and the frame should be rendered opaque.
   // The returned object is not owned by the caller and will remain alive until
   // the process ends.
-  virtual WindowFrameProvider* GetWindowFrameProvider(bool solid_frame,
+  virtual WindowFrameProvider* GetWindowFrameProvider(FrameType type,
+                                                      bool solid_frame,
                                                       bool tiled,
                                                       bool maximized) = 0;
 

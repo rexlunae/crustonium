@@ -8,6 +8,7 @@
 #include "base/logging.h"
 #include "base/types/expected_macros.h"
 #include "components/policy/core/browser/policy_error_map.h"
+#include "components/prefs/pref_value_map.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -279,15 +280,60 @@ TEST_P(ProxyOverrideRulesPolicyHandlerTest, Test) {
 
   policy::PolicyErrorMap errors;
 
-  // Invalid list entries are tolerated, so in that case `CheckPolicySettings`
-  // will still return true.
-  ASSERT_TRUE(handler->CheckPolicySettings(map, &errors));
+  if (!GetParam().affiliated) {
+    ASSERT_FALSE(handler->CheckPolicySettings(map, &errors));
+  } else {
+    // Invalid list entries are tolerated, so in that case `CheckPolicySettings`
+    // will still return true.
+    ASSERT_TRUE(handler->CheckPolicySettings(map, &errors));
+  }
 
   ASSERT_FALSE(errors.empty());
   ASSERT_TRUE(errors.HasError(kPolicyName));
 
   std::u16string messages = errors.GetErrorMessages(kPolicyName);
   ASSERT_EQ(messages, GetParam().expected_messages);
+}
+
+TEST_F(ProxyOverrideRulesPolicyHandlerTest, UnaffiliatedUserPolicyRejected) {
+  auto handler = std::make_unique<ProxyOverrideRulesPolicyHandler>(schema());
+
+  const char kPolicyValue[] = R"([
+    {
+      "DestinationMatchers": ["https://*"],
+      "ProxyList": ["DIRECT"]
+    }
+  ])";
+
+  policy::PolicyMap policy_map;
+  policy_map.Set(
+      kPolicyName, policy::PolicyLevel::POLICY_LEVEL_MANDATORY,
+      policy::PolicyScope::POLICY_SCOPE_USER,
+      policy::PolicySource::POLICY_SOURCE_CLOUD,
+      base::JSONReader::Read(kPolicyValue, base::JSON_ALLOW_TRAILING_COMMAS),
+      nullptr);
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  // Scenario 1: Unaffiliated user
+  policy_map.SetDeviceAffiliationIds({"device_id"});
+  policy_map.SetUserAffiliationIds({"user_id"});
+
+  PrefValueMap prefs;
+  policy::PolicyErrorMap errors;
+
+  EXPECT_FALSE(handler->CheckPolicySettings(policy_map, &errors));
+  EXPECT_TRUE(errors.HasError(kPolicyName));
+
+  // Scenario 2: Affiliated user
+  errors.Clear();
+  policy_map.SetUserAffiliationIds({"device_id"});
+  EXPECT_TRUE(handler->CheckPolicySettings(policy_map, &errors));
+  EXPECT_TRUE(errors.empty());
+
+  handler->ApplyPolicySettings(policy_map, &prefs);
+  const base::Value* val = nullptr;
+  EXPECT_TRUE(prefs.GetValue(prefs::kProxyOverrideRules, &val));
+#endif
 }
 
 }  // namespace

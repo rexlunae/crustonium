@@ -132,7 +132,9 @@ static std::string CalculateKeyValue(
 
 BASE_FEATURE(kOverrideAPIKeyFeature, base::FEATURE_DISABLED_BY_DEFAULT);
 
-ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys) {
+ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
+    : is_initialized_using_google_chrome_keys_(
+          default_api_keys.is_using_google_chrome_keys) {
   std::unique_ptr<base::Environment> environment(base::Environment::Create());
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   GaiaConfig* gaia_config = GaiaConfig::GetInstance();
@@ -170,6 +172,13 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys) {
       default_api_keys.google_api_key_soda,
       STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY_SODA), std::string(), nullptr,
       std::string(), environment.get(), command_line, gaia_config,
+      default_api_keys.allow_override_via_environment,
+      default_api_keys.allow_unset_values);
+
+  api_key_partial_translate_ = CalculateKeyValue(
+      default_api_keys.google_api_key_partial_translate,
+      STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY_PARTIAL_TRANSLATE), std::string(),
+      nullptr, std::string(), environment.get(), command_line, gaia_config,
       default_api_keys.allow_override_via_environment,
       default_api_keys.allow_unset_values);
 #if !BUILDFLAG(IS_ANDROID)
@@ -232,6 +241,17 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys) {
       nullptr, std::string(), environment.get(), command_line, gaia_config,
       default_api_keys.allow_override_via_environment,
       default_api_keys.allow_unset_values);
+
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+  // As the CDM server certificate is only used for a prototype feature,
+  // we allow unset values.
+  cdm_server_certificate_ = CalculateKeyValue(
+      default_api_keys.google_cdm_server_certificate,
+      STRINGIZE_NO_EXPANSION(GOOGLE_CDM_SERVER_CERTIFICATE), std::string(),
+      nullptr, std::string(), environment.get(), command_line, gaia_config,
+      default_api_keys.allow_override_via_environment,
+      /*allow_unset_values=*/true);
+#endif
 
   std::string default_client_id = CalculateKeyValue(
       default_api_keys.google_default_client_id,
@@ -328,6 +348,10 @@ bool ApiKeyCache::HasOAuthClientConfigured() const {
   };
   return std::ranges::none_of(client_ids_, is_unset) &&
          std::ranges::none_of(client_secrets_, is_unset);
+}
+
+bool ApiKeyCache::IsGoogleChromeAPIKeyUsed() const {
+  return is_initialized_using_google_chrome_keys_;
 }
 
 }  // namespace google_apis

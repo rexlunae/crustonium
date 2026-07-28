@@ -39,15 +39,6 @@ public class TabModelSelectorProfileSupplier
         mSelectorObserver =
                 new TabModelSelectorObserver() {
                     @Override
-                    public void onChange() {
-                        assumeNonNull(mSelector);
-                        if (mSelector.getCurrentModel() == null) return;
-                        Profile profile = mSelector.getCurrentModel().getProfile();
-                        if (profile == null) return;
-                        set(profile);
-                    }
-
-                    @Override
                     public void onTabStateInitialized() {
                         assumeNonNull(mSelector);
                         Profile profile = mSelector.getCurrentModel().getProfile();
@@ -65,7 +56,7 @@ public class TabModelSelectorProfileSupplier
 
         mSelectorSupplier = selectorSupplier;
         mSelectorSupplierCallback = this::setSelector;
-        mSelectorSupplier.addObserver(mSelectorSupplierCallback);
+        mSelectorSupplier.addSyncObserverAndPostIfNonNull(mSelectorSupplierCallback);
 
         var selector = mSelectorSupplier.get();
         if (selector != null) {
@@ -82,7 +73,9 @@ public class TabModelSelectorProfileSupplier
 
         mSelector = selector;
         mSelector.addObserver(mSelectorObserver);
-        mSelector.getCurrentTabModelSupplier().addObserver(mCurrentTabModelObserver);
+        mSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
 
         if (selector.getCurrentModel() != null) {
             mCurrentTabModelObserver.onResult(selector.getCurrentModel());
@@ -107,7 +100,7 @@ public class TabModelSelectorProfileSupplier
     }
 
     @Override
-    public Profile get() {
+    public @Nullable Profile get() {
         Profile profile = mSupplier.get();
         // TODO(365814339): Convert to checked exception once all callsites are fixed.
         assert profile == null || !profile.shutdownStarted()

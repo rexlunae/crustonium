@@ -5,10 +5,12 @@
 #ifndef UI_ANDROID_EVENT_FORWARDER_H_
 #define UI_ANDROID_EVENT_FORWARDER_H_
 
+#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "ui/android/ui_android_export.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace ui {
 
@@ -74,7 +76,9 @@ class UI_ANDROID_EXPORT EventForwarder {
                    const base::android::JavaRef<jobjectArray>& j_filenames,
                    const base::android::JavaRef<jstring>& j_text,
                    const base::android::JavaRef<jstring>& j_html,
-                   const base::android::JavaRef<jstring>& j_url);
+                   const base::android::JavaRef<jstring>& j_url,
+                   const base::android::JavaRef<jstring>& j_customData,
+                   const base::android::JavaRef<jstring>& j_effectAllowed);
 
   bool OnGestureEvent(JNIEnv* env, int32_t type, int64_t time_ms, float scale);
 
@@ -86,6 +90,7 @@ class UI_ANDROID_EXPORT EventForwarder {
   void OnMouseWheelEvent(JNIEnv* env,
                          const base::android::JavaRef<jobject>& motion_event,
                          int64_t time_ns,
+                         int32_t action,
                          float x,
                          float y,
                          float raw_x,
@@ -105,11 +110,16 @@ class UI_ANDROID_EXPORT EventForwarder {
 
   void StartFling(JNIEnv* env,
                   int64_t time_ms,
+                  float x,
+                  float y,
+                  float raw_x,
+                  float raw_y,
                   float velocity_x,
                   float velocity_y,
                   bool synthetic_scroll,
                   bool prevent_boosting,
-                  bool is_touchpad_event);
+                  bool is_touchpad_event,
+                  bool target_viewport);
 
   void CancelFling(JNIEnv* env,
                    int64_t time_ms,
@@ -120,14 +130,17 @@ class UI_ANDROID_EXPORT EventForwarder {
 
   void RemoveObserver(Observer* observer);
 
-  float GetCurrentTouchSequenceYOffset();
+  gfx::PointF GetCurrentTouchSequenceOffset();
+
+  base::ObserverList<Observer>& GetObserversForTesting() { return observers_; }
 
  private:
   friend class ViewAndroid;
 
   explicit EventForwarder(ViewAndroid* view);
 
-  base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jobject> GetOrCreateJavaObject(JNIEnv* env);
 
   // last_x_pos_ & last_y_pos_ are only used for trace events (see b/315762684
   // for a relevant investigation). They are useful in debugging but could be
@@ -135,7 +148,6 @@ class UI_ANDROID_EXPORT EventForwarder {
   float last_x_pos_{-1.0};
   float last_y_pos_{-1.0};
   const raw_ptr<ViewAndroid> view_;
-  base::android::ScopedJavaGlobalRef<jobject> java_obj_;
 
   base::ObserverList<Observer> observers_;
   bool send_touch_moves_to_observers;

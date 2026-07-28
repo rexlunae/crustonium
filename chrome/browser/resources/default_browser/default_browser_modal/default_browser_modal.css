@@ -6,8 +6,8 @@ html,
 body {
   margin: 0;
   padding: 0;
-  height: 100%;
   width: 100%;
+  min-width: 615px;
   overflow: hidden;
   user-select: none;
 }

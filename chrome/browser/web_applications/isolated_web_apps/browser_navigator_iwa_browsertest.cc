@@ -18,10 +18,10 @@
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_browsertest.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_browsertest.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
@@ -73,7 +73,7 @@ class BrowserNavigatorIwaTest : public BrowserNavigatorTest {
         web_app::WebAppProvider::GetForTest(profile()));
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
  protected:
   void InstallBundles() {
@@ -126,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorIwaTest, NavigateCurrentTab) {
 
   Browser* iwa_browser = params1.browser->GetBrowserForMigrationOnly();
   EXPECT_NE(iwa_browser, browser());
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
   EXPECT_TRUE(browser()
@@ -169,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorIwaTest, NavigateCurrentTab) {
   Browser* new_iwa_browser = params3.browser->GetBrowserForMigrationOnly();
   EXPECT_NE(iwa_browser, new_iwa_browser);
   EXPECT_NE(browser(), new_iwa_browser);
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ASSERT_EQ(1, iwa_browser->tab_strip_model()->count());
   EXPECT_EQ(url_info1_->origin().GetURL().Resolve("/other-page.html"),
@@ -194,7 +194,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorIwaTest, NavigateCurrentTab) {
   // browser navigation code, but by the `IsolatedWebAppThrottle`, which runs
   // afterwards.
   EXPECT_EQ(iwa_browser, params4.browser);
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // The page should not have navigated.
   ASSERT_EQ(1, iwa_browser->tab_strip_model()->count());
@@ -241,8 +241,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorIwaTest, WindowOpenProtocol) {
           .TranslateUrl(GURL("meow://hru"));
 
   ui_test_utils::UrlLoadObserver observer(remapped_url);
-  ASSERT_THAT(content::EvalJs(rfh, "window.open('meow://hru')"),
-              content::EvalJsResult::IsOk());
+  ASSERT_TRUE(content::ExecJs(rfh, "window.open('meow://hru')"));
   observer.Wait();
 
   ASSERT_TRUE(web_app::AppBrowserController::IsForWebApp(
@@ -278,8 +277,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorIwaTest, WindowOpenProtocolSelf) {
           .TranslateUrl(GURL("meow://hru"));
 
   ui_test_utils::UrlLoadObserver observer(remapped_url);
-  ASSERT_THAT(content::EvalJs(rfh, "window.open('meow://hru', '_self')"),
-              content::EvalJsResult::IsOk());
+  ASSERT_TRUE(content::ExecJs(rfh, "window.open('meow://hru', '_self')"));
   observer.Wait();
 
   ASSERT_TRUE(web_app::AppBrowserController::IsForWebApp(
@@ -318,7 +316,7 @@ IN_PROC_BROWSER_TEST_P(BrowserNavigatorIwaNewTabTest, NavigateNewTab) {
   ui_test_utils::NavigateToURL(&params2);
 
   EXPECT_EQ(params2.browser, iwa_browser);
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
   EXPECT_TRUE(browser()
@@ -343,7 +341,7 @@ IN_PROC_BROWSER_TEST_P(BrowserNavigatorIwaNewTabTest, NavigateNewTab) {
   Browser* new_iwa_browser = params3.browser->GetBrowserForMigrationOnly();
   EXPECT_NE(new_iwa_browser, iwa_browser);
   EXPECT_NE(new_iwa_browser, browser());
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
   EXPECT_TRUE(browser()

@@ -34,20 +34,32 @@ extern const char kFakeJavaScriptFeaturePostMessageReplyValue[];
 // post message.
 class FakeJavaScriptFeature : public JavaScriptFeature {
  public:
+  FakeJavaScriptFeature(ContentWorld content_world, OriginFilter origin_filter);
   FakeJavaScriptFeature(ContentWorld content_world);
   ~FakeJavaScriptFeature() override;
 
   // Executes `kJavaScriptFeatureTestScriptReplaceDivContents` in `web_frame`.
-  void ReplaceDivContents(WebFrame* web_frame);
+  // Returns the value of `JavaScriptFeature::CallJavaScriptFunction` from the
+  // call to trigger the underlying JavaScript function.
+  bool ReplaceDivContents(WebFrame* web_frame);
 
   // Executes `kJavaScriptFeatureTestScriptReplyWithPostMessage` with
   // `parameters` in `web_frame`.
-  void ReplyWithPostMessage(WebFrame* web_frame,
+  // Returns the value of `JavaScriptFeature::CallJavaScriptFunction` from the
+  // call to trigger the underlying JavaScript function.
+  bool ReplyWithPostMessage(WebFrame* web_frame,
                             const base::ListValue& parameters);
 
   // Returns the number of errors received
-  void GetErrorCount(WebFrame* web_frame,
+  // Returns the value of `JavaScriptFeature::CallJavaScriptFunction` from the
+  // call to trigger the underlying JavaScript function.
+  bool GetErrorCount(WebFrame* web_frame,
                      base::OnceCallback<void(const base::Value*)> callback);
+
+  bool CallAsyncSum(WebFrame* web_frame,
+                    int addend1,
+                    int addend2,
+                    ExecuteJavaScriptCallbackWithError callback);
 
   WebState* last_received_web_state() const { return last_received_web_state_; }
 
@@ -75,6 +87,9 @@ class FakeJavaScriptFeature : public JavaScriptFeature {
       WebState* web_state,
       const ScriptMessage& message,
       ScriptMessageReplyCallback callback) override;
+
+  // Clones `message` and sets it to `last_received_message_`.
+  void SetLastReceivedMessage(const ScriptMessage& message);
 
   raw_ptr<WebState, DanglingUntriaged> last_received_web_state_ = nullptr;
   std::unique_ptr<const ScriptMessage> last_received_message_;

@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/background_fetch/background_fetch_delegate_impl.h"
 #include "chrome/browser/browser_process.h"
@@ -43,6 +44,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/origin.h"
 
 using offline_items_collection::ContentId;
@@ -231,7 +233,7 @@ class OfflineContentProviderObserver final
 
   ItemsAddedCallback items_added_callback_;
   FinishedProcessingItemCallback finished_processing_item_callback_;
-  raw_ptr<BackgroundFetchDelegateImpl, AcrossTasksDanglingUntriaged> delegate_ =
+  raw_ptr<BackgroundFetchDelegateImpl> delegate_ =
       nullptr;
   bool pause_ = false;
   bool resume_ = false;
@@ -261,7 +263,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
     https_server_->AddDefaultHandlers(GetChromeTestDataDir());
     ASSERT_TRUE(https_server_->Start());
 
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 
     download_observer_ = std::make_unique<WaitableDownloadLoggerObserver>();
 
@@ -277,7 +279,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
     SetUpBrowser(browser());
 
     delegate_ = static_cast<BackgroundFetchDelegateImpl*>(
-        active_browser_->profile()->GetBackgroundFetchDelegate());
+        active_browser_->GetProfile()->GetBackgroundFetchDelegate());
     DCHECK(delegate_);
 
     offline_content_provider_observer_->set_delegate(delegate_);
@@ -299,11 +301,14 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   void TearDownOnMainThread() override {
     OfflineContentAggregatorFactory::GetInstance()
-        ->GetForKey(active_browser_->profile()->GetProfileKey())
+        ->GetForKey(active_browser_->GetProfile()->GetProfileKey())
         ->RemoveObserver(offline_content_provider_observer_.get());
 
     download_service_->GetLogger()->RemoveObserver(download_observer_.get());
     download_service_ = nullptr;
+    delegate_ = nullptr;
+    active_browser_ = nullptr;
+    offline_content_provider_observer_->set_delegate(nullptr);
   }
 
   // ---------------------------------------------------------------------------
@@ -385,7 +390,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
   gfx::Size GetIconDisplaySize() {
     gfx::Size out_display_size;
     base::RunLoop run_loop;
-    browser()->profile()->GetBackgroundFetchDelegate()->GetIconDisplaySize(
+    browser()->GetProfile()->GetBackgroundFetchDelegate()->GetIconDisplaySize(
         base::BindOnce(&BackgroundFetchBrowserTest::DidGetIconDisplaySize,
                        base::Unretained(this), run_loop.QuitClosure(),
                        &out_display_size));
@@ -436,7 +441,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   void SetPermission(ContentSettingsType content_type, ContentSetting setting) {
     auto* settings_map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
     DCHECK(settings_map);
 
     ContentSettingsPattern host_pattern =
@@ -459,9 +464,9 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
   net::EmbeddedTestServer* https_server() { return https_server_.get(); }
 
  protected:
-  raw_ptr<BackgroundFetchDelegateImpl, AcrossTasksDanglingUntriaged> delegate_ =
+  raw_ptr<BackgroundFetchDelegateImpl> delegate_ =
       nullptr;
-  raw_ptr<download::BackgroundDownloadService, AcrossTasksDanglingUntriaged>
+  raw_ptr<download::BackgroundDownloadService>
       download_service_ = nullptr;
   base::OnceClosure click_event_closure_;
 
@@ -491,7 +496,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
 
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> active_browser_ = nullptr;
+  raw_ptr<Browser> active_browser_ = nullptr;
 };
 
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, DownloadService_Acceptance) {
@@ -512,7 +517,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, DownloadService_Acceptance) {
   EXPECT_FALSE(guid.empty());
 }
 
-// Flaky on linux: crbug.com/1182296
+// Flaky on linux: crbug.com/40751374
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_RecordBackgroundFetchUkmEvent \
   DISABLED_RecordBackgroundFetchUkmEvent
@@ -527,7 +532,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
   ASSERT_NO_FATAL_FAILURE(
       RunScriptFunction("StartSingleFileDownloadWithCorrectDownloadTotal()"));
 
-  std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>> entries =
+  auto entries =
       test_ukm_recorder_->GetEntriesByName(
           ukm::builders::BackgroundFetch::kEntryName);
   ASSERT_EQ(1u, entries.size());
@@ -556,7 +561,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
 }
 
 #if BUILDFLAG(IS_MAC)
-// Flaky on Mac: https://crbug.com/1259680
+// Flaky on Mac: https://crbug.com/40201535
 #define MAYBE_OfflineItemCollection_SingleFileMetadata \
   DISABLED_OfflineItemCollection_SingleFileMetadata
 #else
@@ -664,7 +669,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(offline_item.progress.max.value(), kDownloadedResourceSizeInBytes);
 }
 
-// The test is flaky on all platforms. https://crbug.com/1161385.
+// The test is flaky on all platforms. https://crbug.com/40738789.
 IN_PROC_BROWSER_TEST_F(
     BackgroundFetchBrowserTest,
     DISABLED_OfflineItemCollection_VerifyResourceDownloadedWhenDownloadTotalSmallerThanActualSize) {
@@ -839,34 +844,11 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
       "This origin does not have permission to start a fetch."));
 }
 
-IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, FetchFromServiceWorker) {
-  auto* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
-  DCHECK(settings_map);
-
-  // Give the needed permissions.
-  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
-                CONTENT_SETTING_ALLOW);
-
-  // The fetch should succeed.
-  offline_content_provider_observer_->ResumeOnNextUpdate();
-  ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
-      "StartFetchFromServiceWorker()", "backgroundfetchsuccess"));
-
-  // Revoke Automatic Downloads permission.
-  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
-                CONTENT_SETTING_BLOCK);
-
-  // This should fail without the Automatic Downloads permission.
-  ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
-      "StartFetchFromServiceWorker()", "permissionerror"));
-}
-
 // TODO(crbug.com/40805915): Flaky on many platforms.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
                        DISABLED_FetchFromServiceWorkerWithAsk) {
   auto* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   DCHECK(settings_map);
 
   SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS, CONTENT_SETTING_ASK);
@@ -981,7 +963,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchFencedFrameBrowserTest,
       "frames.";
   StartSingleFileDownload(fenced_frame, kExpectedError);
 
-  std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>> entries =
+  auto entries =
       test_ukm_recorder_->GetEntriesByName(
           ukm::builders::BackgroundFetch::kEntryName);
   ASSERT_EQ(0u, entries.size());
@@ -1024,8 +1006,59 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchFencedFrameBrowserTest,
       "frames.";
   StartSingleFileDownload(fenced_frame, kExpectedError);
 
-  std::vector<raw_ptr<const ukm::mojom::UkmEntry, VectorExperimental>> entries =
+  auto entries =
       test_ukm_recorder_->GetEntriesByName(
           ukm::builders::BackgroundFetch::kEntryName);
   ASSERT_EQ(0u, entries.size());
+}
+
+class BackgroundFetchKillswitchBrowserTest
+    : public BackgroundFetchBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  BackgroundFetchKillswitchBrowserTest() {
+    if (IsRestrictBackgroundFetchFromServiceWorkerEnabled()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          blink::features::kRestrictBackgroundFetchFromServiceWorker);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          blink::features::kRestrictBackgroundFetchFromServiceWorker);
+    }
+  }
+
+ protected:
+  bool IsRestrictBackgroundFetchFromServiceWorkerEnabled() {
+    return GetParam();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BackgroundFetchKillswitchBrowserTest,
+                         testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(BackgroundFetchKillswitchBrowserTest,
+                       FetchFromServiceWorker) {
+  SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                CONTENT_SETTING_ALLOW);
+  if (IsRestrictBackgroundFetchFromServiceWorkerEnabled()) {
+    // If killswitch is enabled, the fetch should fail with a permission error.
+    ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
+        "StartFetchFromServiceWorker()", "permissionerror"));
+  } else {
+    // If killswitch is disabled, the fetch should succeed.
+    offline_content_provider_observer_->ResumeOnNextUpdate();
+    ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
+        "StartFetchFromServiceWorker()", "backgroundfetchsuccess"));
+
+    // Revoke Automatic Downloads permission.
+    SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS,
+                  CONTENT_SETTING_BLOCK);
+
+    // This should fail without the Automatic Downloads permission.
+    ASSERT_NO_FATAL_FAILURE(RunScriptAndCheckResultingMessage(
+        "StartFetchFromServiceWorker()", "permissionerror"));
+  }
 }

@@ -11,6 +11,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/uuid.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
@@ -24,8 +26,10 @@
 #include "components/payments/content/test_content_payment_request_delegate.h"
 #include "components/payments/content/test_payment_app.h"
 #include "components/payments/core/const_csp_checker.h"
+#include "components/payments/core/features.h"
 #include "components/payments/core/journey_logger.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_web_contents_factory.h"
@@ -89,7 +93,8 @@ class PaymentRequestStateTest : public testing::Test,
   void OnPaymentResponseAvailable(mojom::PaymentResponsePtr response) override {
     payment_response_ = std::move(response);
   }
-  void OnPaymentResponseError(const std::string& error_message) override {}
+  void OnPaymentResponseError(mojom::PaymentEventResponseType error,
+                              const std::string& error_message) override {}
   void OnShippingOptionIdSelected(std::string shipping_option_id) override {}
   void OnShippingAddressSelected(mojom::PaymentAddressPtr address) override {
     selected_shipping_address_ = std::move(address);
@@ -478,10 +483,20 @@ TEST_F(PaymentRequestStateTest, JaLatnShippingAddress) {
   // Select an address, nothing should happen until the normalization is
   // completed and the merchant has validated the address.
   autofill::AutofillProfile profile(autofill::AddressCountryCode("JP"));
-  autofill::test::SetProfileInfo(&profile, "Jon", "V.", "Doe",
-                                 "jon.doe@exampl.com", "Example Inc",
-                                 "Roppongi", "6 Chrome-10-1", "Tokyo", "",
-                                 "106-6126", "JP", "+81363849000");
+  autofill::test::SetProfileInfo(&profile,
+                                 autofill::test::SetProfileInfoOptionsBuilder()
+                                     .with_first_name("Jon")
+                                     .with_middle_name("V.")
+                                     .with_last_name("Doe")
+                                     .with_email("jon.doe@exampl.com")
+                                     .with_company("Example Inc")
+                                     .with_address1("Roppongi")
+                                     .with_address2("6 Chrome-10-1")
+                                     .with_city("Tokyo")
+                                     .with_zipcode("106-6126")
+                                     .with_country("JP")
+                                     .with_phone("+81363849000")
+                                     .Build());
 
   state()->SetSelectedShippingProfile(&profile);
   EXPECT_EQ(expected_changes, num_on_selected_information_changed_called());
@@ -533,6 +548,93 @@ TEST_F(PaymentRequestStateTest, FilteredHomeWorkAddressProfiles) {
   EXPECT_EQ(state()->shipping_profiles().size(), 1U);
   EXPECT_EQ(state()->shipping_profiles()[0]->record_type(),
             autofill::AutofillProfile::RecordType::kLocalOrSyncable);
+}
+
+TEST_F(PaymentRequestStateTest, UserInteractionInWebPaymentApp) {
+  RecreateStateWithOptions(mojom::PaymentOptions::New());
+
+  EXPECT_FALSE(state()->user_interaction_in_web_payment_app());
+
+  state()->set_user_interaction_in_web_payment_app(true);
+
+  EXPECT_TRUE(state()->user_interaction_in_web_payment_app());
+}
+
+TEST_F(PaymentRequestStateTest,
+       UserInteractionInWebPaymentAppBypassedByEnableAutomation) {
+  RecreateStateWithOptions(mojom::PaymentOptions::New());
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kEnableAutomation);
+
+  EXPECT_TRUE(state()->user_interaction_in_web_payment_app());
+}
+
+TEST_F(PaymentRequestStateTest,
+       UserInteractionInWebPaymentAppBypassedByWebDriverTestType) {
+  RecreateStateWithOptions(mojom::PaymentOptions::New());
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      switches::kTestType, "webdriver");
+
+  EXPECT_TRUE(state()->user_interaction_in_web_payment_app());
+}
+
+TEST_F(PaymentRequestStateTest,
+       UserInteractionInWebPaymentAppNotBypassedByOtherTestType) {
+  RecreateStateWithOptions(mojom::PaymentOptions::New());
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      switches::kTestType, "browser");
+
+  EXPECT_FALSE(state()->user_interaction_in_web_payment_app());
+}
+
+class PaymentRequestStateMandatoryUiEnabledTest
+    : public PaymentRequestStateTest {
+ protected:
+  PaymentRequestStateMandatoryUiEnabledTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kPaymentRequestMandatoryPaymentAppUi);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(PaymentRequestStateMandatoryUiEnabledTest,
+       SetUserInteractionResumesStashedPaymentResponse) {
+  RecreateStateWithOptions(mojom::PaymentOptions::New());
+  state()->GeneratePaymentResponse();
+  EXPECT_TRUE(response().is_null());
+
+  state()->set_user_interaction_in_web_payment_app(true);
+
+  EXPECT_FALSE(response().is_null());
+}
+
+class PaymentRequestStateMandatoryUiDisabledTest
+    : public PaymentRequestStateTest {
+ protected:
+  PaymentRequestStateMandatoryUiDisabledTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kPaymentRequestMandatoryPaymentAppUi);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(PaymentRequestStateMandatoryUiDisabledTest,
+       GeneratePaymentResponseImmediately) {
+  RecreateStateWithOptions(mojom::PaymentOptions::New());
+
+  state()->GeneratePaymentResponse();
+
+  EXPECT_FALSE(response().is_null());
 }
 
 }  // namespace

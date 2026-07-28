@@ -27,7 +27,6 @@ import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.Tribool;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManagerImpl;
 import org.chromium.components.signin.test.util.AccountCapabilitiesBuilder;
 import org.chromium.components.signin.test.util.FakeAccountManagerFacade;
@@ -55,15 +54,16 @@ public class SigninTestRule implements TestRule {
 
     private final FakeAccountManagerFacade mFakeAccountManagerFacade;
 
-    private final boolean mSerializeToPrefs;
-
     public SigninTestRule() {
-        this(false);
+        this(new FakeAccountManagerFacade(false));
     }
 
     public SigninTestRule(boolean serializeToPrefs) {
-        mSerializeToPrefs = serializeToPrefs;
-        mFakeAccountManagerFacade = new FakeAccountManagerFacade(mSerializeToPrefs);
+        this(new FakeAccountManagerFacade(serializeToPrefs));
+    }
+
+    public SigninTestRule(FakeAccountManagerFacade fakeAccountManagerFacade) {
+        mFakeAccountManagerFacade = fakeAccountManagerFacade;
     }
 
     @Override
@@ -119,9 +119,15 @@ public class SigninTestRule implements TestRule {
         mFakeAccountManagerFacade.setAccountFetchFailed();
     }
 
-    /** See {@link FakeAccountManagerFacade#blockGetAccounts(boolean)}. */
-    public FakeAccountManagerFacade.UpdateBlocker blockGetAccountsUpdate(boolean populateCache) {
-        return mFakeAccountManagerFacade.blockGetAccounts(populateCache);
+    /** See {@link FakeAccountManagerFacade#blockGetAccounts}. */
+    public FakeAccountManagerFacade.UpdateBlocker blockGetAccountsUpdate() {
+        return mFakeAccountManagerFacade.blockGetAccounts(/* postUnblockCallback= */ null);
+    }
+
+    /** See {@link FakeAccountManagerFacade#blockGetAccountsAndPopulateCache}. */
+    public FakeAccountManagerFacade.UpdateBlocker blockGetAccountsUpdateAndPopulateCache() {
+        return mFakeAccountManagerFacade.blockGetAccountsAndPopulateCache(
+                /* postUnblockCallback= */ null);
     }
 
     /**
@@ -199,17 +205,6 @@ public class SigninTestRule implements TestRule {
         mIsSignedIn = true;
     }
 
-    /** Adds and signs in an account with the default name using consent level Sync. */
-    // TODO(crbug.com/40066949): Remove once Sync-the-feature is fully removed.
-    public CoreAccountInfo addTestAccountThenSigninWithConsentLevelSync() {
-        assert !mIsSignedIn : "An account is already signed in!";
-        AccountInfo accountInfo = TestAccounts.ACCOUNT1;
-        addAccount(accountInfo);
-        SigninTestUtil.signinWithConsentLevelSync(accountInfo);
-        mIsSignedIn = true;
-        return accountInfo;
-    }
-
     /** Waits for the account corresponding to coreAccountInfo to finish signin. */
     public void waitForSignin(CoreAccountInfo coreAccountInfo) {
         CriteriaHelper.pollUiThread(
@@ -217,7 +212,7 @@ public class SigninTestRule implements TestRule {
                     Criteria.checkThat(
                             IdentityServicesProvider.get()
                                     .getIdentityManager(ProfileManager.getLastUsedRegularProfile())
-                                    .getPrimaryAccountInfo(ConsentLevel.SIGNIN),
+                                    .getPrimaryAccountInfo(),
                             is(coreAccountInfo));
                 });
         mIsSignedIn = true;
@@ -250,10 +245,10 @@ public class SigninTestRule implements TestRule {
     }
 
     /**
-     * @return The primary account of the requested {@link ConsentLevel}.
+     * @return The primary account.
      */
-    public CoreAccountInfo getPrimaryAccount(@ConsentLevel int consentLevel) {
-        return SigninTestUtil.getPrimaryAccount(consentLevel);
+    public CoreAccountInfo getPrimaryAccount() {
+        return SigninTestUtil.getPrimaryAccount();
     }
 
     /** Sign out from the current account. */

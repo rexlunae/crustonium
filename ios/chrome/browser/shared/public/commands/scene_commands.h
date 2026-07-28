@@ -12,10 +12,12 @@
 #include "ios/public/provider/chrome/browser/user_feedback/user_feedback_sender.h"
 
 enum class AccountMenuAccessPoint;
+@class CobrowseContext;
 class GURL;
 @class OpenNewTabCommand;
 @protocol SafariDataImportUIHandler;
 @class ShowSigninCommand;
+@protocol SystemIdentity;
 @class UIViewController;
 namespace password_manager {
 enum class PasswordCheckReferrer;
@@ -40,6 +42,8 @@ enum class TabGridOpeningMode {
   kIncognito,
   // Force to display the regular mode.
   kRegular,
+  // Force to display the Tab Groups page in regular mode.
+  kTabGroups,
 };
 
 // Protocol for commands that will generally be handled by the application,
@@ -50,6 +54,12 @@ enum class TabGridOpeningMode {
 // Dismisses all modal dialogs with a completion block that is called when
 // modals are dismissed (animations done).
 - (void)dismissModalDialogsWithCompletion:(ProceduralBlock)completion;
+
+// Dismisses all modal dialogs and calls the completion block. Optionally does
+// not dismiss the omnibox or snackbars.
+- (void)dismissModalDialogsWithCompletion:(ProceduralBlock)completion
+                           dismissOmnibox:(BOOL)dismissOmnibox
+                         dismissSnackbars:(BOOL)dismissSnackbars;
 
 // Dismisses all modal dialogs (if any) before showing the Password Checkup page
 // for `referrer`.
@@ -83,8 +93,8 @@ enum class TabGridOpeningMode {
 - (void)showSafeBrowsingSettingsFromViewController:
     (UIViewController*)baseViewController;
 
-// Starts a voice search on the current BVC.
-- (void)startVoiceSearch;
+// Stops voice search on all browsers (regular and incognito) in the scene.
+- (void)stopAllVoiceSearch;
 
 // Shows the History UI.
 - (void)showHistory;
@@ -138,6 +148,9 @@ enum class TabGridOpeningMode {
 // is provided.
 - (void)showAccountMenuFromWebWithURL:(const GURL&)url;
 
+// Shows the account menu.
+- (void)showAccountMenuWithAccessPoint:(AccountMenuAccessPoint)accessPoint;
+
 // TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
 // Shows the consistency promo UI that allows users to sign in to Chrome using
 // the default accounts on the device.
@@ -149,6 +162,9 @@ enum class TabGridOpeningMode {
 // Shows a notification with the signed-in user account.
 - (void)showSigninAccountNotificationFromViewController:
     (UIViewController*)baseViewController;
+
+// Shows the undo sign-out flow from snackbar for `identity`.
+- (void)showUndoSignoutFromSnackbarForIdentity:(id<SystemIdentity>)identity;
 
 // Sets whether the UI is displaying incognito content.
 - (void)setIncognitoContentVisible:(BOOL)incognitoContentVisible;
@@ -166,8 +182,20 @@ enum class TabGridOpeningMode {
 // Opens a debug menu for AI prototyping.
 - (void)openAIMenu;
 
-// Opens the assistant sheet.
+// Displays the Assistant AIM interface.
 - (void)showAssistant;
+
+// Displays the Assistant AIM interface, optionally forcing the minimized state.
+- (void)showAssistantInMinimizedState:(BOOL)minimized;
+
+// Displays the Assistant AIM interface if hidden.
+- (void)revealAssistant;
+
+// Hides the assistant sheet if it is currently presented.
+- (void)hideAssistant;
+
+// Closes the assistant and destroys its resources.
+- (void)closeAssistant;
 
 // Shows the fullscreen sign-in promo with a completion block that is called
 // when the promo is dismissed.
@@ -184,6 +212,14 @@ enum class TabGridOpeningMode {
 
 // Shows the application App Store page, if any.
 - (void)showAppStorePage;
+
+// Shows the ManagedProfileCreation view, to inform of an already done
+// migration.
+- (void)showManagedProfileCreation;
+
+// Shows/Hides the guided tour "NTP" step.
+- (void)showGuidedTourNTPStepWithCompletion:(ProceduralBlock)completion;
+- (void)hideGuidedTourNTPStep;
 
 @end
 

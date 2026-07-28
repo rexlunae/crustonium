@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -20,19 +21,25 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_expected_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/webui/updater/updater_ui.mojom.h"
+#include "chrome/enterprise_companion/global_constants.h"
 #include "chrome/updater/mojom/updater_service.mojom.h"
 #include "chrome/updater/updater_scope.h"
+#include "components/services/unzip/in_process_unzipper.h"
+#include "components/services/unzip/public/mojom/unzipper.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/zlib/google/zip.h"
 
 using base::test::RunOnceCallback;
 using testing::_;
+using testing::AllOf;
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 using testing::Field;
@@ -59,11 +66,32 @@ auto IsUpdaterState(std::string_view active_version,
       Field(&UpdaterState::policies, policies)));
 }
 
+auto IsAppState(std::string_view app_id,
+                std::string_view version,
+                std::optional<std::string_view> cohort) {
+  using updater_ui::mojom::AppState;
+  return Pointee(AllOf(Field(&AppState::app_id, app_id),
+                       Field(&AppState::version, version),
+                       Field(&AppState::cohort, cohort)));
+}
+
+auto IsEnterpriseCompanionState(std::string_view version,
+                                const base::FilePath& installation_directory) {
+  using updater_ui::mojom::EnterpriseCompanionState;
+  return Pointee(AllOf(Field(&EnterpriseCompanionState::version, version),
+                       Field(&EnterpriseCompanionState::installation_directory,
+                             installation_directory)));
+}
+
 class MockUpdaterPageHandlerDelegate : public UpdaterPageHandler::Delegate {
  public:
   MOCK_METHOD(std::optional<base::FilePath>,
-              GetInstallDirectory,
+              GetUpdaterInstallDirectory,
               (updater::UpdaterScope scope),
+              (const, override));
+  MOCK_METHOD(std::optional<base::FilePath>,
+              GetEnterpriseCompanionInstallDirectory,
+              (),
               (const, override));
   MOCK_METHOD(
       void,
@@ -83,33 +111,61 @@ class MockUpdaterPageHandlerDelegate : public UpdaterPageHandler::Delegate {
               GetUserPoliciesJson,
               (base::OnceCallback<void(const std::string&)> callback),
               (const, override));
+  MOCK_METHOD(void,
+              GetSystemUpdaterAppStates,
+              (base::OnceCallback<
+                  void(const std::vector<updater::mojom::AppState>&)> callback),
+              (const, override));
+  MOCK_METHOD(void,
+              GetUserUpdaterAppStates,
+              (base::OnceCallback<
+                  void(const std::vector<updater::mojom::AppState>&)> callback),
+              (const, override));
+  MOCK_METHOD(mojo::PendingRemote<unzip::mojom::Unzipper>,
+              CreateUnzipper,
+              (),
+              (const, override));
 
  private:
   ~MockUpdaterPageHandlerDelegate() override = default;
 };
 
-class MockUpdaterPage : public updater_ui::mojom::Page {
- public:
-  mojo::PendingRemote<updater_ui::mojom::Page> BindAndGetRemote() {
-    return receiver_.BindNewPipeAndPassRemote();
-  }
 
- private:
-  mojo::Receiver<updater_ui::mojom::Page> receiver_{this};
-};
 
 class UpdaterPageHandlerTest : public testing::Test {
  public:
   void SetUp() override {
+    EXPECT_CALL(*mock_delegate_, CreateUnzipper()).WillRepeatedly([]() {
+      return unzip::LaunchInProcessUnzipper();
+    });
+
     handler_ = std::make_unique<UpdaterPageHandler>(
         /*profile=*/nullptr,
         mojo::PendingReceiver<updater_ui::mojom::PageHandler>(),
-        mock_page_.BindAndGetRemote(), mock_delegate_);
+        mock_delegate_);
+  }
+
+  mojo_base::BigBuffer CreateZip(
+      const base::flat_map<base::FilePath, std::string>& files) {
+    base::ScopedTempDir src_dir;
+    EXPECT_TRUE(src_dir.CreateUniqueTempDir());
+    for (const auto& [path, contents] : files) {
+      base::FilePath full_path = src_dir.GetPath().Append(path);
+      EXPECT_TRUE(base::CreateDirectory(full_path.DirName()));
+      EXPECT_TRUE(base::WriteFile(full_path, contents));
+    }
+    base::ScopedTempDir dest_dir;
+    EXPECT_TRUE(dest_dir.CreateUniqueTempDir());
+    base::FilePath zip_path = dest_dir.GetPath().AppendASCII("test.zip");
+    EXPECT_TRUE(zip::Zip(src_dir.GetPath(), zip_path, true));
+    std::string zip_contents;
+    EXPECT_TRUE(base::ReadFileToString(zip_path, &zip_contents));
+    mojo_base::BigBuffer buffer(base::as_byte_span(zip_contents));
+    return buffer;
   }
 
  protected:
   base::test::TaskEnvironment environment_;
-  MockUpdaterPage mock_page_;
   std::unique_ptr<UpdaterPageHandler> handler_;
   scoped_refptr<MockUpdaterPageHandlerDelegate> mock_delegate_ =
       base::MakeRefCounted<MockUpdaterPageHandlerDelegate>();
@@ -123,10 +179,10 @@ TEST_F(UpdaterPageHandlerTest, GetAllUpdaterEvents_OneScope) {
   ASSERT_TRUE(base::WriteFile(log_file, "event1\nevent2\n"));
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillOnce(Return(temp_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillOnce(Return(std::nullopt));
 
   base::RunLoop run_loop;
@@ -149,10 +205,10 @@ TEST_F(UpdaterPageHandlerTest, GetAllUpdaterEvents_BothScopes) {
   ASSERT_TRUE(base::WriteFile(old_log_file, "event2\n"));
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillOnce(Return(temp_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillOnce(Return(std::nullopt));
 
   base::RunLoop run_loop;
@@ -169,10 +225,10 @@ TEST_F(UpdaterPageHandlerTest, GetAllUpdaterEvents_NoFiles) {
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillOnce(Return(temp_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillOnce(Return(std::nullopt));
 
   base::RunLoop run_loop;
@@ -189,11 +245,11 @@ TEST_F(UpdaterPageHandlerTest, GetAllUpdaterEvents_MissingDirectory) {
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillOnce(
           Return(base::FilePath(temp_dir.GetPath().AppendASCII("missing"))));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillOnce(Return(std::nullopt));
 
   base::RunLoop run_loop;
@@ -212,10 +268,10 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_BothScopesSuccess) {
   ASSERT_TRUE(user_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(system_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(user_dir.GetPath()));
 
   updater::mojom::UpdaterState system_state(
@@ -274,10 +330,10 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_SystemPathMissing) {
   base::FilePath system_dir = user_dir.GetPath().AppendASCII("missing");
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(system_dir));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(user_dir.GetPath()));
 
   updater::mojom::UpdaterState user_state(
@@ -321,10 +377,10 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_UserPathMissing) {
   base::FilePath user_dir = system_dir.GetPath().AppendASCII("missing");
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(system_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(user_dir));
 
   updater::mojom::UpdaterState system_state(
@@ -367,10 +423,10 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_GetSystemInstallDirectoryFail) {
   ASSERT_TRUE(system_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(system_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(std::nullopt));
 
   EXPECT_CALL(*mock_delegate_, GetSystemUpdaterState(_)).Times(0);
@@ -392,10 +448,10 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_GetUserInstallDirectoryFail) {
   ASSERT_TRUE(user_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(std::nullopt));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(user_dir.GetPath()));
 
   EXPECT_CALL(*mock_delegate_, GetSystemUpdaterState(_)).Times(0);
@@ -420,10 +476,10 @@ TEST_F(UpdaterPageHandlerTest,
   ASSERT_TRUE(system_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(system_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(system_dir.GetPath().AppendASCII("missing")));
 
   EXPECT_CALL(*mock_delegate_, GetSystemUpdaterState(_))
@@ -451,10 +507,10 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_EmptyPolicyJsonBecomesNull) {
   ASSERT_TRUE(system_dir.CreateUniqueTempDir());
 
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kSystem))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
       .WillRepeatedly(Return(system_dir.GetPath()));
   EXPECT_CALL(*mock_delegate_,
-              GetInstallDirectory(updater::UpdaterScope::kUser))
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
       .WillRepeatedly(Return(system_dir.GetPath().AppendASCII("missing")));
 
   updater::mojom::UpdaterState system_state(
@@ -479,6 +535,226 @@ TEST_F(UpdaterPageHandlerTest, GetUpdaterStates_EmptyPolicyJsonBecomesNull) {
         run_loop.Quit();
       }));
   run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, GetAppStates_Success) {
+  updater::mojom::AppState system_app;
+  system_app.app_id = "system_app";
+  system_app.version = "1.0";
+  system_app.cohort = "system_cohort";
+
+  updater::mojom::AppState user_app1;
+  user_app1.app_id = "user_app1";
+  user_app1.version = "2.0";
+  user_app1.cohort = std::nullopt;
+
+  updater::mojom::AppState user_app2;
+  user_app2.app_id = "user_app2";
+  user_app2.version = "3.0";
+  user_app2.cohort = "";
+
+  EXPECT_CALL(*mock_delegate_, GetSystemUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(
+          std::vector<updater::mojom::AppState>{system_app}));
+  EXPECT_CALL(*mock_delegate_, GetUserUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(
+          std::vector<updater::mojom::AppState>{user_app1, user_app2}));
+
+  base::RunLoop run_loop;
+  handler_->GetAppStates(base::BindLambdaForTesting(
+      [&](UpdaterPageHandler::GetAppStatesResult result) {
+        ASSERT_OK_AND_ASSIGN(
+            updater_ui::mojom::GetAppStatesResponsePtr response,
+            std::move(result));
+        EXPECT_THAT(
+            response->system_apps,
+            ElementsAre(IsAppState("system_app", "1.0", "system_cohort")));
+        EXPECT_THAT(response->user_apps,
+                    ElementsAre(IsAppState("user_app1", "2.0", std::nullopt),
+                                IsAppState("user_app2", "3.0", std::nullopt)));
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, GetAppStates_Empty) {
+  EXPECT_CALL(*mock_delegate_, GetSystemUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(std::vector<updater::mojom::AppState>{}));
+  EXPECT_CALL(*mock_delegate_, GetUserUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(std::vector<updater::mojom::AppState>{}));
+
+  base::RunLoop run_loop;
+  handler_->GetAppStates(base::BindLambdaForTesting(
+      [&](UpdaterPageHandler::GetAppStatesResult result) {
+        ASSERT_OK_AND_ASSIGN(
+            updater_ui::mojom::GetAppStatesResponsePtr response,
+            std::move(result));
+        EXPECT_TRUE(response->system_apps.empty());
+        EXPECT_TRUE(response->user_apps.empty());
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, GetEnterpriseCompanionState_Success) {
+  updater::mojom::AppState companion_app;
+  companion_app.app_id = enterprise_companion::kCompanionAppId;
+  companion_app.version = "1.0.0.0";
+
+  EXPECT_CALL(*mock_delegate_, GetSystemUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(
+          std::vector<updater::mojom::AppState>{companion_app}));
+  EXPECT_CALL(*mock_delegate_, GetEnterpriseCompanionInstallDirectory())
+      .WillOnce(
+          Return(base::FilePath(FILE_PATH_LITERAL("/path/to/companion"))));
+
+  base::RunLoop run_loop;
+  handler_->GetEnterpriseCompanionState(base::BindLambdaForTesting(
+      [&](UpdaterPageHandler::GetEnterpriseCompanionStateResult result) {
+        ASSERT_OK_AND_ASSIGN(
+            updater_ui::mojom::GetEnterpriseCompanionStateResponsePtr response,
+            std::move(result));
+        EXPECT_THAT(
+            response->state,
+            IsEnterpriseCompanionState(
+                "1.0.0.0",
+                base::FilePath(FILE_PATH_LITERAL("/path/to/companion"))));
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, GetEnterpriseCompanionState_NotFound) {
+  EXPECT_CALL(*mock_delegate_, GetSystemUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(std::vector<updater::mojom::AppState>{}));
+
+  base::RunLoop run_loop;
+  handler_->GetEnterpriseCompanionState(base::BindLambdaForTesting(
+      [&](UpdaterPageHandler::GetEnterpriseCompanionStateResult result) {
+        ASSERT_OK_AND_ASSIGN(
+            updater_ui::mojom::GetEnterpriseCompanionStateResponsePtr response,
+            std::move(result));
+        EXPECT_FALSE(response->state);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, GetEnterpriseCompanionState_InstallDirMissing) {
+  updater::mojom::AppState companion_app;
+  companion_app.app_id = enterprise_companion::kCompanionAppId;
+  companion_app.version = "1.0.0.0";
+
+  EXPECT_CALL(*mock_delegate_, GetSystemUpdaterAppStates(_))
+      .WillOnce(RunOnceCallback<0>(
+          std::vector<updater::mojom::AppState>{companion_app}));
+  EXPECT_CALL(*mock_delegate_, GetEnterpriseCompanionInstallDirectory())
+      .WillOnce(Return(std::nullopt));
+
+  base::RunLoop run_loop;
+  handler_->GetEnterpriseCompanionState(base::BindLambdaForTesting(
+      [&](UpdaterPageHandler::GetEnterpriseCompanionStateResult result) {
+        EXPECT_FALSE(result.has_value());
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, UnzipUpdaterHistoryFiles_Success) {
+  mojo_base::BigBuffer zip_data = CreateZip(
+      {{base::FilePath(FILE_PATH_LITERAL("updater_history.jsonl")),
+        "event1\nevent2"},
+       {base::FilePath(FILE_PATH_LITERAL("updater_history.jsonl.old")),
+        "event0"}});
+
+  base::RunLoop run_loop;
+  handler_->UnzipUpdaterHistoryFiles(
+      std::move(zip_data),
+      base::BindLambdaForTesting(
+          [&](UpdaterPageHandler::UnzipUpdaterHistoryFilesResult result) {
+            ASSERT_OK_AND_ASSIGN(
+                updater_ui::mojom::UnzipUpdaterHistoryFilesResponsePtr response,
+                std::move(result));
+            EXPECT_THAT(response->history_file_contents,
+                        UnorderedElementsAre("event1\nevent2", "event0"));
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, UnzipUpdaterHistoryFiles_Filtered) {
+  mojo_base::BigBuffer zip_data = CreateZip(
+      {{base::FilePath(FILE_PATH_LITERAL("updater_history.jsonl")), "event1"},
+       {base::FilePath(FILE_PATH_LITERAL("other.txt")), "ignored"}});
+
+  base::RunLoop run_loop;
+  handler_->UnzipUpdaterHistoryFiles(
+      std::move(zip_data),
+      base::BindLambdaForTesting(
+          [&](UpdaterPageHandler::UnzipUpdaterHistoryFilesResult result) {
+            ASSERT_OK_AND_ASSIGN(
+                updater_ui::mojom::UnzipUpdaterHistoryFilesResponsePtr response,
+                std::move(result));
+            EXPECT_THAT(response->history_file_contents, ElementsAre("event1"));
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, UnzipUpdaterHistoryFiles_Failure_InvalidZip) {
+  mojo_base::BigBuffer zip_data(base::as_byte_span("not a zip file"));
+
+  base::RunLoop run_loop;
+  handler_->UnzipUpdaterHistoryFiles(
+      std::move(zip_data),
+      base::BindLambdaForTesting(
+          [&](UpdaterPageHandler::UnzipUpdaterHistoryFilesResult result) {
+            EXPECT_FALSE(result.has_value());
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+}
+
+TEST_F(UpdaterPageHandlerTest, RecordFilterChange) {
+  base::HistogramTester histogram_tester;
+  handler_->RecordFilterChange(updater_ui::mojom::HistoryFilter::kApp);
+  histogram_tester.ExpectUniqueSample(
+      "Browser.UpdaterWebUI.HistoryFilterChanged",
+      updater_ui::mojom::HistoryFilter::kApp, 1);
+
+  handler_->RecordFilterChange(updater_ui::mojom::HistoryFilter::kAll);
+  histogram_tester.ExpectBucketCount(
+      "Browser.UpdaterWebUI.HistoryFilterChanged",
+      updater_ui::mojom::HistoryFilter::kAll, 1);
+}
+
+TEST_F(UpdaterPageHandlerTest, ShowDirectoryMetrics) {
+  base::HistogramTester histogram_tester;
+
+  EXPECT_CALL(*mock_delegate_,
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kSystem))
+      .WillOnce(Return(std::nullopt));
+  handler_->ShowDirectory(
+      updater_ui::mojom::ShowDirectoryTarget::kSystemUpdater);
+  histogram_tester.ExpectUniqueSample(
+      "Browser.UpdaterWebUI.InstallPathLinkClicked",
+      updater_ui::mojom::ShowDirectoryTarget::kSystemUpdater, 1);
+
+  EXPECT_CALL(*mock_delegate_,
+              GetUpdaterInstallDirectory(updater::UpdaterScope::kUser))
+      .WillOnce(Return(std::nullopt));
+  handler_->ShowDirectory(updater_ui::mojom::ShowDirectoryTarget::kUserUpdater);
+  histogram_tester.ExpectBucketCount(
+      "Browser.UpdaterWebUI.InstallPathLinkClicked",
+      updater_ui::mojom::ShowDirectoryTarget::kUserUpdater, 1);
+
+  EXPECT_CALL(*mock_delegate_, GetEnterpriseCompanionInstallDirectory())
+      .WillOnce(Return(std::nullopt));
+  handler_->ShowDirectory(
+      updater_ui::mojom::ShowDirectoryTarget::kEnterpriseCompanionApp);
+  histogram_tester.ExpectBucketCount(
+      "Browser.UpdaterWebUI.InstallPathLinkClicked",
+      updater_ui::mojom::ShowDirectoryTarget::kEnterpriseCompanionApp, 1);
 }
 
 }  // namespace

@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/intelligence/persist_tab_context/model/page_content_cache_service.h"
 
+#import <utility>
+
 #import "base/feature_list.h"
 #import "base/files/file_util.h"
 #import "base/task/thread_pool.h"
@@ -65,10 +67,11 @@ void PageContentCacheService::CachePageContent(
     const GURL& url,
     const base::Time& visit_timestamp,
     const base::Time& extraction_timestamp,
-    const optimization_guide::proto::PageContext& page_context) {
+    optimization_guide::proto::PageContext page_context) {
   if (IsCacheInitialized()) {
     page_content_cache_->CachePageContent(tab_id, url, visit_timestamp,
-                                          extraction_timestamp, page_context);
+                                          extraction_timestamp,
+                                          std::move(page_context));
   }
 }
 
@@ -84,6 +87,13 @@ void PageContentCacheService::GetAllTabIds(
     page_content_cache_->GetAllTabIds(std::move(callback));
   } else {
     std::move(callback).Run({});
+  }
+}
+
+void PageContentCacheService::RunCleanUpTasksWithActiveTabs(
+    const std::set<int64_t>& all_active_tab_ids) {
+  if (IsCacheInitialized()) {
+    page_content_cache_->RunCleanUpTasksWithActiveTabs(all_active_tab_ids);
   }
 }
 

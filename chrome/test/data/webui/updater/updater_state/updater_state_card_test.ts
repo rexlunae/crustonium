@@ -5,11 +5,10 @@
 import 'chrome://updater/updater_state/updater_state_card.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {BrowserProxyImpl} from 'chrome://updater/browser_proxy.js';
 import {SCOPES} from 'chrome://updater/event_history.js';
 import {formatDateLong} from 'chrome://updater/tools.js';
 import type {UpdaterStateCardElement} from 'chrome://updater/updater_state/updater_state_card.js';
-import {PageHandlerRemote, UpdaterScope} from 'chrome://updater/updater_ui.mojom-webui.js';
+import {browserProxyFactory, PageHandlerRemote, ShowDirectoryTarget} from 'chrome://updater/updater_ui.mojom-webui.js';
 import {assertArrayEquals, assertEquals, assertStringContains, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
@@ -31,10 +30,6 @@ suite('UpdaterStateCardElement', () => {
     item.lastChecked = new Date('2026-01-02T12:00:00');
     item.lastStarted = new Date('2026-01-01T12:00:00');
     item.installPath = '/home/user/updater';
-    item.policies = {
-      policiesByName: {},
-      policiesByAppId: {},
-    };
     document.body.appendChild(item);
     await microtasksFinished();
 
@@ -65,10 +60,6 @@ suite('UpdaterStateCardElement', () => {
     item.lastChecked = null;
     item.lastStarted = null;
     item.installPath = '/opt/google/updater';
-    item.policies = {
-      policiesByName: {},
-      policiesByAppId: {},
-    };
     document.body.appendChild(item);
     await microtasksFinished();
 
@@ -93,7 +84,7 @@ suite('UpdaterStateCardElement', () => {
 
     setup(() => {
       handler = TestMock.fromClass(PageHandlerRemote);
-      BrowserProxyImpl.getInstance().handler = handler;
+      browserProxyFactory.setInstance({handler});
     });
 
     SCOPES.forEach(scope => {
@@ -104,10 +95,6 @@ suite('UpdaterStateCardElement', () => {
         item.lastChecked = new Date('2026-01-02T12:00:00');
         item.lastStarted = new Date('2026-01-01T12:00:00');
         item.installPath = '/home/user/updater';
-        item.policies = {
-          policiesByName: {},
-          policiesByAppId: {},
-        };
         document.body.appendChild(item);
         await microtasksFinished();
 
@@ -117,8 +104,9 @@ suite('UpdaterStateCardElement', () => {
         link.click();
 
         assertArrayEquals(
-            [scope === 'SYSTEM' ? UpdaterScope.kSystem : UpdaterScope.kUser],
-            handler.getArgs('showUpdaterDirectory'));
+            [scope === 'SYSTEM' ? ShowDirectoryTarget.kSystemUpdater :
+                                  ShowDirectoryTarget.kUserUpdater],
+            handler.getArgs('showDirectory'));
       });
     });
   });

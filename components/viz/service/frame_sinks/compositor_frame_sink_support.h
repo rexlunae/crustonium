@@ -50,8 +50,8 @@ class Surface;
 class SurfaceManager;
 
 // Possible outcomes of MaybeSubmitCompositorFrame().
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
+// These values were previously persisted to logs. Entries should not be
+// renumbered and numeric values should never be reused.
 enum class SubmitResult {
   ACCEPTED = 0,
   COPY_OUTPUT_REQUESTS_NOT_ALLOWED = 1,
@@ -59,8 +59,12 @@ enum class SubmitResult {
   SIZE_MISMATCH = 3,
   SURFACE_ID_DECREASED = 4,
   SURFACE_OWNED_BY_ANOTHER_CLIENT = 5,
+  HIT_TEST_DATA_INVALID = 6,
+  INVALID_FRAME = 7,
+  INVALID_DISPLAY_TRANSFORM = 8,
+  INVALID_BEGIN_FRAME_ACK = 9,
   // Magic constant used by the histogram macros.
-  kMaxValue = SURFACE_OWNED_BY_ANOTHER_CLIENT,
+  kMaxValue = INVALID_BEGIN_FRAME_ACK,
 };
 
 class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
@@ -158,6 +162,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   // regardless of any other throttling.
   void SetAllowThrottling(bool allowed);
 
+  // If other clients are interactive, reduce frame cadence if `throttled`.
+
   // SurfaceClient implementation.
   void OnSurfaceCommitted(Surface* surface) override;
   void OnSurfaceActivated(Surface* surface) override;
@@ -193,7 +199,7 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   void SetWantsAnimateOnlyBeginFrames();
   void SetAutoNeedsBeginFrame();
   void SetNoCompositorFrameAcks();
-  void DidNotProduceFrame(const BeginFrameAck& ack);
+  bool DidNotProduceFrame(const BeginFrameAck& ack);
   void SubmitCompositorFrame(
       const LocalSurfaceId& local_surface_id,
       CompositorFrame frame,
@@ -272,6 +278,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   const RegionCaptureBounds& current_capture_bounds() const {
     return current_capture_bounds_;
   }
+
+  LayerContextImpl* layer_context_for_testing() { return layer_context_.get(); }
 
   void SetExternalReservedResourceDelegate(ReservedResourceDelegate* delegate);
 
@@ -519,8 +527,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
 
   // Initialize |last_drawn_frame_index_| as though the frame before the first
   // has been drawn.
-  static_assert(kFrameIndexStart > 1,
-                "|last_drawn_frame_index| relies on kFrameIndexStart > 1");
+  static_assert(kFrameIndexStart >= 1,
+                "|last_drawn_frame_index| relies on kFrameIndexStart >= 1");
   uint32_t last_drawn_frame_index_ = kFrameIndexStart - 1;
 
   FrameSinkThrottler throttler_;
@@ -561,6 +569,8 @@ class VIZ_SERVICE_EXPORT CompositorFrameSinkSupport
   // If exists, then we need to notify this callback when we have a
   // SurfaceAnimationManager.
   base::OnceCallback<void()> surface_animation_manager_callback_;
+
+
 
   base::WeakPtrFactory<CompositorFrameSinkSupport> weak_factory_{this};
 };

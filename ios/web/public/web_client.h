@@ -43,10 +43,23 @@ namespace web {
 
 class BrowserState;
 class BrowserURLRewriter;
+class CobaltController;
 class JavaScriptFeature;
 class WebClient;
 class WebMainParts;
 class WebState;
+
+// Enum type specifying the JavaScript Error logging level.
+enum class JSErrorReportLoggingLevel : short {
+  // No logging.
+  NONE = 0,
+
+  // A report without the webpage URL.
+  REPORT_WITHOUT_URL,
+
+  // A full report may be sent, including webpage URL.
+  FULL
+};
 
 // Setter and getter for the client.  The client should be set early, before any
 // web code is called.
@@ -219,6 +232,16 @@ class WebClient {
       WKFrameInfo* frame,
       base::OnceCallback<void(NSArray<NSURL*>*)> completion) const
       API_AVAILABLE(ios(18.4));
+
+  virtual JSErrorReportLoggingLevel GetJSErrorReportLoggingLevel(
+      BrowserState* browser_state) const;
+
+  // Returns the Cobalt controller for the given `browser_state`.
+  virtual CobaltController* GetCobaltController(
+      BrowserState* browser_state) const;
+
+  // Returns whether smooth scrolling is supported.
+  virtual bool IsSmoothScrollingSupported() const;
 };
 
 }  // namespace web

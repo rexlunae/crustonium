@@ -65,22 +65,6 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
       showClearBrowsingDataDialog_: Boolean,
       showPrivacyGuideDialog_: Boolean,
 
-      enableDeleteBrowsingDataRevamp_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('enableDeleteBrowsingDataRevamp'),
-      },
-
-      isPrivacySandboxRestricted_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('isPrivacySandboxRestricted'),
-      },
-
-      isPrivacySandboxRestrictedNoticeEnabled_: {
-        type: Boolean,
-        value: () =>
-            loadTimeData.getBoolean('isPrivacySandboxRestrictedNoticeEnabled'),
-      },
-
       // The label of the confirmation toast that is displayed after deletion
       // from 'Delete Browsing data' is completed.
       dbdDeletionConfirmationToastLabel_: {
@@ -97,9 +81,6 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
 
   declare private showClearBrowsingDataDialog_: boolean;
   declare private showPrivacyGuideDialog_: boolean;
-  declare private enableDeleteBrowsingDataRevamp_: boolean;
-  declare private isPrivacySandboxRestricted_: boolean;
-  declare private isPrivacySandboxRestrictedNoticeEnabled_: boolean;
   declare private dbdDeletionConfirmationToastLabel_: string;
   declare private shouldShowDbdDeletionConfirmationToast_: boolean;
 
@@ -172,13 +153,6 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
     Router.getInstance().navigateTo(routes.SECURITY);
   }
 
-  private onPrivacySandboxClick_() {
-    this.interactedWithPage_();
-    this.metricsBrowserProxy_.recordAction(
-        'Settings.PrivacySandbox.OpenedFromSettingsParent');
-    Router.getInstance().navigateTo(routes.PRIVACY_SANDBOX);
-  }
-
   private onPrivacyGuideClick_() {
     this.metricsBrowserProxy_.recordPrivacyGuideEntryExitHistogram(
         PrivacyGuideInteractions.SETTINGS_LINK_ROW_ENTRY);
@@ -194,15 +168,6 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
         TrustSafetyInteraction.USED_PRIVACY_CARD);
   }
 
-  private computeAdPrivacySublabel_(): string {
-    // When the privacy sandbox is restricted with a notice, the sublabel
-    // wording indicates measurement only, rather than general ad privacy.
-    const restricted = this.isPrivacySandboxRestricted_ &&
-        this.isPrivacySandboxRestrictedNoticeEnabled_;
-    return restricted ? this.i18n('adPrivacyRestrictedLinkRowSubLabel') :
-                        this.i18n('adPrivacyLinkRowSubLabel');
-  }
-
   private computeThirdPartyCookiesSublabel_(): string {
     const currentCookieSetting =
         this.getPref('profile.cookie_controls_mode').value;
@@ -215,11 +180,6 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
       default:
         assertNotReached();
     }
-  }
-
-  private shouldShowAdPrivacy_(): boolean {
-    return !this.isPrivacySandboxRestricted_ ||
-        this.isPrivacySandboxRestrictedNoticeEnabled_;
   }
 
   private onBrowsingDataDeleted_(
@@ -238,10 +198,6 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
 
     if (routes.PRIVACY_GUIDE) {
       map.set(routes.PRIVACY_GUIDE.path, '#privacyGuideLinkRow');
-    }
-
-    if (routes.PRIVACY_SANDBOX) {
-      map.set(routes.PRIVACY_SANDBOX.path, '#privacySandboxLinkRow');
     }
 
     if (routes.SECURITY) {
@@ -288,6 +244,7 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
       case 'siteSettingsHidDevices':
       case 'siteSettingsIdleDetection':
       case 'siteSettingsImages':
+      case 'siteSettingsInlineCueMenu':
       case 'siteSettingsJavascript':
       case 'siteSettingsJavascriptOptimizer':
       case 'siteSettingsKeyboardLock':
@@ -310,23 +267,16 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
       case 'siteSettingsSiteDetails':
       // <if expr="is_chromeos">
       case 'siteSettingsSmartCardReaders':
+      case 'siteSettingsWebPrinting':
       // </if>
       case 'siteSettingsSound':
       case 'siteSettingsStorageAccess':
       case 'siteSettingsUsbDevices':
       case 'siteSettingsVr':
       case 'siteSettingsWebAppInstallation':
-      case 'siteSettingsWebPrinting':
       case 'siteSettingsWindowManagement':
       case 'siteSettingsZoomLevels':
         triggerId = 'siteSettingsLinkRow';
-        break;
-      case 'privacySandbox':
-      case 'privacySandboxAdMeasurement':
-      case 'privacySandboxFledge':
-      case 'privacySandboxManageTopics':
-      case 'privacySandboxTopics':
-        triggerId = 'privacySandboxLinkRow';
         break;
       default:
         assertNotReached();
@@ -336,8 +286,34 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
 
     const control =
         this.shadowRoot!.querySelector<HTMLElement>(`#${triggerId}`);
-    assert(control);
+    assert(
+        control,
+        `Failed to find associated control for child '${childViewId}'`);
     return control;
+  }
+
+  protected getSignpostIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy20:signpost' :
+        'privacy20:signpost-old';
+  }
+
+  protected getCookieIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:cookie' :
+        'privacy:cookie-old';
+  }
+
+  protected getLockIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:lock' :
+        'privacy:lock-old';
+  }
+
+  protected getPageInfoIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:page-info' :
+        'privacy:page-info-old';
   }
 }
 

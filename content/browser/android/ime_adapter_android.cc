@@ -15,6 +15,8 @@
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "components/input/native_web_keyboard_event.h"
@@ -26,11 +28,12 @@
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/content_features.h"
+#include "mojo/public/cpp/base/big_buffer.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/input/ime_host.mojom.h"
 #include "third_party/blink/public/mojom/input/stylus_writing_gesture.mojom.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
-#include "ui/base/ime/ime_text_span.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "content/public/android/content_jni_headers/ImeAdapterImpl_jni.h"
@@ -70,13 +73,10 @@ input::NativeWebKeyboardEvent NativeWebKeyboardEventFromKeyEvent(
 
 }  // anonymous namespace
 
-static int64_t JNI_ImeAdapterImpl_Init(JNIEnv* env,
-                                       const JavaRef<jobject>& obj,
-                                       const JavaRef<jobject>& jweb_contents) {
-  WebContents* web_contents = WebContents::FromJavaWebContents(jweb_contents);
+static int64_t JNI_ImeAdapterImpl_Create(JNIEnv* env,
+                                         WebContents* web_contents) {
   DCHECK(web_contents);
-  auto* ime_adapter = new ImeAdapterAndroid(env, obj, web_contents);
-  ime_adapter->Initialize();
+  auto* ime_adapter = new ImeAdapterAndroid(web_contents);
   return reinterpret_cast<intptr_t>(ime_adapter);
 }
 
@@ -129,7 +129,7 @@ static void JNI_ImeAdapterImpl_AppendSuggestionSpan(
     int64_t ime_text_spans_ptr,
     int32_t start,
     int32_t end,
-    bool is_misspelling,
+    int32_t type,
     bool remove_on_finish_composing,
     int32_t underline_color,
     int32_t suggestion_highlight_color,
@@ -138,16 +138,16 @@ static void JNI_ImeAdapterImpl_AppendSuggestionSpan(
   DCHECK_GE(start, 0);
   DCHECK_GE(end, 0);
 
-  ui::ImeTextSpan::Type type =
-      is_misspelling ? ui::ImeTextSpan::Type::kMisspellingSuggestion
-                     : ui::ImeTextSpan::Type::kSuggestion;
+  ui::ImeTextSpan::Type ui_type =
+      mojo::EnumTraits<ui::mojom::ImeTextSpanType, ui::ImeTextSpan::Type>::
+          FromMojom(static_cast<ui::mojom::ImeTextSpanType>(type));
 
   std::vector<ui::ImeTextSpan>* ime_text_spans =
       reinterpret_cast<std::vector<ui::ImeTextSpan>*>(ime_text_spans_ptr);
   std::vector<std::string> suggestions_vec;
   AppendJavaStringArrayToStringVector(env, suggestions, &suggestions_vec);
   ui::ImeTextSpan ime_text_span = ui::ImeTextSpan(
-      type, static_cast<unsigned>(start), static_cast<unsigned>(end),
+      ui_type, static_cast<unsigned>(start), static_cast<unsigned>(end),
       ui::ImeTextSpan::Thickness::kThick,
       ui::ImeTextSpan::UnderlineStyle::kSolid, SK_ColorTRANSPARENT,
       static_cast<unsigned>(suggestion_highlight_color), suggestions_vec,
@@ -174,22 +174,21 @@ static void JNI_ImeAdapterImpl_AppendUnderlineSpan(JNIEnv*,
       SK_ColorTRANSPARENT, std::vector<std::string>()));
 }
 
-ImeAdapterAndroid::ImeAdapterAndroid(JNIEnv* env,
-                                     const JavaRef<jobject>& obj,
-                                     WebContents* web_contents)
+ImeAdapterAndroid::ImeAdapterAndroid(WebContents* web_contents)
     : RenderWidgetHostConnector(web_contents), rwhva_(nullptr) {
-  java_ime_adapter_ = JavaObjectWeakGlobalRef(env, obj);
-
-  // Set up mojo client for TextSuggestionHost in advance. Java side is
-  // initialized lazily right before showing the menu first time.
-  TextSuggestionHostAndroid::Create(env, web_contents);
 }
 
 ImeAdapterAndroid::~ImeAdapterAndroid() {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
-  if (!obj.is_null())
-    Java_ImeAdapterImpl_onNativeDestroyed(env, obj);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
+  if (!obj.is_null()) {
+    Java_ImeAdapterImpl_destroyFromNative(env, obj);
+  }
+}
+
+base::android::ScopedJavaLocalRef<jobject> ImeAdapterAndroid::GetJavaObject(
+    JNIEnv* env) {
+  return Java_ImeAdapterImpl_get(env, reinterpret_cast<intptr_t>(this));
 }
 
 void ImeAdapterAndroid::UpdateRenderProcessConnection(
@@ -201,7 +200,7 @@ void ImeAdapterAndroid::UpdateRenderProcessConnection(
     new_rwhva->set_ime_adapter(this);
     if (!old_rwhva && new_rwhva) {
       JNIEnv* env = AttachCurrentThread();
-      ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+      ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
       if (!obj.is_null())
         Java_ImeAdapterImpl_onConnectedToRenderProcess(env, obj);
     }
@@ -213,7 +212,7 @@ void ImeAdapterAndroid::UpdateRenderProcessConnection(
 
 void ImeAdapterAndroid::UpdateState(const ui::mojom::TextInputState& state) {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (obj.is_null())
     return;
   base::android::ScopedJavaLocalRef<jobjectArray> j_ime_text_spans;
@@ -239,7 +238,7 @@ void ImeAdapterAndroid::UpdateState(const ui::mojom::TextInputState& state) {
 
 void ImeAdapterAndroid::UpdateOnTouchDown() {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (obj.is_null())
     return;
   Java_ImeAdapterImpl_updateOnTouchDown(env, obj);
@@ -250,7 +249,7 @@ void ImeAdapterAndroid::UpdateFrameInfo(
     float dip_scale,
     float content_offset_ypix) {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (obj.is_null())
     return;
 
@@ -276,7 +275,7 @@ void ImeAdapterAndroid::OnRenderFrameMetadataChangedAfterActivation(
     return;
 
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (obj.is_null())
     return;
 
@@ -286,6 +285,10 @@ void ImeAdapterAndroid::OnRenderFrameMetadataChangedAfterActivation(
   old_viewport_size_ = new_viewport_size;
   Java_ImeAdapterImpl_onResizeScrollableViewport(env, obj,
                                                  surface_height_reduced);
+}
+
+void ImeAdapterAndroid::Initialize(JNIEnv* env) {
+  RenderWidgetHostConnector::Initialize();
 }
 
 bool ImeAdapterAndroid::SendKeyEvent(JNIEnv* env,
@@ -374,6 +377,7 @@ void ImeAdapterAndroid::ReplaceText(
     const base::android::JavaRef<jobject>& obj,
     int start,
     int end,
+    const base::android::JavaRef<jobject>& text,
     const base::android::JavaRef<jstring>& text_str,
     int relative_cursor_pos) {
   RenderWidgetHostImpl* rwhi = GetFocusedWidget();
@@ -384,7 +388,7 @@ void ImeAdapterAndroid::ReplaceText(
   std::u16string text16 = ConvertJavaStringToUTF16(env, text_str);
 
   std::vector<ui::ImeTextSpan> ime_text_spans =
-      GetImeTextSpansFromJava(env, obj, text_str, text16);
+      GetImeTextSpansFromJava(env, obj, text, text16);
 
   // relative_cursor_pos is as described in the Android API for
   // InputConnection#commitText, whereas the parameters for
@@ -407,22 +411,42 @@ void ImeAdapterAndroid::FinishComposingText(JNIEnv* env) {
   rwhi->ImeFinishComposingText(true);
 }
 
-bool ImeAdapterAndroid::InsertMediaFromURL(
+bool ImeAdapterAndroid::InsertMediaFromBytes(
     JNIEnv* env,
-    const base::android::JavaRef<jstring>& url) {
+    const base::android::JavaRef<jbyteArray>& bytes,
+    const base::android::JavaRef<jstring>& extension) {
   auto* input_handler = GetFocusedFrameWidgetInputHandler();
   if (!input_handler) {
     return false;
   }
 
-  input_handler->ExecuteEditCommand("PasteFromImageURL",
-                                    ConvertJavaStringToUTF16(env, url));
+  if (bytes.is_null()) {
+    return false;
+  }
+
+  size_t size = base::android::SafeGetArrayLength(env, bytes);
+
+  if (size == 0) {
+    return false;
+  }
+
+  mojo_base::BigBuffer big_buffer(size);
+  base::android::JavaByteArrayToByteSpan(env, bytes, big_buffer);
+
+  input_handler->PasteFromImageBytes(
+      std::move(big_buffer),
+      base::android::ConvertJavaStringToUTF8(env, extension));
   return true;
+}
+
+ScopedJavaLocalRef<jobject> ImeAdapterAndroid::java_ime_adapter_for_testing(
+    JNIEnv* env) {
+  return GetJavaObject(env);
 }
 
 void ImeAdapterAndroid::CancelComposition() {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (!obj.is_null())
     Java_ImeAdapterImpl_cancelComposition(env, obj);
 }
@@ -431,7 +455,7 @@ void ImeAdapterAndroid::FocusedNodeChanged(
     bool is_editable_node,
     const gfx::Rect& node_bounds_in_screen) {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (!obj.is_null()) {
     Java_ImeAdapterImpl_focusedNodeChanged(
         env, obj, is_editable_node, node_bounds_in_screen.x(),
@@ -442,7 +466,7 @@ void ImeAdapterAndroid::FocusedNodeChanged(
 
 bool ImeAdapterAndroid::ShouldInitiateStylusWriting() {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (!obj.is_null()) {
     return Java_ImeAdapterImpl_shouldInitiateStylusWriting(env, obj);
   }
@@ -453,7 +477,7 @@ void ImeAdapterAndroid::OnEditElementFocusedForStylusWriting(
     const gfx::Rect& focused_edit_bounds,
     const gfx::Rect& caret_bounds) {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (!obj.is_null()) {
     gfx::Point caret_center = caret_bounds.CenterPoint();
     Java_ImeAdapterImpl_onEditElementFocusedForStylusWriting(
@@ -483,11 +507,21 @@ void ImeAdapterAndroid::HandleStylusWritingGestureAction(
                      weak_factory_.GetWeakPtr(), id));
 }
 
+void ImeAdapterAndroid::CancelPreviewGesture() {
+  blink::mojom::FrameWidgetInputHandler* input_handler =
+      GetFocusedFrameWidgetInputHandler();
+  if (!input_handler) {
+    return;
+  }
+
+  input_handler->CancelStylusGesturePreview();
+}
+
 void ImeAdapterAndroid::OnStylusWritingGestureActionCompleted(
     int id,
     blink::mojom::HandwritingGestureResult result) {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (!obj.is_null()) {
     Java_ImeAdapterImpl_onStylusWritingGestureActionCompleted(env, obj, id,
                                                               (int)result);
@@ -499,7 +533,7 @@ void ImeAdapterAndroid::SetImeRenderWidgetHost() {
     return;
   }
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ime_adapter_.get(env);
+  ScopedJavaLocalRef<jobject> obj = GetJavaObject(env);
   if (obj.is_null()) {
     return;
   }
@@ -653,7 +687,48 @@ void ImeAdapterAndroid::PerformSpellCheck(JNIEnv* env) {
     return;
   }
 
-  rfh->GetAssociatedLocalFrame()->PerformSpellCheck();
+  rfh->GetAssociatedLocalFrame()->PerformFullContentSpellCheck();
+}
+
+void ImeAdapterAndroid::AppendAutocorrectUnderlineSpan(JNIEnv* env,
+                                                       int32_t start,
+                                                       int32_t end) {
+  if (!base::FeatureList::IsEnabled(features::kAndroidPkAutocorrectUnderline) &&
+      !base::FeatureList::IsEnabled(
+          features::kAndroidPkAutocorrectUnderlineV2)) {
+    return;
+  }
+  blink::mojom::FrameWidgetInputHandler* input_handler =
+      GetFocusedFrameWidgetInputHandler();
+  if (!input_handler) {
+    return;
+  }
+  ui::ImeTextSpan ime_text_span =
+      ui::ImeTextSpan(ui::ImeTextSpan::Type::kAutocorrect,
+                      /*start_offset=*/0,
+                      /*end_offset=*/static_cast<unsigned>(end - start),
+                      ui::ImeTextSpan::Thickness::kThick,
+                      ui::ImeTextSpan::UnderlineStyle::kDot);
+  ime_text_span.underline_color =
+      SkColorSetA(gfx::kGoogleGrey700, SK_AlphaOPAQUE * 0.7);
+
+  input_handler->AddImeTextSpansToExistingText(start, end, {ime_text_span});
+}
+
+void ImeAdapterAndroid::ClearAllAutocorrectUnderlineSpans(JNIEnv* env) {
+  if (!base::FeatureList::IsEnabled(features::kAndroidPkAutocorrectUnderline) &&
+      !base::FeatureList::IsEnabled(
+          features::kAndroidPkAutocorrectUnderlineV2)) {
+    return;
+  }
+  blink::mojom::FrameWidgetInputHandler* input_handler =
+      GetFocusedFrameWidgetInputHandler();
+  if (!input_handler) {
+    return;
+  }
+  input_handler->ClearImeTextSpansByType(0,
+                                         std::numeric_limits<uint32_t>::max(),
+                                         ui::ImeTextSpan::Type::kAutocorrect);
 }
 
 }  // namespace content

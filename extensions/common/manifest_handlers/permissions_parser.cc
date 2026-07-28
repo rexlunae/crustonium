@@ -246,7 +246,7 @@ bool ParseHelper(Extension* extension,
     // The feature should exist since we just got an APIPermission for it. The
     // two systems should be updated together whenever a permission is added.
     DCHECK(feature) << "Could not find feature for " << iter->name();
-    // http://crbug.com/176381
+    // http://crbug.com/40302033
     if (!feature) {
       to_remove.push_back(iter->id());
       continue;
@@ -530,19 +530,20 @@ void PermissionsParser::SetScriptableHosts(
 // static
 const PermissionSet& PermissionsParser::GetRequiredPermissions(
     const Extension* extension) {
-  DCHECK(extension->GetManifestData(keys::kPermissions));
-  return *static_cast<const ManifestPermissions*>(
-              extension->GetManifestData(keys::kPermissions))
-              ->permissions;
+  const ManifestPermissions* info =
+      extension->GetManifestData<ManifestPermissions>(keys::kPermissions);
+  DCHECK(info);
+  return *info->permissions;
 }
 
 // static
 const PermissionSet& PermissionsParser::GetOptionalPermissions(
     const Extension* extension) {
-  DCHECK(extension->GetManifestData(keys::kOptionalPermissions));
-  return *static_cast<const ManifestPermissions*>(
-              extension->GetManifestData(keys::kOptionalPermissions))
-              ->permissions;
+  const ManifestPermissions* info =
+      extension->GetManifestData<ManifestPermissions>(
+          keys::kOptionalPermissions);
+  DCHECK(info);
+  return *info->permissions;
 }
 
 }  // namespace extensions

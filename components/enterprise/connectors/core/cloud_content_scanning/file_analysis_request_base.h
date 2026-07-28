@@ -5,11 +5,18 @@
 #ifndef COMPONENTS_ENTERPRISE_CONNECTORS_CORE_CLOUD_CONTENT_SCANNING_FILE_ANALYSIS_REQUEST_BASE_H_
 #define COMPONENTS_ENTERPRISE_CONNECTORS_CORE_CLOUD_CONTENT_SCANNING_FILE_ANALYSIS_REQUEST_BASE_H_
 
+#include <atomic>
+
 #include "base/functional/callback_helpers.h"
+#include "base/task/post_job.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_request.h"
 #include "components/enterprise/connectors/core/service_provider_config.h"
 #include "components/file_access/scoped_file_access.h"
+
+namespace safe_browsing {
+class FileOpeningJob;
+}  // namespace safe_browsing
 
 namespace enterprise_connectors {
 
@@ -29,10 +36,14 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
       scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
       BinaryUploadRequest::RequestStartCallback start_callback =
           base::DoNothing(),
-      bool is_obfuscated = false);
+      bool is_obfuscated = false,
+      bool force_sync_hash_computation = true);
   FileAnalysisRequestBase(const FileAnalysisRequestBase&) = delete;
   FileAnalysisRequestBase& operator=(const FileAnalysisRequestBase&) = delete;
   ~FileAnalysisRequestBase() override;
+
+  void set_file_opening_job(
+      scoped_refptr<safe_browsing::FileOpeningJob> file_opening_job);
 
   // BinaryUploadRequest implementation. If |delay_opening_file_| is false,
   // OnGotFileData is called by posting after GetFileDataBlocking runs a
@@ -42,13 +53,28 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
 
   // Opens the file, reads it, and then calls OnGotFileData on the UI thread.
   // This should be called on a thread with base::MayBlock().
-  void OpenFile();
+  void OpenFile(const std::atomic<bool>* is_cancelled = nullptr);
+
+  // Cancels the request if it hasn't been opened yet, triggering callbacks
+  // to avoid memory leaks. Resetting data_callback_ destroys the bound
+  // arguments, which includes the std::unique_ptr holding this
+  // FileAnalysisRequestBase, destroying it and breaking the circular reference
+  // silently.
+  void Cancel();
 
  protected:
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   virtual void ProcessZipFile(Data data) = 0;
   virtual void ProcessRarFile(Data data) = 0;
 #endif
+
+  // Wrapped by BinaryUploadRequest::register_on_got_hash_callback_. Use
+  // call_last = true if a callback may delete this object after it
+  // is run.
+  void RegisterOnGotHashCallback(
+      bool call_last,
+      enterprise_connectors::OnGotHashCallback callback);
+  void OnGotHash(std::string hash);
 
   void OnGotFileData(std::pair<ScanRequestUploadResult, Data> result_and_data);
 
@@ -91,9 +117,21 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
   // process.
   bool is_obfuscated_ = false;
 
+  // Controls whether OpenFile tasks can compute hash after notifying
+  // OnGotFileInfo.
+  bool force_sync_hash_computation_ = true;
+
+  std::deque<enterprise_connectors::OnGotHashCallback> hash_notify_callbacks_;
+
   std::unique_ptr<file_access::ScopedFileAccess> scoped_file_access_;
 
  private:
+  SEQUENCE_CHECKER(sequence_checker_);
+
+  // Used to CHECK at most one register_on_got_hash_callback_ is called last.
+  bool register_cb_called_last = false;
+
+  scoped_refptr<safe_browsing::FileOpeningJob> file_opening_job_;
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
 
   base::WeakPtrFactory<FileAnalysisRequestBase> weakptr_factory_{this};

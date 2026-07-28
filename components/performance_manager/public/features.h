@@ -100,6 +100,11 @@ BASE_DECLARE_FEATURE_PARAM(int, kNotificationStringVersion);
 
 #endif
 
+// When enabled, LevelDBSiteDataStore uses BEST_EFFORT priority for its task
+// runner instead of the default USER_BLOCKING, to reduce thread pool contention
+// during startup.
+BASE_DECLARE_FEATURE(kLevelDBSiteDataStoreBestEffort);
+
 // Enable best effort task inhibiting based on performance scenario information.
 BASE_DECLARE_FEATURE(kEnableBestEffortTaskInhibitingPolicy);
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kBestEffortTaskInhibitingPeriod);
@@ -113,7 +118,7 @@ extern const base::FeatureParam<bool> kInheritParentPriority;
 
 extern const base::FeatureParam<bool> kRenderedOutOfViewIsNotVisible;
 
-extern const base::FeatureParam<bool> kNonSpareRendererHighInitialPriority;
+extern const base::FeatureParam<bool> kRendererHighInitialPriority;
 
 BASE_DECLARE_FEATURE(kPMLoadingPageVoter);
 
@@ -197,6 +202,14 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
 // enabled.
 BASE_DECLARE_FEATURE_PARAM(int, kInfiniteTabsFreezingOnMemoryPressurePercent);
 
+// If enabled, tabs may be discarded on Windows when the system approaches the
+// commit limit.
+BASE_DECLARE_FEATURE(kDiscardOnCommitLimit);
+
+// The available commit memory percentage below which to trigger discarding when
+// enabled.
+BASE_DECLARE_FEATURE_PARAM(int, kDiscardOnCommitLimit_MinAvailablePercent);
+
 // When enabled, Resource Attribution measurements will include contexts for
 // individual origins.
 BASE_DECLARE_FEATURE(kResourceAttributionIncludeOrigins);
@@ -222,7 +235,7 @@ BASE_DECLARE_FEATURE(kBoostClosingTabs);
 // A feature to force foreground priority for all frames and workers. Intended
 // for ad-hoc debugging, to determine if a background tab issue is caused
 // specifically by low priority.
-BASE_DECLARE_FEATURE(kForceForegroundPriority);
+BASE_DECLARE_FEATURE(kForceForegroundPriorityForAllTabs);
 
 BASE_DECLARE_FEATURE(kTransientKeepAlivePolicy);
 
@@ -233,6 +246,26 @@ BASE_DECLARE_FEATURE_PARAM(size_t, kTransientKeepAlivePolicyMaxCount);
 // A feature to set the the priority of extension service worker processes to
 // USER_BLOCKING.
 BASE_DECLARE_FEATURE(kExtensionServiceWorkerVoter);
+
+#if BUILDFLAG(IS_WIN)
+BASE_DECLARE_FEATURE(kBrowserProcessAboveNormalPriority);
+#endif
+
+BASE_DECLARE_FEATURE(kDisableTabDiscarding);
+
+// When enabled, PageLiveStateDecorator uses the page loading state to avoid
+// treating initial load title/favicon churn as a background update
+// signal (crbug.com/497577319).
+//
+// When disabled, falls back to legacy behavior.
+BASE_DECLARE_FEATURE(kUseLoadingStateToDetectBackgroundTitleOrFaviconUpdate);
+
+BASE_DECLARE_FEATURE(kGlicActuationPriorityVoter);
+
+// When enabled, ignores kMediaQueryChange favicon updates (e.g.
+// prefers-color-scheme toggles) when determining whether a background tab
+// updated its favicon.
+BASE_DECLARE_FEATURE(kIgnoreMediaQueryFaviconUpdates);
 
 }  // namespace performance_manager::features
 

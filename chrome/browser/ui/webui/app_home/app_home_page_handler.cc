@@ -17,14 +17,17 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/app_icon_source.h"
+#include "chrome/browser/extensions/chrome_app_deprecation.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_ui_util.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/launch_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
@@ -32,7 +35,6 @@
 #include "chrome/browser/ui/views/apps/app_info_dialog/app_info_dialog_container.h"
 #include "chrome/browser/ui/webui/app_home/app_home.mojom-shared.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
-#include "chrome/browser/web_applications/extension_status_utils.h"
 #include "chrome/browser/web_applications/extensions/launch.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
@@ -110,7 +112,9 @@ AppHomePageHandler::~AppHomePageHandler() {
 }
 
 Browser* AppHomePageHandler::GetCurrentBrowser() {
-  return chrome::FindBrowserWithTab(web_ui_->GetWebContents());
+  auto* browser = GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+      web_ui_->GetWebContents());
+  return browser ? browser->GetBrowserForMigrationOnly() : nullptr;
 }
 
 void AppHomePageHandler::LoadDeprecatedAppsDialogIfRequired() {
@@ -133,8 +137,8 @@ void AppHomePageHandler::LoadDeprecatedAppsDialogIfRequired() {
                                         kForceInstallDialogQueryString,
                                         &app_id)) {
     if (extensions::IsExtensionUnsupportedDeprecatedApp(profile_, app_id) &&
-        extensions::IsExtensionForceInstalled(profile_, app_id, nullptr)) {
-      if (extensions::IsPreinstalledAppId(app_id)) {
+        extensions::util::IsExtensionForceInstalled(app_id, profile_)) {
+      if (extensions::chrome_app_deprecation::IsPreinstalledAppId(app_id)) {
         TabDialogs::FromWebContents(web_contents)
             ->ShowForceInstalledPreinstalledDeprecatedAppDialog(app_id,
                                                                 web_contents);
@@ -153,13 +157,13 @@ void AppHomePageHandler::LaunchAppInternal(
     app_home::mojom::ClickEventPtr click_event) {
   if (extensions::IsExtensionUnsupportedDeprecatedApp(profile_, app_id) &&
       base::FeatureList::IsEnabled(features::kChromeAppsDeprecation)) {
-    if (!extensions::IsExtensionForceInstalled(profile_, app_id, nullptr)) {
+    if (!extensions::util::IsExtensionForceInstalled(app_id, profile_)) {
       TabDialogs::FromWebContents(web_ui_->GetWebContents())
           ->ShowDeprecatedAppsDialog(app_id, deprecated_app_ids_,
                                      web_ui_->GetWebContents());
       return;
     } else {
-      if (extensions::IsPreinstalledAppId(app_id)) {
+      if (extensions::chrome_app_deprecation::IsPreinstalledAppId(app_id)) {
         TabDialogs::FromWebContents(web_ui_->GetWebContents())
             ->ShowForceInstalledPreinstalledDeprecatedAppDialog(
                 app_id, web_ui_->GetWebContents());
@@ -181,7 +185,7 @@ void AppHomePageHandler::LaunchAppInternal(
   // different more restrictive filter should likely be used instead.
   if (registrar.AppMatches(app_id,
                            web_app::WebAppFilter::IsAppSurfaceableToUser())) {
-    type = extensions::Manifest::Type::TYPE_HOSTED_APP;
+    type = extensions::Manifest::Type::kHostedApp;
     full_launch_url = registrar.GetAppStartUrl(app_id);
     launch_container = web_app::ConvertDisplayModeToAppLaunchContainer(
         registrar.GetAppEffectiveDisplayMode(app_id));
@@ -305,7 +309,7 @@ void AppHomePageHandler::CreateWebAppShortcut(const std::string& app_id,
                                               base::OnceClosure done) {
   Browser* browser = GetCurrentBrowser();
   chrome::ShowCreateChromeAppShortcutsDialog(
-      browser->window()->GetNativeWindow(), browser->profile(), app_id,
+      browser->GetWindow()->GetNativeWindow(), browser->GetProfile(), app_id,
       base::BindOnce(
           [](base::OnceClosure done, bool success) {
             base::UmaHistogramBoolean(
@@ -320,7 +324,7 @@ void AppHomePageHandler::CreateExtensionAppShortcut(
     base::OnceClosure done) {
   Browser* browser = GetCurrentBrowser();
   chrome::ShowCreateChromeAppShortcutsDialog(
-      browser->window()->GetNativeWindow(), browser->profile(), extension,
+      browser->GetWindow()->GetNativeWindow(), browser->GetProfile(), extension,
       base::IgnoreArgs<bool>(std::move(done)));
 }
 
@@ -386,7 +390,9 @@ app_home::mojom::AppInfoPtr AppHomePageHandler::CreateAppInfoPtrFromWebApp(
   app_info->store_page_url = std::nullopt;
   app_info->may_uninstall = registrar.CanUserUninstallWebApp(app_id);
   app_info->app_type =
-      registrar.AppMatches(app_id, web_app::WebAppFilter::IsIsolatedApp())
+      registrar.AppMatches(app_id,
+                           web_app::WebAppFilter::IsIsolatedApp() |
+                               web_app::WebAppFilter::IsIsolatedSubApp())
           ? app_home::mojom::AppType::kIsolatedWebApp
           : app_home::mojom::AppType::kWebApp;
   return app_info;
@@ -446,9 +452,10 @@ void AppHomePageHandler::FillWebAppInfoList(
   web_app::WebAppRegistrar& registrar = web_app_provider_->registrar_unsafe();
 
   for (const webapps::AppId& web_app_id : registrar.GetAppIds()) {
-    // Do not show apps that are migration targets on chrome://apps.
-    if (registrar.AppMatches(
-            web_app_id, web_app::WebAppFilter::IsAppSuggestedForMigration())) {
+    // Only expose apps on chrome://apps that should be surfaceable to users.
+    // I.e. this excludes apps that are only suggested migration targets.
+    if (!registrar.AppMatches(
+            web_app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
       continue;
     }
     result->emplace_back(CreateAppInfoPtrFromWebApp(web_app_id));
@@ -472,8 +479,8 @@ void AppHomePageHandler::FillExtensionInfoList(
     const bool is_deprecated_app =
         extensions::IsExtensionUnsupportedDeprecatedApp(context,
                                                         extension->id());
-    if (is_deprecated_app && !extensions::IsExtensionForceInstalled(
-                                 context, extension->id(), nullptr)) {
+    if (is_deprecated_app && !extensions::util::IsExtensionForceInstalled(
+                                 extension->id(), context)) {
       deprecated_app_ids_.insert(extension->id());
     }
     result->emplace_back(CreateAppInfoPtrFromExtension(extension.get()));
@@ -513,7 +520,8 @@ void AppHomePageHandler::UninstallWebApp(const std::string& web_app_id) {
   Browser* browser = GetCurrentBrowser();
   CHECK(browser);
   web_app_provider_->ui_manager().PresentUserUninstallDialog(
-      web_app_id, webapps::WebappUninstallSource::kAppsPage, browser->window(),
+      web_app_id, webapps::WebappUninstallSource::kAppsPage,
+      BrowserWindow::FromBrowser(browser),
       std::move(uninstall_success_callback));
   return;
 }
@@ -522,7 +530,7 @@ extensions::ExtensionUninstallDialog*
 AppHomePageHandler::CreateExtensionUninstallDialog() {
   Browser* browser = GetCurrentBrowser();
   extension_uninstall_dialog_ = extensions::ExtensionUninstallDialog::Create(
-      profile_, browser->window()->GetNativeWindow(), this);
+      profile_, browser->GetWindow()->GetNativeWindow(), this);
   return extension_uninstall_dialog_.get();
 }
 
@@ -539,7 +547,7 @@ void AppHomePageHandler::UninstallExtensionApp(const Extension* extension) {
 
   Browser* browser = GetCurrentBrowser();
   extension_uninstall_dialog_ = extensions::ExtensionUninstallDialog::Create(
-      profile_, browser->window()->GetNativeWindow(), this);
+      profile_, browser->GetWindow()->GetNativeWindow(), this);
 
   extension_uninstall_dialog_->ConfirmUninstall(
       extension, extensions::UNINSTALL_REASON_USER_INITIATED,
@@ -569,11 +577,35 @@ void AppHomePageHandler::OnWebAppWillBeUninstalled(
 }
 
 void AppHomePageHandler::OnWebAppInstalled(const webapps::AppId& app_id) {
+  if (!web_app_provider_->registrar_unsafe().AppMatches(
+          app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return;
+  }
   page_->AddApp(CreateAppInfoPtrFromWebApp(app_id));
 }
 
 void AppHomePageHandler::OnWebAppManifestUpdated(const webapps::AppId& app_id) {
+  if (!web_app_provider_->registrar_unsafe().AppMatches(
+          app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return;
+  }
   page_->UpdateApp(CreateAppInfoPtrFromWebApp(app_id, /*is_update=*/true));
+}
+
+void AppHomePageHandler::OnWebAppMigrated(const webapps::AppId& source_app_id,
+                                          const webapps::AppId& target_app_id) {
+  // The target app HAS to be in a valid state to be shown to the user. Whether
+  // the source app exists or not is of no concern, as `RemoveApp()` will clean
+  // it up anyway, even if it's left behind.
+  if (!web_app_provider_->registrar_unsafe().AppMatches(
+          target_app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return;
+  }
+
+  auto source_app_info = app_home::mojom::AppInfo::New();
+  source_app_info->id = source_app_id;
+  page_->RemoveApp(std::move(source_app_info));
+  page_->AddApp(CreateAppInfoPtrFromWebApp(target_app_id));
 }
 
 void AppHomePageHandler::OnWebAppInstallManagerDestroyed() {
@@ -661,17 +693,29 @@ void AppHomePageHandler::GetDeprecationLinkString(
 void AppHomePageHandler::OnWebAppRunOnOsLoginModeChanged(
     const webapps::AppId& app_id,
     web_app::RunOnOsLoginMode run_on_os_login_mode) {
+  if (!web_app_provider_->registrar_unsafe().AppMatches(
+          app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return;
+  }
   page_->AddApp(CreateAppInfoPtrFromWebApp(app_id));
 }
 
 void AppHomePageHandler::OnWebAppUserDisplayModeChanged(
     const webapps::AppId& app_id,
     web_app::mojom::UserDisplayMode user_display_mode) {
+  if (!web_app_provider_->registrar_unsafe().AppMatches(
+          app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return;
+  }
   page_->AddApp(CreateAppInfoPtrFromWebApp(app_id));
 }
 
 void AppHomePageHandler::OnWebAppInstalledWithOsHooks(
     const webapps::AppId& app_id) {
+  if (!web_app_provider_->registrar_unsafe().AppMatches(
+          app_id, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return;
+  }
   page_->AddApp(CreateAppInfoPtrFromWebApp(app_id));
 }
 

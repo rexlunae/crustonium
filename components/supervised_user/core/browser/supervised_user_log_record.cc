@@ -18,6 +18,7 @@
 #include "components/supervised_user/core/browser/device_parental_controls.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
+#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "extensions/buildflags/buildflags.h"
 
@@ -44,10 +45,8 @@ std::optional<SupervisedUserLogRecord::Segment> GetSupervisionStatus(
     signin::IdentityManager* identity_manager,
     const PrefService& pref_service,
     const DeviceParentalControls& device_parental_controls) {
-  // TODO(crbug.com/474592052): in case of Family Link and device supervision,
-  // prefer Family Link supervision status. Once properly handled, record
-  // metrics for both supervision types.
-  if (!IsSubjectToParentalControls(pref_service) &&
+  if (!base::FeatureList::IsEnabled(kSupervisedUserEmitLogRecordSeparately) &&
+      !IsSubjectToParentalControls(pref_service) &&
       device_parental_controls.IsEnabled()) {
     // This type of supervision is signin-status independent (but only available
     // to non-incognito profiles).
@@ -62,17 +61,19 @@ std::optional<SupervisedUserLogRecord::Segment> GetSupervisionStatus(
 
   AccountInfo account_info = identity_manager->FindExtendedAccountInfo(
       identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin));
-  if (!AreParentalSupervisionCapabilitiesKnown(account_info.capabilities)) {
+  if (!AreParentalSupervisionCapabilitiesKnown(
+          account_info.GetAccountCapabilities())) {
     // The user is signed in, but the parental supervision capabilities are
     // not known.
     return std::nullopt;
   }
 
   auto is_subject_to_parental_controls =
-      account_info.capabilities.is_subject_to_parental_controls();
+      account_info.GetAccountCapabilities().is_subject_to_parental_controls();
   if (is_subject_to_parental_controls == signin::Tribool::kTrue) {
     auto is_opted_in_to_parental_supervision =
-        account_info.capabilities.is_opted_in_to_parental_supervision();
+        account_info.GetAccountCapabilities()
+            .is_opted_in_to_parental_supervision();
     if (is_opted_in_to_parental_supervision == signin::Tribool::kTrue) {
       return SupervisedUserLogRecord::Segment::
           kSupervisionEnabledByFamilyLinkUser;
@@ -82,8 +83,8 @@ std::optional<SupervisedUserLogRecord::Segment> GetSupervisionStatus(
       return SupervisedUserLogRecord::Segment::
           kSupervisionEnabledByFamilyLinkPolicy;
     }
-  } else if (account_info.capabilities.can_fetch_family_member_info() ==
-             signin::Tribool::kTrue) {
+  } else if (account_info.GetAccountCapabilities()
+                 .can_fetch_family_member_info() == signin::Tribool::kTrue) {
     if (IsParentFamilyMemberRole(pref_service)) {
       return SupervisedUserLogRecord::Segment::kParent;
     }
@@ -145,6 +146,11 @@ std::optional<ToggleState> GetPermissionsToggleState(
   // Note: Do not check that the ProviderType is `kSupervisedProvider`. This
   // is true only when the parent has disabled the "Permissions" FL switch.
 
+  // TODO(crbug.com/494643383): Figure out what to do with this block on desktop
+  // Android. Enabling it via ENABLE_EXTENSIONS_CORE causes the DCHECK to fire
+  // because geolocation is false and the permission is also false. These are
+  // the same values as non-desktop Android, so we can clearly tolerate both
+  // being false, but it's strange that they don't match Win/Mac/Linux.
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   bool block_geolocation = is_geolocation_blocked_by_default;
   bool permissions_allowed_pref = pref_service.GetBoolean(
@@ -159,17 +165,17 @@ std::optional<ToggleState> GetPermissionsToggleState(
 #endif  // BUILDFLAG(IS_IOS)
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 bool SupervisedUserCanSkipExtensionParentApprovals(
     const PrefService& pref_service) {
   return pref_service.GetBoolean(prefs::kSkipParentApprovalToInstallExtensions);
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 std::optional<ToggleState> GetExtensionToggleState(
     std::optional<SupervisedUserLogRecord::Segment> supervision_status,
     const PrefService& pref_service) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (IsUnsupervisedStatus(supervision_status)) {
     return std::nullopt;
   }
@@ -299,8 +305,17 @@ SupervisedUserLogRecord SupervisedUserLogRecord::Create(
 
 // static
 bool SupervisedUserLogRecord::EmitHistograms(
-    const std::vector<SupervisedUserLogRecord>& records) {
+    const std::vector<SupervisedUserLogRecord>& records,
+    const DeviceParentalControls& device_parental_controls) {
   bool did_emit_histogram = false;
+
+  if (base::FeatureList::IsEnabled(kSupervisedUserEmitLogRecordSeparately) &&
+      device_parental_controls.IsEnabled()) {
+    base::UmaHistogramEnumeration(
+        kFamilyLinkUserLogSegmentHistogramName,
+        SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally);
+    did_emit_histogram = true;
+  }
 
   std::optional<SupervisedUserLogRecord::Segment> segment =
       GetLogSegmentForHistogram(records);

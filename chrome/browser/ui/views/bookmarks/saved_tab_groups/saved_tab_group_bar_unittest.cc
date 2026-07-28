@@ -8,12 +8,13 @@
 #include <optional>
 #include <string>
 
-#include "base/task/current_thread.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/uuid.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/frame/window_frame_util.h"
+#include "chrome/browser/ui/tabs/organizer/organizer_panel_state_controller.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_button.h"
@@ -21,17 +22,15 @@
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/test_browser_window.h"
-#include "chrome/test/base/testing_profile.h"
-#include "chrome/test/views/chrome_views_test_base.h"
+#include "chrome/test/user_education/mock_browser_user_education_interface.h"
 #include "components/collaboration/public/features.h"
 #include "components/data_sharing/public/features.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/saved_tab_groups/internal/tab_group_sync_service_impl.h"
-#include "components/saved_tab_groups/public/collaboration_finder.h"
 #include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/pref_names.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
-#include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/saved_tab_groups/public/types.h"
 #include "components/saved_tab_groups/test_support/saved_tab_group_test_utils.h"
@@ -41,6 +40,9 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/events/event.h"
+#include "ui/events/types/event_type.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_utils.h"
 
@@ -58,30 +60,33 @@ const tab_groups::TabGroupColorId kNewColor = tab_groups::TabGroupColorId::kRed;
 
 class SavedTabGroupBarUnitTest : public TestWithBrowserView {
  public:
-  SavedTabGroupBarUnitTest() {
-    // TODO (crbug.com/406068322) the Messaging Service currently interferes
-    // with this test harness, it needs to be cleaned up.
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{data_sharing::features::kDataSharingFeature},
-        {collaboration::features::kCollaborationMessaging});
+  SavedTabGroupBarUnitTest() : SavedTabGroupBarUnitTest(true) {}
+  explicit SavedTabGroupBarUnitTest(bool init_features) {
+    if (init_features) {
+      // TODO (crbug.com/406068322) the Messaging Service currently interferes
+      // with this test harness, it needs to be cleaned up.
+      feature_list_.InitWithFeatures(
+          /*enabled_features=*/{data_sharing::features::kDataSharingFeature},
+          {collaboration::features::kCollaborationMessaging});
+    }
   }
 
   SavedTabGroupBar* saved_tab_group_bar() { return saved_tab_group_bar_.get(); }
   TabGroupSyncService* service() {
     return tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   int button_padding() { return button_padding_; }
 
   void SetUp() override {
     TestWithBrowserView::SetUp();
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         tab_groups::prefs::kAutoPinNewTabGroups, true);
 
     TabGroupSyncService* service =
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     service->SetIsInitializedForTesting(true);
     Wait();
 
@@ -108,7 +113,7 @@ class SavedTabGroupBarUnitTest : public TestWithBrowserView {
 
   void AddTabToBrowser(Browser* browser, int index) {
     std::unique_ptr<content::WebContents> web_contents =
-        content::WebContentsTester::CreateTestWebContents(browser->profile(),
+        content::WebContentsTester::CreateTestWebContents(browser->GetProfile(),
                                                           nullptr);
 
     browser->tab_strip_model()->AddWebContents(
@@ -207,7 +212,7 @@ class SavedTabGroupBarUnitTest : public TestWithBrowserView {
                                 &new_visual_data);
   }
 
- private:
+ protected:
   base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<SavedTabGroupBar> saved_tab_group_bar_;
 
@@ -520,9 +525,11 @@ TEST_F(SavedTabGroupBarUnitTest, OnlyShowEverthingButton) {
                                         ->GetPreferredSize()
                                         .width() +
                                     SavedTabGroupBar::kBetweenElementSpacing;
-  const int overflow_preferred_width =
-      saved_tab_group_bar()->overflow_button()->GetPreferredSize().width() +
-      SavedTabGroupBar::kBetweenElementSpacing;
+  const int overflow_preferred_width = saved_tab_group_bar()
+                                           ->everything_menu_button()
+                                           ->GetPreferredSize()
+                                           .width() +
+                                       SavedTabGroupBar::kBetweenElementSpacing;
 
   // Not enough width for even the overflow button
   saved_tab_group_bar()->SetBounds(0, 0, overflow_preferred_width - 1, 100);

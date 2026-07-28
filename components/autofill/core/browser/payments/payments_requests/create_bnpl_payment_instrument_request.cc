@@ -4,8 +4,15 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/create_bnpl_payment_instrument_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -38,8 +45,7 @@ std::string CreateBnplPaymentInstrumentRequest::GetRequestContent() {
   base::DictValue request_dict;
   base::DictValue context;
   context.Set("language_code", request_details_.app_locale);
-  context.Set("billable_service",
-              payments::kUploadPaymentMethodBillableServiceNumber);
+  context.Set("billable_service", kUploadPaymentMethodBillableServiceNumber);
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
                 BuildCustomerContextDictionary(

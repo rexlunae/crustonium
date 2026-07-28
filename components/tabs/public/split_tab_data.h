@@ -27,8 +27,12 @@ class SplitTabData {
   const split_tabs::SplitTabId& id() const { return id_; }
 
   SplitTabVisualData* visual_data() { return &visual_data_; }
+  const SplitTabVisualData* visual_data() const { return &visual_data_; }
 
   std::vector<tabs::TabInterface*> ListTabs() const;
+
+  // Returns the TabCollection handle associated with this split.
+  tabs::TabCollection::Handle GetCollectionHandle() const;
 
   // Returns [start, end) where the leftmost tab in the split has index start
   // and the rightmost tab in the split has index end - 1.

@@ -35,15 +35,16 @@ using ::testing::Values;
 
 class SigninHatsUtilBaseBrowserTest : public SigninBrowserTestBase {
  public:
-  explicit SigninHatsUtilBaseBrowserTest(const base::Feature& feature) {
-    feature_list_.InitAndEnableFeature(feature);
+  explicit SigninHatsUtilBaseBrowserTest(
+      const std::vector<base::test::FeatureRef> enabled_features) {
+    feature_list_.InitWithFeatures(enabled_features, /*disabled_features=*/{});
   }
 
   void SetUpOnMainThread() override {
     SigninBrowserTestBase::SetUpOnMainThread();
     mock_hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            CHECK_DEREF(browser()).profile(),
+            CHECK_DEREF(browser()).GetProfile(),
             base::BindRepeating(&BuildMockHatsService)));
   }
 
@@ -79,11 +80,13 @@ class SigninHatsUtilBrowserTest : public SigninHatsUtilBaseBrowserTest {
  public:
   SigninHatsUtilBrowserTest()
       : SigninHatsUtilBaseBrowserTest(
-            switches::kChromeIdentitySurveyFirstRunSignin) {}
+            /*enabled_features=*/{
+                switches::
+                    kChromeIdentitySurveySwitchProfileFromProfilePicker}) {}
 
  protected:
   std::string trigger() const {
-    return kHatsSurveyTriggerIdentityFirstRunSignin;
+    return kHatsSurveyTriggerIdentitySwitchProfileFromProfilePicker;
   }
 };
 
@@ -103,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest, LaunchHatsSurveyForProfile) {
       .Times(0);
 
   signin::LaunchHatsSurveyForProfile(trigger(),
-                                     CHECK_DEREF(browser()).profile());
+                                     CHECK_DEREF(browser()).GetProfile());
 }
 
 IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest,
@@ -121,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest,
       .Times(0);
 
   signin::LaunchHatsSurveyForProfile(trigger(),
-                                     CHECK_DEREF(browser()).profile());
+                                     CHECK_DEREF(browser()).GetProfile());
 }
 
 IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest,
@@ -135,13 +138,13 @@ IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest,
       .Times(0);
 
   signin::LaunchHatsSurveyForProfile(
-      trigger(), CHECK_DEREF(browser()).profile(),
+      trigger(), CHECK_DEREF(browser()).GetProfile(),
       /*defer_if_no_browser=*/false, std::move(survey_data));
 }
 
 IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest,
                        LaunchHatsSurveyDeferIfNoBrowser) {
-  Profile* profile = CHECK_DEREF(browser()).profile();
+  Profile* profile = CHECK_DEREF(browser()).GetProfile();
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
   ScopedProfileKeepAlive profile_keep_alive(
@@ -164,7 +167,7 @@ IN_PROC_BROWSER_TEST_F(SigninHatsUtilBrowserTest,
   EXPECT_CALL(mock_hats_service(), LaunchDelayedSurvey).Times(0);
 
   signin::LaunchHatsSurveyForProfile(/*trigger=*/"unknown_trigger",
-                                     CHECK_DEREF(browser()).profile());
+                                     CHECK_DEREF(browser()).GetProfile());
 }
 
 struct PromoBubbleTestParams {
@@ -179,7 +182,8 @@ class SigninHatsUtilPromoBubbleDismissedBrowserTest
  public:
   SigninHatsUtilPromoBubbleDismissedBrowserTest()
       : SigninHatsUtilBaseBrowserTest(
-            switches::kChromeIdentitySurveySigninPromoBubbleDismissed) {}
+            /*enabled_features=*/{
+                switches::kChromeIdentitySurveySigninPromoBubbleDismissed}) {}
 
  protected:
   std::string trigger() const {
@@ -203,7 +207,7 @@ IN_PROC_BROWSER_TEST_P(SigninHatsUtilPromoBubbleDismissedBrowserTest,
       .Times(0);
 
   signin::LaunchHatsSurveyForProfile(
-      trigger(), CHECK_DEREF(browser()).profile(),
+      trigger(), CHECK_DEREF(browser()).GetProfile(),
       /*defer_if_no_browser=*/false, GetParam().access_point);
 }
 
@@ -233,3 +237,42 @@ INSTANTIATE_TEST_SUITE_P(
       base::RemoveChars(info.param.expected_bubble_type, " ", &test_suffix);
       return test_suffix;
     });
+
+class SigninHatsUtilConflictingFeaturesBrowserTest
+    : public SigninHatsUtilBaseBrowserTest {
+ public:
+  SigninHatsUtilConflictingFeaturesBrowserTest()
+      : SigninHatsUtilBaseBrowserTest(
+            /*enabled_features=*/{
+                switches::kChromeIdentitySurveyFirstRunSignin,
+                switches::kBeforeFirstRunDesktopRefreshSurvey}) {}
+
+ protected:
+  std::string trigger_with_no_conflict() const {
+    return kHatsSurveyTriggerIdentityFirstRunCompleted;
+  }
+
+  std::string trigger_with_conflict() const {
+    return kHatsSurveyTriggerIdentityFirstRunSignin;
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(SigninHatsUtilConflictingFeaturesBrowserTest,
+                       LaunchHatsSurveyForProfileIfNoConflict) {
+  EXPECT_CALL(mock_hats_service(),
+              LaunchDelayedSurvey(trigger_with_no_conflict(), _, _, _));
+  EXPECT_CALL(mock_hats_service(),
+              LaunchDelayedSurvey(Not(trigger_with_no_conflict()), _, _, _))
+      .Times(0);
+
+  signin::LaunchHatsSurveyForProfile(trigger_with_no_conflict(),
+                                     CHECK_DEREF(browser()).GetProfile());
+}
+
+IN_PROC_BROWSER_TEST_F(SigninHatsUtilConflictingFeaturesBrowserTest,
+                       DoNotLaunchHatsSurveyForProfileIfConflict) {
+  EXPECT_CALL(mock_hats_service(), LaunchDelayedSurvey).Times(0);
+
+  signin::LaunchHatsSurveyForProfile(trigger_with_conflict(),
+                                     CHECK_DEREF(browser()).GetProfile());
+}

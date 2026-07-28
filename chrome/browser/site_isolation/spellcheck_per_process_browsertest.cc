@@ -271,7 +271,7 @@ class ChromeSitePerProcessSpellCheckTest : public ChromeSitePerProcessTest {
 
  protected:
   // Tests that spelling in out-of-process subframes is checked.
-  // See crbug.com/638361 for details.
+  // See crbug.com/40480876 for details.
   void RunOOPIFSpellCheckTest() {
     SpellCheckBrowserTestHelper spell_check_helper;
 
@@ -294,13 +294,13 @@ class ChromeSitePerProcessSpellCheckTest : public ChromeSitePerProcessTest {
   }
 
   // Tests that after disabling spellchecking, spelling in new out-of-process
-  // subframes is not checked. See crbug.com/789273 for details.
-  // https://crbug.com/944428
+  // subframes is not checked. See crbug.com/41357814 for details.
+  // https://crbug.com/40619449
   void RunOOPIFDisabledSpellCheckTest() {
     SpellCheckBrowserTestHelper spell_check_helper;
 
     content::BrowserContext* browser_context =
-        static_cast<content::BrowserContext*>(browser()->profile());
+        static_cast<content::BrowserContext*>(browser()->GetProfile());
 
     // Initiate a SpellcheckService
     SpellcheckServiceFactory::GetForContext(browser_context);
@@ -352,7 +352,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessSpellCheckTest,
 
 #if BUILDFLAG(HAS_SPELLCHECK_PANEL)
 // Tests that the OSX spell check panel can be opened from an out-of-process
-// subframe, crbug.com/712395
+// subframe, crbug.com/40515960
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessSpellCheckTest,
                        OOPIFSpellCheckPanelTest) {
   spellcheck::SpellCheckPanelBrowserTestHelper test_helper;

@@ -30,6 +30,10 @@ component("private_metrics_recorders") {
   sources = [
     "dkm_recorder.cc",
     "dkm_recorder.h",
+    "lom_recorder.cc",
+    "lom_recorder.h",
+    "puma_histogram_functions.cc",
+    "puma_histogram_functions.h",
   ]
   defines = [ "IS_PRIVATE_METRICS_RECORDERS_IMPL" ]
   public_deps = [
@@ -42,7 +46,8 @@ component("private_metrics_recorders") {
   ]
 }
 
-# TODO(crbug.com/433729993): Build dwa static library under private_metrics static library.
+# TODO(crbug.com/433729993): Build dwa static library under private_metrics
+# static library.
 static_library("private_metrics") {
   sources = [
     "//components/metrics/dwa/dwa_entry_builder.cc",
@@ -90,6 +95,7 @@ static_library("private_metrics") {
     ":private_metrics_features",
     "//base",
     "//build:buildflag_header_h",
+    "//components/background_task_scheduler",
     "//components/metrics",
     "//components/metrics:library_support",
     "//components/metrics:metrics_pref_names",
@@ -114,10 +120,13 @@ source_set("unit_tests") {
     "//components/metrics/private_metrics/puma_service_unittest.cc",
     "data_upload_config_downloader_unittest.cc",
     "dkm_entry_builder_unittest.cc",
+    "lom_recorder_unittest.cc",
+    "puma_histogram_functions_unittest.cc",
   ]
   deps = [
     ":private_metrics",
     ":private_metrics_features",
+    "private_insights:unit_tests",
     "//base",
     "//base/test:test_support",
     "//components/country_codes",
@@ -131,6 +140,7 @@ source_set("unit_tests") {
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/federated_compute:confidential_compute",
+    "//third_party/federated_compute:confidential_compute_crypto_test_util",
     "//third_party/federated_compute:confidential_compute_proto",
     "//third_party/metrics_proto",
     "//third_party/oak:oak_proto",

@@ -32,13 +32,14 @@
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
 #include "third_party/blink/renderer/core/css/document_style_environment_variables.h"
 #include "third_party/blink/renderer/core/css/media_feature_overrides.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/css/vision_deficiency.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data.h"
 #include "third_party/blink/renderer/core/dom/visited_link_state.h"
 #include "third_party/blink/renderer/core/editing/drag_caret.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
@@ -66,7 +67,6 @@
 #include "third_party/blink/renderer/core/inspector/inspector_issue_storage.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
-#include "third_party/blink/renderer/core/layout/text_autosizer.h"
 #include "third_party/blink/renderer/core/loader/idleness_detector.h"
 #include "third_party/blink/renderer/core/page/autoscroll_controller.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
@@ -93,6 +93,7 @@
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme_overlay_mobile.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image_chrome_client.h"
 #include "third_party/blink/renderer/core/svg/svg_document_resource_tracker.h"
+#include "third_party/blink/renderer/core/svg/svg_resource_scheduler_registry.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/heap/disallow_new_wrapper.h"
@@ -280,7 +281,6 @@ Page::Page(base::PassKey<Page>,
       next_related_page_(this),
       prev_related_page_(this),
       autoplay_flags_(0),
-      web_text_autosizer_page_info_({0, 0, 1.f}),
       v8_compile_hints_producer_(
           MakeGarbageCollected<
               v8_compile_hints::V8CrowdsourcedCompileHintsProducer>(this)),
@@ -541,10 +541,7 @@ SpatialNavigationController& Page::GetSpatialNavigationController() {
 SVGDocumentResourceTracker& Page::GetSVGDocumentResourceTracker() {
   if (!svg_document_resource_tracker_) {
     svg_document_resource_tracker_ =
-        MakeGarbageCollected<SVGDocumentResourceTracker>(
-            GetPageScheduler()->GetAgentGroupScheduler().DefaultTaskRunner(),
-            SVGDocumentResourceTracker::MakeCacheIdentifier(
-                String(BrowsingContextGroupToken().ToString())));
+        SVGResourceSchedulerRegistry::GetTracker(GetAgentGroupScheduler());
   }
   return *svg_document_resource_tracker_;
 }
@@ -679,6 +676,15 @@ void Page::InitialStyleChanged() {
     if (!local_frame)
       continue;
     local_frame->GetDocument()->GetStyleEngine().InitialStyleChanged();
+  }
+}
+
+void Page::UAStyleChanged() {
+  for (Frame* frame = MainFrame(); frame;
+       frame = frame->Tree().TraverseNext()) {
+    if (auto* local_frame = DynamicTo<LocalFrame>(frame)) {
+      local_frame->GetDocument()->GetStyleEngine().UAStyleChanged();
+    }
   }
 }
 
@@ -1012,11 +1018,6 @@ void Page::SettingsChanged(ChangeType change_type) {
             ->GetDocument()
             ->GetViewportData()
             .UpdateViewportDescription();
-        // The text autosizer has dependencies on the viewport. Viewport
-        // description only applies to the main frame. On a viewport description
-        // change; any changes will be calculated starting from the local main
-        // frame renderer and propagated to the OOPIF renderers.
-        TextAutosizer::UpdatePageInfoInAllFrames(MainFrame());
       }
       break;
     case ChangeType::kViewportPaintProperties:
@@ -1067,16 +1068,6 @@ void Page::SettingsChanged(ChangeType change_type) {
           document->GetStyleEngine().InitialStyleChanged();
         }
       }
-      break;
-    case ChangeType::kTextAutosizing:
-      if (!MainFrame())
-        break;
-      // We need to update even for remote main frames since this setting
-      // could be changed via InternalSettings.
-      TextAutosizer::UpdatePageInfoInAllFrames(MainFrame());
-      // The text-size-adjust adjustment in style depends on the text autosizing
-      // setting, so we need to invalidate style.
-      InitialStyleChanged();
       break;
     case ChangeType::kFontFamily:
       for (Frame* frame = MainFrame(); frame;
@@ -1221,6 +1212,13 @@ void Page::SettingsChanged(ChangeType change_type) {
       ForcedColorsChanged();
       break;
     }
+    case ChangeType::kAcceptLanguages:
+      AcceptLanguagesChanged();
+      break;
+    case ChangeType::kTextTrackStyle:
+      CSSDefaultStyleSheets::Instance().ResetTextTrackStyleSheet();
+      UAStyleChanged();
+      break;
   }
 }
 
@@ -1285,13 +1283,13 @@ void Page::DidCommitLoad(LocalFrame* frame) {
         ScrollOffset(), mojom::blink::ScrollType::kProgrammatic,
         cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
   }
-  // crbug/1312107: If DevTools has "Highlight ad frames" checked when the
-  // main frame is refreshed or the ad frame is navigated to a different
-  // process, DevTools calls `Settings::SetHighlightAds` so early that the
-  // local frame is still in provisional state (not swapped in). Explicitly
-  // invalidate the settings here as `Page::DidCommitLoad` is only fired after
-  // the navigation is committed, at which point the local frame must already
-  // be swapped-in.
+  // crbug.com/1312107: If DevTools has "Highlight ads" checked when the main
+  // frame is refreshed or the ad frame is navigated to a different process,
+  // DevTools calls `Settings::SetInspectorHighlightAds` so early that the local
+  // frame is still in provisional state (not swapped in). Explicitly invalidate
+  // the settings here as `Page::DidCommitLoad` is only fired after the
+  // navigation is committed, at which point the local frame must already be
+  // swapped-in.
   //
   // This explicit update is placed outside the above if-block to accommodate
   // iframes. The iframes share the same Page (frame tree) as the main frame,
@@ -1393,10 +1391,6 @@ void Page::WillBeDestroyed() {
     prev->next_related_page_ = next;
     prev_related_page_ = nullptr;
     next_related_page_ = nullptr;
-  }
-
-  if (svg_document_resource_tracker_) {
-    svg_document_resource_tracker_->WillBeDestroyed();
   }
 
   if (scrolling_coordinator_)
@@ -1577,11 +1571,6 @@ void Page::UpdateBrowsingContextGroup(
   }
 }
 
-void Page::SetAttributionSupport(
-    network::mojom::AttributionSupport attribution_support) {
-  attribution_support_ = attribution_support;
-}
-
 template class CORE_TEMPLATE_EXPORT Supplement<Page>;
 
 const char InternalSettingsPageSupplementBase::kSupplementName[] =
@@ -1602,10 +1591,35 @@ void Page::PrepareForLeakDetection() {
   }
 }
 
+void Page::UpgradePrerenderUntilScriptToFullPrerender() {
+  CHECK(IsPrerendering());
+  CHECK(ShouldPauseJavaScriptExecutionOnPrerender());
+  should_pause_javascript_execution_on_prerender_ = false;
+
+  // Collect local documents first. Unblocking script execution can
+  // synchronously run parser scripts, which may mutate the frame tree
+  // (e.g. inserting or removing iframes). Snapshotting avoids issues with
+  // iterating a tree that changes under us. This mirrors the pattern used
+  // by WebViewImpl::ActivatePrerenderedPage().
+  HeapVector<Member<Document>> documents;
+  for (Frame* frame = MainFrame(); frame;
+       frame = frame->Tree().TraverseNext()) {
+    if (auto* local_frame = DynamicTo<LocalFrame>(frame)) {
+      if (Document* document = local_frame->GetDocument()) {
+        documents.push_back(document);
+      }
+    }
+  }
+
+  for (auto& document : documents) {
+    document->UnblockScriptExecutionForPrerenderUpgrade();
+  }
+}
+
 // Ensure the 10 bits reserved for connected frame count in NodeRareData are
 // sufficient.
 static_assert(kMaxNumberOfFrames <
-                  (1 << ElementRareDataVector::kConnectedFrameCountBits),
+                  (1 << NodeRareData::kConnectedFrameCountBits),
               "Frame limit should fit in rare data count");
 static_assert(kTenFrames < kMaxNumberOfFrames,
               "Reduced frame limit for testing should actually be lower");

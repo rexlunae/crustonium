@@ -51,7 +51,8 @@ enum class FontDataServiceIPC {
   kMatchFamilyNameCharacter = 1,
   kGetAllFamilyNames = 2,
   kLegacyMakeTypeface = 3,
-  kMaxValue = kLegacyMakeTypeface,
+  kMatchLocalFont = 4,
+  kMaxValue = kMatchLocalFont,
 };
 
 // Value is arbitrary. The number should be small to conserve memory but large
@@ -95,7 +96,8 @@ FontDataServiceImpl::MappedAsset::MappedAsset(
 FontDataServiceImpl::MappedAsset::~MappedAsset() = default;
 
 FontDataServiceImpl::FontDataServiceImpl()
-    : font_manager_(skia::DefaultFontMgr()) {
+    : font_manager_(skia::DefaultFontMgr()),
+      local_font_matcher_(LocalFontMatcher::Create()) {
   CHECK(font_manager_);
 }
 
@@ -119,12 +121,6 @@ std::tuple<base::File, uint64_t> FontDataServiceImpl::GetFileHandle(
   typeface.getResourceName(&font_path);
   base::UmaHistogramBoolean("Chrome.FontDataService.EmptyPathOnGetFileHandle",
                             font_path.isEmpty());
-#if BUILDFLAG(IS_LINUX)
-  // TODO(crbug.com/463411679): `getResourceName()` is not implemented for
-  // Linux, so the returned file will always be invalid and a memory region will
-  // be shared instead.
-  CHECK(font_path.isEmpty());
-#endif  // BUILDFLAG(IS_LINUX)
   if (font_path.isEmpty()) {
     return {};
   }
@@ -227,6 +223,16 @@ bool FontDataServiceImpl::CheckMatchesRequiredStyle(
 
   for (const auto& family_name : kFamiliesWithRequiredStyles) {
     if (base::EqualsCaseInsensitiveASCII(requested_family_name, family_name)) {
+      // As an additional check, verify if the family actually contains a
+      // regular face. If it doesn't, we should refuse to use any face from this
+      // family to avoid poor UX (e.g. using ultra-bold for a regular request).
+      // This matches the legacy logic in DWriteFontProxyImpl::FindFamily.
+      sk_sp<SkTypeface> regular_face = font_manager_->matchFamilyStyle(
+          requested_family_name.c_str(), SkFontStyle::Normal());
+      if (!regular_face || regular_face->fontStyle() != SkFontStyle::Normal()) {
+        return false;
+      }
+
       int found_weight_direction = find_style_component_direction(
           actual_style.weight(), SkFontStyle::kLight_Weight,
           SkFontStyle::kSemiBold_Weight);
@@ -480,6 +486,9 @@ FontDataServiceImpl::CreateMatchFamilyNameResult(
     return nullptr;
   }
 
+  result->synthetic_bold = typeface->isSyntheticBold();
+  result->synthetic_oblique = typeface->isSyntheticOblique();
+
   const int axis_count = typeface->getVariationDesignPosition({});
   if (axis_count > 0) {
     auto coordinate_list =
@@ -499,6 +508,44 @@ FontDataServiceImpl::CreateMatchFamilyNameResult(
   }
 
   return result;
+}
+
+void FontDataServiceImpl::MatchLocalFont(const std::string& font_unique_name,
+                                         MatchLocalFontCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  TRACE_EVENT("fonts", "FontDataServiceImpl::MatchLocalFont",
+              "font_unique_name", font_unique_name);
+  base::UmaHistogramEnumeration("Chrome.FontDataService.InvokedIPC",
+                                FontDataServiceIPC::kMatchLocalFont);
+
+  if (local_font_matcher_) {
+    std::optional<LocalFontMatchResult> match =
+        local_font_matcher_->MatchLocalFont(font_unique_name);
+    base::UmaHistogramBoolean(
+        "Chrome.FontDataService.MatchLocalFont.FilterSuccess",
+        match.has_value());
+    if (match) {
+      base::File font_file(match->file_path,
+                           base::File::FLAG_OPEN | base::File::FLAG_READ |
+                               base::File::FLAG_WIN_EXCLUSIVE_WRITE);
+#if BUILDFLAG(IS_WIN)
+      if (!font_file.IsValid()) {
+        base::UmaHistogramSparse("Chrome.FontDataService.WinLastError",
+                                 ::GetLastError());
+      }
+#endif  // BUILDFLAG(IS_WIN)
+      if (font_file.IsValid()) {
+        auto result = mojom::MatchFamilyNameResult::New();
+        result->ttc_index = match->ttc_index;
+        result->typeface_data =
+            mojom::TypefaceData::NewFontFile(mojom::TypefaceFile::New(
+                std::move(font_file), GetUniqueFileId(match->file_path)));
+        std::move(callback).Run(std::move(result));
+        return;
+      }
+    }
+  }
+  std::move(callback).Run(nullptr);
 }
 
 }  // namespace font_data_service

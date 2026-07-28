@@ -781,8 +781,8 @@ TEST(X509UtilTest, LastOidComponentFromBase) {
   }
   {
     // Last component is too big.
-    const uint8_t oid[] = {0x1, 0x2, 0x3, 0x82, 0x0, 0x0, 0x0,
-                           0x0, 0x0, 0x0, 0x0,  0x0, 0x0};
+    const uint8_t oid[] = {0x1,  0x2,  0x3,  0x82, 0x80, 0x80, 0x80,
+                           0x80, 0x80, 0x80, 0x80, 0x80, 0x0};
     auto last = LastOidComponentFromBase(oid, base);
     EXPECT_EQ(last, std::nullopt);
   }
@@ -821,6 +821,87 @@ TEST(X509UtilTest, LastOidComponentFromBase) {
     const uint8_t oid[] = {0x1, 0x2};
     auto last = LastOidComponentFromBase(oid, base);
     EXPECT_EQ(last, std::nullopt);
+  }
+}
+
+TEST(X509UtilTest, SplitLastOidComponent) {
+  {
+    const uint8_t expected_base[] = {0x1, 0x2, 0x3};
+    const uint8_t oid[] = {0x1, 0x2, 0x3, 0x4};
+    auto r = SplitLastOidComponent(oid);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->base_id, expected_base);
+    EXPECT_EQ(r->last_component, 4);
+  }
+  {
+    const uint8_t expected_base[] = {0x1, 0x2, 0x3};
+    const uint8_t oid[] = {0x1, 0x2, 0x3, 0x81, 0x4};
+    auto r = SplitLastOidComponent(oid);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->base_id, expected_base);
+    EXPECT_EQ(r->last_component, 0x84);
+  }
+  {
+    const uint8_t expected_base[] = {0x1, 0x2, 0x3};
+    const uint8_t oid[] = {0x1,  0x2,  0x3,  0x81, 0xff, 0xff, 0xff,
+                           0xff, 0xff, 0xff, 0xff, 0xff, 0x7f};
+    auto r = SplitLastOidComponent(oid);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->base_id, expected_base);
+    EXPECT_EQ(r->last_component, std::numeric_limits<uint64_t>::max());
+  }
+  {
+    // Last component is too big.
+    const uint8_t oid[] = {0x1,  0x2,  0x3,  0x82, 0x80, 0x80, 0x80,
+                           0x80, 0x80, 0x80, 0x80, 0x80, 0x0};
+    auto r = SplitLastOidComponent(oid);
+    EXPECT_EQ(r, std::nullopt);
+  }
+  {
+    // Last component is not minimally encoded.
+    const uint8_t oid[] = {0x1, 0x2, 0x3, 0x80, 0x01};
+    auto r = SplitLastOidComponent(oid);
+    EXPECT_EQ(r, std::nullopt);
+  }
+  {
+    // Last component is truncated.
+    const uint8_t oid[] = {0x1, 0x2, 0x3, 0x81};
+    auto r = SplitLastOidComponent(oid);
+    EXPECT_EQ(r, std::nullopt);
+  }
+
+  // one-byte base, one-byte last component
+  {
+    const uint8_t expected_base[] = {0x3};
+    const uint8_t oid[] = {0x3, 0x4};
+    auto r = SplitLastOidComponent(oid);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->base_id, expected_base);
+    EXPECT_EQ(r->last_component, 4);
+  }
+
+  // empty base, one-byte last component
+  {
+    const uint8_t oid[] = {0x4};
+    auto r = SplitLastOidComponent(oid);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->base_id, base::span<uint8_t>());
+    EXPECT_EQ(r->last_component, 4);
+  }
+
+  // empty base, multi-byte last component
+  {
+    const uint8_t oid[] = {0x81, 0x4};
+    auto r = SplitLastOidComponent(oid);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->base_id, base::span<uint8_t>());
+    EXPECT_EQ(r->last_component, 0x84);
+  }
+
+  // empty input
+  {
+    auto r = SplitLastOidComponent({});
+    EXPECT_EQ(r, std::nullopt);
   }
 }
 
@@ -895,6 +976,17 @@ TEST(X509UtilTest, ParseTlsTrustAnchorIDs) {
         ParseTlsTrustAnchorIDs(wire_ids);
     EXPECT_TRUE(parsed_ids.empty());
   }
+}
+
+TEST(X509UtilTest, TrustAnchorIDsToString) {
+  std::vector<std::vector<uint8_t>> trust_anchor_ids = {
+      // 44363.48.7 encoded as a relative OID
+      {0x82, 0xda, 0x4b, 0x30, 0x07},
+      // 44363.48.7.127 encoded as a relative OID
+      {0x82, 0xda, 0x4b, 0x30, 0x07, 0x7f},
+  };
+  EXPECT_EQ("44363.48.7, 44363.48.7.127",
+            TrustAnchorIDsToString(trust_anchor_ids));
 }
 
 }  // namespace net::x509_util

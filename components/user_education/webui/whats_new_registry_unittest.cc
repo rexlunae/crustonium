@@ -29,41 +29,32 @@ using BrowserCommand = browser_command::mojom::Command;
 // Modules
 // Enabled through feature list.
 BASE_FEATURE(kTestModuleEnabled,
-             "TestModuleEnabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Disabled through feature list.
 BASE_FEATURE(kTestModuleDisabled,
-             "TestModuleDisabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled by default.
 BASE_FEATURE(kTestModuleEnabledByDefault,
-             "TestModuleEnabledByDefault",
              base::FEATURE_ENABLED_BY_DEFAULT);
 // Disabled by default.
 BASE_FEATURE(kTestModuleDisabledByDefault,
-             "TestModuleDisabledByDefault",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Editions
 // Enabled through feature list.
 BASE_FEATURE(kTestEditionEnabled1,
-             "TestEditionEnabled1",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled through feature list.
 BASE_FEATURE(kTestEditionEnabled2,
-             "TestEditionEnabled2",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled by default.
 BASE_FEATURE(kTestEditionEnabledByDefault,
-             "TestEditionEnabledByDefault",
              base::FEATURE_ENABLED_BY_DEFAULT);
 // Disabled by default.
 BASE_FEATURE(kTestEditionDisabled,
-             "TestEditionDisabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Previously used edition, enabled by default, unregistered.
 BASE_FEATURE(kTestOldUnregisteredEdition,
-             "TestOldUnregisteredEdition",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace
@@ -303,6 +294,17 @@ TEST_F(WhatsNewRegistryTest, ResetStorageService) {
   RegisterModules(std::move(mock_storage_service));
 
   whats_new_registry_->ResetData();
+}
+
+TEST_F(WhatsNewRegistryTest, VersionOverride) {
+  auto mock_storage_service = std::make_unique<MockWhatsNewStorageService>();
+  RegisterModules(std::move(mock_storage_service));
+
+  EXPECT_EQ(std::nullopt, whats_new_registry_->version_override());
+
+  int32_t value = 100;
+  whats_new_registry_->set_version_override(value);
+  EXPECT_EQ(value, whats_new_registry_->version_override());
 }
 
 }  // namespace user_education

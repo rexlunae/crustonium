@@ -14,6 +14,7 @@
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
 #include "chrome/grit/generated_resources.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/bluetooth/bluetooth_manifest_permission.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/permissions/permissions_info.h"
@@ -77,7 +78,7 @@ class ChromePermissionMessageProviderUnittest : public ChromeManifestTest {
                       granted_hosts.Clone(), URLPatternSet()),
         PermissionSet(requested_permissions.Clone(), ManifestPermissionSet(),
                       requested_hosts.Clone(), URLPatternSet()),
-        Manifest::TYPE_EXTENSION);
+        Manifest::Type::kExtension);
   }
 
   ChromePermissionMessageProvider* message_provider() {
@@ -103,7 +104,7 @@ TEST_F(ChromePermissionMessageProviderUnittest,
     APIPermissionSet permissions;
     permissions.insert(APIPermissionID::kTab);
     PermissionMessages messages =
-        GetMessages(permissions, Manifest::TYPE_PLATFORM_APP);
+        GetMessages(permissions, Manifest::Type::kPlatformApp);
     ASSERT_EQ(1U, messages.size());
     EXPECT_EQ(
         l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ),
@@ -113,7 +114,7 @@ TEST_F(ChromePermissionMessageProviderUnittest,
     APIPermissionSet permissions;
     permissions.insert(APIPermissionID::kTopSites);
     PermissionMessages messages =
-        GetMessages(permissions, Manifest::TYPE_PLATFORM_APP);
+        GetMessages(permissions, Manifest::Type::kPlatformApp);
     ASSERT_EQ(1U, messages.size());
     EXPECT_EQ(l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_TOPSITES),
               messages.front().message());
@@ -123,7 +124,7 @@ TEST_F(ChromePermissionMessageProviderUnittest,
     permissions.insert(APIPermissionID::kTab);
     permissions.insert(APIPermissionID::kTopSites);
     PermissionMessages messages =
-        GetMessages(permissions, Manifest::TYPE_PLATFORM_APP);
+        GetMessages(permissions, Manifest::Type::kPlatformApp);
     ASSERT_EQ(1U, messages.size());
     EXPECT_EQ(
         l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ),
@@ -152,7 +153,7 @@ TEST_F(ChromePermissionMessageProviderUnittest,
   permissions.insert(std::move(usb));
 
   PermissionMessages messages =
-      GetMessages(permissions, Manifest::TYPE_EXTENSION);
+      GetMessages(permissions, Manifest::Type::kExtension);
 
   ASSERT_EQ(2U, messages.size());
   auto it = messages.begin();
@@ -184,7 +185,7 @@ TEST_F(ChromePermissionMessageProviderUnittest,
 
   PermissionMessages messages = message_provider()->GetPermissionMessages(
       message_provider()->GetAllPermissionIDs(permissions,
-                                              Manifest::TYPE_EXTENSION));
+                                              Manifest::Type::kExtension));
 
   ASSERT_EQ(1U, messages.size());
   EXPECT_EQ(l10n_util::GetStringFUTF16(IDS_EXTENSION_PROMPT_WARNING_2_HOSTS,
@@ -199,7 +200,7 @@ TEST_F(ChromePermissionMessageProviderUnittest, PowerfulPermissions) {
     APIPermissionSet permissions;
     permissions.insert(APIPermissionID::kTab);
     PermissionMessages messages = GetManagementUIPermissionIDs(
-        permissions, ManifestPermissionSet(), Manifest::TYPE_EXTENSION);
+        permissions, ManifestPermissionSet(), Manifest::Type::kExtension);
     ASSERT_EQ(1U, messages.size());
     EXPECT_EQ(
         l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ),
@@ -209,7 +210,7 @@ TEST_F(ChromePermissionMessageProviderUnittest, PowerfulPermissions) {
     APIPermissionSet permissions;
     permissions.insert(APIPermissionID::kBookmark);
     PermissionMessages messages = GetManagementUIPermissionIDs(
-        permissions, ManifestPermissionSet(), Manifest::TYPE_EXTENSION);
+        permissions, ManifestPermissionSet(), Manifest::Type::kExtension);
     ASSERT_EQ(0U, messages.size());
   }
   {
@@ -217,7 +218,7 @@ TEST_F(ChromePermissionMessageProviderUnittest, PowerfulPermissions) {
     permissions.insert(APIPermissionID::kTab);
     permissions.insert(APIPermissionID::kBookmark);
     PermissionMessages messages = GetManagementUIPermissionIDs(
-        permissions, ManifestPermissionSet(), Manifest::TYPE_EXTENSION);
+        permissions, ManifestPermissionSet(), Manifest::Type::kExtension);
     ASSERT_EQ(1U, messages.size());
     EXPECT_EQ(
         l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ),
@@ -236,7 +237,7 @@ TEST_F(ChromePermissionMessageProviderUnittest, PowerfulPermissions) {
     permissions.insert(APIPermissionID::kBookmark);
     permissions.insert(APIPermissionID::kDebugger);
     PermissionMessages messages = GetManagementUIPermissionIDs(
-        permissions, manifest_permissions, Manifest::TYPE_EXTENSION);
+        permissions, manifest_permissions, Manifest::Type::kExtension);
     ASSERT_EQ(2U, messages.size());
     EXPECT_EQ(l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_DEBUGGER),
               messages.front().message());
@@ -248,7 +249,7 @@ TEST_F(ChromePermissionMessageProviderUnittest, PowerfulPermissions) {
 
 // Checks that granted hosts that may cause API permission messages are
 // processed as part of IsPrivilegeIncrease. Regression test for
-// crbug.com/1014505.
+// crbug.com/40103313.
 TEST_F(ChromePermissionMessageProviderUnittest, PrivilegeIncreaseAllUrls) {
   APIPermissionSet granted_permissions;
   granted_permissions.insert(APIPermissionID::kWebRequest);
@@ -271,6 +272,56 @@ TEST_F(ChromePermissionMessageProviderUnittest, PrivilegeIncreaseAllUrls) {
   // privilege increase.
   EXPECT_FALSE(IsPrivilegeIncrease(granted_permissions, granted_hosts,
                                    requested_permissions, requested_hosts));
+}
+
+TEST_F(ChromePermissionMessageProviderUnittest, BluetoothSocketEscalation) {
+  // V1: only uuids
+  base::DictValue v1_dict;
+  base::ListValue v1_uuids;
+  v1_uuids.Append("180D");
+  v1_dict.Set("uuids", std::move(v1_uuids));
+  base::Value v1_value(std::move(v1_dict));
+  std::u16string error;
+  std::unique_ptr<BluetoothManifestPermission> v1_permission =
+      BluetoothManifestPermission::FromValue(v1_value, &error);
+  ASSERT_TRUE(v1_permission);
+
+  // V2: uuids + socket
+  base::DictValue v2_dict;
+  base::ListValue v2_uuids;
+  v2_uuids.Append("180D");
+  v2_dict.Set("uuids", std::move(v2_uuids));
+  v2_dict.Set("socket", true);
+  base::Value v2_value(std::move(v2_dict));
+  std::unique_ptr<BluetoothManifestPermission> v2_permission =
+      BluetoothManifestPermission::FromValue(v2_value, &error);
+  ASSERT_TRUE(v2_permission);
+
+  // Test serialization round-trip of V2 before comparing, to show it loses data
+  std::unique_ptr<base::Value> serialized = v2_permission->ToValue();
+  ASSERT_TRUE(serialized);
+
+  auto restored = std::make_unique<BluetoothManifestPermission>();
+  ASSERT_TRUE(restored->FromValue(serialized.get()));
+  // This will fail before the fix because ToValue/FromValue is lossy
+  EXPECT_TRUE(restored->CheckSocketPermitted(nullptr));
+
+  ManifestPermissionSet g_manifest_permissions;
+  g_manifest_permissions.insert(std::move(v1_permission));
+  PermissionSet granted_permissions(APIPermissionSet(),
+                                    std::move(g_manifest_permissions),
+                                    URLPatternSet(), URLPatternSet());
+
+  ManifestPermissionSet r_manifest_permissions;
+  r_manifest_permissions.insert(std::move(v2_permission));
+  PermissionSet requested_permissions(APIPermissionSet(),
+                                      std::move(r_manifest_permissions),
+                                      URLPatternSet(), URLPatternSet());
+
+  // This will fail before the fix because IsPrivilegeIncrease returns false
+  EXPECT_TRUE(message_provider()->IsPrivilegeIncrease(
+      granted_permissions, requested_permissions,
+      Manifest::Type::kPlatformApp));
 }
 
 }  // namespace extensions

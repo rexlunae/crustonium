@@ -8,41 +8,27 @@
 #include <string>
 #include <utility>
 
-#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "cc/paint/paint_recorder.h"
-#include "cc/paint/skia_paint_canvas.h"
-#include "components/paint_preview/common/paint_preview_tracker.h"
-#include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/content/common/visual_utils.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_classifier_delegate.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_dom_utils.h"
 #include "components/safe_browsing/content/renderer/phishing_classifier/phishing_visual_feature_extractor.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/scorer.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/phishing_classifier/scorer.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "components/safe_browsing/core/common/visual_utils.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
-#include "crypto/sha2.h"
-#include "skia/ext/legacy_display_globals.h"
-#include "third_party/blink/public/platform/web_url.h"
-#include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/web/web_document.h"
-#include "third_party/blink/public/web/web_document_loader.h"
 #include "third_party/blink/public/web/web_local_frame.h"
-#include "third_party/blink/public/web/web_view.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
-#include "ui/gfx/geometry/rect_conversions.h"
 #include "url/gurl.h"
 
 namespace safe_browsing {
@@ -71,7 +57,8 @@ void PhishingClassifier::SetClientSideDetectionType(
 
 void PhishingClassifier::BeginClassification(DoneCallback done_callback) {
   TRACE_EVENT_BEGIN("safe_browsing", "PhishingClassification",
-                    perfetto::Track::FromPointer(this));
+                    perfetto::NamedTrack::FromPointer(
+                        "safe_browsing::PhishingClassifier", this));
   DCHECK(is_ready());
 
   // However, in an opt build, we will go ahead and clean up the pending
@@ -81,20 +68,23 @@ void PhishingClassifier::BeginClassification(DoneCallback done_callback) {
   visual_extractor_ = std::make_unique<PhishingVisualFeatureExtractor>();
   done_callback_ = std::move(done_callback);
 
+  // Cache the URL of the frame right before paint capture for visual
+  // extraction. This is needed because the URL of the frame may change
+  // after the page has finished loading and during classification via same
+  // page navigation.
   blink::WebLocalFrame* frame = render_frame_->GetWebFrame();
+  classification_url_ = frame->GetDocument().Url();
 
-  // Check whether the URL is one that we should classify.
-  // Currently, we only classify http/https URLs that are GET requests.
-  GURL url(frame->GetDocument().Url());
-  if (!url.SchemeIsHTTPOrHTTPS()) {
-    RunFailureCallback(Result::kInvalidURLFormatRequest);
-    return;
-  }
-
-  blink::WebDocumentLoader* document_loader = frame->GetDocumentLoader();
-  if (!document_loader || document_loader->HttpMethod().Ascii() != "GET") {
-    RunFailureCallback(Result::kInvalidDocumentLoader);
-    return;
+  PhishingProcessStatus status = CanPerformPhishingDetection(frame);
+  switch (status) {
+    case PhishingProcessStatus::kInvalidUrlFormat:
+      RunFailureCallback(PhishingClassifier::Result::kInvalidURLFormatRequest);
+      return;
+    case PhishingProcessStatus::kInvalidDomLoader:
+      RunFailureCallback(PhishingClassifier::Result::kInvalidDocumentLoader);
+      return;
+    case PhishingProcessStatus::kValid:
+      break;
   }
 
   // For consistency, we always want to invoke the DoneCallback
@@ -109,7 +99,6 @@ void PhishingClassifier::BeginClassification(DoneCallback done_callback) {
 void PhishingClassifier::CancelPendingClassification() {
   // Note that cancelling the feature extractors is simply a no-op if they
   // were not running.
-  DCHECK(is_ready());
   visual_extractor_.reset();
   weak_factory_.InvalidateWeakPtrs();
   Clear();
@@ -150,11 +139,9 @@ void PhishingClassifier::VisualExtractionFinished(bool success) {
     return;
   }
 
-  blink::WebLocalFrame* main_frame = render_frame_->GetWebFrame();
-
   std::unique_ptr<ClientPhishingRequest> verdict =
       std::make_unique<ClientPhishingRequest>();
-  verdict->set_url(main_frame->GetDocument().Url().GetString().Utf8());
+  verdict->set_url(classification_url_.spec());
   // Because the client_score is required, set a dummy value so that it can be
   // parsed in the browser host class.
   verdict->set_client_score(0);
@@ -163,44 +150,24 @@ void PhishingClassifier::VisualExtractionFinished(bool success) {
     verdict->mutable_visual_features()->Swap(visual_features_.get());
   }
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   ScorerStorage::GetInstance()->GetScorer()->ApplyVisualTfLiteModel(
       *bitmap_, base::BindOnce(&PhishingClassifier::OnVisualTfLiteModelDone,
                                weak_factory_.GetWeakPtr(), std::move(verdict)));
-#else
-  RunFailureCallback(Result::kVisualExtractionFailed);
-#endif
 }
 
 void PhishingClassifier::OnVisualTfLiteModelDone(
     std::unique_ptr<ClientPhishingRequest> verdict,
     std::vector<double> result) {
-  Scorer* scorer = ScorerStorage::GetInstance()->GetScorer();
-  if (!base::FeatureList::IsEnabled(kClientSideDetectionDeprecateDOMModel)) {
-    if (static_cast<int>(result.size()) != scorer->tflite_thresholds().size()) {
-      // Model is misconfigured, so bail out.
-      RunFailureCallback(Result::kInvalidScore);
-      return;
-    }
-  }
-
-  if (!base::FeatureList::IsEnabled(kClientSideDetectionDeprecateDOMModel)) {
-    verdict->set_tflite_model_version(scorer->tflite_model_version());
-  }
-
   for (size_t i = 0; i < result.size(); i++) {
     ClientPhishingRequest::CategoryScore* category =
         verdict->add_tflite_model_scores();
-    if (!base::FeatureList::IsEnabled(kClientSideDetectionDeprecateDOMModel)) {
-      category->set_label(scorer->tflite_thresholds().at(i).label());
-    }
+
     category->set_value(result[i]);
   }
 
   if (request_type_.has_value() &&
       request_type_.value() ==
           safe_browsing::mojom::ClientSideDetectionType::kImageEmbeddingMatch) {
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
     ScorerStorage::GetInstance()
         ->GetScorer()
         ->ApplyVisualTfLiteModelImageEmbedding(
@@ -209,7 +176,6 @@ void PhishingClassifier::OnVisualTfLiteModelDone(
                 &PhishingClassifier::OnVisualTfLiteModelImageEmbeddingDone,
                 weak_factory_.GetWeakPtr(), std::move(verdict)));
     return;
-#endif
   }
 
   RunCallback(*verdict, Result::kSuccess);
@@ -221,11 +187,6 @@ void PhishingClassifier::OnVisualTfLiteModelImageEmbeddingDone(
   bool has_image_feature_embedding =
       image_feature_embedding.embedding_value_size() > 0;
   if (has_image_feature_embedding) {
-    if (!base::FeatureList::IsEnabled(kClientSideDetectionDeprecateDOMModel)) {
-      Scorer* scorer = ScorerStorage::GetInstance()->GetScorer();
-      image_feature_embedding.set_embedding_model_version(
-          scorer->image_embedding_tflite_model_version());
-    }
     *verdict->mutable_image_feature_embedding() = image_feature_embedding;
   }
   base::UmaHistogramBoolean(
@@ -237,7 +198,8 @@ void PhishingClassifier::OnVisualTfLiteModelImageEmbeddingDone(
 void PhishingClassifier::RunCallback(const ClientPhishingRequest& verdict,
                                      Result phishing_classifier_result) {
   TRACE_EVENT_END("safe_browsing", /* PhishingClassification */
-                  perfetto::Track::FromPointer(this));
+                  perfetto::NamedTrack::FromPointer(
+                      "safe_browsing::PhishingClassifier", this));
   std::move(done_callback_).Run(verdict, phishing_classifier_result);
   Clear();
 }

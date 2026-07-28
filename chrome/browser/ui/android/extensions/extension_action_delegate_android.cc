@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/notimplemented.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/extensions/extension_view_host_factory.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
@@ -15,8 +16,10 @@ using extensions::ActionInfo;
 ExtensionActionDelegateAndroid::ExtensionActionDelegateAndroid(
     BrowserWindowInterface* browser,
     const ToolbarActionsModel::ActionId& action_id,
-    extensions::ExtensionsToolbarBridge* bridge)
-    : browser_(browser), action_id_(action_id), toolbar_bridge_(bridge) {}
+    extensions::ExtensionsToolbarAndroid* toolbar_android)
+    : browser_(browser),
+      action_id_(action_id),
+      toolbar_android_(toolbar_android) {}
 
 ExtensionActionDelegateAndroid::~ExtensionActionDelegateAndroid() = default;
 
@@ -33,24 +36,28 @@ void ExtensionActionDelegateAndroid::DetachFromModel() {
 }
 
 void ExtensionActionDelegateAndroid::RegisterCommand() {
-  // TODO(crbug.com/461981075)
+  // No-op. On Android, toolbar action executions (as well as named commands)
+  // are both handled by `extension_keybinding_registry`, instead of by each
+  // action.
 }
 
 void ExtensionActionDelegateAndroid::UnregisterCommand() {
-  // TODO(crbug.com/461981075)
+  // No-op. On Android, toolbar action executions (as well as named commands)
+  // are both handled by `extension_keybinding_registry`, instead of by each
+  // action.
 }
 
 bool ExtensionActionDelegateAndroid::IsShowingPopup() const {
-  // TODO(crbug.com/461981075)
-  return false;
+  return toolbar_android_->HasActivePopup();
 }
 
 void ExtensionActionDelegateAndroid::HidePopup() {
-  // TODO(crbug.com/461981075)
+  toolbar_android_->HideActivePopup();
 }
 
-gfx::NativeView ExtensionActionDelegateAndroid::GetPopupNativeView() {
-  // TODO(crbug.com/461981075)
+gfx::NativeView ExtensionActionDelegateAndroid::GetPopupNativeViewForTesting() {
+  // Unused for Android tests.
+  NOTIMPLEMENTED();
   return nullptr;
 }
 
@@ -59,21 +66,13 @@ void ExtensionActionDelegateAndroid::TriggerPopup(
     PopupShowAction show_action,
     bool by_user,
     ShowPopupCallback callback) {
-  if (!toolbar_bridge_) {
-    // TODO(crbug.com/461981075): Remove this check once
-    // `ExtensionsMenuDelegateAndroid` passes a correct `bridge` instead of
-    // `nullptr`.
-    return;
-  }
-
-  toolbar_bridge_->TriggerPopup(action_id_, std::move(host));
+  toolbar_android_->TriggerPopup(action_id_, std::move(host));
 }
 
 void ExtensionActionDelegateAndroid::ShowContextMenuAsFallback() {
-  // TODO(crbug.com/461981075)
+  toolbar_android_->ShowContextMenu(action_id_);
 }
 
-bool ExtensionActionDelegateAndroid::CloseOverflowMenuIfOpen() {
-  // TODO(crbug.com/461981075)
-  return false;
+void ExtensionActionDelegateAndroid::CloseExtensionsMenuIfOpen() {
+  toolbar_android_->CloseExtensionsMenuIfOpen();
 }

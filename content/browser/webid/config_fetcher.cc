@@ -20,7 +20,7 @@ namespace {
 static constexpr size_t kMaxProvidersInWellKnownFile = 1ul;
 
 void SetError(ConfigFetcher::FetchResult& fetch_result,
-              blink::mojom::FederatedAuthRequestResult result,
+              blink::mojom::FederatedRequestResult result,
               RequestIdTokenStatus token_status,
               std::optional<std::string> additional_console_error_message) {
   fetch_result.error = ConfigFetcher::FetchError(
@@ -29,13 +29,13 @@ void SetError(ConfigFetcher::FetchResult& fetch_result,
 
 }  // namespace
 
-using blink::mojom::FederatedAuthRequestResult;
+using blink::mojom::FederatedRequestResult;
 using TokenStatus = RequestIdTokenStatus;
 
 ConfigFetcher::FetchError::FetchError(const FetchError&) = default;
 
 ConfigFetcher::FetchError::FetchError(
-    blink::mojom::FederatedAuthRequestResult result,
+    blink::mojom::FederatedRequestResult result,
     RequestIdTokenStatus token_status,
     std::optional<std::string> additional_console_error_message)
     : result(result),
@@ -105,34 +105,32 @@ void ConfigFetcher::OnWellKnownFetched(
 
     switch (status.parse_status) {
       case ParseStatus::kHttpNotFoundError: {
-        OnError(fetch_result,
-                FederatedAuthRequestResult::kWellKnownHttpNotFound,
+        OnError(fetch_result, FederatedRequestResult::kWellKnownHttpNotFound,
                 TokenStatus::kWellKnownHttpNotFound,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kNoResponseError: {
-        OnError(fetch_result, FederatedAuthRequestResult::kWellKnownNoResponse,
+        OnError(fetch_result, FederatedRequestResult::kWellKnownNoResponse,
                 TokenStatus::kWellKnownNoResponse,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kInvalidResponseError: {
-        OnError(fetch_result,
-                FederatedAuthRequestResult::kWellKnownInvalidResponse,
+        OnError(fetch_result, FederatedRequestResult::kWellKnownInvalidResponse,
                 TokenStatus::kWellKnownInvalidResponse,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kEmptyListError: {
-        OnError(fetch_result, FederatedAuthRequestResult::kWellKnownListEmpty,
+        OnError(fetch_result, FederatedRequestResult::kWellKnownListEmpty,
                 TokenStatus::kWellKnownListEmpty,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kInvalidContentTypeError: {
         OnError(fetch_result,
-                FederatedAuthRequestResult::kWellKnownInvalidContentType,
+                FederatedRequestResult::kWellKnownInvalidContentType,
                 TokenStatus::kWellKnownInvalidContentType,
                 additional_console_error_message);
         return;
@@ -164,27 +162,25 @@ void ConfigFetcher::OnConfigFetched(
 
     switch (status.parse_status) {
       case ParseStatus::kHttpNotFoundError: {
-        OnError(fetch_result, FederatedAuthRequestResult::kConfigHttpNotFound,
+        OnError(fetch_result, FederatedRequestResult::kConfigHttpNotFound,
                 TokenStatus::kConfigHttpNotFound,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kNoResponseError: {
-        OnError(fetch_result, FederatedAuthRequestResult::kConfigNoResponse,
+        OnError(fetch_result, FederatedRequestResult::kConfigNoResponse,
                 TokenStatus::kConfigNoResponse,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kInvalidResponseError: {
-        OnError(fetch_result,
-                FederatedAuthRequestResult::kConfigInvalidResponse,
+        OnError(fetch_result, FederatedRequestResult::kConfigInvalidResponse,
                 TokenStatus::kConfigInvalidResponse,
                 additional_console_error_message);
         return;
       }
       case ParseStatus::kInvalidContentTypeError: {
-        OnError(fetch_result,
-                FederatedAuthRequestResult::kConfigInvalidContentType,
+        OnError(fetch_result, FederatedRequestResult::kConfigInvalidContentType,
                 TokenStatus::kConfigInvalidContentType,
                 additional_console_error_message);
         return;
@@ -225,7 +221,7 @@ void ConfigFetcher::OnConfigFetched(
 
 void ConfigFetcher::OnError(
     FetchResult& fetch_result,
-    blink::mojom::FederatedAuthRequestResult result,
+    blink::mojom::FederatedRequestResult result,
     RequestIdTokenStatus token_status,
     std::optional<std::string> additional_console_error_message) {
   SetError(fetch_result, result, token_status,
@@ -255,6 +251,10 @@ void ConfigFetcher::ValidateAndMaybeSetError(FetchResult& result) {
 
   bool is_token_valid = IsEndpointSameOrigin(
       result.identity_provider_config_url, result.endpoints.token);
+  bool is_vc_endpoint_valid =
+      !IsDelegationEnabled() || result.endpoints.issuance.is_empty() ||
+      IsEndpointSameOrigin(result.identity_provider_config_url,
+                           result.endpoints.issuance);
   bool is_accounts_valid =
       IsEndpointSameOrigin(result.identity_provider_config_url,
                            result.endpoints.accounts) ||
@@ -265,7 +265,8 @@ void ConfigFetcher::ValidateAndMaybeSetError(FetchResult& result) {
       IsEndpointSameOrigin(result.identity_provider_config_url,
                            result.metadata->idp_login_url);
 
-  if (!is_token_valid || !is_accounts_valid || !is_login_url_valid) {
+  if (!is_token_valid || !is_accounts_valid || !is_login_url_valid ||
+      !is_vc_endpoint_valid) {
     std::string console_message =
         "Config file is missing or has an invalid URL for the following:\n";
     if (!is_token_valid) {
@@ -277,8 +278,11 @@ void ConfigFetcher::ValidateAndMaybeSetError(FetchResult& result) {
     if (!is_login_url_valid) {
       console_message += "\"login_url\"\n";
     }
+    if (!is_vc_endpoint_valid) {
+      console_message += "\"vc_issuance_endpoint\"\n";
+    }
 
-    SetError(result, FederatedAuthRequestResult::kConfigInvalidResponse,
+    SetError(result, FederatedRequestResult::kConfigInvalidResponse,
              TokenStatus::kConfigInvalidResponse, console_message);
     return;
   }
@@ -313,7 +317,7 @@ void ConfigFetcher::ValidateAndMaybeSetError(FetchResult& result) {
     // configURL without checking for its presence in the provider_urls array.
     if (result.endpoints.accounts != result.wellknown.accounts ||
         result.metadata->idp_login_url != result.wellknown.login_url) {
-      SetError(result, FederatedAuthRequestResult::kConfigInvalidResponse,
+      SetError(result, FederatedRequestResult::kConfigInvalidResponse,
                TokenStatus::kConfigInvalidResponse,
                "The well-known file contains an accounts endpoint or login_url "
                "that doesn't match the one in the configURL");
@@ -342,7 +346,7 @@ void ConfigFetcher::ValidateAndMaybeSetError(FetchResult& result) {
   // }
 
   if (result.wellknown.provider_urls.size() > kMaxProvidersInWellKnownFile) {
-    SetError(result, FederatedAuthRequestResult::kWellKnownTooBig,
+    SetError(result, FederatedRequestResult::kWellKnownTooBig,
              TokenStatus::kWellKnownTooBig,
              /*additional_console_error_message=*/std::nullopt);
     return;
@@ -352,7 +356,7 @@ void ConfigFetcher::ValidateAndMaybeSetError(FetchResult& result) {
                                     result.identity_provider_config_url) != 0);
 
   if (!provider_url_is_valid) {
-    SetError(result, FederatedAuthRequestResult::kConfigNotInWellKnown,
+    SetError(result, FederatedRequestResult::kConfigNotInWellKnown,
              TokenStatus::kConfigNotInWellKnown,
              /*additional_console_error_message=*/std::nullopt);
     return;

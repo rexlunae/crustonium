@@ -15,7 +15,7 @@
 #include <string>
 #include <utility>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -65,53 +65,35 @@ void GetUIARuntimeId(IUIAutomationElement* first_child,
     // GetRuntimeId.
     base::win::ScopedSafearray start_fragment_runtime_id;
     start_fragment->GetRuntimeId(start_fragment_runtime_id.Receive());
-    LONG lower_bound = 0;
-    HRESULT hr =
-        ::SafeArrayGetLBound(start_fragment_runtime_id.Get(), 1, &lower_bound);
-    CHECK(SUCCEEDED(hr));
-    LONG upper_bound = 0;
-    hr = ::SafeArrayGetUBound(start_fragment_runtime_id.Get(), 1, &upper_bound);
-    CHECK(SUCCEEDED(hr));
-    CHECK(lower_bound >= 0);
-    LONG fragment_id_length = (upper_bound - lower_bound) + 1;
-    CHECK(fragment_id_length == 4);
-
-    int32_t* fragment_id_array = nullptr;
-    ::SafeArrayAccessData(start_fragment_runtime_id.Get(),
-                          reinterpret_cast<void**>(&fragment_id_array));
-    CHECK(fragment_id_array);
+    auto locked_fragment_ids =
+        start_fragment_runtime_id.CreateLockScope<VT_I4>();
+    CHECK(locked_fragment_ids.has_value());
+    const auto fragment_id_span = base::span(*locked_fragment_ids);
+    CHECK_EQ(fragment_id_span.size(), 4U);
     // Grab out the last three ints from the internal runtime id. This should
     // correspond with the frame tree id and DOM id.
-    internal_id = {UNSAFE_TODO(fragment_id_array[1]),
-                   UNSAFE_TODO(fragment_id_array[2]),
-                   UNSAFE_TODO(fragment_id_array[3])};
-
-    ::SafeArrayUnaccessData(start_fragment_runtime_id.Get());
+    internal_id = {fragment_id_span[1], fragment_id_span[2],
+                   fragment_id_span[3]};
   }
 
   base::win::ScopedSafearray runtime_id;
   first_child->GetRuntimeId(runtime_id.Receive());
   CHECK(runtime_id.Get());
-  LONG lower_bound = 0;
-  HRESULT hr = ::SafeArrayGetLBound(runtime_id.Get(), 1, &lower_bound);
-  CHECK(SUCCEEDED(hr));
   LONG upper_bound = 0;
-  hr = ::SafeArrayGetUBound(runtime_id.Get(), 1, &upper_bound);
+  HRESULT hr = ::SafeArrayGetUBound(runtime_id.Get(), 1, &upper_bound);
   CHECK(SUCCEEDED(hr));
-  LONG runtime_id_length = upper_bound - lower_bound + 1;
-  CHECK(runtime_id_length >= 4);
   {
-    int32_t* runtime_id_array = nullptr;
-    ::SafeArrayAccessData(runtime_id.Get(),
-                          reinterpret_cast<void**>(&runtime_id_array));
-    CHECK(runtime_id_array);
+    auto locked_runtime_ids = runtime_id.CreateLockScope<VT_I4>();
+    CHECK(locked_runtime_ids.has_value());
 
+    // SAFETY: Trust SafeArray functions returned the correct bounds.
+    auto runtime_id_span = base::span(*locked_runtime_ids);
+    CHECK_GE(runtime_id_span.size(), 4U);
     // Stuff the internal id values in the last three spots in the grabbed
     // UIA-based runtime id.
-    UNSAFE_TODO(runtime_id_array[upper_bound - 2]) = internal_id[0];
-    UNSAFE_TODO(runtime_id_array[upper_bound - 1]) = internal_id[1];
-    UNSAFE_TODO(runtime_id_array[upper_bound]) = internal_id[2];
-    ::SafeArrayUnaccessData(runtime_id.Get());
+    runtime_id_span[upper_bound - 2] = internal_id[0];
+    runtime_id_span[upper_bound - 1] = internal_id[1];
+    runtime_id_span[upper_bound] = internal_id[2];
   }
 
   *runtime_id_out = runtime_id.Release();
@@ -464,13 +446,6 @@ void AXTreeFormatterUia::AddDefaultFilters(
                     AXPropertyFilter::DENY);
   // UIA_WindowPatternId
   AddPropertyFilter(property_filters, "Window.IsModal=*");
-
-  // Custom properties.
-  AddPropertyFilter(
-      property_filters,
-      GetPropertyName(
-          UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId()) +
-          "=*");
 }
 
 base::DictValue AXTreeFormatterUia::BuildTree(
@@ -944,8 +919,9 @@ void AXTreeFormatterUia::AddCustomProperties(IUIAutomationElement* node,
   // Custom properties need to be added separately.
   for (const auto& property : GetCustomPropertiesMap()) {
     base::win::ScopedVariant variant;
-    if (SUCCEEDED(
-            node->GetCurrentPropertyValue(property.first, variant.Receive()))) {
+    HRESULT hr =
+        node->GetCurrentPropertyValue(property.first, variant.Receive());
+    if (SUCCEEDED(hr)) {
       WriteProperty(property.first, variant, dict);
     }
   }
@@ -1006,6 +982,9 @@ void AXTreeFormatterUia::WriteProperty(long propertyId,
     case VT_UNKNOWN:
       WriteUnknownProperty(propertyId, var.ptr()->punkVal, dict);
       break;
+    case VT_ARRAY | VT_UNKNOWN:
+      WriteRawElementArray(propertyId, var.ptr()->parray, dict);
+      break;
     default:
       switch (propertyId) {
         case UIA_BoundingRectanglePropertyId:
@@ -1041,6 +1020,67 @@ void AXTreeFormatterUia::WriteI4Property(long propertyId,
   }
 }
 
+void AXTreeFormatterUia::WriteRawElementArray(long propertyId,
+                                              SAFEARRAY* sa,
+                                              base::DictValue* dict) const {
+  // UIA may return custom UIAutomationType_ElementArray properties as a
+  // raw SAFEARRAY of IUnknown rather than wrapping them in an
+  // IUIAutomationElementArray. Handle that case by iterating the array
+  // and extracting element names directly.
+  if (!sa) {
+    return;
+  }
+  LONG lower_bound = 0;
+  LONG upper_bound = -1;
+  if (FAILED(SafeArrayGetLBound(sa, 1, &lower_bound)) ||
+      FAILED(SafeArrayGetUBound(sa, 1, &upper_bound))) {
+    return;
+  }
+  std::u16string element_list;
+  for (LONG i = lower_bound; i <= upper_bound; i++) {
+    IUnknown* raw_element = nullptr;
+    if (FAILED(SafeArrayGetElement(sa, &i, &raw_element)) || !raw_element) {
+      continue;
+    }
+    Microsoft::WRL::ComPtr<IUnknown> element;
+    element.Attach(raw_element);
+
+    std::u16string name;
+    // Try client-side IUIAutomationElement first.
+    Microsoft::WRL::ComPtr<IUIAutomationElement> uia_element;
+    if (SUCCEEDED(element.As(&uia_element))) {
+      name = GetNodeName(uia_element.Get());
+      if (name.empty()) {
+        base::win::ScopedBstr role;
+        uia_element->get_CurrentAriaRole(role.Receive());
+        if (role.Get()) {
+          name = u"{" + base::WideToUTF16(role.Get()) + u"}";
+        }
+      }
+    } else {
+      // Fall back to provider-side IRawElementProviderSimple.
+      Microsoft::WRL::ComPtr<IRawElementProviderSimple> provider;
+      if (SUCCEEDED(element.As(&provider))) {
+        base::win::ScopedVariant name_var;
+        if (SUCCEEDED(provider->GetPropertyValue(UIA_NamePropertyId,
+                                                 name_var.Receive())) &&
+            name_var.type() == VT_BSTR && name_var.ptr()->bstrVal) {
+          name = base::WideToUTF16(name_var.ptr()->bstrVal);
+        }
+      }
+    }
+    if (!name.empty()) {
+      if (!element_list.empty()) {
+        element_list += u", ";
+      }
+      element_list += name;
+    }
+  }
+  if (!element_list.empty()) {
+    dict->SetByDottedPath(GetPropertyName(propertyId), element_list);
+  }
+}
+
 void AXTreeFormatterUia::WriteUnknownProperty(long propertyId,
                                               IUnknown* unk,
                                               base::DictValue* dict) const {
@@ -1063,6 +1103,14 @@ void AXTreeFormatterUia::WriteUnknownProperty(long propertyId,
       break;
     }
     default:
+      // Custom properties use dynamic IDs that can't appear in case labels.
+      if (propertyId ==
+          UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId()) {
+        Microsoft::WRL::ComPtr<IUIAutomationElementArray> array;
+        if (unk && SUCCEEDED(unk->QueryInterface(IID_PPV_ARGS(&array)))) {
+          WriteElementArray(propertyId, array.Get(), dict);
+        }
+      }
       break;
   }
 }
@@ -1074,17 +1122,22 @@ void AXTreeFormatterUia::WriteRectangleProperty(long propertyId,
                                                 base::DictValue* dict) const {
   CHECK(value.vt == (VT_ARRAY | VT_R8));
 
-  double* data = nullptr;
-  SafeArrayAccessData(value.parray, reinterpret_cast<void**>(&data));
+  // Note that `value` owns `parray`, so call `Release` on `safe_array` before
+  // it goes out of scope.
+  base::win::ScopedSafearray safe_array(value.parray);
 
+  auto lock_data = safe_array.CreateLockScope<VT_R8>();
+  CHECK(lock_data.has_value());
+  const auto data_span = base::span(*lock_data);
   base::DictValue rectangle;
-  rectangle.Set("left", static_cast<int>(data[0] - root_x));
-  rectangle.Set("top", static_cast<int>(UNSAFE_TODO(data[1] - root_y)));
-  rectangle.Set("width", static_cast<int>(UNSAFE_TODO(data[2])));
-  rectangle.Set("height", static_cast<int>(UNSAFE_TODO(data[3])));
-  dict->SetByDottedPath(GetPropertyName(propertyId), std::move(rectangle));
+  rectangle.Set("left", static_cast<int>(data_span[0] - root_x));
+  rectangle.Set("top", static_cast<int>(data_span[1] - root_y));
+  rectangle.Set("width", static_cast<int>(data_span[2]));
+  rectangle.Set("height", static_cast<int>(data_span[3]));
 
-  SafeArrayUnaccessData(value.parray);
+  safe_array.Release();
+
+  dict->SetByDottedPath(GetPropertyName(propertyId), std::move(rectangle));
 }
 
 void AXTreeFormatterUia::WriteElementArray(long propertyId,
@@ -1118,9 +1171,12 @@ std::u16string AXTreeFormatterUia::GetNodeName(
   // Update the cache for this node.
   if (uncached_node) {
     Microsoft::WRL::ComPtr<IUIAutomationElement> node;
-    uncached_node->BuildUpdatedCache(element_cache_request_.Get(), &node);
+    if (FAILED(uncached_node->BuildUpdatedCache(element_cache_request_.Get(),
+                                                &node)) ||
+        !node) {
+      return std::u16string();
+    }
 
-    base::win::ScopedBstr name;
     base::win::ScopedVariant variant;
     if (SUCCEEDED(node->GetCachedPropertyValue(UIA_NamePropertyId,
                                                variant.Receive())) &&
@@ -1169,10 +1225,10 @@ void AXTreeFormatterUia::BuildCacheRequests() {
 
 void AXTreeFormatterUia::BuildCustomPropertiesMap() {
   GetCustomPropertiesMap().insert(
-      {UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
-       "VirtualContent"});
-  GetCustomPropertiesMap().insert(
       {UiaRegistrarWin::GetInstance().GetMathMLPropertyId(), "MathML"});
+  GetCustomPropertiesMap().insert(
+      {UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId(),
+       "AccessibleActions"});
 }
 
 std::string AXTreeFormatterUia::ProcessTreeForOutput(

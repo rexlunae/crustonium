@@ -2,16 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "partition_alloc/slot_start.h"
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
+#include "partition_alloc/buildflags.h"
 
-#include "partition_alloc/bucket_lookup.h"
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -25,10 +22,12 @@
 #include <vector>
 
 #include "partition_alloc/address_space_randomization.h"
+#include "partition_alloc/bounds_checks.h"
+#include "partition_alloc/bucket_lookup.h"
 #include "partition_alloc/build_config.h"
-#include "partition_alloc/buildflags.h"
 #include "partition_alloc/dangling_raw_ptr_checks.h"
 #include "partition_alloc/in_slot_metadata.h"
+#include "partition_alloc/internal/partition_root_internal.h"
 #include "partition_alloc/memory_reclaimer.h"
 #include "partition_alloc/page_allocator_constants.h"
 #include "partition_alloc/partition_address_space.h"
@@ -50,10 +49,11 @@
 #include "partition_alloc/partition_cookie.h"
 #include "partition_alloc/partition_freelist_entry.h"
 #include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/partition_stats.h"
 #include "partition_alloc/reservation_offset_table.h"
 #include "partition_alloc/scheduler_loop_quarantine_support.h"
+#include "partition_alloc/slot_address_and_size.h"
+#include "partition_alloc/slot_start.h"
 #include "partition_alloc/tagging.h"
 #include "partition_alloc/thread_isolation/thread_isolation.h"
 #include "partition_alloc/use_death_tests.h"
@@ -199,7 +199,7 @@ bool ClearAddressSpaceLimit() {
 #endif
 }
 
-const size_t kTestSizes[] = {
+const auto kTestSizes = std::to_array<size_t>({
     1,
     17,
     100,
@@ -208,7 +208,7 @@ const size_t kTestSizes[] = {
     partition_alloc::PartitionRoot::GetDirectMapSlotSize(100),
     1 << 20,
     1 << 21,
-};
+});
 constexpr size_t kTestSizesCount = std::size(kTestSizes);
 // A lambda function for unit tests to try Free, FreeWithSize, and
 // FreeWithSizeAndAlignment. It always takes a size_t argument, but ignores it
@@ -228,9 +228,9 @@ void AllocateRandomly(partition_alloc::PartitionRoot* root,
   std::vector<void*> allocations(count, nullptr);
   std::vector<size_t> sizes(count, 0);
   for (size_t i = 0; i < count; ++i) {
-    const size_t size =
+    const size_t size = PA_UNSAFE_TODO(
         kTestSizes[partition_alloc::internal::base::RandGenerator(
-            kTestSizesCount)];
+            kTestSizesCount)]);
     allocations[i] = root->Alloc<alloc_flags>(size);
     sizes[i] = size;
     EXPECT_NE(nullptr, allocations[i]) << " size: " << size << " i: " << i;
@@ -344,7 +344,7 @@ GetPartitionAllocWithSizedFreeTestParams() {
   auto params = GetPartitionAllocTestParams();
   auto free_with_size_func = [](PartitionRoot* root, void* ptr, size_t size,
                                 size_t) {
-    root->FreeWithSizeInline(ptr, size);
+    root->Free<FreeFlags::kWithSizeHint>(ptr, {.size = size});
   };
   params.emplace_back(PartitionAllocTestParam{BucketDistribution::kNeutral,
                                               false, free_with_size_func});
@@ -358,7 +358,8 @@ GetPartitionAllocWithFreeWithSizeAndAlignmentTestParams() {
   auto params = GetPartitionAllocTestParams();
   auto free_with_size_and_alignment_func = [](PartitionRoot* root, void* ptr,
                                               size_t size, size_t alignment) {
-    root->FreeWithSizeAndAlignmentInline(ptr, size, alignment);
+    root->Free<FreeFlags::kWithSizeHint | FreeFlags::kWithAlignmentHint>(
+        ptr, {.size = size, .alignment = alignment});
   };
   params.emplace_back(PartitionAllocTestParam{
       BucketDistribution::kNeutral, false, free_with_size_and_alignment_func});
@@ -384,13 +385,14 @@ class PartitionAllocTest
     ~ScopedPageAllocation() { allocator_.root()->Free(ptr_); }
 
     void TouchAllPages() {
-      memset(ptr_, 'A',
-             ((npages_ * SystemPageSize()) - ExtraAllocSize(allocator_))
-                 .ValueOrDie());
+      PA_UNSAFE_TODO(
+          memset(ptr_, 'A',
+                 ((npages_ * SystemPageSize()) - ExtraAllocSize(allocator_))
+                     .ValueOrDie()));
     }
 
     void* PageAtIndex(size_t index) {
-      return ptr_ - kPointerOffset + (SystemPageSize() * index);
+      return PA_UNSAFE_TODO(ptr_ - kPointerOffset + (SystemPageSize() * index));
     }
 
    private:
@@ -565,7 +567,7 @@ class PartitionAllocTest
 
   size_t SizeToBucketSize(size_t size) const {
     const auto index = SizeToIndex(size);
-    return allocator.root()->buckets_[index].slot_size;
+    return PA_UNSAFE_TODO(allocator.root()->buckets_[index]).slot_size;
   }
 
   static size_t ExtraAllocSize(const PartitionAllocator& allocator) {
@@ -582,7 +584,8 @@ class PartitionAllocTest
   size_t GetNumPagesPerSlotSpan(size_t size) {
     size_t real_size = size + ExtraAllocSize(allocator);
     size_t bucket_index = SizeToIndex(real_size);
-    PartitionRoot::Bucket* bucket = &allocator.root()->buckets_[bucket_index];
+    PartitionRoot::Bucket* bucket =
+        PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
     // TODO(tasak): make get_pages_per_slot_span() available at
     // partition_alloc_unittest.cc. Is it allowable to make the code from
     // partition_bucet.cc to partition_bucket.h?
@@ -594,7 +597,8 @@ class PartitionAllocTest
   const SlotSpan* GetFullSlotSpan(size_t size) {
     size_t real_size = size + ExtraAllocSize(allocator);
     size_t bucket_index = SizeToIndex(real_size);
-    PartitionRoot::Bucket* bucket = &allocator.root()->buckets_[bucket_index];
+    PartitionRoot::Bucket* bucket =
+        PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
     size_t num_slots =
         (bucket->num_system_pages_per_slot_span * SystemPageSize()) /
         bucket->slot_size;
@@ -657,26 +661,29 @@ class PartitionAllocTest
     for (i = 0; i < num_allocations; ++i) {
       switch (mode) {
         case kPartitionAlloc: {
-          ptrs[i] = allocator.root()->Alloc<AllocFlags::kReturnNull>(alloc_size,
-                                                                     type_name);
+          PA_UNSAFE_TODO(ptrs[i]) =
+              allocator.root()->Alloc<AllocFlags::kReturnNull>(alloc_size,
+                                                               type_name);
           break;
         }
         case kPartitionRealloc: {
-          ptrs[i] =
+          PA_UNSAFE_TODO(ptrs[i]) =
               allocator.root()->Alloc<AllocFlags::kReturnNull>(1, type_name);
-          ptrs[i] = allocator.root()->Realloc<AllocFlags::kReturnNull>(
-              ptrs[i], alloc_size, type_name);
+          PA_UNSAFE_TODO(ptrs[i]) =
+              allocator.root()->Realloc<AllocFlags::kReturnNull>(
+                  PA_UNSAFE_TODO(ptrs[i]), alloc_size, type_name);
           break;
         }
       }
 
       if (!i) {
-        EXPECT_TRUE(ptrs[0]);
+        EXPECT_TRUE(PA_UNSAFE_TODO(ptrs[0]));
       }
-      if (!ptrs[i]) {
-        ptrs[i] = allocator.root()->Alloc<AllocFlags::kReturnNull>(alloc_size,
-                                                                   type_name);
-        EXPECT_FALSE(ptrs[i]);
+      if (!PA_UNSAFE_TODO(ptrs[i])) {
+        PA_UNSAFE_TODO(ptrs[i]) =
+            allocator.root()->Alloc<AllocFlags::kReturnNull>(alloc_size,
+                                                             type_name);
+        EXPECT_FALSE(PA_UNSAFE_TODO(ptrs[i]));
         break;
       }
     }
@@ -688,11 +695,12 @@ class PartitionAllocTest
     // Free, reallocate and free again each block we allocated. We do this to
     // check that freeing memory also works correctly after a failed allocation.
     for (--i; i >= 0; --i) {
-      allocator.root()->Free(ptrs[i]);
-      ptrs[i] = allocator.root()->Alloc<AllocFlags::kReturnNull>(alloc_size,
-                                                                 type_name);
-      EXPECT_TRUE(ptrs[i]);
-      allocator.root()->Free(ptrs[i]);
+      allocator.root()->Free(PA_UNSAFE_TODO(ptrs[i]));
+      PA_UNSAFE_TODO(ptrs[i]) =
+          allocator.root()->Alloc<AllocFlags::kReturnNull>(alloc_size,
+                                                           type_name);
+      EXPECT_TRUE(PA_UNSAFE_TODO(ptrs[i]));
+      allocator.root()->Free(PA_UNSAFE_TODO(ptrs[i]));
     }
 
     allocator.root()->Free(ptrs);
@@ -925,7 +933,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Check that the most basic of allocate / free pairs work.
 TEST_P(PartitionAllocWithSizedFreeTest, Basic) {
   PartitionRoot::Bucket* bucket =
-      &allocator.root()->buckets_[test_bucket_index_];
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[test_bucket_index_]);
   auto* sent_slot_span = SlotSpan::get_sentinel_slot_span();
 
   EXPECT_FALSE(bucket->empty_slot_spans_head);
@@ -981,7 +989,7 @@ TEST_P(PartitionAllocTest, MultiAlloc) {
 // Test a bucket with multiple slot spans.
 TEST_P(PartitionAllocTest, MultiSlotSpans) {
   PartitionRoot::Bucket* bucket =
-      &allocator.root()->buckets_[test_bucket_index_];
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[test_bucket_index_]);
 
   auto* slot_span = GetFullSlotSpan(kTestAllocSize);
   FreeFullSlotSpan(allocator.root(), slot_span);
@@ -1023,7 +1031,7 @@ TEST_P(PartitionAllocTest, MultiSlotSpans) {
 // Test some finer aspects of internal slot span transitions.
 TEST_P(PartitionAllocTest, SlotSpanTransitions) {
   PartitionRoot::Bucket* bucket =
-      &allocator.root()->buckets_[test_bucket_index_];
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[test_bucket_index_]);
 
   auto* slot_span1 = GetFullSlotSpan(kTestAllocSize);
   EXPECT_EQ(slot_span1, bucket->active_slot_spans_head);
@@ -1093,7 +1101,8 @@ TEST_P(PartitionAllocTest, ExtraAllocSize) {
   size_t slot_size = 64;
   size_t bucket_index =
       PartitionRoot::SizeToBucketIndex(slot_size, GetBucketDistribution());
-  PartitionRoot::Bucket* bucket = &allocator.root()->buckets_[bucket_index];
+  PartitionRoot::Bucket* bucket =
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   ASSERT_EQ(bucket->slot_size, slot_size);
 
   // The first allocation is expected to span exactly the capacity of the slot.
@@ -1119,7 +1128,8 @@ TEST_P(PartitionAllocTest, PreferSlotSpansWithProvisionedEntries) {
   size_t real_size = size + ExtraAllocSize(allocator);
   size_t bucket_index =
       PartitionRoot::SizeToBucketIndex(real_size, GetBucketDistribution());
-  PartitionRoot::Bucket* bucket = &allocator.root()->buckets_[bucket_index];
+  PartitionRoot::Bucket* bucket =
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   ASSERT_EQ(bucket->slot_size, real_size);
   size_t slots_per_span = bucket->num_system_pages_per_slot_span;
 
@@ -1194,7 +1204,7 @@ TEST_P(PartitionAllocTest, PreferSlotSpansWithProvisionedEntries) {
 // free slot span list metadata bucket.
 TEST_P(PartitionAllocTest, FreeSlotSpanListSlotSpanTransitions) {
   PartitionRoot::Bucket* bucket =
-      &allocator.root()->buckets_[test_bucket_index_];
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[test_bucket_index_]);
 
   size_t num_to_fill_free_list_slot_span =
       PartitionPageSize() / (sizeof(SlotSpan) + ExtraAllocSize(allocator));
@@ -1206,12 +1216,12 @@ TEST_P(PartitionAllocTest, FreeSlotSpanListSlotSpanTransitions) {
 
   size_t i;
   for (i = 0; i < num_to_fill_free_list_slot_span; ++i) {
-    slot_spans[i] = GetFullSlotSpan(kTestAllocSize);
+    PA_UNSAFE_TODO(slot_spans[i]) = GetFullSlotSpan(kTestAllocSize);
   }
-  EXPECT_EQ(slot_spans[num_to_fill_free_list_slot_span - 1],
+  EXPECT_EQ(PA_UNSAFE_TODO(slot_spans[num_to_fill_free_list_slot_span - 1]),
             bucket->active_slot_spans_head);
   for (i = 0; i < num_to_fill_free_list_slot_span; ++i) {
-    FreeFullSlotSpan(allocator.root(), slot_spans[i]);
+    FreeFullSlotSpan(allocator.root(), PA_UNSAFE_TODO(slot_spans[i]));
   }
   EXPECT_EQ(SlotSpan::get_sentinel_slot_span(), bucket->active_slot_spans_head);
   EXPECT_TRUE(bucket->empty_slot_spans_head);
@@ -1225,13 +1235,13 @@ TEST_P(PartitionAllocTest, FreeSlotSpanListSlotSpanTransitions) {
   FreeFullSlotSpan(allocator.root(), slot_span2);
 
   for (i = 0; i < num_to_fill_free_list_slot_span; ++i) {
-    slot_spans[i] = GetFullSlotSpan(kTestAllocSize);
+    PA_UNSAFE_TODO(slot_spans[i]) = GetFullSlotSpan(kTestAllocSize);
   }
-  EXPECT_EQ(slot_spans[num_to_fill_free_list_slot_span - 1],
+  EXPECT_EQ(PA_UNSAFE_TODO(slot_spans[num_to_fill_free_list_slot_span - 1]),
             bucket->active_slot_spans_head);
 
   for (i = 0; i < num_to_fill_free_list_slot_span; ++i) {
-    FreeFullSlotSpan(allocator.root(), slot_spans[i]);
+    FreeFullSlotSpan(allocator.root(), PA_UNSAFE_TODO(slot_spans[i]));
   }
   EXPECT_EQ(SlotSpan::get_sentinel_slot_span(), bucket->active_slot_spans_head);
   EXPECT_TRUE(bucket->empty_slot_spans_head);
@@ -1253,9 +1263,11 @@ TEST_P(PartitionAllocTest, MultiPageAllocs) {
   uintptr_t first_super_page_base = 0;
   size_t i;
   for (i = 0; i < num_slot_spans_needed; ++i) {
-    slot_spans[i] = GetFullSlotSpan(kTestAllocSize);
+    PA_UNSAFE_TODO(slot_spans[i]) = GetFullSlotSpan(kTestAllocSize);
     uintptr_t slot_span_start =
-        SlotSpan::ToSlotSpanStart(slot_spans[i], allocator.root()).value();
+        SlotSpan::ToSlotSpanStart(PA_UNSAFE_TODO(slot_spans[i]),
+                                  allocator.root())
+            .value();
     if (!i) {
       first_super_page_base = slot_span_start & kSuperPageBaseMask;
     }
@@ -1270,7 +1282,7 @@ TEST_P(PartitionAllocTest, MultiPageAllocs) {
     }
   }
   for (i = 0; i < num_slot_spans_needed; ++i) {
-    FreeFullSlotSpan(allocator.root(), slot_spans[i]);
+    FreeFullSlotSpan(allocator.root(), PA_UNSAFE_TODO(slot_spans[i]));
   }
 }
 
@@ -1324,8 +1336,8 @@ TEST_P(PartitionAllocTest, Alloc) {
   // source of the realloc. The condition can be detected by a trashing of
   // the uninitialized value in the space of the upsized allocation.
   EXPECT_EQ(kUninitializedByte,
-            static_cast<unsigned char>(
-                *(new_char_ptr + BucketIndexLookup::kMinBucketSize)));
+            static_cast<unsigned char>(PA_UNSAFE_TODO(
+                *(new_char_ptr + BucketIndexLookup::kMinBucketSize))));
 #endif
   *new_char_ptr = 'B';
   // The realloc moved. To check that the old allocation was freed, we can
@@ -1413,7 +1425,7 @@ TEST_P(PartitionAllocWithSizedFreeTest, AllocSizes) {
 
     void* ptr = allocator.root()->Alloc(size, type_name);
     EXPECT_TRUE(ptr);
-    memset(ptr, 'A', size);
+    PA_UNSAFE_TODO(memset(ptr, 'A', size));
     void* ptr2 = allocator.root()->Alloc(size, type_name);
     EXPECT_TRUE(ptr2);
     void* ptr3 = allocator.root()->Alloc(size, type_name);
@@ -1447,8 +1459,9 @@ TEST_P(PartitionAllocWithSizedFreeTest, AllocSizes) {
 #if PA_BUILDFLAG(EXPENSIVE_DCHECKS_ARE_ON)
     // |SlotSpan::Free| must poison the slot's contents with
     // |kFreedByte|.
-    EXPECT_EQ(kFreedByte,
-              *(static_cast<unsigned char*>(new_ptr_1) + (size - 1)));
+    EXPECT_EQ(
+        kFreedByte,
+        *(PA_UNSAFE_TODO(static_cast<unsigned char*>(new_ptr_1) + (size - 1))));
 #endif
   }
 #endif  // !(PA_BUILDFLAG(IS_LINUX) && PA_BUILDFLAG(PA_ARCH_CPU_ARM64))
@@ -1472,7 +1485,7 @@ TEST_P(PartitionAllocWithSizedFreeTest, AllocSizes) {
     size -= 1;
     void* ptr = allocator.root()->Alloc(size, type_name);
     char* char_ptr = static_cast<char*>(ptr);
-    *(char_ptr + (size - 1)) = 'A';
+    *(PA_UNSAFE_TODO(char_ptr + (size - 1))) = 'A';
     FreePtr(ptr, size);
 
     // Can we free null?
@@ -1504,8 +1517,7 @@ TEST_P(PartitionAllocTest, AllocGetSizeAndStart) {
   if (UseBRPPool()) {
     uintptr_t address = UntagPtr(ptr);
     for (size_t offset = 0; offset < requested_size; ++offset) {
-      EXPECT_EQ(PartitionAllocGetSlotStartAndSizeInBRPPool(address + offset)
-                    .slot_start,
+      EXPECT_EQ(SlotAddressAndSize::FromBRPPool(address + offset).slot_start,
                 slot_start.Untag());
     }
   }
@@ -1528,8 +1540,7 @@ TEST_P(PartitionAllocTest, AllocGetSizeAndStart) {
   if (UseBRPPool()) {
     uintptr_t address = UntagPtr(ptr);
     for (size_t offset = 0; offset < requested_size; offset += 877) {
-      EXPECT_EQ(PartitionAllocGetSlotStartAndSizeInBRPPool(address + offset)
-                    .slot_start,
+      EXPECT_EQ(SlotAddressAndSize::FromBRPPool(address + offset).slot_start,
                 slot_start.Untag());
     }
   }
@@ -1558,8 +1569,7 @@ TEST_P(PartitionAllocTest, AllocGetSizeAndStart) {
   if (UseBRPPool()) {
     uintptr_t address = UntagPtr(ptr);
     for (size_t offset = 0; offset < requested_size; offset += 4999) {
-      EXPECT_EQ(PartitionAllocGetSlotStartAndSizeInBRPPool(address + offset)
-                    .slot_start,
+      EXPECT_EQ(SlotAddressAndSize::FromBRPPool(address + offset).slot_start,
                 slot_start.Untag());
     }
   }
@@ -1582,8 +1592,7 @@ TEST_P(PartitionAllocTest, AllocGetSizeAndStart) {
   if (UseBRPPool()) {
     uintptr_t address = UntagPtr(ptr);
     for (size_t offset = 0; offset < requested_size; offset += 4999) {
-      EXPECT_EQ(PartitionAllocGetSlotStartAndSizeInBRPPool(address + offset)
-                    .slot_start,
+      EXPECT_EQ(SlotAddressAndSize::FromBRPPool(address + offset).slot_start,
                 slot_start.Untag());
     }
   }
@@ -1591,7 +1600,7 @@ TEST_P(PartitionAllocTest, AllocGetSizeAndStart) {
 
   // Check that we can write at the end of the reported size too.
   char* char_ptr = static_cast<char*>(ptr);
-  *(char_ptr + (actual_capacity - 1)) = 'A';
+  *(PA_UNSAFE_TODO(char_ptr + (actual_capacity - 1))) = 'A';
   allocator.root()->Free(ptr);
 
   // Allocate something very large, and uneven.
@@ -1612,8 +1621,7 @@ TEST_P(PartitionAllocTest, AllocGetSizeAndStart) {
     if (UseBRPPool()) {
       uintptr_t address = UntagPtr(ptr);
       for (size_t offset = 0; offset < requested_size; offset += 16111) {
-        EXPECT_EQ(PartitionAllocGetSlotStartAndSizeInBRPPool(address + offset)
-                      .slot_start,
+        EXPECT_EQ(SlotAddressAndSize::FromBRPPool(address + offset).slot_start,
                   slot_start.Untag());
       }
     }
@@ -1730,88 +1738,98 @@ TEST_P(PartitionAllocTest, IsPtrWithinSameAlloc) {
       }
 
       uintptr_t address = UntagPtr(ptr);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address - kFarFarAwayDelta, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address,
+                                              address - kFarFarAwayDelta, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address - kSuperPageSize, 0u),
+      EXPECT_EQ(
+          IsPtrWithinSameAllocInBRPPool(address, address - kSuperPageSize, 0u),
+          PtrPosWithinAlloc::kFarOOB);
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address, address - 1, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address - 1, 0u),
-                PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address, address, 0u),
                 PtrPosWithinAlloc::kInBounds);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address + requested_size / 2, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address,
+                                              address + requested_size / 2, 0u),
                 PtrPosWithinAlloc::kInBounds);
 #if PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address + requested_size - 1, 1u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address,
+                                              address + requested_size - 1, 1u),
                 PtrPosWithinAlloc::kInBounds);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address + requested_size, 1u),
-                PtrPosWithinAlloc::kAllocEnd);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address + requested_size - 4, 4u),
+      EXPECT_EQ(
+          IsPtrWithinSameAllocInBRPPool(address, address + requested_size, 1u),
+          PtrPosWithinAlloc::kAllocEnd);
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address,
+                                              address + requested_size - 4, 4u),
                 PtrPosWithinAlloc::kInBounds);
       for (size_t subtrahend = 0; subtrahend < 4; subtrahend++) {
-        EXPECT_EQ(IsPtrWithinSameAlloc(
+        EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
                       address, address + requested_size - subtrahend, 4u),
                   PtrPosWithinAlloc::kAllocEnd);
       }
 #else  // PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address + requested_size, 0u),
-                PtrPosWithinAlloc::kInBounds);
+      EXPECT_EQ(
+          IsPtrWithinSameAllocInBRPPool(address, address + requested_size, 0u),
+          PtrPosWithinAlloc::kInBounds);
 #endif
-      EXPECT_EQ(IsPtrWithinSameAlloc(address, address + requested_size + 1, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address,
+                                              address + requested_size + 1, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
                     address, address + requested_size + kSuperPageSize, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
                     address, address + requested_size + kFarFarAwayDelta, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(
-          IsPtrWithinSameAlloc(address + requested_size,
-                               address + requested_size + kFarFarAwayDelta, 0u),
-          PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(
-          IsPtrWithinSameAlloc(address + requested_size,
-                               address + requested_size + kSuperPageSize, 0u),
-          PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size,
-                                     address + requested_size + 1, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
+                    address + requested_size,
+                    address + requested_size + kFarFarAwayDelta, 0u),
+                PtrPosWithinAlloc::kFarOOB);
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
+                    address + requested_size,
+                    address + requested_size + kSuperPageSize, 0u),
+                PtrPosWithinAlloc::kFarOOB);
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size,
+                                              address + requested_size + 1, 0u),
                 PtrPosWithinAlloc::kFarOOB);
 #if PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size - 1,
-                                     address + requested_size - 1, 1u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size - 1,
+                                              address + requested_size - 1, 1u),
                 PtrPosWithinAlloc::kInBounds);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size - 1,
-                                     address + requested_size, 1u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size - 1,
+                                              address + requested_size, 1u),
                 PtrPosWithinAlloc::kAllocEnd);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size,
-                                     address + requested_size, 1u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size,
+                                              address + requested_size, 1u),
                 PtrPosWithinAlloc::kAllocEnd);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size - 4,
-                                     address + requested_size - 4, 4u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size - 4,
+                                              address + requested_size - 4, 4u),
                 PtrPosWithinAlloc::kInBounds);
       for (size_t addend = 1; addend < 4; addend++) {
-        EXPECT_EQ(
-            IsPtrWithinSameAlloc(address + requested_size - 4,
-                                 address + requested_size - 4 + addend, 4u),
-            PtrPosWithinAlloc::kAllocEnd);
+        EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
+                      address + requested_size - 4,
+                      address + requested_size - 4 + addend, 4u),
+                  PtrPosWithinAlloc::kAllocEnd);
       }
 #else  // PA_BUILDFLAG(BACKUP_REF_PTR_POISON_OOB_PTR)
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size,
-                                     address + requested_size, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size,
+                                              address + requested_size, 0u),
                 PtrPosWithinAlloc::kInBounds);
 #endif
-      EXPECT_EQ(IsPtrWithinSameAlloc(
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(
                     address + requested_size,
                     address + requested_size - (requested_size / 2), 0u),
                 PtrPosWithinAlloc::kInBounds);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size, address, 0u),
-                PtrPosWithinAlloc::kInBounds);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size, address - 1, 0u),
+      EXPECT_EQ(
+          IsPtrWithinSameAllocInBRPPool(address + requested_size, address, 0u),
+          PtrPosWithinAlloc::kInBounds);
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size,
+                                              address - 1, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size,
-                                     address - kSuperPageSize, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size,
+                                              address - kSuperPageSize, 0u),
                 PtrPosWithinAlloc::kFarOOB);
-      EXPECT_EQ(IsPtrWithinSameAlloc(address + requested_size,
-                                     address - kFarFarAwayDelta, 0u),
+      EXPECT_EQ(IsPtrWithinSameAllocInBRPPool(address + requested_size,
+                                              address - kFarFarAwayDelta, 0u),
                 PtrPosWithinAlloc::kFarOOB);
     }
 
@@ -1834,8 +1852,8 @@ TEST_P(PartitionAllocTest, GetSlotStartMultiplePages) {
   // non-zero.
   size_t real_size = 0;
   for (const auto& bucket : root->buckets_) {
-    if ((root->buckets_ + SizeToIndex(bucket.slot_size))->slot_size !=
-        bucket.slot_size) {
+    if ((PA_UNSAFE_TODO(root->buckets_ + SizeToIndex(bucket.slot_size)))
+            ->slot_size != bucket.slot_size) {
       continue;
     }
     if (bucket.slot_size <= ExtraAllocSize(allocator)) {
@@ -1855,7 +1873,8 @@ TEST_P(PartitionAllocTest, GetSlotStartMultiplePages) {
   // Double check we don't end up with 0 or negative size.
   EXPECT_GT(requested_size, 0u);
   EXPECT_LE(requested_size, real_size);
-  const auto* bucket = allocator.root()->buckets_ + SizeToIndex(real_size);
+  const auto* bucket =
+      PA_UNSAFE_TODO(allocator.root()->buckets_ + SizeToIndex(real_size));
   EXPECT_EQ(bucket->slot_size, real_size);
   // Make sure the test is testing multiple partition pages case.
   EXPECT_GT(bucket->num_system_pages_per_slot_span,
@@ -1873,8 +1892,7 @@ TEST_P(PartitionAllocTest, GetSlotStartMultiplePages) {
         allocator.root()->AllocationCapacityFromSlotStart(slot_start.Untag()),
         requested_size);
     for (size_t offset = 0; offset < requested_size; offset += 13) {
-      EXPECT_EQ(PartitionAllocGetSlotStartAndSizeInBRPPool(address + offset)
-                    .slot_start,
+      EXPECT_EQ(SlotAddressAndSize::FromBRPPool(address + offset).slot_start,
                 slot_start.Untag());
     }
     allocator.root()->Free(ptr);
@@ -1886,7 +1904,7 @@ TEST_P(PartitionAllocTest, GetSlotStartMultiplePages) {
 TEST_P(PartitionAllocTest, Realloc) {
   // realloc(0, size) should be equivalent to malloc().
   void* ptr = allocator.root()->Realloc(nullptr, kTestAllocSize, type_name);
-  memset(ptr, 'A', kTestAllocSize);
+  PA_UNSAFE_TODO(memset(ptr, 'A', kTestAllocSize));
   auto* slot_span = SlotSpan::FromSlotStart(SlotStart::Unchecked(ptr).Untag(),
                                             allocator.root());
   // realloc(ptr, 0) should be equivalent to free().
@@ -1901,14 +1919,15 @@ TEST_P(PartitionAllocTest, Realloc) {
   // Confirm size fills the entire slot.
   ASSERT_EQ(size, allocator.root()->AllocationCapacityFromRequestedSize(size));
   ptr = allocator.root()->Alloc(size, type_name);
-  memset(ptr, 'A', size);
+  PA_UNSAFE_TODO(memset(ptr, 'A', size));
   ptr2 = allocator.root()->Realloc(ptr, size + 1, type_name);
   PA_EXPECT_PTR_NE(ptr, ptr2);
   char* char_ptr2 = static_cast<char*>(ptr2);
   EXPECT_EQ('A', char_ptr2[0]);
-  EXPECT_EQ('A', char_ptr2[size - 1]);
+  EXPECT_EQ('A', PA_UNSAFE_TODO(char_ptr2[size - 1]));
 #if PA_BUILDFLAG(EXPENSIVE_DCHECKS_ARE_ON)
-  EXPECT_EQ(kUninitializedByte, static_cast<unsigned char>(char_ptr2[size]));
+  EXPECT_EQ(kUninitializedByte,
+            static_cast<unsigned char>(PA_UNSAFE_TODO(char_ptr2[size])));
 #endif
 
   // Test that shrinking an allocation with realloc() also copies everything
@@ -1918,9 +1937,10 @@ TEST_P(PartitionAllocTest, Realloc) {
   PA_EXPECT_PTR_NE(ptr2, ptr);
   char* char_ptr = static_cast<char*>(ptr);
   EXPECT_EQ('A', char_ptr[0]);
-  EXPECT_EQ('A', char_ptr[size - 2]);
+  EXPECT_EQ('A', PA_UNSAFE_TODO(char_ptr[size - 2]));
 #if PA_BUILDFLAG(EXPENSIVE_DCHECKS_ARE_ON)
-  EXPECT_EQ(kUninitializedByte, static_cast<unsigned char>(char_ptr[size - 1]));
+  EXPECT_EQ(kUninitializedByte,
+            static_cast<unsigned char>(PA_UNSAFE_TODO(char_ptr[size - 1])));
 #endif
 
   allocator.root()->Free(ptr);
@@ -1935,14 +1955,15 @@ TEST_P(PartitionAllocTest, Realloc) {
   // Confirm size doesn't fill the entire slot.
   ASSERT_LT(size, allocator.root()->AllocationCapacityFromRequestedSize(size));
   ptr = allocator.root()->Alloc(size, type_name);
-  memset(ptr, 'A', size);
+  PA_UNSAFE_TODO(memset(ptr, 'A', size));
   ptr2 = allocator.root()->Realloc(ptr, size * 2, type_name);
   PA_EXPECT_PTR_NE(ptr, ptr2);
   char_ptr2 = static_cast<char*>(ptr2);
   EXPECT_EQ('A', char_ptr2[0]);
-  EXPECT_EQ('A', char_ptr2[size - 1]);
+  EXPECT_EQ('A', PA_UNSAFE_TODO(char_ptr2[size - 1]));
 #if PA_BUILDFLAG(EXPENSIVE_DCHECKS_ARE_ON)
-  EXPECT_EQ(kUninitializedByte, static_cast<unsigned char>(char_ptr2[size]));
+  EXPECT_EQ(kUninitializedByte,
+            static_cast<unsigned char>(PA_UNSAFE_TODO(char_ptr2[size])));
 #endif
   allocator.root()->Free(ptr2);
 
@@ -1951,16 +1972,17 @@ TEST_P(PartitionAllocTest, Realloc) {
   size = 2 * (MaxRegularSlotSpanSize() + 1);
   ASSERT_GT(size / 2, MaxRegularSlotSpanSize());  // in single-slot span range
   ptr = allocator.root()->Alloc(size, type_name);
-  memset(ptr, 'A', size);
+  PA_UNSAFE_TODO(memset(ptr, 'A', size));
   ptr2 = allocator.root()->Realloc(ptr2, size / 2, type_name);
   PA_EXPECT_PTR_NE(ptr, ptr2);
   char_ptr2 = static_cast<char*>(ptr2);
   EXPECT_EQ('A', char_ptr2[0]);
-  EXPECT_EQ('A', char_ptr2[size / 2 - 1]);
+  EXPECT_EQ('A', PA_UNSAFE_TODO(char_ptr2[size / 2 - 1]));
 #if PA_BUILDFLAG(USE_PARTITION_COOKIE)
   // For single-slot slot spans, the cookie is always placed immediately after
   // the allocation.
-  EXPECT_EQ(kCookieValue[0], static_cast<unsigned char>(char_ptr2[size / 2]));
+  EXPECT_EQ(kCookieValue[0],
+            static_cast<unsigned char>(PA_UNSAFE_TODO(char_ptr2[size / 2])));
 #endif
   allocator.root()->Free(ptr2);
 
@@ -2100,7 +2122,8 @@ TEST_P(PartitionAllocTest, ReallocDirectMapAlignedRelocate) {
 TEST_P(PartitionAllocTest, PartialPageFreelists) {
   size_t big_size = SystemPageSize() - ExtraAllocSize(allocator);
   size_t bucket_index = SizeToIndex(big_size + ExtraAllocSize(allocator));
-  PartitionRoot::Bucket* bucket = &allocator.root()->buckets_[bucket_index];
+  PartitionRoot::Bucket* bucket =
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   EXPECT_EQ(nullptr, bucket->empty_slot_spans_head);
 
   void* ptr = allocator.root()->Alloc(big_size, type_name);
@@ -2164,7 +2187,7 @@ TEST_P(PartitionAllocTest, PartialPageFreelists) {
   size_t non_dividing_size =
       SystemPageSize() / 2 + 1 - ExtraAllocSize(allocator);
   bucket_index = SizeToIndex(non_dividing_size + ExtraAllocSize(allocator));
-  bucket = &allocator.root()->buckets_[bucket_index];
+  bucket = PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   EXPECT_EQ(nullptr, bucket->empty_slot_spans_head);
 
   ptr = allocator.root()->Alloc(non_dividing_size, type_name);
@@ -2206,7 +2229,7 @@ TEST_P(PartitionAllocTest, PartialPageFreelists) {
   // single allocation.
   size_t medium_size = (SystemPageSize() / 2) - ExtraAllocSize(allocator);
   bucket_index = SizeToIndex(medium_size + ExtraAllocSize(allocator));
-  bucket = &allocator.root()->buckets_[bucket_index];
+  bucket = PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   EXPECT_EQ(nullptr, bucket->empty_slot_spans_head);
 
   ptr = allocator.root()->Alloc(medium_size, type_name);
@@ -2227,7 +2250,7 @@ TEST_P(PartitionAllocTest, PartialPageFreelists) {
 
   size_t small_size = (SystemPageSize() / 4) - ExtraAllocSize(allocator);
   bucket_index = SizeToIndex(small_size + ExtraAllocSize(allocator));
-  bucket = &allocator.root()->buckets_[bucket_index];
+  bucket = PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   EXPECT_EQ(nullptr, bucket->empty_slot_spans_head);
 
   ptr = allocator.root()->Alloc(small_size, type_name);
@@ -2255,7 +2278,7 @@ TEST_P(PartitionAllocTest, PartialPageFreelists) {
       allocator.root()->AdjustSize0IfNeeded(very_small_size);
   bucket_index =
       SizeToIndex(very_small_adjusted_size + ExtraAllocSize(allocator));
-  bucket = &allocator.root()->buckets_[bucket_index];
+  bucket = PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   EXPECT_EQ(nullptr, bucket->empty_slot_spans_head);
 
   ptr = allocator.root()->Alloc(very_small_size, type_name);
@@ -2321,7 +2344,7 @@ TEST_P(PartitionAllocTest, PartialPageFreelists) {
 // Test some of the fragmentation-resistant properties of the allocator.
 TEST_P(PartitionAllocTest, SlotSpanRefilling) {
   PartitionRoot::Bucket* bucket =
-      &allocator.root()->buckets_[test_bucket_index_];
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[test_bucket_index_]);
 
   // Grab two full slot spans and a non-full slot span.
   auto* slot_span1 = GetFullSlotSpan(kTestAllocSize);
@@ -2368,7 +2391,7 @@ TEST_P(PartitionAllocTest, PartialPages) {
   constexpr size_t kMaxSize = 4000u;
   while (size < kMaxSize) {
     bucket_index = SizeToIndex(size + ExtraAllocSize(allocator));
-    bucket = &allocator.root()->buckets_[bucket_index];
+    bucket = PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
     if (bucket->num_system_pages_per_slot_span %
         NumSystemPagesPerPartitionPage()) {
       break;
@@ -2400,7 +2423,7 @@ TEST_P(PartitionAllocTest, MappingCollision) {
 
   size_t i;
   for (i = 0; i < num_partition_pages_needed; ++i) {
-    first_super_page_pages[i] = GetFullSlotSpan(kTestAllocSize);
+    PA_UNSAFE_TODO(first_super_page_pages[i]) = GetFullSlotSpan(kTestAllocSize);
   }
 
   uintptr_t slot_span_start =
@@ -2426,7 +2449,8 @@ TEST_P(PartitionAllocTest, MappingCollision) {
   EXPECT_TRUE(map2);
 
   for (i = 0; i < num_partition_pages_needed; ++i) {
-    second_super_page_pages[i] = GetFullSlotSpan(kTestAllocSize);
+    PA_UNSAFE_TODO(second_super_page_pages[i]) =
+        GetFullSlotSpan(kTestAllocSize);
   }
 
   FreePages(map1, PageAllocationGranularity());
@@ -2487,8 +2511,10 @@ TEST_P(PartitionAllocTest, MappingCollision) {
 
   FreeFullSlotSpan(allocator.root(), slot_span_in_third_super_page);
   for (i = 0; i < num_partition_pages_needed; ++i) {
-    FreeFullSlotSpan(allocator.root(), first_super_page_pages[i]);
-    FreeFullSlotSpan(allocator.root(), second_super_page_pages[i]);
+    FreeFullSlotSpan(allocator.root(),
+                     PA_UNSAFE_TODO(first_super_page_pages[i]));
+    FreeFullSlotSpan(allocator.root(),
+                     PA_UNSAFE_TODO(second_super_page_pages[i]));
   }
 }
 
@@ -2499,7 +2525,8 @@ TEST_P(PartitionAllocTest, FreeCache) {
 
   size_t big_size = 1000 - ExtraAllocSize(allocator);
   size_t bucket_index = SizeToIndex(big_size + ExtraAllocSize(allocator));
-  PartitionBucket* bucket = &allocator.root()->buckets_[bucket_index];
+  PartitionBucket* bucket =
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
 
   void* ptr = allocator.root()->Alloc(big_size, type_name);
   EXPECT_TRUE(ptr);
@@ -2621,7 +2648,8 @@ TEST_P(PartitionAllocTest, CheckMetadataIntegrityPass) {
 
   // Should not crash.
   PartitionRoot::CheckMetadataIntegrity(small_ptr);
-  PartitionRoot::CheckMetadataIntegrity(small_ptr + kTestAllocSize - 1);
+  PartitionRoot::CheckMetadataIntegrity(
+      PA_UNSAFE_TODO(small_ptr + kTestAllocSize - 1));
 
   allocator.root()->Free(small_ptr);
 
@@ -2632,7 +2660,8 @@ TEST_P(PartitionAllocTest, CheckMetadataIntegrityPass) {
 
   // Should not crash.
   PartitionRoot::CheckMetadataIntegrity(large_ptr);
-  PartitionRoot::CheckMetadataIntegrity(large_ptr + kDirectMapSize - 1);
+  PartitionRoot::CheckMetadataIntegrity(
+      PA_UNSAFE_TODO(large_ptr + kDirectMapSize - 1));
 
   allocator.root()->Free(large_ptr);
 }
@@ -2895,11 +2924,12 @@ TEST_P(PartitionAllocDeathTest, DirectMapGuardPages) {
     void* ptr = allocator.root()->Alloc(size, type_name);
 
     EXPECT_TRUE(ptr);
-    char* char_ptr = static_cast<char*>(ptr) - kPointerOffset;
+    char* char_ptr = PA_UNSAFE_TODO(static_cast<char*>(ptr) - kPointerOffset);
 
-    EXPECT_DEATH(*(char_ptr - 1) = 'A', "");
-    EXPECT_DEATH(*(char_ptr + partition_alloc::internal::base::bits::AlignUp(
-                                  size, SystemPageSize())) = 'A',
+    EXPECT_DEATH(*(PA_UNSAFE_TODO(char_ptr - 1)) = 'A', "");
+    EXPECT_DEATH(*(PA_UNSAFE_TODO(
+                     char_ptr + partition_alloc::internal::base::bits::AlignUp(
+                                    size, SystemPageSize()))) = 'A',
                  "");
 
     allocator.root()->Free(ptr);
@@ -2917,7 +2947,7 @@ TEST_P(PartitionAllocDeathTest, UseAfterFreeDetection) {
 
   // use after free, not crashing here, but the next allocation should crash,
   // since we corrupted the freelist.
-  memset(data, 0x42, 100);
+  PA_UNSAFE_TODO(memset(data, 0x42, 100));
   EXPECT_DEATH(allocator.root()->Alloc(100), "");
 }
 
@@ -2927,19 +2957,19 @@ TEST_P(PartitionAllocDeathTest, FreelistCorruption) {
   void** fake_freelist_entry =
       static_cast<void**>(allocator.root()->Alloc(alloc_size));
   fake_freelist_entry[0] = nullptr;
-  fake_freelist_entry[1] = nullptr;
+  PA_UNSAFE_TODO(fake_freelist_entry[1]) = nullptr;
 
   void** uaf_data = static_cast<void**>(allocator.root()->Alloc(alloc_size));
   allocator.root()->Free(uaf_data);
   // Try to confuse the allocator. This is still easy to circumvent willingly,
   // "just" need to set uaf_data[1] to ~uaf_data[0].
-  void* previous_uaf_data = uaf_data[0];
-  uaf_data[0] = fake_freelist_entry;
+  void* previous_uaf_data = PA_UNSAFE_TODO(uaf_data[0]);
+  PA_UNSAFE_TODO(uaf_data[0]) = fake_freelist_entry;
   EXPECT_DEATH(allocator.root()->Alloc(alloc_size), "");
 
   // Restore the freelist entry value, otherwise freelist corruption is detected
   // in TearDown(), crashing this process.
-  uaf_data[0] = previous_uaf_data;
+  PA_UNSAFE_TODO(uaf_data[0]) = previous_uaf_data;
 
   allocator.root()->Free(fake_freelist_entry);
 }
@@ -2952,21 +2982,21 @@ TEST_P(PartitionAllocDeathTest, OffByOneDetection) {
   const size_t alloc_size = 2 * sizeof(void*);
   char* array = static_cast<char*>(allocator.root()->Alloc(alloc_size));
   if (cpu.has_mte()) {
-    EXPECT_DEATH(array[alloc_size] = 'A', "");
+    EXPECT_DEATH(PA_UNSAFE_TODO(array[alloc_size]) = 'A', "");
   } else {
-    char previous_value = array[alloc_size];
+    char previous_value = PA_UNSAFE_TODO(array[alloc_size]);
     // volatile is required to prevent the compiler from getting too clever and
     // eliding the out-of-bounds write. The root cause is that the PA_MALLOC_FN
     // annotation tells the compiler (among other things) that the returned
     // value cannot alias anything.
-    *const_cast<volatile char*>(&array[alloc_size]) = 'A';
+    *const_cast<volatile char*>(PA_UNSAFE_TODO(&array[alloc_size])) = 'A';
     // Crash at the next allocation. This assumes that we are touching a new,
     // non-randomized slot span, where the next slot to be handed over to the
     // application directly follows the current one.
     EXPECT_DEATH(allocator.root()->Alloc(alloc_size), "");
 
     // Restore integrity, otherwise the process will crash in TearDown().
-    array[alloc_size] = previous_value;
+    PA_UNSAFE_TODO(array[alloc_size]) = previous_value;
   }
 }
 
@@ -2976,16 +3006,16 @@ TEST_P(PartitionAllocDeathTest, OffByOneDetectionWithRealisticData) {
   void** array = static_cast<void**>(allocator.root()->Alloc(alloc_size));
   char valid;
   if (cpu.has_mte()) {
-    EXPECT_DEATH(array[2] = &valid, "");
+    EXPECT_DEATH(PA_UNSAFE_TODO(array[2]) = &valid, "");
   } else {
-    void* previous_value = array[2];
+    void* previous_value = PA_UNSAFE_TODO(array[2]);
     // As above, needs volatile to convince the compiler to perform the write.
-    *const_cast<void* volatile*>(&array[2]) = &valid;
+    *const_cast<void* volatile*>(PA_UNSAFE_TODO(&array[2])) = &valid;
     // Crash at the next allocation. This assumes that we are touching a new,
     // non-randomized slot span, where the next slot to be handed over to the
     // application directly follows the current one.
     EXPECT_DEATH(allocator.root()->Alloc(alloc_size), "");
-    array[2] = previous_value;
+    PA_UNSAFE_TODO(array[2]) = previous_value;
   }
 }
 #endif  // !PA_BUILDFLAG(USE_PARTITION_COOKIE)
@@ -3004,19 +3034,19 @@ TEST_P(PartitionAllocDeathTest, OffByOneDetectionByCookie) {
       array, allocator.root());
   size_t usable_size = allocator.root()->GetSlotUsableSize(slot_span);
 
-  char previous_value = array[usable_size];
+  char previous_value = PA_UNSAFE_TODO(array[usable_size]);
   // volatile is required to prevent the compiler from getting too clever and
   // eliding the out-of-bounds write. The root cause is that the PA_MALLOC_FN
   // annotation tells the compiler (among other things) that the returned
   // value cannot alias anything.
-  *const_cast<volatile char*>(&array[usable_size]) = 'A';
+  *const_cast<volatile char*>(PA_UNSAFE_TODO(&array[usable_size])) = 'A';
   // Crash at `free()`, either by cookie check failure or InSlotMetadata
   // corruption.
   EXPECT_DEATH(allocator.root()->Free(array), "");
   // It should also crash with `CheckMetadataIntegrity()`.
   EXPECT_DEATH(allocator.root()->CheckMetadataIntegrity(array), "");
   // Restore integrity, otherwise the process will crash in TearDown().
-  array[usable_size] = previous_value;
+  PA_UNSAFE_TODO(array[usable_size] = previous_value);
   allocator.root()->Free(array);
 }
 
@@ -3033,16 +3063,16 @@ TEST_P(PartitionAllocDeathTest, OffByOneDetectionByCookieWithRealisticData) {
   size_t usable_size =
       allocator.root()->GetSlotUsableSize(slot_span) / sizeof(void*);
 
-  void* previous_value = array[usable_size];
+  void* previous_value = PA_UNSAFE_TODO(array[usable_size]);
   // As above, needs volatile to convince the compiler to perform the write.
-  *const_cast<void* volatile*>(&array[usable_size]) = &valid;
+  *const_cast<void* volatile*>(PA_UNSAFE_TODO(&array[usable_size])) = &valid;
   // Crash at `free()`, either by cookie check failure or InSlotMetadata
   // corruption.
   EXPECT_DEATH(allocator.root()->Free(array), "");
   // It should also crash with `CheckMetadataIntegrity()`.
   EXPECT_DEATH(allocator.root()->CheckMetadataIntegrity(array), "");
   // Restore integrity, otherwise the process will crash in TearDown().
-  array[usable_size] = previous_value;
+  PA_UNSAFE_TODO(array[usable_size] = previous_value);
   allocator.root()->Free(array);
 }
 #endif  // PA_BUILDFLAG(USE_PARTITION_COOKIE)
@@ -3055,7 +3085,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
   {
     void* ptr = allocator.root()->Alloc(kTestAllocSize, type_name);
     MockPartitionStatsDumper mock_stats_dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true,
                                 &mock_stats_dumper);
     EXPECT_TRUE(mock_stats_dumper.IsMemoryAllocationRecorded());
     allocator.root()->Free(ptr);
@@ -3067,8 +3098,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
       void* ptr =
           allocator.root()->Alloc(2048 - ExtraAllocSize(allocator), type_name);
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
       const PartitionBucketMemoryStats* stats = dumper.GetBucketStats(2048);
@@ -3089,8 +3120,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_FALSE(dumper.IsMemoryAllocationRecorded());
 
       const PartitionBucketMemoryStats* stats = dumper.GetBucketStats(2048);
@@ -3115,8 +3146,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_FALSE(dumper.IsMemoryAllocationRecorded());
 
       const PartitionBucketMemoryStats* stats = dumper.GetBucketStats(2048);
@@ -3149,8 +3180,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
       const PartitionBucketMemoryStats* stats =
@@ -3184,8 +3215,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
       const PartitionBucketMemoryStats* stats =
@@ -3238,8 +3269,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
       size_t slot_size = SizeToBucketSize(requested_size);
@@ -3267,8 +3298,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_FALSE(dumper.IsMemoryAllocationRecorded());
 
       size_t slot_size = SizeToBucketSize(requested_size);
@@ -3294,8 +3325,8 @@ TEST_P(PartitionAllocTest, DumpMemoryStats) {
 
     {
       MockPartitionStatsDumper dumper;
-      allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                  &dumper);
+      allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                  /*populate_discardable_bytes=*/true, &dumper);
       EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
       size_t slot_size = SizeToBucketSize(requested_size);
@@ -3330,8 +3361,8 @@ TEST_P(PartitionAllocTest, Purge) {
   allocator.root()->Free(ptr);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_FALSE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats = dumper.GetBucketStats(2048);
@@ -3343,8 +3374,8 @@ TEST_P(PartitionAllocTest, Purge) {
   allocator.root()->PurgeMemory(PurgeFlags::kDecommitEmptySlotSpans);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_FALSE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats = dumper.GetBucketStats(2048);
@@ -3366,8 +3397,8 @@ TEST_P(PartitionAllocTest, Purge) {
   allocator.root()->Free(big_ptr);
   allocator.root()->PurgeMemory(PurgeFlags::kDecommitEmptySlotSpans);
 
-  CHECK_PAGE_IN_CORE(ptr - kPointerOffset, false);
-  CHECK_PAGE_IN_CORE(big_ptr - kPointerOffset, false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr - kPointerOffset), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(big_ptr - kPointerOffset), false);
 }
 
 // Tests that we prefer to allocate into a non-empty partition page over an
@@ -3434,8 +3465,8 @@ TEST_P(PartitionAllocTest, PurgeDiscardableSecondPage) {
   EXPECT_EQ(2u, slot_span->num_unprovisioned_slots);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3447,9 +3478,9 @@ TEST_P(PartitionAllocTest, PurgeDiscardableSecondPage) {
     EXPECT_EQ(SystemPageSize(), stats->active_bytes);
     EXPECT_EQ(2 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr2 - kPointerOffset, true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr2 - kPointerOffset), true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
-  CHECK_PAGE_IN_CORE(ptr2 - kPointerOffset, false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr2 - kPointerOffset), false);
   EXPECT_EQ(3u, slot_span->num_unprovisioned_slots);
 
   allocator.root()->Free(ptr1);
@@ -3464,8 +3495,8 @@ TEST_P(PartitionAllocTest, PurgeDiscardableFirstPage) {
   allocator.root()->Free(ptr1);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3481,9 +3512,9 @@ TEST_P(PartitionAllocTest, PurgeDiscardableFirstPage) {
     EXPECT_EQ(SystemPageSize(), stats->active_bytes);
     EXPECT_EQ(2 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), false);
 
   allocator.root()->Free(ptr2);
 }
@@ -3498,14 +3529,14 @@ TEST_P(PartitionAllocTest, PurgeDiscardableNonPageSizedAlloc) {
       requested_size - ExtraAllocSize(allocator), type_name);
   void* ptr4 = allocator.root()->Alloc(
       requested_size - ExtraAllocSize(allocator), type_name);
-  memset(ptr1, 'A', requested_size - ExtraAllocSize(allocator));
-  memset(ptr2, 'A', requested_size - ExtraAllocSize(allocator));
+  PA_UNSAFE_TODO(memset(ptr1, 'A', requested_size - ExtraAllocSize(allocator)));
+  PA_UNSAFE_TODO(memset(ptr2, 'A', requested_size - ExtraAllocSize(allocator)));
   allocator.root()->Free(ptr1);
   allocator.root()->Free(ptr2);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3521,20 +3552,28 @@ TEST_P(PartitionAllocTest, PurgeDiscardableNonPageSizedAlloc) {
     EXPECT_EQ(requested_size * 2, stats->active_bytes);
     EXPECT_EQ(10 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 4), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 4)), true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
   // Except for Windows, the first page is discardable because the freelist
   // pointer on this page is nullptr. Note that CHECK_PAGE_IN_CORE only executes
   // checks for Linux and ChromeOS, not for Windows.
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 4), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 4)), false);
 
   allocator.root()->Free(ptr3);
   allocator.root()->Free(ptr4);
@@ -3550,14 +3589,14 @@ TEST_P(PartitionAllocTest, PurgeDiscardableNonPageSizedAllocOnSlotBoundary) {
       requested_size - ExtraAllocSize(allocator), type_name);
   void* ptr4 = allocator.root()->Alloc(
       requested_size - ExtraAllocSize(allocator), type_name);
-  memset(ptr1, 'A', requested_size - ExtraAllocSize(allocator));
-  memset(ptr2, 'A', requested_size - ExtraAllocSize(allocator));
+  PA_UNSAFE_TODO(memset(ptr1, 'A', requested_size - ExtraAllocSize(allocator)));
+  PA_UNSAFE_TODO(memset(ptr2, 'A', requested_size - ExtraAllocSize(allocator)));
   allocator.root()->Free(ptr2);
   allocator.root()->Free(ptr1);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3573,20 +3612,28 @@ TEST_P(PartitionAllocTest, PurgeDiscardableNonPageSizedAllocOnSlotBoundary) {
     EXPECT_EQ(requested_size * 2, stats->active_bytes);
     EXPECT_EQ(10 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 4), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 4)), true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     false);
   // Except for Windows, the third page is discardable because the freelist
   // pointer on this page is nullptr. Note that CHECK_PAGE_IN_CORE only executes
   // checks for Linux and ChromeOS, not for Windows.
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 4), false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 4)), false);
 
   allocator.root()->Free(ptr3);
   allocator.root()->Free(ptr4);
@@ -3614,8 +3661,8 @@ TEST_P(PartitionAllocTest, PurgeDiscardableManyPages) {
   ScopedPageAllocation p(allocator, kSecondAllocPages);
 
   MockPartitionStatsDumper dumper;
-  allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                              &dumper);
+  allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                              /*populate_discardable_bytes=*/true, &dumper);
   EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
   const PartitionBucketMemoryStats* stats =
@@ -3653,10 +3700,10 @@ TEST_P(PartitionAllocTest, PurgeDiscardableWithFreeListStraightening) {
       SystemPageSize() - ExtraAllocSize(allocator), type_name);
   void* ptr4 = allocator.root()->Alloc(
       SystemPageSize() - ExtraAllocSize(allocator), type_name);
-  ptr1[0] = 'A';
-  ptr1[SystemPageSize()] = 'A';
-  ptr1[SystemPageSize() * 2] = 'A';
-  ptr1[SystemPageSize() * 3] = 'A';
+  PA_UNSAFE_TODO(ptr1[0]) = 'A';
+  PA_UNSAFE_TODO(ptr1[SystemPageSize()]) = 'A';
+  PA_UNSAFE_TODO(ptr1[SystemPageSize() * 2]) = 'A';
+  PA_UNSAFE_TODO(ptr1[SystemPageSize() * 3]) = 'A';
   const SlotSpan* slot_span = SlotSpan::FromSlotStart(
       SlotStart::Unchecked(ptr1).Untag(), allocator.root());
   allocator.root()->Free(ptr2);
@@ -3666,8 +3713,8 @@ TEST_P(PartitionAllocTest, PurgeDiscardableWithFreeListStraightening) {
 
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3683,16 +3730,22 @@ TEST_P(PartitionAllocTest, PurgeDiscardableWithFreeListStraightening) {
     EXPECT_EQ(SystemPageSize(), stats->active_bytes);
     EXPECT_EQ(4 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
   EXPECT_EQ(1u, slot_span->num_unprovisioned_slots);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), false);
 
   // Let's check we didn't brick the freelist.
   void* ptr1b = allocator.root()->Alloc(
@@ -3792,10 +3845,10 @@ TEST_P(PartitionAllocTest, PurgeDiscardableDoubleTruncateFreeList) {
       SystemPageSize() - ExtraAllocSize(allocator), type_name);
   void* ptr4 = allocator.root()->Alloc(
       SystemPageSize() - ExtraAllocSize(allocator), type_name);
-  ptr1[0] = 'A';
-  ptr1[SystemPageSize()] = 'A';
-  ptr1[SystemPageSize() * 2] = 'A';
-  ptr1[SystemPageSize() * 3] = 'A';
+  PA_UNSAFE_TODO(ptr1[0]) = 'A';
+  PA_UNSAFE_TODO(ptr1[SystemPageSize()]) = 'A';
+  PA_UNSAFE_TODO(ptr1[SystemPageSize() * 2]) = 'A';
+  PA_UNSAFE_TODO(ptr1[SystemPageSize() * 3]) = 'A';
   const SlotSpan* slot_span = SlotSpan::FromSlotStart(
       SlotStart::Unchecked(ptr1).Untag(), allocator.root());
   allocator.root()->Free(ptr4);
@@ -3804,8 +3857,8 @@ TEST_P(PartitionAllocTest, PurgeDiscardableDoubleTruncateFreeList) {
 
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3817,16 +3870,22 @@ TEST_P(PartitionAllocTest, PurgeDiscardableDoubleTruncateFreeList) {
     EXPECT_EQ(2 * SystemPageSize(), stats->active_bytes);
     EXPECT_EQ(4 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
   EXPECT_EQ(2u, slot_span->num_unprovisioned_slots);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 2), false);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + (SystemPageSize() * 3), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     true);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 2)), false);
+  CHECK_PAGE_IN_CORE(
+      PA_UNSAFE_TODO(ptr1 - kPointerOffset + (SystemPageSize() * 3)), false);
 
   EXPECT_FALSE(slot_span->get_freelist_head());
 
@@ -3851,8 +3910,8 @@ TEST_P(PartitionAllocTest, PurgeDiscardableSmallSlotsWithTruncate) {
   EXPECT_EQ(4u, slot_span->num_unprovisioned_slots);
   {
     MockPartitionStatsDumper dumper;
-    allocator.root()->DumpStats("mock_allocator", false /* detailed dump */,
-                                &dumper);
+    allocator.root()->DumpStats("mock_allocator", /*is_light_dump=*/false,
+                                /*populate_discardable_bytes=*/true, &dumper);
     EXPECT_TRUE(dumper.IsMemoryAllocationRecorded());
 
     const PartitionBucketMemoryStats* stats =
@@ -3864,11 +3923,13 @@ TEST_P(PartitionAllocTest, PurgeDiscardableSmallSlotsWithTruncate) {
     EXPECT_EQ(requested_size * 2, stats->active_bytes);
     EXPECT_EQ(2 * SystemPageSize(), stats->resident_bytes);
   }
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     true);
   allocator.root()->PurgeMemory(PurgeFlags::kDiscardUnusedSystemPages);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset, true);
-  CHECK_PAGE_IN_CORE(ptr1 - kPointerOffset + SystemPageSize(), false);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset), true);
+  CHECK_PAGE_IN_CORE(PA_UNSAFE_TODO(ptr1 - kPointerOffset + SystemPageSize()),
+                     false);
   EXPECT_EQ(6u, slot_span->num_unprovisioned_slots);
 
   allocator.root()->Free(ptr1);
@@ -3880,7 +3941,8 @@ TEST_P(PartitionAllocTest, ActiveListMaintenance) {
   size_t real_size = size + ExtraAllocSize(allocator);
   size_t bucket_index =
       PartitionRoot::SizeToBucketIndex(real_size, GetBucketDistribution());
-  PartitionRoot::Bucket* bucket = &allocator.root()->buckets_[bucket_index];
+  PartitionRoot::Bucket* bucket =
+      PA_UNSAFE_TODO(&allocator.root()->buckets_[bucket_index]);
   ASSERT_EQ(bucket->slot_size, real_size);
   size_t slots_per_span = bucket->num_system_pages_per_slot_span;
 
@@ -3937,11 +3999,11 @@ TEST_P(PartitionAllocTest, ReallocMovesCookie) {
   void* ptr = allocator.root()->Alloc(kSize + 1, type_name);
   EXPECT_TRUE(ptr);
 
-  memset(ptr, 0xbd, kSize + 1);
+  PA_UNSAFE_TODO(memset(ptr, 0xbd, kSize + 1));
   ptr = allocator.root()->Realloc(ptr, kSize + 2, type_name);
   EXPECT_TRUE(ptr);
 
-  memset(ptr, 0xbd, kSize + 2);
+  PA_UNSAFE_TODO(memset(ptr, 0xbd, kSize + 2));
   allocator.root()->Free(ptr);
 }
 
@@ -3965,7 +4027,7 @@ TEST_P(PartitionAllocTest, ZeroFill) {
         allocator.root()->Alloc<AllocFlags::kZeroFill>(size));
     size_t non_zero_position = kAllZerosSentinel;
     for (size_t i = 0; i < size; ++i) {
-      if (0 != p[i]) {
+      if (0 != PA_UNSAFE_TODO(p[i])) {
         non_zero_position = i;
         break;
       }
@@ -4035,10 +4097,65 @@ TEST_P(PartitionAllocTest, SchedulerLoopQuarantineDisabled) {
   root->Free(ptr_to_keep_slot_span);
 }
 
+TEST_P(PartitionAllocTest, IntendedLeak) {
+  PartitionOptions opts = GetCommonPartitionOptions();
+  opts.thread_cache = PartitionOptions::kDisabled;
+  opts.backup_ref_ptr = PartitionOptions::kDisabled;
+  std::unique_ptr<PartitionRoot> root = CreateCustomTestRoot(opts, {});
+
+  // This allocation is required to prevent slot span from being empty and
+  // decomitted. Because we want to confirm `ptr` will not be appended to a free
+  // list, but decomitting a page also seems that `ptr` is not in a free list.
+  void* ptr_to_keep_slot_span = root->Alloc(kTestAllocSize, type_name);
+  void* ptr = root->Alloc(kTestAllocSize, type_name);
+
+  // Fill the memory region with any different value from kTypeId or
+  // kFreedBytes to see what code zaps the memory region. E.g. kFreedBytes means
+  // DebugMemset() with EXPENSIVE_DCHECKS_ARE_ON.
+  constexpr const uint8_t kAnyDummyValue = 0x12u;
+  PA_UNSAFE_TODO(memset(ptr, kAnyDummyValue, kTestAllocSize));
+
+  // Remember `total_intended_leak_bytes` of the custom root.
+  SimplePartitionStatsDumper dumper;
+  root->DumpStats("CustomTestRoot", true, false, &dumper);
+  uint64_t total_intended_leak_bytes = dumper.stats().total_intended_leak_bytes;
+
+  auto* slot_span =
+      SlotSpan::FromSlotStart(SlotStart::Unchecked(ptr).Untag(), root.get());
+
+  constexpr const uint64_t kTypeId = 0xDEADBEAFu;
+  root->Free<FreeFlags::kIntendedLeak | FreeFlags::kWithTypeIdHint>(
+      ptr, {.type_id = kTypeId});
+
+  // Leaked objects will be never found in the freelist of the `slot_span`.
+  EXPECT_NE(SlotStart::Unchecked(ptr).Untag().value(),
+            UntagPtr(slot_span->get_freelist_head()));
+
+  // The `ptr` must be zapped.
+  uint64_t value_after_intended_leaked = *reinterpret_cast<uint64_t*>(ptr);
+  EXPECT_EQ(value_after_intended_leaked & kIntendedLeakQuarantineMask,
+            kIntendedLeakQuarantineMarker);
+  EXPECT_EQ((value_after_intended_leaked & ~kIntendedLeakQuarantineMask) >> 8u,
+            kTypeId);
+
+  // Compare `total_intended_leak_bytes` between before and after
+  // `Free<kIntendedLeak>`.
+  root->DumpStats("CustomTestRoot", true, false, &dumper);
+  EXPECT_EQ(dumper.stats().total_intended_leak_bytes,
+            total_intended_leak_bytes + slot_span->bucket->slot_size);
+
+  root->Free(ptr_to_keep_slot_span);
+  // Normal objects will be found in the freelist of the `slot_span`.
+  // Because of leaked objects, `num_allocated` of the `slot_span` will
+  // never be equal to 0, the page will not be decommitted.
+  EXPECT_EQ(SlotStart::Unchecked(ptr_to_keep_slot_span).Untag().value(),
+            UntagPtr(slot_span->get_freelist_head()));
+}
+
 TEST_P(PartitionAllocTest, ZapOnFree) {
   void* ptr = allocator.root()->Alloc(1, type_name);
   EXPECT_TRUE(ptr);
-  memset(ptr, 'A', 1);
+  PA_UNSAFE_TODO(memset(ptr, 'A', 1));
   constexpr auto kFlags = FreeFlags::kSchedulerLoopQuarantine;
   allocator.root()->Free<kFlags>(ptr);
   // Accessing memory after free requires a retag.
@@ -4048,14 +4165,15 @@ TEST_P(PartitionAllocTest, ZapOnFree) {
   constexpr size_t size = 1024;
   ptr = allocator.root()->Alloc(size, type_name);
   EXPECT_TRUE(ptr);
-  memset(ptr, 'A', size);
+  PA_UNSAFE_TODO(memset(ptr, 'A', size));
   allocator.root()->Free<kFlags>(ptr);
   // Accessing memory after free requires a retag.
   ptr = TagPtr(ptr);
   EXPECT_NE('A', *static_cast<unsigned char*>(ptr));
+  EXPECT_EQ(kFreedByte, *(PA_UNSAFE_TODO(static_cast<unsigned char*>(ptr) +
+                                         2 * sizeof(void*))));
   EXPECT_EQ(kFreedByte,
-            *(static_cast<unsigned char*>(ptr) + 2 * sizeof(void*)));
-  EXPECT_EQ(kFreedByte, *(static_cast<unsigned char*>(ptr) + size - 1));
+            *(PA_UNSAFE_TODO(static_cast<unsigned char*>(ptr) + size - 1)));
 
   // Make sure the quarantine is empty before the root is reset.
   internal::ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch(
@@ -4084,7 +4202,7 @@ TEST_P(PartitionAllocTest, InaccessibleRegionAfterSlotSpans) {
        alloc_size < MaxRegularSlotSpanSize() - ExtraAllocSize(allocator);
        alloc_size++) {
     size_t index = SizeToIndex(alloc_size + ExtraAllocSize(allocator));
-    auto& bucket = root->buckets_[index];
+    auto& bucket = PA_UNSAFE_TODO(root->buckets_[index]);
     if (bucket.get_bytes_per_span() != bucket.get_pages_per_slot_span()
                                            << PartitionPageShift()) {
       incomplete_bucket = &bucket;
@@ -4139,7 +4257,7 @@ TEST_P(PartitionAllocTest, FewerMemoryRegions) {
        alloc_size < MaxRegularSlotSpanSize() - ExtraAllocSize(allocator);
        alloc_size++) {
     size_t index = SizeToIndex(alloc_size + ExtraAllocSize(allocator));
-    auto& bucket = root->buckets_[index];
+    auto& bucket = PA_UNSAFE_TODO(root->buckets_[index]);
     if (bucket.get_bytes_per_span() != bucket.get_pages_per_slot_span()
                                            << PartitionPageShift()) {
       incomplete_bucket = &bucket;
@@ -4207,7 +4325,7 @@ TEST_P(PartitionAllocTest, ZeroFreedMemory) {
   auto alloc_and_return_freed_pointer = [&](size_t size) {
     void* ptr = allocator.root()->Alloc(size, type_name);
     EXPECT_TRUE(ptr);
-    memset(ptr, kByte, size);
+    PA_UNSAFE_TODO(memset(ptr, kByte, size));
     allocator.root()->Free(ptr);
     // Accessing memory after free requires a retag.
     ptr = TagPtr(ptr);
@@ -4220,16 +4338,18 @@ TEST_P(PartitionAllocTest, ZeroFreedMemory) {
   // Zeroing of regular allocations.
   size_t size = 1024;
   void* ptr = alloc_and_return_freed_pointer(size);
-  EXPECT_EQ(0, *(static_cast<unsigned char*>(ptr) + 2 * sizeof(void*)));
-  EXPECT_EQ(0, *(static_cast<unsigned char*>(ptr) + size - 1));
+  EXPECT_EQ(0, *(PA_UNSAFE_TODO(static_cast<unsigned char*>(ptr) +
+                                2 * sizeof(void*))));
+  EXPECT_EQ(0, *(PA_UNSAFE_TODO(static_cast<unsigned char*>(ptr) + size - 1)));
 
   // Single-slot slot span are not zeroed.
   size = MaxRegularSlotSpanSize() + 1;
   ptr = alloc_and_return_freed_pointer(size);
   // Not asserting on the specific value because depending on flags, the memory
   // may be zapped anyway.
-  EXPECT_NE(0, *(static_cast<unsigned char*>(ptr) + 2 * sizeof(void*)));
-  EXPECT_NE(0, *(static_cast<unsigned char*>(ptr) + size - 1));
+  EXPECT_NE(0, *(PA_UNSAFE_TODO(static_cast<unsigned char*>(ptr) +
+                                2 * sizeof(void*))));
+  EXPECT_NE(0, *(PA_UNSAFE_TODO(static_cast<unsigned char*>(ptr) + size - 1)));
 
   // No test with direct-mapped allocations, as they are decommitted right away,
   // and the freed memory cannot be touched anymore.
@@ -4248,7 +4368,7 @@ TEST_P(PartitionAllocTest, Bug_897585) {
   ptr = allocator.root()->Realloc<AllocFlags::kReturnNull>(ptr, kDesiredSize,
                                                            nullptr);
   ASSERT_NE(nullptr, ptr);
-  memset(ptr, 0xbd, kDesiredSize);
+  PA_UNSAFE_TODO(memset(ptr, 0xbd, kDesiredSize));
   allocator.root()->Free(ptr);
 }
 
@@ -4262,11 +4382,12 @@ TEST_P(PartitionAllocTest, OverrideHooks) {
   static volatile bool free_called = false;
   static void* overridden_allocation = nullptr;
   overridden_allocation = malloc(kOverriddenSize);
-  memset(overridden_allocation, kOverriddenChar, kOverriddenSize);
+  PA_UNSAFE_TODO(
+      memset(overridden_allocation, kOverriddenChar, kOverriddenSize));
 
   PartitionAllocHooks::SetOverrideHooks(
-      [](void** out, AllocFlags flags, size_t size,
-         const char* type_name) -> bool {
+      [](void** out, AllocFlags flags, size_t size, const char* type_name,
+         std::optional<size_t> alignment) -> bool {
         if (size == kOverriddenSize && type_name == kOverriddenType) {
           *out = overridden_allocation;
           return true;
@@ -4420,7 +4541,7 @@ TEST_P(PartitionAllocWithFreeWithSizeAndAlignmentTest, AlignedAlloc) {
 // results.
 TEST_P(PartitionAllocTest, OptimizedGetSlotNumber) {
   for (size_t i = 0; i < BucketIndexLookup::kNumBuckets; ++i) {
-    auto& bucket = allocator.root()->buckets_[i];
+    auto& bucket = PA_UNSAFE_TODO(allocator.root()->buckets_[i]);
     if (SizeToIndex(bucket.slot_size) != i) {
       continue;
     }
@@ -4444,7 +4565,7 @@ TEST_P(PartitionAllocTest, GetUsableSize) {
     EXPECT_TRUE(ptr);
     size_t usable_size = PartitionRoot::GetUsableSize(ptr);
     EXPECT_LE(size, usable_size);
-    memset(ptr, 0xDE, usable_size);
+    PA_UNSAFE_TODO(memset(ptr, 0xDE, usable_size));
     // Should not crash when free the ptr.
     allocator.root()->Free(ptr);
   }
@@ -4468,7 +4589,7 @@ TEST_P(PartitionAllocTest, Bookkeeping) {
   size_t expected_super_pages_size = kSuperPageSize;
   size_t expected_max_committed_size = expected_committed_size;
   size_t bucket_index = SizeToIndex(small_size - ExtraAllocSize(allocator));
-  PartitionBucket* bucket = &root.buckets_[bucket_index];
+  PartitionBucket* bucket = PA_UNSAFE_TODO(&root.buckets_[bucket_index]);
   size_t expected_total_allocated_size = bucket->slot_size;
   size_t expected_max_allocated_size = expected_total_allocated_size;
 
@@ -4542,7 +4663,7 @@ TEST_P(PartitionAllocTest, Bookkeeping) {
   ASSERT_GT(big_size, MaxRegularSlotSpanSize());
   ASSERT_LE(big_size, BucketIndexLookup::kMaxBucketSize);
   bucket_index = SizeToIndex(big_size - ExtraAllocSize(allocator));
-  bucket = &root.buckets_[bucket_index];
+  bucket = PA_UNSAFE_TODO(&root.buckets_[bucket_index]);
   // Assert the allocation doesn't fill the entire span nor entire partition
   // page, to make the test more interesting.
   ASSERT_LT(big_size, bucket->get_bytes_per_span());
@@ -4750,7 +4871,7 @@ TEST_P(PartitionAllocTest, RefCountBasic) {
   // quarantine.
   in_slot_metadata = TagPtr(in_slot_metadata);
   EXPECT_TRUE(in_slot_metadata->ReleaseFromUnprotectedPtr());
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr1));
   PartitionRoot::FreeAfterBRPQuarantine(
       internal::UntaggedSlotStart(slot_info.slot_start), slot_info.size);
@@ -4800,9 +4921,8 @@ void PartitionAllocTest::RunRefCountReallocSubtest(size_t orig_size,
 
     EXPECT_TRUE(in_slot_metadata1->ReleaseFromUnprotectedPtr());
 
-    auto slot_info =
-        partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
-            reinterpret_cast<uintptr_t>(ptr1));
+    auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
+        reinterpret_cast<uintptr_t>(ptr1));
     PartitionRoot::FreeAfterBRPQuarantine(
         internal::UntaggedSlotStart(slot_info.slot_start), slot_info.size);
   }
@@ -4889,7 +5009,8 @@ TEST_P(PartitionAllocTest, ExtraExtrasNullfyOffByOneDetection) {
   int64_t* ptr2 = static_cast<int64_t*>(root_no_extra->Alloc(8));
 
   // Off-by-one (8 bytes).
-  EXPECT_DEATH_IF_SUPPORTED((ptr2[1] = 0, root_no_extra->Free(ptr2)), "");
+  EXPECT_DEATH_IF_SUPPORTED(
+      (PA_UNSAFE_TODO(ptr2[1]) = 0, root_no_extra->Free(ptr2)), "");
 
   root_no_extra->Free(ptr2);
   root_no_extra->Free(ptr1);
@@ -4909,7 +5030,7 @@ TEST_P(PartitionAllocTest, ExtraExtrasNullfyOffByOneDetection) {
 
   // This off-by-one overwrites the extra extras and does not corrupt
   // `InSlotMetadata`.
-  ptr2[1] = 0;
+  PA_UNSAFE_TODO(ptr2[1]) = 0;
   root_with_extra->Free(ptr2);
   root_with_extra->Free(ptr1);
 #endif  // !PA_BUILDFLAG(HAS_64_BIT_POINTERS)
@@ -4987,7 +5108,7 @@ TEST_P(UnretainedDanglingRawPtrTest, UnretainedDanglingPtrShouldReport) {
   EXPECT_EQ(g_unretained_dangling_raw_ptr_detected_count, 1);
   EXPECT_TRUE(in_slot_metadata->ReleaseFromUnprotectedPtr());
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5017,6 +5138,32 @@ TEST_P(PartitionAllocTest, BackupRefPtrGuardRegion) {
   }
 }
 #endif  // !PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+
+#if PA_USE_DEATH_TESTS()
+TEST_P(PartitionAllocDeathTest, AcquireAfterQuarantined) {
+  if (!UseBRPPool()) {
+    return;
+  }
+
+  // Allocate memory. The object will be held by allocator and its refcount is
+  // equal to zero.
+  uint64_t* ptr = static_cast<uint64_t*>(
+      allocator.root()->Alloc(64 - ExtraAllocSize(allocator), type_name));
+  auto* in_slot_metadata =
+      allocator.root()->InSlotMetadataPointerFromObjectForTesting(ptr);
+  EXPECT_TRUE(in_slot_metadata->IsAliveWithNoKnownRefs());
+
+  // Make the object in-freelist or MO-quarantined.
+  allocator.root()->Free(ptr);
+  EXPECT_FALSE(in_slot_metadata->IsAlive());
+  EXPECT_FALSE(in_slot_metadata->HasNonZeroRefsForTesting());
+
+  // Because of PA_CHECK, expect Acquire() always crash if death test is
+  // supported.
+  EXPECT_DEATH(in_slot_metadata->Acquire(), "");
+}
+#endif  // PA_USE_DEATH_TESTS()
+
 #endif  // PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
 
 #if PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS)
@@ -5063,7 +5210,7 @@ TEST_P(PartitionAllocTest, DanglingPtr) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 1);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 2);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5111,7 +5258,7 @@ TEST_P(PartitionAllocTest, DanglingDanglingPtr) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 0);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 0);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5150,7 +5297,7 @@ TEST_P(PartitionAllocTest, DanglingMixedReleaseRawPtrFirst) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 1);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 1);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5191,7 +5338,7 @@ TEST_P(PartitionAllocTest, DanglingMixedReleaseDanglingPtrFirst) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 1);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 1);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5235,7 +5382,7 @@ TEST_P(PartitionAllocTest, DanglingPtrUsedToAcquireNewRawPtr) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 0);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 0);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5278,7 +5425,7 @@ TEST_P(PartitionAllocTest, DanglingPtrUsedToAcquireNewRawPtrVariant) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 0);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 0);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5318,7 +5465,7 @@ TEST_P(PartitionAllocTest, RawPtrReleasedBeforeFree) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 0);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 0);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 }
@@ -5379,7 +5526,7 @@ TEST_P(PartitionAllocTest, DanglingPtrReleaseToSchedulerLoopQuarantine) {
   EXPECT_EQ(g_dangling_raw_ptr_detected_count, 1);
   EXPECT_EQ(g_dangling_raw_ptr_released_count, 2);
 
-  auto slot_info = partition_alloc::PartitionAllocGetSlotStartAndSizeInBRPPool(
+  auto slot_info = partition_alloc::SlotAddressAndSize::FromBRPPool(
       reinterpret_cast<uintptr_t>(ptr));
   PartitionRoot::FreeAfterBRPQuarantine(slot_info.slot_start, slot_info.size);
 
@@ -5390,7 +5537,7 @@ TEST_P(PartitionAllocTest, DanglingPtrReleaseToSchedulerLoopQuarantine) {
 #if PA_USE_DEATH_TESTS()
 // DCHECK message are stripped in official build. It causes death tests with
 // matchers to fail.
-#if !defined(OFFICIAL_BUILD) || PA_BUILDFLAG(IS_DEBUG)
+#if !PA_BUILDFLAG(OFFICIAL) || PA_BUILDFLAG(IS_DEBUG)
 
 // Acquire() once, Release() twice => CRASH
 TEST_P(PartitionAllocDeathTest, ReleaseUnderflowRawPtr) {
@@ -5424,7 +5571,30 @@ TEST_P(PartitionAllocDeathTest, ReleaseUnderflowDanglingPtr) {
   allocator.root()->Free(ptr);
 }
 
-#endif  //! defined(OFFICIAL_BUILD) || PA_BUILDFLAG(IS_DEBUG)
+#endif  //! PA_BUILDFLAG(OFFICIAL) || PA_BUILDFLAG(IS_DEBUG)
+
+TEST_P(PartitionAllocDeathTest, AcquireUnprotectedAfterQuarantined) {
+  if (!UseBRPPool()) {
+    return;
+  }
+
+  // Allocate memory. The object will be held by allocator and its refcount is
+  // equal to zero.
+  uint64_t* ptr = static_cast<uint64_t*>(
+      allocator.root()->Alloc(64 - ExtraAllocSize(allocator), type_name));
+  auto* in_slot_metadata =
+      allocator.root()->InSlotMetadataPointerFromObjectForTesting(ptr);
+  EXPECT_TRUE(in_slot_metadata->IsAliveWithNoKnownRefs());
+
+  // Make the object in-freelist or MO-quarantined.
+  allocator.root()->Free(ptr);
+  EXPECT_FALSE(in_slot_metadata->IsAlive());
+  EXPECT_FALSE(in_slot_metadata->HasNonZeroRefsForTesting());
+
+  // Because of PA_CHECK, expect AcquireFromProtectedPtr() always crash
+  // if death test is supported.
+  EXPECT_DEATH(in_slot_metadata->AcquireFromUnprotectedPtr(), "");
+}
 #endif  // PA_USE_DEATH_TESTS()
 #endif  // PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS)
 
@@ -5616,12 +5786,11 @@ TEST_P(PartitionAllocTest, CheckReservationType) {
 
   // DCHECKs don't work with EXPECT_DEATH on official builds.
 #if PA_BUILDFLAG(DCHECKS_ARE_ON) && \
-    (!defined(OFFICIAL_BUILD) || PA_BUILDFLAG(IS_DEBUG))
+    (!PA_BUILDFLAG(OFFICIAL) || PA_BUILDFLAG(IS_DEBUG))
   // Expect to DCHECK on unallocated region.
   EXPECT_DEATH_IF_SUPPORTED(table.IsReservationStart(address_to_check), "");
-#endif  //  PA_BUILDFLAG(DCHECKS_ARE_ON) && (!defined(OFFICIAL_BUILD) ||
-        //  PA_BUILDFLAG(IS_DEBUG))
-
+#endif  //  PA_BUILDFLAG(DCHECKS_ARE_ON) && (!PA_BUILDFLAG(OFFICIAL)
+        //  || PA_BUILDFLAG(IS_DEBUG))
 }
 
 // Test for crash http://crbug.com/1169003.
@@ -5685,21 +5854,20 @@ TEST_P(PartitionAllocTest, FastPathOrReturnNull) {
 #if PA_USE_DEATH_TESTS()
 // DCHECK message are stripped in official build. It causes death tests with
 // matchers to fail.
-#if !defined(OFFICIAL_BUILD) || PA_BUILDFLAG(IS_DEBUG)
+#if !PA_BUILDFLAG(OFFICIAL) || PA_BUILDFLAG(IS_DEBUG)
 
 TEST_P(PartitionAllocDeathTest, CheckTriggered) {
   PA_EXPECT_DCHECK_DEATH_WITH(PA_CHECK(5 == 7), "Check failed.*5 == 7");
   EXPECT_DEATH(PA_CHECK(5 == 7), "Check failed.*5 == 7");
 }
 
-#endif  // !defined(OFFICIAL_BUILD) && PA_BUILDFLAG(IS_DEBUG)
+#endif  // !PA_BUILDFLAG(OFFICIAL) && PA_BUILDFLAG(IS_DEBUG)
 #endif  // PA_USE_DEATH_TESTS()
 
 // Not on chromecast, since gtest considers extra output from itself as a test
 // failure:
 // https://ci.chromium.org/ui/p/chromium/builders/ci/Cast%20Audio%20Linux/98492/overview
-#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && PA_USE_DEATH_TESTS() && \
-    !PA_BUILDFLAG(IS_CASTOS)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && PA_USE_DEATH_TESTS()
 
 namespace {
 
@@ -5776,7 +5944,7 @@ TEST_P(PartitionAllocTest, DISABLED_PreforkHandler) {
 }
 
 #endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&
-        // PA_USE_DEATH_TESTS() && !PA_BUILDFLAG(IS_CASTOS)
+        // PA_USE_DEATH_TESTS()
 
 // Checks the bucket index logic.
 TEST_P(PartitionAllocTest, GetIndex) {
@@ -5844,7 +6012,7 @@ TEST_P(PartitionAllocTest, ConfigurablePool) {
   const size_t min_pool_size = PartitionAddressSpace::ConfigurablePoolMinSize();
   for (size_t pool_size = max_pool_size; pool_size >= min_pool_size;
        pool_size /= 2) {
-    PA_DCHECK(base::bits::HasSingleBit(pool_size));
+    PA_DCHECK(std::has_single_bit(pool_size));
     EXPECT_FALSE(IsConfigurablePoolAvailable());
     uintptr_t pool_base =
         AllocPages(pool_size, pool_size,
@@ -5865,7 +6033,8 @@ TEST_P(PartitionAllocTest, ConfigurablePool) {
     const size_t count = 250;
     std::vector<void*> allocations(count, nullptr);
     for (size_t i = 0; i < count; ++i) {
-      const size_t size = kTestSizes[base::RandGenerator(kTestSizesCount)];
+      const size_t size =
+          PA_UNSAFE_TODO(kTestSizes[base::RandGenerator(kTestSizesCount)]);
       allocations[i] = root->Alloc(size);
       EXPECT_NE(nullptr, allocations[i]);
       // We don't Untag allocations here because MTE is disabled for
@@ -5951,7 +6120,7 @@ TEST_P(PartitionAllocTest, IncreaseEmptySlotSpanRingSize) {
   constexpr size_t single_slot_count = kDefaultEmptySlotSpanRingSize + 10;
   const size_t single_slot_size = MaxRegularSlotSpanSize() + 1;
   const size_t bucket_size =
-      root->buckets_[SizeToIndex(single_slot_size)].slot_size;
+      PA_UNSAFE_TODO(root->buckets_[SizeToIndex(single_slot_size)]).slot_size;
 
   for (size_t i = 0; i < single_slot_count; i++) {
     void* ptr = root->Alloc(single_slot_size);
@@ -6019,7 +6188,8 @@ TEST_P(PartitionAllocTest, IncreaseEmptySlotSpanRingSize) {
 #endif
 }
 
-#if PA_BUILDFLAG(IS_CAST_ANDROID) && PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if PA_BUILDFLAG(ENABLE_SYSTEM_FREE_FALLBACK) && \
+    PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 extern "C" {
 void* __real_malloc(size_t);
 }  // extern "C"
@@ -6057,7 +6227,7 @@ TEST_P(PartitionAllocTest, SortFreelist) {
 
   size_t bucket_index =
       SizeToIndex(allocation_size + ExtraAllocSize(allocator));
-  auto& bucket = allocator.root()->buckets_[bucket_index];
+  auto& bucket = PA_UNSAFE_TODO(allocator.root()->buckets_[bucket_index]);
   EXPECT_TRUE(bucket.active_slot_spans_head->freelist_is_sorted());
 
   // Can sort again.
@@ -6432,8 +6602,8 @@ TEST_P(PartitionAllocTest, SwitchBucketDistributionAfterAlloc) {
 
 TEST_P(PartitionAllocTest, MultipleThreadCachePerThread) {
   // Use thread cache indices which are not used by default partitions.
-  constexpr size_t index1 = kNumDefaultPartitions;
-  constexpr size_t index2 = kNumDefaultPartitions + 1;
+  constexpr size_t index1 = kNumPartitions;
+  constexpr size_t index2 = kNumPartitions + 1;
   static_assert(index1 < internal::kMaxThreadCacheIndex);
   static_assert(index2 < internal::kMaxThreadCacheIndex);
   ASSERT_FALSE(ThreadCache::IsValid(ThreadCache::Get(index1)));
@@ -6460,6 +6630,18 @@ TEST_P(PartitionAllocTest, MultipleThreadCachePerThread) {
       internal::SlotStart::Unchecked(ptr2).Untag(), bucket_index, pos2));
   EXPECT_EQ(pos2, 0u);
 }
+
+// Documentation tests demonstrating the behavior of `IsExtentOutOfBounds()`.
+// This test passes if it doesn't crash.
+TEST_P(PartitionAllocTest, BoundsChecksDontCrash) {
+  EXPECT_FALSE(IsExtentOutOfBounds(static_cast<const void*>(nullptr), 1024u,
+                                   sizeof(char)));
+
+  void* object = allocator.root()->Alloc(32u);
+  EXPECT_FALSE(IsExtentOutOfBounds(object, 0u, sizeof(char)));
+  allocator.root()->Free(object);
+}
+
 }  // namespace partition_alloc::internal
 
-#endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#endif  // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)

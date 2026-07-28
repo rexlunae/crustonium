@@ -14,26 +14,31 @@
 #import "ios/chrome/browser/browser_view/ui_bundled/tab_consumer.h"
 #import "ios/chrome/browser/contextual_panel/coordinator/contextual_sheet_presenter.h"
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_consumer.h"
-#import "ios/chrome/browser/lens/ui_bundled/lens_coordinator.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_presentation_environment.h"
+#import "ios/chrome/browser/main/ui/browser_layout_consumer.h"
 #import "ios/chrome/browser/omnibox/ui/omnibox_focus_delegate.h"
 #import "ios/chrome/browser/omnibox/ui/popup/omnibox_popup_presenter.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/lens_overlay_state_notifier.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
+#import "ios/chrome/browser/shared/ui/util/ui_view_controller_with_display_tracing.h"
 #import "ios/chrome/browser/toolbar/ui/toolbar_height_delegate.h"
 #import "ios/chrome/browser/web/model/web_state_container_view_provider.h"
 
 @class BookmarksCoordinator;
 @class BrowserContentViewController;
 @protocol BrowserCoordinatorCommands;
-@protocol BWGCommands;
 @protocol DefaultPromoNonModalPresentationDelegate;
 @protocol FindInPageCommands;
+class FullscreenBrowserAgent;
 class FullscreenController;
+@protocol GeminiCommands;
 @protocol HelpCommands;
 @protocol IncognitoReauthCommands;
 @class KeyCommandsProvider;
 @class LayoutGuideCenter;
+@class LayoutState;
+@class MainToolbarCoordinator;
 @class NewTabPageCoordinator;
 @protocol PopupMenuCommands;
 @class PopupMenuCoordinator;
@@ -41,12 +46,10 @@ class FullscreenController;
 @protocol SceneCommands;
 @class SideSwipeCoordinator;
 class SnapshotBrowserAgent;
-@class TabStripCoordinator;
 class TabUsageRecorderBrowserAgent;
 @protocol TextZoomCommands;
 @class ToolbarAccessoryPresenter;
 @protocol ToolbarCommands;
-@class ToolbarCoordinator;
 class UrlLoadingBrowserAgent;
 @protocol VoiceSearchController;
 
@@ -54,10 +57,10 @@ typedef struct {
   ToolbarAccessoryPresenter* toolbarAccessoryPresenter;
   PopupMenuCoordinator* popupMenuCoordinator;
   NewTabPageCoordinator* ntpCoordinator;
-  ToolbarCoordinator* toolbarCoordinator;
-  TabStripCoordinator* tabStripCoordinator;
+  MainToolbarCoordinator* toolbarCoordinator;
   SideSwipeCoordinator* sideSwipeCoordinator;
   BookmarksCoordinator* bookmarksCoordinator;
+  raw_ptr<FullscreenBrowserAgent> fullscreenBrowserAgent;
   raw_ptr<FullscreenController> fullscreenController;
   id<BrowserCoordinatorCommands> browserCoordinatorHandler;
   id<TextZoomCommands> textZoomHandler;
@@ -66,7 +69,7 @@ typedef struct {
   id<SceneCommands> sceneHandler;
   id<ToolbarCommands> toolbarHandler;
   id<FindInPageCommands> findInPageCommandsHandler;
-  id<BWGCommands> geminiHandler;
+  id<GeminiCommands> geminiHandler;
   LayoutGuideCenter* layoutGuideCenter;
   BOOL isOffTheRecord;
   raw_ptr<UrlLoadingBrowserAgent> urlLoadingBrowserAgent;
@@ -80,16 +83,17 @@ typedef struct {
 // The top-level view controller for the browser UI. Manages other controllers
 // which implement the interface.
 @interface BrowserViewController
-    : UIViewController <BrowserCommands,
-                        ContextualSheetPresenter,
-                        IncognitoReauthConsumer,
-                        LensPresentationDelegate,
-                        LensOverlayPresentationEnvironment,
-                        TabConsumer,
-                        OmniboxFocusDelegate,
-                        OmniboxPopupPresenterDelegate,
-                        ToolbarHeightDelegate,
-                        WebStateContainerViewProvider>
+    : UIViewControllerWithDisplayTracing <BrowserCommands,
+                                          BrowserLayoutConsumer,
+                                          ContextualSheetPresenter,
+                                          IncognitoReauthConsumer,
+                                          LensOverlayPresentationEnvironment,
+                                          LensOverlayStateNotifierObserver,
+                                          OmniboxFocusDelegate,
+                                          OmniboxPopupPresenterDelegate,
+                                          TabConsumer,
+                                          ToolbarHeightDelegate,
+                                          WebStateContainerViewProvider>
 
 // Initializes a new BVC.
 // `browserContentViewController` is the container object this BVC will exist
@@ -115,20 +119,18 @@ typedef struct {
 // Whether web usage is enabled for the WebStates in `self.browser`.
 @property(nonatomic) BOOL webUsageEnabled;
 
-// The container used for infobar banner overlays.
-@property(nonatomic, strong)
-    UIViewController* infobarBannerOverlayContainerViewController;
-
-// The container used for infobar modal overlays.
-@property(nonatomic, strong)
-    UIViewController* infobarModalOverlayContainerViewController;
-
 // Presentation delegate for the non-modal default browser promo.
 @property(nonatomic, weak) id<DefaultPromoNonModalPresentationDelegate>
     nonModalPromoPresentationDelegate;
 
 // Command handler for Gemini commands.
-@property(nonatomic, weak) id<BWGCommands> geminiHandler;
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
+
+// The layout state.
+@property(nonatomic, weak) LayoutState* layoutState;
+
+// The lens overlay state notifier.
+@property(nonatomic, weak) LensOverlayStateNotifier* lensOverlayStateNotifier;
 
 // Callback that will be invoked when the browser view visibility changed.
 @property(nonatomic, assign) const BrowserViewVisibilityStateChangedCallback&

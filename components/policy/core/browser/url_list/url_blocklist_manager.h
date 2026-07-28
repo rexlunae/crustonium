@@ -19,7 +19,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "components/policy/policy_export.h"
-#include "components/prefs/pref_change_registrar.h"
 #include "components/url_matcher/url_matcher.h"
 #include "components/url_matcher/url_util.h"
 #include "url/gurl.h"
@@ -68,12 +67,15 @@ class POLICY_EXPORT URLBlocklist {
 
   URLBlocklistState GetURLBlocklistState(const GURL& url) const;
 
+  void SetDowngradeAllowlistWildcardToNeutral(bool downgrade);
+
  private:
   // Returns the highest priority filter in `filters_` matching the given URL,
   // or nullptr if none found.
   const url_matcher::util::FilterComponents* GetHighestPriorityFilterFor(
       const GURL& url) const;
 
+  bool downgrade_allowlist_wildcard_to_neutral_ = true;
   base::MatcherStringPattern::ID id_ = 0;
   std::map<base::MatcherStringPattern::ID, url_matcher::util::FilterComponents>
       filters_;
@@ -92,6 +94,15 @@ class BlocklistSource {
 
   // Returns exceptions to the blocklist.
   virtual const base::ListValue* GetAllowlistSpec() const = 0;
+
+  // Returns true if matching level of allowlist wildcard '*' is downgraded to
+  // neutral.
+  //
+  // By default, setting '*' to URLAllowlist policy is considered a no-op.
+  // However, some callers of URLBlocklist (e.g. OnTaskBlocklist) rely on its
+  // old behavior. Provide a way to control when `BlocklistSource` is
+  // overridden.
+  virtual bool DowngradeAllowlistWildcardToNeutral() const = 0;
 
   // Adds an observer that will be called when the blocklist changes.
   virtual void SetBlocklistObserver(base::RepeatingClosure observer) = 0;

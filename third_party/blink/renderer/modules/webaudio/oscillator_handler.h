@@ -6,10 +6,12 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_OSCILLATOR_HANDLER_H_
 
 #include "base/containers/span.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_oscillator_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_oscillator_type.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_scheduled_source_node.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
@@ -21,7 +23,10 @@ namespace blink {
 class ExceptionState;
 class PeriodicWaveImpl;
 
-class OscillatorHandler final : public AudioScheduledSourceHandler {
+class MODULES_EXPORT OscillatorHandler final
+    : public AudioScheduledSourceHandler {
+  FRIEND_TEST_ALL_PREFIXES(OscillatorHandlerTest, RoundingBug);
+
  public:
   // The waveform type.
   // These must be defined as in the .idl file.
@@ -38,10 +43,11 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
   static constexpr float kInterpolate2Point = 0.3f;
   static constexpr float kInterpolate3Point = 0.16f;
 
+  // Note: After calling Create, you must call SetInitialType() or
+  // SetInitialPeriodicWave() to complete initialization and handle potential
+  // allocation failures.
   static scoped_refptr<OscillatorHandler> Create(AudioNode&,
                                                  float sample_rate,
-                                                 const String& oscillator_type,
-                                                 PeriodicWaveImpl* wave_table,
                                                  AudioParamHandler& frequency,
                                                  AudioParamHandler& detune);
   ~OscillatorHandler() override;
@@ -56,15 +62,20 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
 
   void HandleStoppableSourceNode() override;
 
+  // Sets the initial type. Returns false if table allocation fails.
+  bool SetInitialType(const String& oscillator_type);
+
+  // Sets the initial periodic wave.
+  void SetInitialPeriodicWave(PeriodicWaveImpl*);
+
  private:
   OscillatorHandler(AudioNode&,
                     float sample_rate,
-                    const String& oscillator_type,
-                    PeriodicWaveImpl* wave_table,
                     AudioParamHandler& frequency,
                     AudioParamHandler& detune);
 
-  bool SetType(uint8_t);  // Returns true on success.
+  // Returns true on success.
+  bool SetType(uint8_t);
 
   // Returns true if there are sample-accurate timeline parameter changes.
   bool CalculateSampleAccuratePhaseIncrements(uint32_t frames_to_process);
@@ -74,13 +85,15 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
   base::WeakPtr<AudioScheduledSourceHandler> AsWeakPtr() override;
 
   // Compute the output for k-rate AudioParams
-  double ProcessKRate(int n, float* dest_p, double virtual_read_index) const;
+  double ProcessKRate(int n,
+                      base::span<float> destination,
+                      double virtual_read_index) const;
 
   // Scalar version for the main loop in ProcessKRate().  Returns the updated
   // virtual_read_index.
   double ProcessKRateScalar(int start_index,
                             int n,
-                            float* dest_p,
+                            base::span<float> destination,
                             double virtual_read_index,
                             float frequency,
                             float rate_scale) const;
@@ -89,14 +102,14 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
   // Returns the number of elements processed and the updated
   // virtual_read_index.
   std::tuple<int, double> ProcessKRateVector(int n,
-                                             float* dest_p,
+                                             base::span<float> destination,
                                              double virtual_read_index,
                                              float frequency,
                                              float rate_scale) const;
 
   // Compute the output for a-rate AudioParams
   double ProcessARate(int n,
-                      float* dest_p,
+                      base::span<float> destination,
                       double virtual_read_index,
                       base::span<float> phase_increments) const;
 
@@ -117,7 +130,7 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
   // Returns the updated virtual_read_index.
   double ProcessARateScalar(int k,
                             int n,
-                            float* destination,
+                            base::span<float> destination,
                             double virtual_read_index,
                             base::span<const float> phase_increments) const;
 
@@ -125,7 +138,7 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
   // and the update virtual_read_index.
   std::tuple<int, double> ProcessARateVector(
       int n,
-      float* destination,
+      base::span<float> destination,
       double virtual_read_index,
       base::span<const float> phase_increments) const;
 
@@ -149,7 +162,7 @@ class OscillatorHandler final : public AudioScheduledSourceHandler {
   //
   // Returns the updated virtual_read_index
   double ProcessARateVectorKernel(
-      float* destination,
+      base::span<float> destination,
       double virtual_read_index,
       base::span<const float> phase_increments,
       unsigned periodic_wave_size,

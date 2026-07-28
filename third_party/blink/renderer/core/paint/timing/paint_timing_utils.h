@@ -9,6 +9,16 @@
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 
+namespace cc {
+class HeadsUpDisplayLayer;
+}
+
+namespace blink {
+class Document;
+class LocalDOMWindow;
+class LocalFrameView;
+}  // namespace blink
+
 namespace blink::paint_timing {
 
 // Returns the `Node` causing the image to be generated. For pseudo elements,
@@ -29,6 +39,18 @@ inline bool CORE_EXPORT IsImageType(const LayoutObject& object) {
 inline bool CORE_EXPORT IsTextType(const Node& node) {
   return node.IsTextNode();
 }
+
+CORE_EXPORT cc::HeadsUpDisplayLayer* GetHUDLayerIfContentfulPaintRectsEnabled(
+    LocalFrameView* frame_view);
+
+CORE_EXPORT cc::HeadsUpDisplayLayer* GetHUDLayerIfLayoutShiftRectsEnabled(
+    LocalFrameView* frame_view);
+
+// Notifies the document loader that performance timing has changed in some way
+// if the window, document, and loader are non-null. Causes the current
+// performance timing values to be sent to UKM.
+CORE_EXPORT void NotifyLoaderPerformanceTimingChanged(LocalDOMWindow*);
+CORE_EXPORT void NotifyLoaderPerformanceTimingChanged(Document*);
 
 }  // namespace blink::paint_timing
 

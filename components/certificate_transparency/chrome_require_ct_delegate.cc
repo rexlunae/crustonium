@@ -179,7 +179,15 @@ ChromeRequireCTDelegate::IsCTRequiredForHost(
     std::string_view hostname,
     const net::X509Certificate* chain,
     const std::vector<net::SHA256HashValue>& spki_hashes) const {
-  if (MatchHostname(hostname) || MatchSPKI(chain, spki_hashes)) {
+  if (MatchSPKI(chain, spki_hashes)) {
+    return CTRequirementLevel::NOT_REQUIRED_APPLIES_ACROSS_NAMES;
+  }
+  if (MatchHostname(hostname)) {
+    // Technically it should be possible to check all the hostname rules
+    // against all the SANs in the leaf and determine if this should apply
+    // across SANs. However this is hard to calculate and unclear if it is
+    // actually worth doing. Just do the simple way for now and only do
+    // hostname exclusion checks for the individual hostname.
     return CTRequirementLevel::NOT_REQUIRED;
   }
 
@@ -331,14 +339,11 @@ void ChromeRequireCTDelegate::ParseSpkiHashes(
     absl::flat_hash_set<net::SHA256HashValue>* hashes) const {
   hashes->clear();
   for (const auto& value : spki_list) {
-    net::HashValue hash;
-    if (!hash.FromString(value)) {
+    std::optional<net::HashValue> hash = net::HashValue::FromString(value);
+    if (!hash || hash->tag() != net::HASH_VALUE_SHA256) {
       continue;
     }
-    if (hash.tag() != net::HASH_VALUE_SHA256) {
-      continue;
-    }
-    hashes->insert(hash.sha256hashvalue());
+    hashes->insert(hash->sha256hashvalue());
   }
 }
 

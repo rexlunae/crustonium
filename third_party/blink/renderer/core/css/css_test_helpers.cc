@@ -73,7 +73,7 @@ void TestStyleSheet::AddCSSRules(const String& css_text, bool is_empty_sheet) {
 
 CSSStyleSheet* CreateStyleSheet(Document& document) {
   return CSSStyleSheet::CreateInline(
-      document, NullURL(), TextPosition::MinimumPosition(), Utf8Encoding());
+      document, NullUrl(), TextPosition::MinimumPosition(), Utf8Encoding());
 }
 
 RuleSet* CreateRuleSet(Document& document, String text) {
@@ -182,8 +182,9 @@ CSSVariableData* CreateVariableData(String s) {
   bool is_animation_tainted = false;
   bool is_attr_tainted = false;
   bool needs_variable_resolution = false;
-  return CSSVariableData::Create(s, is_animation_tainted, is_attr_tainted,
-                                 needs_variable_resolution);
+  return CSSVariableData::Create(
+      s, is_animation_tainted, is_attr_tainted,
+      CSSVariableData::HasReferences(needs_variable_resolution));
 }
 
 const CSSValue* CreateCustomIdent(const char* s) {
@@ -224,7 +225,7 @@ StyleRuleBase* ParseNestedRule(Document& document,
                                CSSNestingType nesting_type,
                                StyleRule* parent_rule_for_nesting) {
   auto* sheet = CSSStyleSheet::CreateInline(
-      document, NullURL(), TextPosition::MinimumPosition(), Utf8Encoding());
+      document, NullUrl(), TextPosition::MinimumPosition(), Utf8Encoding());
   const auto* context = MakeGarbageCollected<CSSParserContext>(document);
   return CSSParser::ParseRule(context, sheet->Contents(), nesting_type,
                               parent_rule_for_nesting, text);
@@ -275,10 +276,12 @@ String ToString(PseudoId pseudo_id) {
       return "kPseudoIdBefore";
     case kPseudoIdAfter:
       return "kPseudoIdAfter";
+    case kPseudoIdExpandIcon:
+      return "kPseudoIdExpandIcon";
     case kPseudoIdPickerIcon:
       return "kPseudoIdPickerIcon";
-    case kPseudoIdInterestHint:
-      return "kPseudoIdInterestHint";
+    case kPseudoIdInterestButton:
+      return "kPseudoIdInterestButton";
     case kPseudoIdMarker:
       return "kPseudoIdMarker";
     case kPseudoIdBackdrop:
@@ -353,12 +356,18 @@ String ToString(PseudoId pseudo_id) {
       return "kPseudoIdDetailsContent";
     case kPseudoIdPickerSelect:
       return "kPseudoIdPickerSelect";
+    case kPseudoIdSelectListbox:
+      return "kPseudoIdSelectListbox";
     case kPseudoIdPermissionIcon:
       return "kPseudoIdPermissionIcon";
     case kAfterLastInternalPseudoId:
       return "kAfterLastInternalPseudoId";
     case kPseudoIdOverscrollAreaParent:
       return "kPseudoIdOverscrollAreaParent";
+    case kPseudoIdOverscrollBackdrop:
+      return "kPseudoIdOverscrollBackdrop";
+    case kPseudoIdSkeleton:
+      return "kPseudoIdSkeleton";
     case kPseudoIdInvalid:
       return "kPseudoIdInvalid";
   }

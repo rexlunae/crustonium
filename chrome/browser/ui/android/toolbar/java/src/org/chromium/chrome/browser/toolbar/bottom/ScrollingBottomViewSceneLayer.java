@@ -50,8 +50,15 @@ public class ScrollingBottomViewSceneLayer extends SceneOverlayLayer implements 
     /** The {@link ViewResourceFrameLayout} that this scene layer represents. */
     private final ViewResourceFrameLayout mBottomView;
 
+    /** Whether the shadow should be visible. */
+    private boolean mShowShadow = true;
+
+    /** The bottom padding of the view in px, used for EdgeToEdge. */
+    private int mBottomPaddingPx;
+
     /**
      * Build a composited bottom view layer.
+     *
      * @param bottomView The view used to generate the composited version.
      * @param topShadowHeightPx The height of the shadow on the top of the view in px if it exists.
      */
@@ -65,8 +72,9 @@ public class ScrollingBottomViewSceneLayer extends SceneOverlayLayer implements 
 
     /**
      * Build a copy of an existing {@link ScrollingBottomViewSceneLayer}.
+     *
      * @param sceneLayer The existing scene layer to copy. This only copies the source view,
-     *                   resource ID, and shadow height. All other state is ignored.
+     *     resource ID, and shadow height. All other state is ignored.
      */
     public ScrollingBottomViewSceneLayer(ScrollingBottomViewSceneLayer sceneLayer) {
         this(sceneLayer.mBottomView, sceneLayer.mTopShadowHeightPx);
@@ -75,6 +83,7 @@ public class ScrollingBottomViewSceneLayer extends SceneOverlayLayer implements 
     /**
      * Set the view's offset from the bottom of the screen in px. An offset of 0 means the view is
      * completely visible. An increasing offset will move the view down.
+     *
      * @param offsetPx The view's offset in px.
      */
     public void setYOffset(int offsetPx) {
@@ -102,6 +111,20 @@ public class ScrollingBottomViewSceneLayer extends SceneOverlayLayer implements 
         mIsVisible = visible;
     }
 
+    /**
+     * @param show Whether the shadow should be visible.
+     */
+    public void setShowShadow(boolean show) {
+        mShowShadow = show;
+    }
+
+    /**
+     * @param paddingPx The view's bottom padding in px.
+     */
+    public void setBottomPadding(int paddingPx) {
+        mBottomPaddingPx = paddingPx;
+    }
+
     @Override
     protected void initializeNative() {
         if (mNativePtr == 0) {
@@ -126,8 +149,9 @@ public class ScrollingBottomViewSceneLayer extends SceneOverlayLayer implements 
                         mTopShadowHeightPx,
                         mCurrentXOffsetPx,
                         viewport.height() + mCurrentYOffsetPx,
-                        true,
-                        mOffsetTag);
+                        mShowShadow,
+                        mOffsetTag,
+                        mBottomPaddingPx);
 
         return this;
     }
@@ -156,6 +180,7 @@ public class ScrollingBottomViewSceneLayer extends SceneOverlayLayer implements 
                 float xOffset,
                 float yOffset,
                 boolean showShadow,
-                @Nullable OffsetTag offsetTag);
+                @Nullable OffsetTag offsetTag,
+                int bottomPadding);
     }
 }

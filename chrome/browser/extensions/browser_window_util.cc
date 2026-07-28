@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "components/tabs/public/tab_interface.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -43,9 +43,8 @@ bool BrowserMatchesHelper(BrowserWindowInterface& browser,
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (restrict_to_current_workspace) {
-    Browser* browser_for_migration = browser.GetBrowserForMigrationOnly();
-    if (!browser_for_migration->window() ||
-        !browser_for_migration->window()->IsOnCurrentWorkspace()) {
+    BrowserWindow* browser_window = BrowserWindow::FromBrowser(&browser);
+    if (!browser_window || !browser_window->IsOnCurrentWorkspace()) {
       return false;
     }
   }

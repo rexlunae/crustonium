@@ -10,6 +10,7 @@ import android.os.Build;
 import android.os.Process;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
@@ -143,6 +144,7 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
     private final boolean mTrafficStatsUidSet;
     private final int mTrafficStatsUid;
     private final long mNetworkHandle;
+    private final boolean mIsAdaptiveNetworkStream;
     private final CronetLogger mLogger;
     private RefCountDelegate mInflightDoneCallbackCount;
     private CronetException mException;
@@ -301,7 +303,8 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
             int trafficStatsTag,
             boolean trafficStatsUidSet,
             int trafficStatsUid,
-            long networkHandle) {
+            long networkHandle,
+            boolean isAdaptiveNetworkStream) {
         mRequestContext = requestContext;
         mInitialUrl = url;
         mInitialPriority = convertStreamPriority(priority);
@@ -319,6 +322,7 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
         mTrafficStatsUid = trafficStatsUid;
         mNetworkHandle = networkHandle;
         mLogger = requestContext.getCronetLogger();
+        mIsAdaptiveNetworkStream = isAdaptiveNetworkStream;
     }
 
     @Override
@@ -942,6 +946,7 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
         mRequestContext.onRequestFinished();
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private CronetTrafficInfo buildCronetTrafficInfo(
             @RequestFinishedInfoImpl.FinishedReason int finishedReason,
             boolean quicConnectionMigrationAttempted,
@@ -1066,7 +1071,8 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
                 mMetrics.getConnectDurationInMicroseconds(),
                 mMetrics.getTimeToWriteFirstByteInMicroseconds(),
                 mMetrics.getTimeToReceiveHeaderLastByteMicroseconds(),
-                isProxied);
+                isProxied,
+                mIsAdaptiveNetworkStream);
     }
 
     public void setOnDestroyedCallbackForTesting(Runnable onDestroyedCallbackForTesting) {
@@ -1075,6 +1081,10 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
 
     private static boolean doesMethodAllowWriteData(String methodName) {
         return !methodName.equals("GET") && !methodName.equals("HEAD");
+    }
+
+    long getTargetNetworkHandle() {
+        return mNetworkHandle;
     }
 
     private static ArrayList<Map.Entry<String, String>> headersListFromStrings(String[] headers) {
@@ -1171,7 +1181,6 @@ public class CronetBidirectionalStream extends ExperimentalBidirectionalStream {
     private void destroyNativeStreamLocked() {
         try (var traceEvent =
                 ScopedSysTraceEvent.scoped("CronetBidirectionalStream#destroyNativeStreamLocked")) {
-            Log.i(CronetUrlRequestContext.LOG_TAG, "destroyNativeStreamLocked " + this.toString());
             if (mNativeStream == 0) {
                 return;
             }

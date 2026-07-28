@@ -36,10 +36,15 @@ class ChooseFileTabHelperTest : public PlatformTest {
     tab_helper_ = ChooseFileTabHelper::FromWebState(web_state_.get());
   }
 
+  void SetLastTap(CGPoint point, base::TimeTicks time) {
+    LastTapLocationTabHelper::FromWebState(web_state_.get())
+        ->SetLastTapForTesting(point, time);
+  }
+
  protected:
   base::test::TaskEnvironment task_environment_;
-  raw_ptr<ChooseFileTabHelper, DanglingUntriaged> tab_helper_;
   std::unique_ptr<web::FakeWebState> web_state_;
+  raw_ptr<ChooseFileTabHelper> tab_helper_;
 };
 
 // Tests that calling `StopChoosingFiles()` submits file selection and that
@@ -186,6 +191,98 @@ TEST_F(ChooseFileTabHelperTest, LastChooseFileEvent) {
   EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
 }
 
+// Tests that starting navigation to a different document resets the last
+// ChooseFileEvent.
+TEST_F(ChooseFileTabHelperTest, DidStartNavigationResetsLastChooseFileEvent) {
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+
+  ChooseFileEvent event = ChooseFileEvent::Builder()
+                              .SetAllowMultipleFiles(false)
+                              .SetHasSelectedFile(false)
+                              .SetWebState(web_state_.get())
+                              .Build();
+  tab_helper_->SetLastChooseFileEvent(event);
+  EXPECT_TRUE(tab_helper_->HasLastChooseFileEvent());
+
+  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
+
+  // Same document navigation should NOT reset last_choose_file_event_.
+  navigation_context->SetIsSameDocument(true);
+  tab_helper_->DidStartNavigation(web_state_.get(), navigation_context.get());
+  EXPECT_TRUE(tab_helper_->HasLastChooseFileEvent());
+
+  // Cross-document navigation should reset last_choose_file_event_.
+  navigation_context->SetIsSameDocument(false);
+  tab_helper_->DidStartNavigation(web_state_.get(), navigation_context.get());
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+}
+
+// Tests that file events and panel presentation requests are ignored while a
+// cross-document navigation is pending across documents.
+TEST_F(ChooseFileTabHelperTest, PendingNavigationIgnoresChooseFileEvent) {
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+
+  ChooseFileEvent event = ChooseFileEvent::Builder()
+                              .SetAllowMultipleFiles(false)
+                              .SetHasSelectedFile(false)
+                              .SetWebState(web_state_.get())
+                              .Build();
+
+  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
+  navigation_context->SetIsSameDocument(false);
+  tab_helper_->DidStartNavigation(web_state_.get(), navigation_context.get());
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+
+  // The outgoing document attempts to set a new event while the navigation is
+  // pending. It should be ignored.
+  tab_helper_->SetLastChooseFileEvent(event);
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+
+  if (@available(iOS 18.4, *)) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(kIOSCustomFileUploadMenu);
+
+    id parameters = [OCMockObject mockForClass:[WKOpenPanelParameters class]];
+    __block bool completion_called = false;
+    tab_helper_->RunOpenPanel(parameters, /*frame=*/nil,
+                              base::BindOnce(^(NSArray<NSURL*>* result_urls) {
+                                completion_called = true;
+                                EXPECT_NSEQ(nil, result_urls);
+                              }));
+    EXPECT_TRUE(completion_called);
+    EXPECT_FALSE(tab_helper_->IsChoosingFiles());
+  }
+
+  // Uncommitted cross-document navigation finishes. Storing events should work
+  // again.
+  navigation_context->SetHasCommitted(false);
+  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
+  tab_helper_->SetLastChooseFileEvent(event);
+  EXPECT_TRUE(tab_helper_->HasLastChooseFileEvent());
+
+  // Committed cross-document navigation should reset last_choose_file_event_.
+  navigation_context->SetIsSameDocument(false);
+  navigation_context->SetHasCommitted(true);
+  tab_helper_->DidStartNavigation(web_state_.get(), navigation_context.get());
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+}
+
+// Tests that hiding the tab resets the last ChooseFileEvent.
+TEST_F(ChooseFileTabHelperTest, WasHiddenResetsLastChooseFileEvent) {
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+
+  ChooseFileEvent event = ChooseFileEvent::Builder()
+                              .SetAllowMultipleFiles(false)
+                              .SetHasSelectedFile(false)
+                              .SetWebState(web_state_.get())
+                              .Build();
+  tab_helper_->SetLastChooseFileEvent(event);
+  EXPECT_TRUE(tab_helper_->HasLastChooseFileEvent());
+
+  tab_helper_->WasHidden(web_state_.get());
+  EXPECT_FALSE(tab_helper_->HasLastChooseFileEvent());
+}
+
 // Tests that `RunOpenPanel()` starts file selection in the tab and shows the
 // file upload panel.
 TEST_F(ChooseFileTabHelperTest, RunOpenPanel) {
@@ -298,4 +395,126 @@ TEST_F(ChooseFileTabHelperTest, RunOpenPanelHistograms) {
     histogram_tester.ExpectUniqueSample(
         "IOS.Web.FileInput.DirectoryAttributeMismatched", false, 1);
   }
+}
+
+// Tests that RunOpenPanel overrides coordinates with a recent native tap
+// location when there is a recent touch interaction and VoiceOver is inactive.
+TEST_F(ChooseFileTabHelperTest, RunOpenPanel_TapAnchoring) {
+  if (@available(iOS 18.4, *)) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(kIOSCustomFileUploadMenu);
+
+    // Set up a recent native tap location at (150, 250) less than 1 second ago.
+    CGPoint tap_location = CGPointMake(150, 250);
+    SetLastTap(tap_location, base::TimeTicks::Now());
+
+    // Request coordinates at (999, 999) in the event.
+    ChooseFileEvent event = ChooseFileEvent::Builder()
+                                .SetAllowMultipleFiles(true)
+                                .SetOnlyAllowDirectory(false)
+                                .SetWebState(web_state_.get())
+                                .SetScreenLocation(CGPointMake(999, 999))
+                                .Build();
+    tab_helper_->SetLastChooseFileEvent(event);
+
+    id parameters = [OCMockObject mockForClass:[WKOpenPanelParameters class]];
+    [[[parameters stub] andReturnValue:@YES] allowsMultipleSelection];
+    [[[parameters stub] andReturnValue:@NO] allowsDirectories];
+
+    id handler = OCMProtocolMock(@protocol(FileUploadPanelCommands));
+    tab_helper_->SetFileUploadPanelHandler(handler);
+    OCMExpect([handler showFileUploadPanel]);
+
+    tab_helper_->RunOpenPanel(parameters, /*frame=*/nil, base::DoNothing());
+    EXPECT_OCMOCK_VERIFY(handler);
+
+    // Verify that the coordinates were overridden to the native tap point.
+    ASSERT_TRUE(tab_helper_->IsChoosingFiles());
+    EXPECT_TRUE(CGPointEqualToPoint(
+        tap_location, tab_helper_->GetChooseFileEvent().screen_location));
+  }
+}
+
+// Tests that RunOpenPanel does not override requested coordinates if the native
+// tap is stale.
+TEST_F(ChooseFileTabHelperTest, RunOpenPanel_StaleTapFallback) {
+  if (@available(iOS 18.4, *)) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(kIOSCustomFileUploadMenu);
+
+    // Set up a stale native tap location at (150, 250) 5 seconds ago.
+    CGPoint tap_location = CGPointMake(150, 250);
+    SetLastTap(tap_location, base::TimeTicks::Now() - base::Seconds(5));
+
+    // Request coordinates at (300, 400) in the event.
+    CGPoint requested_location = CGPointMake(300, 400);
+    ChooseFileEvent event = ChooseFileEvent::Builder()
+                                .SetAllowMultipleFiles(true)
+                                .SetOnlyAllowDirectory(false)
+                                .SetWebState(web_state_.get())
+                                .SetScreenLocation(requested_location)
+                                .Build();
+    tab_helper_->SetLastChooseFileEvent(event);
+
+    id parameters = [OCMockObject mockForClass:[WKOpenPanelParameters class]];
+    [[[parameters stub] andReturnValue:@YES] allowsMultipleSelection];
+    [[[parameters stub] andReturnValue:@NO] allowsDirectories];
+
+    id handler = OCMProtocolMock(@protocol(FileUploadPanelCommands));
+    tab_helper_->SetFileUploadPanelHandler(handler);
+    OCMExpect([handler showFileUploadPanel]);
+
+    tab_helper_->RunOpenPanel(parameters, /*frame=*/nil, base::DoNothing());
+    EXPECT_OCMOCK_VERIFY(handler);
+
+    // Verify that the coordinates were NOT overridden, keeping the requested
+    // location.
+    ASSERT_TRUE(tab_helper_->IsChoosingFiles());
+    EXPECT_TRUE(CGPointEqualToPoint(
+        requested_location, tab_helper_->GetChooseFileEvent().screen_location));
+  }
+}
+
+// Tests that RunOpenPanel falls back to the native tap location if requested
+// coordinates are CGPointZero, even if the tap is stale.
+TEST_F(ChooseFileTabHelperTest, RunOpenPanel_StaleTapFallbackToDefault) {
+  if (@available(iOS 18.4, *)) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(kIOSCustomFileUploadMenu);
+
+    // Set up a stale native tap location at (150, 250) 5 seconds ago.
+    CGPoint tap_location = CGPointMake(150, 250);
+    SetLastTap(tap_location, base::TimeTicks::Now() - base::Seconds(5));
+
+    // Build an event with CGPointZero coordinates.
+    ChooseFileEvent event = ChooseFileEvent::Builder()
+                                .SetAllowMultipleFiles(true)
+                                .SetOnlyAllowDirectory(false)
+                                .SetWebState(web_state_.get())
+                                .SetScreenLocation(CGPointZero)
+                                .Build();
+    tab_helper_->SetLastChooseFileEvent(event);
+
+    id parameters = [OCMockObject mockForClass:[WKOpenPanelParameters class]];
+    [[[parameters stub] andReturnValue:@YES] allowsMultipleSelection];
+    [[[parameters stub] andReturnValue:@NO] allowsDirectories];
+
+    id handler = OCMProtocolMock(@protocol(FileUploadPanelCommands));
+    tab_helper_->SetFileUploadPanelHandler(handler);
+    OCMExpect([handler showFileUploadPanel]);
+
+    tab_helper_->RunOpenPanel(parameters, /*frame=*/nil, base::DoNothing());
+    EXPECT_OCMOCK_VERIFY(handler);
+
+    // Verify that the coordinates fallback to the native tap point.
+    ASSERT_TRUE(tab_helper_->IsChoosingFiles());
+    EXPECT_TRUE(CGPointEqualToPoint(
+        tap_location, tab_helper_->GetChooseFileEvent().screen_location));
+  }
+}
+
+// Tests that IsCustomOpenPanelSupported is set to true on creation for realized
+// web state.
+TEST_F(ChooseFileTabHelperTest, TestIsCustomOpenPanelSupported) {
+  EXPECT_TRUE(web_state_->IsCustomOpenPanelSupported());
 }

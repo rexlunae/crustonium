@@ -68,10 +68,11 @@ import java.util.concurrent.atomic.AtomicReference;
     // controls works reliably;
     // Disable edge to edge as part of the test is measuring the keyboard's height, which differs
     // depending on whether Chrome is drawn e2e.
-    "disable-features=ResamplingScrollEvents,DrawCutoutEdgeToEdge,EdgeToEdgeBottomChin",
+    "disable-features=ResamplingScrollEvents",
     "hide-scrollbars"
 })
 @Batch(Batch.PER_CLASS)
+@DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
 public class ViewTransitionPixelTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -459,7 +460,7 @@ public class ViewTransitionPixelTest {
     @Feature({"RenderTest"})
     // TODO(crbug.com/473893732): Update the test for lock top control or use restriction.
     @DisableFeatures(ChromeFeatureList.LOCK_TOP_CONTROLS_ON_LARGE_TABLETS_V2)
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444403
     public void testBrowserControlsRootSnapshotControlsOverlay() throws Throwable {
         String url = "/chrome/test/data/android/view_transition_browser_controls.html";
         mActivityTestRule.startOnTestServerUrl(url);
@@ -551,7 +552,7 @@ public class ViewTransitionPixelTest {
     @Feature({"RenderTest"})
     // TODO(crbug.com/473893732): Update the test for lock top control or use restriction.
     @DisableFeatures(ChromeFeatureList.LOCK_TOP_CONTROLS_ON_LARGE_TABLETS_V2)
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/446934111
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444403
     public void testBrowserControlsChildSnapshotControlsOverlay() throws Throwable {
         String url = "/chrome/test/data/android/view_transition_browser_controls_child.html";
         mActivityTestRule.startOnTestServerUrl(url);

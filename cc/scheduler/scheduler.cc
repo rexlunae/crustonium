@@ -14,8 +14,8 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/task/delay_policy.h"
 #include "base/task/single_thread_task_runner.h"
@@ -29,7 +29,11 @@
 #include "cc/metrics/compositor_timing_history.h"
 #include "cc/scheduler/headless_scheduler_state_machine.h"
 #include "cc/scheduler/scheduler_state_machine.h"
+#include "cc/scheduler/slim_scheduler_state_machine.h"
+#include "cc/scheduler/webview_scheduler_state_machine.h"
+#include "components/viz/common/display/display_scheduler_draw_result.h"
 #include "components/viz/common/features.h"
+#include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/delay_based_time_source.h"
 #include "services/tracing/public/cpp/perfetto/macros.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
@@ -59,9 +63,15 @@ Scheduler::Scheduler(
       compositor_frame_reporting_controller_(
           compositor_frame_reporting_controller),
       begin_impl_frame_tracker_(FROM_HERE) {
-  if (settings.wait_for_all_pipeline_stages_before_draw &&
-      base::FeatureList::IsEnabled(features::kHeadlessSchedulerStateMachine)) {
+  if (settings.wait_for_all_pipeline_stages_before_draw) {
     state_machine_ = std::make_unique<HeadlessSchedulerStateMachine>(settings);
+  } else if (settings.using_synchronous_renderer_compositor &&
+             base::FeatureList::IsEnabled(
+                 features::kWebviewSchedulerStateMachine)) {
+    state_machine_ = std::make_unique<WebviewSchedulerStateMachine>(settings);
+  } else if (base::FeatureList::IsEnabled(features::kSlimScheduler) &&
+             !settings_.single_threaded_proxy) {
+    state_machine_ = std::make_unique<SlimSchedulerStateMachine>(settings);
   } else {
     state_machine_ = std::make_unique<SchedulerStateMachine>(settings);
   }
@@ -180,6 +190,65 @@ void Scheduler::SetNeedsOneBeginImplFrame() {
   ProcessScheduledActions();
 }
 
+// This is an experimental method introduced for crbug.com/496610055
+// in which we send an artificial BeginMainFrame if we know that we're
+// in the last renderer frame of a cross-document view transition.
+void Scheduler::SendEarlyFinalBeginMainFrame() {
+  TRACE_EVENT0("cc", "Scheduler::SendEarlyFinalBeginMainFrame");
+  viz::BeginFrameArgs args = last_dispatched_begin_main_frame_args_;
+
+  // Ensure we start from the latest known args to avoid sequence number
+  // clashes.
+  if (begin_impl_frame_tracker_.DangerousMethodCurrentOrLast().frame_id >
+      args.frame_id) {
+    args = begin_impl_frame_tracker_.DangerousMethodCurrentOrLast();
+  }
+  if (pending_begin_frame_args_.frame_id > args.frame_id) {
+    args = pending_begin_frame_args_;
+  }
+
+  if (!args.IsValid() || args.interval.is_zero()) {
+    return;
+  }
+
+  // If we are starting a frame that covers or supersedes the pending one,
+  // clear it now to prevent it from starting later.
+  if (pending_begin_frame_args_.IsValid() &&
+      args.frame_id >= pending_begin_frame_args_.frame_id) {
+    pending_begin_frame_args_ = viz::BeginFrameArgs();
+    pending_begin_frame_task_.Cancel();
+  }
+
+  if (state_machine_->begin_impl_frame_state() !=
+      SchedulerStateMachine::BeginImplFrameState::IDLE) {
+    begin_impl_frame_deadline_timer_.Stop();
+    if (!settings_.using_synchronous_renderer_compositor) {
+      compositor_frame_reporting_controller_->OnFinishImplFrame(
+          begin_impl_frame_tracker_.Current().frame_id,
+          /*waiting_for_main=*/false);
+    }
+    FinishImplFrame();
+  }
+
+  // Calculate intervals after potentially finishing the current frame.
+  base::TimeDelta elapsed = Now() - args.frame_time;
+  uint64_t intervals =
+      elapsed.is_positive() ? base::ClampRound(elapsed / args.interval) : 1;
+  if (intervals <= 0) {
+    intervals = 1;
+  }
+  args.frame_id.sequence_number += intervals;
+  args.frame_time += args.interval * intervals;
+  args.deadline = args.frame_time + args.interval;
+  args.on_critical_path = !state_machine_->ImplLatencyTakesPriority();
+  args.frame_id.source_id = viz::BeginFrameArgs::kManualSourceId;
+
+  state_machine_->SetUrgentBeginMainFramePending();
+
+  // Send the next BeginMainFrame right away.
+  OnBeginFrame(args);
+}
+
 void Scheduler::SetNeedsRedraw() {
   state_machine_->SetNeedsRedraw();
   ProcessScheduledActions();
@@ -223,10 +292,9 @@ void Scheduler::DidReceiveCompositorFrameAck() {
 
 void Scheduler::SetTreePrioritiesAndScrollState(
     TreePriority tree_priority,
-    ScrollHandlerState scroll_handler_state,
     bool is_current_scroll_main_painted) {
   state_machine_->SetTreePrioritiesAndScrollState(
-      tree_priority, scroll_handler_state, is_current_scroll_main_painted);
+      tree_priority, is_current_scroll_main_painted);
   ProcessScheduledActions();
 }
 
@@ -300,23 +368,6 @@ base::TimeTicks Scheduler::LastBeginImplFrameTime() {
   return begin_impl_frame_tracker_.Current().frame_time;
 }
 
-void Scheduler::BeginMainFrameNotExpectedUntil(base::TimeTicks time) {
-  TRACE_EVENT1("cc", "Scheduler::BeginMainFrameNotExpectedUntil",
-               "remaining_time", (time - Now()).InMillisecondsF());
-
-  DCHECK(!inside_scheduled_action_);
-  base::AutoReset<bool> mark_inside(&inside_scheduled_action_, true);
-  client_->ScheduledActionBeginMainFrameNotExpectedUntil(time);
-}
-
-void Scheduler::BeginMainFrameNotExpectedSoon() {
-  TRACE_EVENT0("cc", "Scheduler::BeginMainFrameNotExpectedSoon");
-
-  DCHECK(!inside_scheduled_action_);
-  base::AutoReset<bool> mark_inside(&inside_scheduled_action_, true);
-  client_->SendBeginMainFrameNotExpectedSoon();
-}
-
 void Scheduler::StartOrStopBeginFrames() {
   if (state_machine_->begin_impl_frame_state() !=
       SchedulerStateMachine::BeginImplFrameState::IDLE) {
@@ -352,8 +403,7 @@ void Scheduler::StartOrStopBeginFrames() {
 
 void Scheduler::CancelPendingBeginFrameTask() {
   if (pending_begin_frame_args_.IsValid()) {
-    TRACE_EVENT_INSTANT0("cc", "Scheduler::BeginFrameDropped",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("cc", "Scheduler::BeginFrameDropped");
     SendDidNotProduceFrame(pending_begin_frame_args_,
                            FrameSkippedReason::kNoDamage);
     // Make pending begin frame invalid so that we don't accidentally use it.
@@ -385,8 +435,8 @@ void Scheduler::OnBeginFrameSourcePausedChanged(bool paused) {
     return;
   }
   {
-    TRACE_EVENT_INSTANT1("cc", "Scheduler::SetBeginFrameSourcePaused",
-                         TRACE_EVENT_SCOPE_THREAD, "paused", paused);
+    TRACE_EVENT_INSTANT("cc", "Scheduler::SetBeginFrameSourcePaused", "paused",
+                        paused);
     state_machine_->SetBeginFrameSourcePaused(paused);
     client_->DidChangeBeginFrameSourcePaused(paused);
   }
@@ -395,11 +445,9 @@ void Scheduler::OnBeginFrameSourcePausedChanged(bool paused) {
 
 // BeginFrame is the mechanism that tells us that now is a good time to start
 // making a frame. Usually this means that user input for the frame is complete.
-// If the scheduler is busy, we queue the BeginFrame to be handled later as
-// a BeginRetroFrame.
+// If the scheduler is busy, we queue the BeginFrame to be handled later as a
+// pending BeginMainFrame.
 bool Scheduler::OnBeginFrameDerivedImpl(const viz::BeginFrameArgs& args) {
-  TRACE_EVENT1("cc,benchmark", "Scheduler::BeginFrame", "args", args.AsValue());
-
   // If the begin frame interval is different than last frame and bigger than
   // zero then let |client_| know about the new interval for animations. In
   // theory the interval should always be bigger than zero but the value is
@@ -414,10 +462,23 @@ bool Scheduler::OnBeginFrameDerivedImpl(const viz::BeginFrameArgs& args) {
     state_machine_->FrameIntervalUpdated(last_frame_interval_);
   }
 
+  // TODO(crbug.com/512813200): Audit uses of Dangerous* methods
+  if (begin_impl_frame_tracker_.DangerousMethodHasStarted()) {
+    const viz::BeginFrameArgs& last_args =
+        begin_impl_frame_tracker_.DangerousMethodCurrentOrLast();
+    if (args.frame_id.source_id == last_args.frame_id.source_id &&
+        args.frame_id.sequence_number <= last_args.frame_id.sequence_number) {
+      // We already processed this frame ID (e.g. from an early main frame).
+      // Do not call SendDidNotProduceFrame, as that would abort the reporter
+      // for the frame we are actively processing.
+      return false;
+    }
+  }
+  TRACE_EVENT1("cc,benchmark", "Scheduler::BeginFrame", "args", args.AsValue());
+
   // Drop the BeginFrame if we don't need one.
   if (!state_machine_->BeginFrameNeeded()) {
-    TRACE_EVENT_INSTANT0("cc", "Scheduler::BeginFrameDropped",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("cc", "Scheduler::BeginFrameDropped");
     // Since we don't use the BeginFrame, we may later receive the same
     // BeginFrame again. Thus, we can't confirm it at this point, even though we
     // don't have any updates right now.
@@ -448,8 +509,7 @@ bool Scheduler::OnBeginFrameDerivedImpl(const viz::BeginFrameArgs& args) {
     // frame calls, but we only want to process the last one. Saving the args,
     // and posting a task achieves that.
     if (pending_begin_frame_args_.IsValid()) {
-      TRACE_EVENT_INSTANT0("cc", "Scheduler::BeginFrameDropped",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("cc", "Scheduler::BeginFrameDropped");
       SendDidNotProduceFrame(pending_begin_frame_args_,
                              FrameSkippedReason::kRecoverLatency);
     }
@@ -536,8 +596,7 @@ void Scheduler::BeginImplFrameWithDeadline(const viz::BeginFrameArgs& args) {
   // ignore BeginFrame deadlines.
   if (!settings_.wait_for_all_pipeline_stages_before_draw &&
       args.type == viz::BeginFrameArgs::MISSED && args.deadline < now) {
-    TRACE_EVENT_INSTANT0("cc", "Scheduler::MissedBeginFrameDropped",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("cc", "Scheduler::MissedBeginFrameDropped");
     skipped_last_frame_missed_exceeded_deadline_ = true;
     SendDidNotProduceFrame(args, FrameSkippedReason::kRecoverLatency);
     return;
@@ -694,8 +753,10 @@ void Scheduler::FinishImplFrame() {
     client_->DidFinishImplFrame(last_activate_origin_frame_args());
   }
 
-  if (begin_frame_source_)
-    begin_frame_source_->DidFinishFrame(this);
+  if (begin_frame_source_) {
+    begin_frame_source_->DidFinishFrame(
+        this, viz::DisplaySchedulerDrawResult::kUnknown);
+  }
 }
 
 void Scheduler::SendDidNotProduceFrame(const viz::BeginFrameArgs& args,
@@ -914,12 +975,6 @@ void Scheduler::SetPauseRendering(bool pause_rendering) {
   ProcessScheduledActions();
 }
 
-void Scheduler::SetMainThreadWantsBeginMainFrameNotExpected(bool new_state) {
-  state_machine_->SetMainThreadWantsBeginMainFrameNotExpectedMessages(
-      new_state);
-  ProcessScheduledActions();
-}
-
 void Scheduler::ProcessScheduledActions() {
   // Do not perform actions during compositor shutdown.
   if (stopped_)
@@ -954,17 +1009,6 @@ void Scheduler::ProcessScheduledActions() {
         state_machine_->WillSendBeginMainFrame();
         client_->ScheduledActionSendBeginMainFrame(begin_main_frame_args_);
         last_dispatched_begin_main_frame_args_ = begin_main_frame_args_;
-        break;
-      case SchedulerStateMachine::Action::
-          NOTIFY_BEGIN_MAIN_FRAME_NOT_EXPECTED_UNTIL:
-        state_machine_->WillNotifyBeginMainFrameNotExpectedUntil();
-        BeginMainFrameNotExpectedUntil(begin_main_frame_args_.frame_time +
-                                       begin_main_frame_args_.interval);
-        break;
-      case SchedulerStateMachine::Action::
-          NOTIFY_BEGIN_MAIN_FRAME_NOT_EXPECTED_SOON:
-        state_machine_->WillNotifyBeginMainFrameNotExpectedSoon();
-        BeginMainFrameNotExpectedSoon();
         break;
       case SchedulerStateMachine::Action::COMMIT:
         state_machine_->WillCommit(/*commit_had_no_updates=*/false);
@@ -1089,9 +1133,6 @@ void Scheduler::ClearHistory() {
   ProcessScheduledActions();
 }
 
-void Scheduler::SetShouldThrottleFrameRate(bool flag) {
-  state_machine_->SetShouldThrottleFrameRate(flag);
-}
 
 void Scheduler::SetRequestHighFramerate(bool flag) {
   TRACE_EVENT("blink", __PRETTY_FUNCTION__);

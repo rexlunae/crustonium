@@ -60,21 +60,21 @@ class ConfigBase final : public TargetConfig {
   JobLevel GetJobLevel() const override;
   void SetJobMemoryLimit(size_t memory_limit) override;
   ResultCode AllowFileAccess(FileSemantics semantics,
-                             const wchar_t* pattern) override;
-  ResultCode AllowExtraDll(const wchar_t* path) override;
+                             std::wstring_view pattern) override;
+  ResultCode AllowExtraDll(std::wstring_view path) override;
   ResultCode SetFakeGdiInit() override;
-  void AddDllToUnload(const wchar_t* dll_name) override;
+  void AddDllToUnload(std::wstring_view dll_name) override;
   ResultCode SetIntegrityLevel(IntegrityLevel integrity_level) override;
   IntegrityLevel GetIntegrityLevel() const override;
   void SetDelayedIntegrityLevel(IntegrityLevel integrity_level) override;
-  ResultCode SetLowBox(const wchar_t* sid) override;
+  ResultCode SetLowBox(base::wcstring_view sid) override;
   ResultCode SetProcessMitigations(MitigationFlags flags) override;
   MitigationFlags GetProcessMitigations() override;
   ResultCode SetDelayedProcessMitigations(MitigationFlags flags) override;
   MitigationFlags GetDelayedProcessMitigations() const override;
   void AddRestrictingRandomSid() override;
   void SetLockdownDefaultDacl() override;
-  ResultCode AddAppContainerProfile(const wchar_t* package_name) override;
+  ResultCode AddAppContainerProfile(base::wcstring_view package_name) override;
   AppContainer* GetAppContainer() override;
   void AddKernelObjectToClose(HandleToClose handle_info) override;
   void SetDisconnectCsrss() override;
@@ -82,6 +82,7 @@ class ConfigBase final : public TargetConfig {
   void SetFilterEnvironment(bool filter) override;
   bool GetEnvironmentFiltered() override;
   void SetZeroAppShim() override;
+  void SetSecurityAttributeName(std::wstring_view name) override;
 
  private:
   // Can call Freeze() and is_csrss_connected().
@@ -135,6 +136,9 @@ class ConfigBase final : public TargetConfig {
   const std::vector<base::win::ScopedHandle>& shared_handles() {
     return shared_handles_;
   }
+  std::optional<std::wstring> security_attribute_name() {
+    return security_attribute_name_;
+  }
 
   TokenLevel lockdown_level_;
   TokenLevel initial_level_;
@@ -164,6 +168,9 @@ class ConfigBase final : public TargetConfig {
   std::unique_ptr<AppContainerBase> app_container_;
   // List of handles to be shared with a new process to complete the config.
   std::vector<base::win::ScopedHandle> shared_handles_;
+  // The name of the Security Attribute to use in the default DACL of the
+  // target process.
+  std::optional<std::wstring> security_attribute_name_;
 };
 
 struct TargetTokens {

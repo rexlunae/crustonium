@@ -80,7 +80,7 @@ class IWAProtocolTestBase : public DevToolsProtocolTestBase {
   }
 
   void TearDownOnMainThread() override {
-    web_app::test::UninstallAllWebApps(browser()->profile());
+    web_app::test::UninstallAllWebApps(browser()->GetProfile());
     override_registration_.reset();
     DevToolsProtocolTestBase::TearDownOnMainThread();
   }
@@ -95,7 +95,7 @@ class IWAProtocolTestBase : public DevToolsProtocolTestBase {
   webapps::AppId AppId() const { return app_id_; }
 
   bool AppExists() {
-    auto* provider = WebAppProvider::GetForTest(browser()->profile());
+    auto* provider = WebAppProvider::GetForTest(browser()->GetProfile());
     CHECK(provider);
 
     return provider->registrar_unsafe().GetInstallState(AppId()).has_value();
@@ -189,7 +189,14 @@ class IWAProtocolTestRemoteProxy : public IWAProtocolTestBase {
 IN_PROC_BROWSER_TEST_F(IWAProtocolTestLocalFile, Install) {
   Install();
 }
-IN_PROC_BROWSER_TEST_F(IWAProtocolTestRemoteFile, Install) {
+
+// TODO(crbug.com/482445180): Flaky on windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_RemoteFileInstall DISABLED_RemoteFileInstall
+#else
+#define MAYBE_RemoteFileInstall RemoteFileInstall
+#endif  // BUILDFLAG(IS_WIN)
+IN_PROC_BROWSER_TEST_F(IWAProtocolTestRemoteFile, MAYBE_RemoteFileInstall) {
   Install();
 }
 IN_PROC_BROWSER_TEST_F(IWAProtocolTestRemoteProxy, Install) {

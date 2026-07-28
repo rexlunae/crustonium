@@ -36,7 +36,6 @@
 #include "components/reporting/proto/synced/record.pb.h"
 #include "components/reporting/proto/synced/record_constants.pb.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/protos/app_types.pb.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/test/browser_test.h"
@@ -240,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(AppEventsObserverBrowserTest, ReportLaunchedApp) {
       apps::AppLaunchParams(
           app_id, apps::LaunchContainer::kLaunchContainerWindow,
           WindowOpenDisposition::CURRENT_TAB, apps::LaunchSource::kFromTest),
-      base::IgnoreArgs<apps::LaunchResult&&>(run_loop.QuitClosure()));
+      base::IgnoreArgs<apps::LaunchResult>(run_loop.QuitClosure()));
   run_loop.Run();
 
   const auto [priority, record] = missive_observer.GetNextEnqueuedRecord();

@@ -157,8 +157,8 @@ void WebSettingsImpl::SetAutoZoomFocusedEditableToLegibleScale(
       auto_zoom_focused_editable_to_legible_scale;
 }
 
-void WebSettingsImpl::SetTextAutosizingEnabled(bool enabled) {
-  dev_tools_emulator_->SetTextAutosizingEnabled(enabled);
+void WebSettingsImpl::SetTextSizeAdjustEnabled(bool enabled) {
+  settings_->SetTextSizeAdjustEnabled(enabled);
 }
 
 // TODO(pdr): Rename this OSTextScaleFactor.
@@ -181,10 +181,6 @@ void WebSettingsImpl::SetAccessibilityPasswordValuesEnabled(bool enabled) {
 
 void WebSettingsImpl::SetAccessibilityFontWeightAdjustment(int size) {
   settings_->SetAccessibilityFontWeightAdjustment(size);
-}
-
-void WebSettingsImpl::SetDeviceScaleAdjustment(float device_scale_adjustment) {
-  dev_tools_emulator_->SetDeviceScaleAdjustment(device_scale_adjustment);
 }
 
 void WebSettingsImpl::SetDefaultTextEncodingName(const WebString& encoding) {
@@ -328,8 +324,8 @@ void WebSettingsImpl::SetAllowScriptsToCloseWindows(bool allow) {
   settings_->SetAllowScriptsToCloseWindows(allow);
 }
 
-void WebSettingsImpl::SetAllowWindowFocusWithoutUserGesture(bool allow) {
-  settings_->SetAllowWindowFocusWithoutUserGesture(allow);
+void WebSettingsImpl::SetAllowUnrestrictedWindowFocus(bool allow) {
+  settings_->SetAllowUnrestrictedWindowFocus(allow);
 }
 
 void WebSettingsImpl::SetWideViewportQuirkEnabled(
@@ -529,6 +525,10 @@ void WebSettingsImpl::SetHighlightAds(bool enabled) {
   settings_->SetHighlightAds(enabled);
 }
 
+void WebSettingsImpl::SetInspectorHighlightAds(bool enabled) {
+  settings_->SetInspectorHighlightAds(enabled);
+}
+
 void WebSettingsImpl::SetHyperlinkAuditingEnabled(bool enabled) {
   settings_->SetHyperlinkAuditingEnabled(enabled);
 }
@@ -622,6 +622,10 @@ void WebSettingsImpl::SetWebAppScope(const WebString& scope) {
   settings_->SetWebAppScope(scope);
 }
 
+void WebSettingsImpl::SetIsInitialProfile(bool is_initial_profile) {
+  settings_->SetIsInitialProfile(is_initial_profile);
+}
+
 void WebSettingsImpl::SetPresentationRequiresUserGesture(bool required) {
   settings_->SetPresentationRequiresUserGesture(required);
 }
@@ -632,6 +636,10 @@ void WebSettingsImpl::SetEmbeddedMediaExperienceEnabled(bool enabled) {
 
 void WebSettingsImpl::SetImmersiveModeEnabled(bool enabled) {
   settings_->SetImmersiveModeEnabled(enabled);
+}
+
+void WebSettingsImpl::SetImmersiveVideoPlaybackEnabled(bool enabled) {
+  settings_->SetImmersiveVideoPlaybackEnabled(enabled);
 }
 
 void WebSettingsImpl::SetViewportEnabled(bool enabled) {
@@ -819,16 +827,18 @@ void WebSettingsImpl::SetModalContextMenu(bool is_available) {
   settings_->SetModalContextMenu(is_available);
 }
 
-void WebSettingsImpl::
-    SetRequireTransientActivationAndAuthorizationForSubAppsAPIs(
-        bool is_required) {
-  settings_->SetRequireTransientActivationAndAuthorizationForSubAppsAPI(
-      is_required);
-}
 
 void WebSettingsImpl::SetRootScrollbarThemeColor(
     std::optional<SkColor> theme_color) {
   settings_->SetRootScrollbarThemeColor(theme_color);
+}
+
+void WebSettingsImpl::SetBatterySaverEnabled(bool enabled) {
+  settings_->SetBatterySaverEnabled(enabled);
+}
+
+void WebSettingsImpl::SetPreloadingDisabled(bool disabled) {
+  settings_->SetPreloadingDisabled(disabled);
 }
 
 }  // namespace blink

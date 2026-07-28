@@ -8,8 +8,13 @@
 
 #include <algorithm>
 #include <queue>
+#include <set>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 
 #ifdef __SSE2__
 #include <immintrin.h>
@@ -75,7 +80,7 @@ bool SubstringSetMatcher::Build(
   }
 
   // Compute the total number of tree nodes needed.
-  std::sort(patterns.begin(), patterns.end(), ComparePatterns);
+  std::ranges::sort(patterns, ComparePatterns);
   NodeID tree_size = GetTreeSize(patterns);
   if (tree_size >= kInvalidNodeID) {
     return false;
@@ -95,7 +100,7 @@ SubstringSetMatcher::SubstringSetMatcher() = default;
 SubstringSetMatcher::~SubstringSetMatcher() = default;
 
 bool SubstringSetMatcher::Match(
-    const std::string& text,
+    std::string_view text,
     std::set<MatcherStringPattern::ID>* matches) const {
   const size_t old_number_of_matches = matches->size();
 
@@ -130,7 +135,7 @@ bool SubstringSetMatcher::Match(
   return old_number_of_matches != matches->size();
 }
 
-bool SubstringSetMatcher::AnyMatch(const std::string& text) const {
+bool SubstringSetMatcher::AnyMatch(std::string_view text) const {
   // Handle patterns matching the empty string.
   const AhoCorasickNode* const root = &tree_[kRootID];
   if (root->has_outputs()) {
@@ -176,7 +181,7 @@ constexpr SubstringSetMatcher::NodeID SubstringSetMatcher::kRootID;
 
 SubstringSetMatcher::NodeID SubstringSetMatcher::GetTreeSize(
     const std::vector<const MatcherStringPattern*>& patterns) const {
-  DCHECK(std::is_sorted(patterns.begin(), patterns.end(), ComparePatterns));
+  DCHECK(std::ranges::is_sorted(patterns, ComparePatterns));
 
   base::CheckedNumeric<NodeID> result = 1u;  // 1 for the root node.
   if (patterns.empty()) {

@@ -5,19 +5,12 @@
 #import "ios/chrome/browser/composebox/ui/presentation/composebox_ipad_presentation_controller.h"
 
 #import "base/check.h"
-#import "ios/chrome/browser/composebox/ui/composebox_ui_constants.h"
+#import "ios/chrome/browser/composebox/shared/ui/composebox_ui_constants.h"
+#import "ios/chrome/browser/omnibox/public/omnibox_constants.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
-
-namespace {
-
-// The additional horizontal margin to ensure the composebox covers the top
-// omnibox.
-const CGFloat kComposeboxOmniboxLayoutGuideHorizontalMargin = 10.0f;
-
-}  // namespace
 
 @implementation ComposeboxiPadPresentationController {
   // The dimming view, used to dismiss the composebox when tapped.
@@ -32,6 +25,7 @@ const CGFloat kComposeboxOmniboxLayoutGuideHorizontalMargin = 10.0f;
                        presentingViewController:presenting];
   if (self) {
     _dimmingView = [[UIView alloc] init];
+    _dimmingView.accessibilityIdentifier = @"Typing Shield";
     _dimmingView.backgroundColor =
         [[UIColor blackColor] colorWithAlphaComponent:0.5];
 
@@ -49,6 +43,7 @@ const CGFloat kComposeboxOmniboxLayoutGuideHorizontalMargin = 10.0f;
   CHECK(self.layoutGuideCenter);
   _layoutGuide = [self.layoutGuideCenter makeLayoutGuideNamed:kTopOmniboxGuide];
   [self.containerView addLayoutGuide:_layoutGuide];
+  self.containerView.accessibilityViewIsModal = YES;
 
   UIView* dimmingView = _dimmingView;
   dimmingView.frame = self.containerView.bounds;
@@ -96,7 +91,11 @@ const CGFloat kComposeboxOmniboxLayoutGuideHorizontalMargin = 10.0f;
   CGRect omniboxFrame =
       [_layoutGuide.owningView convertRect:_layoutGuide.layoutFrame
                                     toView:containerView];
-  CGFloat top = CGRectGetMinY(omniboxFrame) - kInputPlateMargin;
+  // Functionally, this calculation is functionally the same as factoring in the
+  // minimumHeight for the omnibox text view and the top spacing between the
+  // input plate and the composebox so that the initial placeholder text is
+  // centered to the top toolbar fakebox text.
+  CGFloat top = CGRectGetMinY(omniboxFrame) - kInputPlateIpadMargin;
   CGFloat width = omniboxFrame.size.width;
   CGFloat x = omniboxFrame.origin.x;
   if (IsRegularXRegularSizeClass(self.traitCollection)) {
@@ -118,7 +117,7 @@ const CGFloat kComposeboxOmniboxLayoutGuideHorizontalMargin = 10.0f;
   _dimmingView.frame = self.containerView.bounds;
   self.presentedView.frame = [self frameOfPresentedViewInContainerView];
   self.presentedView.layer.cornerRadius =
-      kInputPlateCornerRadius + kInputPlateMargin;
+      kInputPlateIpadCornerRadius + kInputPlateIpadMargin;
   self.presentedView.clipsToBounds = YES;
 }
 

@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("magic_boost") {
@@ -29,12 +27,12 @@ static_library("magic_boost") {
     "//chromeos/ash/components/editor_menu/public/cpp",
     "//chromeos/components/magic_boost/public/cpp",
     "//chromeos/components/mahi/public/cpp",
-    "//chromeos/crosapi/mojom",
     "//components/prefs",
     "//mojo/public/cpp/bindings",
     "//ui/views",
 
-    # TODO: Use //chrome/browser/ash/input_method after fixing cyclic dependency.
+    # TODO: Use //chrome/browser/ash/input_method after fixing cyclic
+    # dependency.
     "//chrome/common:buildflags",
     "//chromeos/ash/services/orca/public/mojom",
     "//components/lens:buildflags",

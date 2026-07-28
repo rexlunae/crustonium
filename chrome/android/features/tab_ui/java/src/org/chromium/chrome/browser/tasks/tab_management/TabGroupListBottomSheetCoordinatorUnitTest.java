@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 package org.chromium.chrome.browser.tasks.tab_management;
 
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -31,8 +33,9 @@ import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupListBottomSheetCoordinator.TabGroupListBottomSheetCoordinatorDelegate;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.collaboration.CollaborationService;
@@ -53,7 +56,7 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private BottomSheetController mBottomSheetController;
-    @Mock private TabGroupModelFilter mFilter;
+    @Mock private TabModel mTabModel;
     @Mock private TabGroupSyncService mTabGroupSyncService;
     @Mock private CollaborationService mCollaborationService;
     @Mock private DataSharingService mDataSharingService;
@@ -84,7 +87,7 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
                         mProfile,
                         /* tabGroupCreationCallback= */ ignored -> {},
                         /* tabMovedCallback= */ null,
-                        mFilter,
+                        mTabModel,
                         mBottomSheetController,
                         /* supportsShowNewGroup= */ true,
                         /* destroyOnHide= */ false);
@@ -133,6 +136,15 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
     }
 
     @Test
+    public void testDelegateIsSameContentView() {
+        TabGroupListBottomSheetCoordinatorDelegate delegate = mCoordinator.createDelegate(false);
+
+        BottomSheetContent mockContent = mock();
+        assertFalse(delegate.isSameContentView(mockContent));
+        assertFalse(delegate.isSameContentView(null));
+    }
+
+    @Test
     public void testIncognito_dontFetchTabGroupSyncService() {
         when(mProfile.isOffTheRecord()).thenReturn(true);
         // Test that the Coordinator can be constructed without crashing.
@@ -141,7 +153,7 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
                 mProfile,
                 /* tabGroupCreationCallback= */ ignored -> {},
                 /* tabMovedCallback= */ null,
-                mFilter,
+                mTabModel,
                 mBottomSheetController,
                 /* supportsShowNewGroup= */ true,
                 /* destroyOnHide= */ false);

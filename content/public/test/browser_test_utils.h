@@ -42,6 +42,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/browser/spare_render_process_host_manager.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_media_capture_id.h"
@@ -588,6 +589,14 @@ void SimulateKeyPress(WebContents* web_contents,
                       bool alt,
                       bool command);
 
+// Sends a key press asynchronously for the given |character|.
+// Figures out the appropriate |key|, |code|, |key_code| and |shift| modifier
+// for the US layout.
+//
+// Note: Input event to a page may not work right after a page load, see
+// `SimulateEndOfPaintHoldingOnPrimaryMainFrame` for a workaround.
+void SimulateCharTyped(WebContents* web_contents, char16_t character);
+
 // Like SimulateKeyPress(), but does not send the char (AKA keypress) event.
 // This is useful for arrow keys and other key presses that do not generate
 // characters.
@@ -647,6 +656,11 @@ void SimulateEndOfPaintHoldingOnPrimaryMainFrame(WebContents* web_contents);
 
 // Return the value set for VisitedLinkSalt in the navigation's commit_params.
 std::optional<uint64_t> GetVisitedLinkSaltForNavigation(
+    NavigationHandle* navigation_handle);
+
+// Return the value set for internal_scroll_to_text_fragment in the navigation's
+// commit_params.
+std::optional<std::string> GetInternalScrollToTextFragmentForNavigation(
     NavigationHandle* navigation_handle);
 
 // Holds down modifier keys for the duration of its lifetime and releases them
@@ -860,13 +874,15 @@ class EvalJsResult {
   ~EvalJsResult();
 
   // Matchers for successful & unsuccessful runs.
-  static auto IsOk() { return testing::Property(&EvalJsResult::is_ok, true); }
+  //
+  // Note: `IsOk` and `IsError` are intentionally not provided. If you find
+  // yourself looking for `IsOk` or `IsError`, prefer to use `ExecJs(...)` with
+  // `EXPECT_TRUE` or `EXPECT_FALSE` instead.
   template <typename M>
   static auto IsOkAndHolds(M m) {
     return testing::Field("data_", &EvalJsResult::data_,
                           testing::VariantWith<base::Value>(m));
   }
-  static auto IsError() { return testing::Not(IsOk()); }
   template <typename M>
   static auto ErrorIs(M m) {
     return testing::Field("data_", &EvalJsResult::data_,
@@ -897,6 +913,7 @@ class EvalJsResult {
     return is_ok() && value()->is_string();
   }
   [[nodiscard]] bool is_bool() const { return is_ok() && value()->is_bool(); }
+  [[nodiscard]] bool is_int() const { return is_ok() && value()->is_int(); }
   [[nodiscard]] bool is_list() const { return is_ok() && value()->is_list(); }
   [[nodiscard]] bool is_dict() const { return is_ok() && value()->is_dict(); }
 
@@ -1071,8 +1088,16 @@ RenderFrameHost* ChildFrameAt(const ToRenderFrameHost& adapter, size_t index);
 // OriginAgentCluster header.
 bool HasOriginKeyedProcess(RenderFrameHost* frame);
 
-// Returns true if `frame` has a sandboxed SiteInstance.
-bool HasSandboxedSiteInstance(RenderFrameHost* frame);
+// Returns true when both frames' SiteInstances carry the same unique-instance
+// embedder isolation (equal per-instance id). Two frames that share a unique
+// instance are guaranteed to share a process.
+bool HaveEmbedderIsolationWithSameUniqueInstance(RenderFrameHost* a,
+                                                 RenderFrameHost* b);
+
+// Returns true if `frame`'s process is locked to a unique-instance
+// `EmbedderIsolationInfo` (one per-document isolated instance; today's
+// sole producer is the MIME handler stream manager).
+bool HasUniqueInstanceIsolation(RenderFrameHost* frame);
 
 // Returns the frames visited by |RenderFrameHost::ForEachRenderFrameHost| in
 // the same order.
@@ -1122,7 +1147,7 @@ std::vector<net::CanonicalCookie> GetCanonicalCookies(
 [[nodiscard]] bool SetCookie(
     BrowserContext* browser_context,
     const GURL& url,
-    const std::string& value,
+    std::string_view value,
     net::CookieOptions::SameSiteCookieContext context =
         net::CookieOptions::SameSiteCookieContext::MakeInclusive(),
     base::optional_ref<const net::CookiePartitionKey> cookie_partition_key =
@@ -1327,7 +1352,8 @@ class RenderProcessHostWatcher : public RenderProcessHostObserver {
   ~RenderProcessHostWatcher() override;
 
   // Waits until the expected event is triggered. This may only be called once.
-  void Wait();
+  // Returns false if waiting stops for any other reason, e.g. timeout.
+  bool Wait();
 
   // Returns true if a renderer process exited cleanly (without hitting
   // RenderProcessExited with an abnormal TerminationStatus). This should be
@@ -1335,8 +1361,8 @@ class RenderProcessHostWatcher : public RenderProcessHostObserver {
   bool did_exit_normally() { return did_exit_normally_; }
 
  private:
-  // Quit the run loop and clean up.
-  void QuitRunLoop();
+  // Register the event and clean up.
+  void OnEvent(bool success);
 
   // Overridden RenderProcessHost::LifecycleObserver methods.
   void RenderProcessReady(RenderProcessHost* host) override;
@@ -1346,13 +1372,13 @@ class RenderProcessHostWatcher : public RenderProcessHostObserver {
 
   base::ScopedObservation<RenderProcessHost, RenderProcessHostObserver>
       observation_{this};
-  WatchType type_;
+  const WatchType type_;
   bool did_exit_normally_;
 
   std::unique_ptr<ScopedAllowRendererCrashes> allow_renderer_crashes_;
 
-  base::RunLoop run_loop_;
-  base::OnceClosure quit_closure_;
+  WaiterHelper waiter_helper_;
+  bool success_ = false;
 };
 
 // Implementation helper for:
@@ -1532,8 +1558,17 @@ class RenderFrameSubmissionObserver
   // Resets the current |render_frame_count|;
   void ResetCounter() { render_frame_count_ = 0; }
 
-  // Blocks the browser ui thread until the next OnRenderFrameSubmission.
+  // Blocks the browser ui thread until the next OnRenderFrameSubmission
+  // or OnRenderFrameMetadataChangedAfterActivation.
   void WaitForAnyFrameSubmission();
+
+  // Tell observer to explicitly wait for next frame submission in
+  // WaitForNextFrameSubmission.
+  void SetWaitForNextFrame();
+
+  // Blocks the browser ui thread until a new frame is submitted since
+  // the frame count is recorded in SetWaitForNextFrame.
+  void WaitForNextFrameSubmission();
 
   // Blocks the browser ui thread until the next
   // OnRenderFrameMetadataChangedAfterActivation.
@@ -1581,17 +1616,18 @@ class RenderFrameSubmissionObserver
   void OnLocalSurfaceIdChanged(
       const cc::RenderFrameMetadata& metadata) override;
 
-  // If true then the next OnRenderFrameSubmission will cancel the blocking
-  // |run_loop_| otherwise the blocking will continue until the next
-  // OnRenderFrameMetadataChangedAfterActivation.
-  bool break_on_any_frame_ = false;
-
   const base::WeakPtr<RenderFrameMetadataProviderImpl>
       render_frame_metadata_provider_;
   base::OnceClosure quit_closure_;
   // If non-null, run when metadata changes.
   base::OnceClosure metadata_change_closure_;
   int render_frame_count_ = 0;
+
+  // Used to wait for render frame submission. In WaitForNextFrameSubmission, it
+  // is used as a target render frame count. In WaitForAnyFrameSubmission, it is
+  // used to block until one of OnRenderFrameSubmission or
+  // OnRenderFrameMetadataChangedAfterActivation is called.
+  std::optional<int> wait_for_render_frame_count_;
 };
 
 // This class is intended to synchronize the renderer main thread, renderer impl
@@ -1626,6 +1662,29 @@ class MainThreadFrameObserver {
   raw_ptr<RenderWidgetHost, FlakyDanglingUntriaged> render_widget_host_;
   base::OnceClosure quit_closure_;
   int routing_id_;
+};
+
+// Watches for the primary main frame to become ready for input.
+class ReadyForInputObserver : public RenderWidgetHostObserver {
+ public:
+  explicit ReadyForInputObserver(WebContents* web_contents);
+
+  ReadyForInputObserver(const ReadyForInputObserver&) = delete;
+  ReadyForInputObserver& operator=(const ReadyForInputObserver&) = delete;
+
+  ~ReadyForInputObserver() override;
+
+  // Waits until the primary main frame is ready for input.
+  void Wait();
+
+ private:
+  // RenderWidgetHostObserver:
+  void RenderWidgetHostDestroyed(RenderWidgetHost* widget_host) override;
+
+  void OnReadyForInput();
+
+  raw_ptr<RenderWidgetHostImpl> rwhi_ = nullptr;
+  base::RunLoop run_loop_;
 };
 
 // Watches for an input msg to be consumed.
@@ -1713,6 +1772,27 @@ class InputEventAckWaiter : public RenderWidgetHost::InputEventObserver {
   InputEventAckPredicate predicate_;
   bool event_received_ = false;
   base::OnceClosure quit_closure_;
+};
+
+// Watches for gesture tap events.
+class GestureTapEventObserver : public RenderWidgetHost::InputEventObserver {
+ public:
+  GestureTapEventObserver() = default;
+
+  GestureTapEventObserver(const GestureTapEventObserver&) = delete;
+  GestureTapEventObserver& operator=(const GestureTapEventObserver&) = delete;
+
+  ~GestureTapEventObserver() override = default;
+
+  // RenderWidgetHost::InputEventObserver:
+  void OnInputEvent(const RenderWidgetHost& host,
+                    const blink::WebInputEvent& event,
+                    InputEventSource source) override;
+
+  int num_gesture_tap_seen() const { return num_gesture_tap_seen_; }
+
+ private:
+  int num_gesture_tap_seen_ = 0;
 };
 
 // Sets up a ui::TestClipboard for use in browser tests. On Windows,
@@ -2240,6 +2320,8 @@ class PwnMessageHelper {
   // Calls OpenURL method in FrameHost Mojo interface.
   static void OpenURL(RenderFrameHost* render_frame_host, const GURL& url);
 
+  static bool OpenPopup(RenderFrameHost* render_frame_host, const GURL& url);
+
  private:
   PwnMessageHelper();  // Not instantiable.
 };
@@ -2271,10 +2353,9 @@ class BlobURLStoreInterceptor
 
   blink::mojom::BlobURLStore* GetForwardingInterface() override;
 
-  void Register(
-      mojo::PendingRemote<blink::mojom::Blob> blob,
-      const GURL& url,
-      RegisterCallback callback) override;
+  void Register(mojo::PendingRemote<blink::mojom::Blob> blob,
+                const GURL& url,
+                RegisterCallback callback) override;
 
  private:
   explicit BlobURLStoreInterceptor(GURL target_url);
@@ -2299,6 +2380,13 @@ int LoadBasicRequest(network::mojom::NetworkContext* network_context,
 // has the same properties as factories vended to the Renderer process that
 // hosts the |frame|).
 int LoadBasicRequest(RenderFrameHost* frame, const GURL& url);
+
+// Wait until the network context has/doesn't have preloaded shared dictionary
+// info. Returns true if the expected value was observed within the timeout,
+// false otherwise.
+bool WaitUntilHasPreloadSharedDictionaryInfo(
+    network::mojom::NetworkContext* network_context,
+    bool expected_value);
 
 // Ensures that all StoragePartitions for the given BrowserContext have their
 // cookies flushed to disk.
@@ -2462,40 +2550,50 @@ class DidFinishNavigationObserver : public WebContentsObserver {
   base::RepeatingCallback<void(NavigationHandle*)> callback_;
 };
 
-// Wait for a new WebContents to be created, and for it to finish navigation.
-// It will detect WebContents creation after construction, even if it's before
-// Wait() is called.  The intended pattern is:
+// Wait for new `WebContents` to be created and finish loading. It will detect
+// `WebContents` creation after construction, even if it's before `Wait()` is
+// called. The intended pattern is:
 //
 // CreateAndLoadWebContentsObserver observer;
 // ...Do something that creates one WebContents and causes it to navigate...
 // observer.Wait();
 class CreateAndLoadWebContentsObserver {
  public:
-  // Used to wait for the given number of WebContents to be created. The load of
-  // the last expected WebContents is awaited.
-  explicit CreateAndLoadWebContentsObserver(int num_expected_contents = 1);
+  CreateAndLoadWebContentsObserver(
+      size_t num_expected_contents = 1,
+      base::RepeatingCallback<bool(WebContents*)> filter =
+          base::BindRepeating([](WebContents*) { return true; }));
   ~CreateAndLoadWebContentsObserver();
 
-  // Wait for the last expected WebContents to finish loading. The test will
-  // fail if an additional WebContents creation is observed before `Wait()`
-  // completes.
+  // Wait for `num_expected_contents_` `WebContents` passing `filter_` to be
+  // created and loaded. The test will fail if too many are created before
+  // `Wait()` completes. The test will timeout and fail if too few are created.
   WebContents* Wait();
 
  private:
+  // Callback for `RegisterWebContentsCreationCallback()`.
   void OnWebContentsCreated(WebContents* web_contents);
 
-  // Unregister for WebContents creation callbacks if we are registered.  May
-  // be called multiple times.
-  void UnregisterIfNeeded();
+  // Returns the `WebContents` created and loaded passing `filter_` since this
+  // was constructed.
+  std::vector<WebContents*> GetFilteredWebContents();
 
-  std::optional<LoadStopObserver> load_stop_observer_;
+  // Subscription for `RegisterWebContentsCreationCallback()`.
   base::CallbackListSubscription creation_subscription_;
 
-  raw_ptr<WebContents, DanglingUntriaged> web_contents_ = nullptr;
+  // Allows `Wait()` to sleep until a new `WebContents` is created.
   base::OnceClosure contents_creation_quit_closure_;
 
-  const int num_expected_contents_;
-  int num_new_contents_seen_ = 0;
+  // Allows `Wait()` to sleep until each `WebContents` loads.
+  std::vector<std::unique_ptr<LoadStopObserver>> load_stop_observers_;
+
+  // Number of `WebContents` expected to be created and loaded passing
+  // `filter_`.
+  const size_t num_expected_contents_;
+
+  // Only `WebContents` that return true from `filter_` are counted. Useful for
+  // tests that e.g. want to ignore certain WeBUIs.
+  base::RepeatingCallback<bool(WebContents*)> filter_;
 };
 
 // Waits for the given number of calls to
@@ -2614,6 +2712,8 @@ void InitAndEnableRenderDocumentForAllFrames(
 // or std::nullopt if no node matches.
 // Note: This method makes multiple renderer IPC calls (via the devtools
 // protocol) and waits for a result (an IPC back from the renderer) each time.
+// TODO(bokan): Update the return value to be a blink::DOMNodeIdType which is a
+// base::IdType32
 std::optional<int> GetDOMNodeId(content::RenderFrameHost& rfh,
                                 std::string_view query_selector);
 
@@ -2754,6 +2854,10 @@ class RequestCloseWidgetInterceptor
   mojo::test::ScopedSwapImplForTesting<blink::mojom::PopupWidgetHost>
       swapped_impl_;
 };
+
+// Crash the process associated with `adapter`. Waits for the crash to be seen
+// by the browser process. Returns `false` if the test times out before that.
+[[nodiscard]] bool CrashFrameProcess(const ToRenderFrameHost& adapter);
 
 }  // namespace content
 

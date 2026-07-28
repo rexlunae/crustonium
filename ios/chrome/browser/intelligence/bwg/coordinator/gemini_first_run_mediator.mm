@@ -13,21 +13,25 @@
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/variations/service/variations_service.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/intelligence/bwg/coordinator/gemini_first_run_mediator_delegate.h"
 #import "ios/chrome/browser/intelligence/bwg/metrics/gemini_metrics.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_browser_agent.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/ui/gemini_consent_configuration.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_feature_availability.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_prefs.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
-#import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
-#import "ios/public/provider/chrome/browser/bwg/bwg_api.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/public/provider/chrome/browser/bwg/gemini_api.h"
 #import "ios/web/public/web_state.h"
 #import "url/gurl.h"
 
@@ -53,10 +57,7 @@ const CGFloat kPromoMaxImpressionCount = 3;
   raw_ptr<PrefService> _prefService;
 
   // The profile-scoped Gemini service.
-  raw_ptr<BwgService> _geminiService;
-
-  // The browser-scoped Gemini browser agent.
-  raw_ptr<BwgBrowserAgent> _geminiBrowserAgent;
+  raw_ptr<GeminiService> _geminiService;
 
   // Start time for the preparation of the presentation of BWG overlay.
   base::TimeTicks _geminiOverlayPreparationStartTime;
@@ -67,6 +68,12 @@ const CGFloat kPromoMaxImpressionCount = 3;
   // Completion block for the FRE flow.
   void (^_FRECompletion)(BOOL success);
 
+  // The identity manager.
+  raw_ptr<signin::IdentityManager> _identityManager;
+
+  // The authentication service.
+  raw_ptr<AuthenticationService> _authService;
+
   // The entry point the mediator was initialized from.
   gemini::EntryPoint _entryPoint;
 }
@@ -74,8 +81,9 @@ const CGFloat kPromoMaxImpressionCount = 3;
 - (instancetype)initWithPrefService:(PrefService*)prefService
                        webStateList:(WebStateList*)webStateList
                  baseViewController:(UIViewController*)baseViewController
-                         BWGService:(BwgService*)geminiService
-                    BwgBrowserAgent:(BwgBrowserAgent*)geminiBrowserAgent
+                      geminiService:(GeminiService*)geminiService
+              authenticationService:(AuthenticationService*)authService
+                    identityManager:(signin::IdentityManager*)identityManager
                             tracker:(feature_engagement::Tracker*)tracker
                          entryPoint:(gemini::EntryPoint)entryPoint
                   completionHandler:(void (^)(BOOL success))completion {
@@ -83,9 +91,12 @@ const CGFloat kPromoMaxImpressionCount = 3;
   if (self) {
     _prefService = prefService;
     _webStateList = webStateList;
+    _geminiService = geminiService;
+    _authService = authService;
     _tracker = tracker;
     _entryPoint = entryPoint;
     _FRECompletion = completion;
+    _identityManager = identityManager;
     _geminiOverlayPreparationStartTime = base::TimeTicks::Now();
   }
   return self;
@@ -93,8 +104,9 @@ const CGFloat kPromoMaxImpressionCount = 3;
 
 - (void)disconnect {
   if (_FRECompletion) {
-    _FRECompletion(NO);
+    void (^completion)(BOOL) = _FRECompletion;
     _FRECompletion = nil;
+    completion(NO);
   }
 }
 
@@ -104,6 +116,25 @@ const CGFloat kPromoMaxImpressionCount = 3;
       kPromoMaxImpressionCount;
 
   return ShouldForceBWGPromo() || !promoImpressionsExhausted;
+}
+
+- (GeminiConsentConfiguration*)consentConfigurationForFirstRunType:
+    (GeminiFirstRunType)firstRunType {
+  variations::VariationsService* variationsService =
+      GetApplicationContext()->GetVariationsService();
+  std::string country =
+      variationsService
+          ? base::ToLowerASCII(variationsService->GetStoredPermanentCountry())
+          : "";
+  NSString* nsCountry = base::SysUTF8ToNSString(country);
+
+  BOOL isManagedAccount =
+      _authService && _authService->HasPrimaryIdentityManaged();
+  return [GeminiConsentConfiguration
+      configurationForManaged:isManagedAccount
+                       strict:[self useStrictLegalConsent]
+                         type:firstRunType
+                      country:nsCountry];
 }
 
 #pragma mark - Private
@@ -123,7 +154,7 @@ const CGFloat kPromoMaxImpressionCount = 3;
   if (impressionCount == 1) {
     _tracker->NotifyEvent(
         feature_engagement::events::kIOSGeminiPromoFirstCompletion);
-    BwgTabHelper* geminiTabHelper = [self activeWebStateGeminiTabHelper];
+    GeminiTabHelper* geminiTabHelper = [self activeWebStateGeminiTabHelper];
     if (geminiTabHelper) {
       geminiTabHelper->SetPreventContextualPanelEntryPoint(
           [self shouldShowAIHubIPH]);
@@ -133,6 +164,10 @@ const CGFloat kPromoMaxImpressionCount = 3;
 
 // Returns whether to show AI Hub IPH.
 - (BOOL)shouldShowAIHubIPH {
+  if (IsChromeNextIaEnabled()) {
+    return NO;
+  }
+
   BOOL wouldTriggerIPH =
       _tracker->WouldTriggerHelpUI(feature_engagement::kIPHIOSPageActionMenu);
 
@@ -140,11 +175,22 @@ const CGFloat kPromoMaxImpressionCount = 3;
          wouldTriggerIPH;
 }
 
-#pragma mark - BWGConsentMutator
+// Returns whether the UI must enforce strict legal consent requirements.
+- (BOOL)useStrictLegalConsent {
+  return !_geminiService->HasModelExecutionCapability();
+}
+
+#pragma mark - GeminiFirstRunMutator
+
+- (BOOL)shouldShowImageRemixRow {
+  return IsGeminiImageRemixToolShowFRERowEnabled() &&
+         gemini::IsFeatureAvailable(gemini::Feature::kImageRemix,
+                                    _identityManager);
+}
 
 // Did consent to Gemini.
 - (void)didConsentGemini {
-  _prefService->SetBoolean(prefs::kIOSBwgConsent, YES);
+  gemini::UpdateUserConsentPrefs(YES, _prefService);
   if (IsGeminiNavigationPromoEnabled()) {
     _tracker->NotifyEvent(feature_engagement::events::kIOSGeminiConsentGiven);
   }
@@ -154,16 +200,39 @@ const CGFloat kPromoMaxImpressionCount = 3;
   }];
 }
 
-// Did dismisses the Consent UI.
+// Did consent to Live Gemini.
+- (void)didConsentToLiveGemini {
+  gemini::UpdateUserConsentToLivePrefs(YES, _prefService);
+  __weak __typeof(self) weakSelf = self;
+  [_delegate dismissGeminiConsentUIWithCompletion:^{
+    [weakSelf handleFRECompletion:YES];
+  }];
+}
+
+// Did refuse Gemini consent.
 - (void)didRefuseGeminiConsent {
+  // Retain self to survive synchronous teardown from the delegate.
+  __strong __typeof(self) strongSelf = self;
+  gemini::UpdateUserConsentPrefs(NO, _prefService);
   [_delegate dismissGeminiFlow];
-  [self handleFRECompletion:NO];
+  [strongSelf handleFRECompletion:NO];
 }
 
 // Did close Gemini Promo UI.
 - (void)didCloseGeminiPromo {
+  // Retain self to survive synchronous teardown from the delegate.
+  __strong __typeof(self) strongSelf = self;
   [_delegate dismissGeminiFlow];
-  [self handleFRECompletion:NO];
+  [strongSelf handleFRECompletion:NO];
+}
+
+// Did refuse Live onboarding.
+- (void)didRefuseLiveOnboarding {
+  // Retain self to survive synchronous teardown from the delegate.
+  __strong __typeof(self) strongSelf = self;
+  [_delegate dismissGeminiConsentUIWithCompletion:^{
+    [strongSelf handleFRECompletion:NO];
+  }];
 }
 
 // Promo was shown.
@@ -174,47 +243,31 @@ const CGFloat kPromoMaxImpressionCount = 3;
   }
 
   [self logPromoShown];
-
-  BwgTabHelper* geminiTabHelper = [self activeWebStateGeminiTabHelper];
-  if (geminiTabHelper) {
-    geminiTabHelper->SetIsFirstRun(true);
-  }
 }
 
 - (void)handleFRECompletion:(BOOL)success {
   if (_FRECompletion) {
-    _FRECompletion(success);
+    void (^completion)(BOOL) = _FRECompletion;
     _FRECompletion = nil;
+    completion(success);
   }
 }
 
 // Open a new tab page given a URL.
 - (void)openNewTabWithURL:(const GURL&)URL {
-  [self prepareFREBackground];
+  [_delegate dismissGeminiFlow];
   OpenNewTabCommand* command = [OpenNewTabCommand commandWithURLFromChrome:URL];
   [self.sceneHandler openURLInNewTab:command];
 }
 
-// Notifies the currently active WebState's BWG tab helper that the FRE will be
-// backgrounded.
-- (void)prepareFREBackground {
-  BwgTabHelper* geminiTabHelper = [self activeWebStateGeminiTabHelper];
-  if (!geminiTabHelper) {
-    return;
-  }
-
-  geminiTabHelper->SetBwgUiShowing(false);
-  geminiTabHelper->PrepareBwgFreBackgrounding();
-}
-
 // Returns the currently active WebState's Gemini tab helper.
-- (BwgTabHelper*)activeWebStateGeminiTabHelper {
+- (GeminiTabHelper*)activeWebStateGeminiTabHelper {
   web::WebState* activeWebState = _webStateList->GetActiveWebState();
   if (!activeWebState) {
     return nil;
   }
 
-  return BwgTabHelper::FromWebState(activeWebState);
+  return GeminiTabHelper::FromWebState(activeWebState);
 }
 
 @end

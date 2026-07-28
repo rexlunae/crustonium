@@ -15,7 +15,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundImageType.THEME_COLLECTION;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -35,8 +35,8 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
-import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
@@ -77,7 +77,7 @@ public class NtpSyncedThemeManagerUnitTest {
 
     @Test
     public void testFetchNextThemeCollectionImageAfterDailyRefreshApplied_dailyRefreshDisabled() {
-        NtpCustomizationUtils.setNtpBackgroundImageTypeToSharedPreference(THEME_COLLECTION);
+        NtpCustomizationUtils.setNtpBackgroundTypeToSharedPreference(THEME_COLLECTION);
         CustomBackgroundInfo currentInfo =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_1,
@@ -88,12 +88,12 @@ public class NtpSyncedThemeManagerUnitTest {
 
         mNtpSyncedThemeManager = new NtpSyncedThemeManager(mContext, mProfile);
         mNtpSyncedThemeManager.fetchNextThemeCollectionImageAfterDailyRefreshApplied();
-        verify(mNatives, never()).init(any(), any());
+        verify(mNatives, never()).fetchNextThemeCollectionImage(anyLong());
     }
 
     @Test
     public void testFetchNextThemeCollectionImageAfterDailyRefreshApplied_infoAlreadyExists() {
-        NtpCustomizationUtils.setNtpBackgroundImageTypeToSharedPreference(THEME_COLLECTION);
+        NtpCustomizationUtils.setNtpBackgroundTypeToSharedPreference(THEME_COLLECTION);
         CustomBackgroundInfo currentInfo =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_1,
@@ -113,13 +113,13 @@ public class NtpSyncedThemeManagerUnitTest {
 
         mNtpSyncedThemeManager = new NtpSyncedThemeManager(mContext, mProfile);
         mNtpSyncedThemeManager.fetchNextThemeCollectionImageAfterDailyRefreshApplied();
-        verify(mNatives, never()).init(any(), any());
+        verify(mNatives, never()).fetchNextThemeCollectionImage(anyLong());
     }
 
     @Test
     public void testFetchNextThemeCollectionImageAfterDailyRefreshApplied() {
         // 1. Set up preconditions.
-        NtpCustomizationUtils.setNtpBackgroundImageTypeToSharedPreference(THEME_COLLECTION);
+        NtpCustomizationUtils.setNtpBackgroundTypeToSharedPreference(THEME_COLLECTION);
         CustomBackgroundInfo currentInfo =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_1,
@@ -156,9 +156,9 @@ public class NtpSyncedThemeManagerUnitTest {
         Bitmap bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
         mBitmapCallbackCaptor.getValue().onResult(bitmap);
 
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
 
-        // 6. Verify daily refresh info is saved and bridge is destroyed.
+        // 6. Verify daily refresh info is saved and bridge is kept alive.
         assertTrue(NtpCustomizationUtils.createDailyRefreshBackgroundImageFile().exists());
         assertNotNull(
                 NtpCustomizationUtils.getDailyRefreshCustomBackgroundInfoFromSharedPreference());
@@ -167,6 +167,13 @@ public class NtpSyncedThemeManagerUnitTest {
                 NtpThemeColorInfo.COLOR_NOT_SET,
                 NtpCustomizationUtils.getDailyRefreshCustomizedPrimaryColorFromSharedPreference());
 
+        verify(mNatives, never()).destroy(anyLong());
+    }
+
+    @Test
+    public void testDestroy() {
+        mNtpSyncedThemeManager = new NtpSyncedThemeManager(mContext, mProfile);
+        mNtpSyncedThemeManager.destroy();
         verify(mNatives).destroy(anyLong());
     }
 }

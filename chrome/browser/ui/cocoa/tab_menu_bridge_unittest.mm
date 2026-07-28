@@ -219,9 +219,6 @@ class TabMenuBridgeTest : public ::testing::Test {
   NSMenuItem* __strong menu_root_;
   NSMenu* __strong menu_;
   tabs::TabModel::PreventFeatureInitializationForTesting prevent_;
-
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kShowTabGroupsMacSystemMenu};
 };
 
 TEST_F(TabMenuBridgeTest, CreatesBlankMenu) {
@@ -348,24 +345,60 @@ TEST_F(TabMenuBridgeTest, ActiveItemTracksChanges) {
   ExpectActiveMenuItemNameIs("Tab 3");
 }
 
-TEST_F(TabMenuBridgeTest, TabGroupIndicator) {
+
+// Regression test: clicking a stale menu item after a tab has been closed
+// should not crash.
+TEST_F(TabMenuBridgeTest, ClickingStaleMenuItemDoesNotCrash) {
   TabStripModel* const tab_strip_model = model();
   TabMenuBridge bridge(menu_root());
   bridge.SetForceRebuildMenuForTesting(true);
   bridge.SetTabStripModel(tab_strip_model);
 
-  AddModelTabNamed("Tab 1", model());
-  ActivateModelTabNamed("Tab 1");
+  AddModelTabNamed("Tab 1", tab_strip_model);
+  AddModelTabNamed("Tab 2", tab_strip_model);
+  AddModelTabNamed("Tab 3", tab_strip_model);
+  ExpectDynamicTabsInMenuAre({"Tab 1", "Tab 2", "Tab 3"});
 
-  // Group indicator is not shown.
-  EXPECT_EQ(1, tab_strip_model->count());
-  EXPECT_EQ(nil, GetActiveMenuItem().attributedTitle);
+  // Save a reference to the last menu item (corresponding to "Tab 3").
+  NSMenuItem* tab3_item = MenuItemForTabNamed("Tab 3");
 
-  // Add to new group. Group indicator is shown.
-  AddModelTabToGroup({0});
-  EXPECT_NE(nil, GetActiveMenuItem().attributedTitle);
+  // Close "Tab 3" - this rebuilds the menu, removing tab3_item.
+  RemoveModelTabNamed("Tab 3");
+  ExpectDynamicTabsInMenuAre({"Tab 1", "Tab 2"});
 
-  // Remove from group. Group indicator is not shown.
-  RemoveModelTabFromGroup({0});
-  EXPECT_EQ(nil, GetActiveMenuItem().attributedTitle);
+  // Simulate the user clicking the now-stale menu item. This should not crash
+  // and should not change the active tab.
+  bridge.OnDynamicItemChosen(tab3_item);
+
+  // The active tab should not have changed.
+  EXPECT_EQ(ActiveTabName(), "Tab 2");
+}
+
+// Test that clicking a menu item activates the correct tab even if tabs have
+// been reordered since the menu was built.
+TEST_F(TabMenuBridgeTest, ClickingMenuItemAfterReorderActivatesCorrectTab) {
+  TabStripModel* const tab_strip_model = model();
+  TabMenuBridge bridge(menu_root());
+  bridge.SetForceRebuildMenuForTesting(true);
+  bridge.SetTabStripModel(tab_strip_model);
+
+  AddModelTabNamed("Tab 1", tab_strip_model);
+  AddModelTabNamed("Tab 2", tab_strip_model);
+  AddModelTabNamed("Tab 3", tab_strip_model);
+  ExpectDynamicTabsInMenuAre({"Tab 1", "Tab 2", "Tab 3"});
+
+  // Save a reference to the menu item for "Tab 1" (at model index 0).
+  NSMenuItem* tab1_item = MenuItemForTabNamed("Tab 1");
+
+  // Stop forcing rebuilds so the move makes the menu stale instead of
+  // rebuilding it (which would recycle NSMenuItems to different tabs).
+  bridge.SetForceRebuildMenuForTesting(false);
+
+  // Move "Tab 1" to the end (index 2). The menu items are now stale.
+  tab_strip_model->MoveWebContentsAt(0, 2, false);
+
+  // Clicking the saved menu item should still activate "Tab 1", not whatever
+  // is now at its old position.
+  bridge.OnDynamicItemChosen(tab1_item);
+  EXPECT_EQ(ActiveTabName(), "Tab 1");
 }

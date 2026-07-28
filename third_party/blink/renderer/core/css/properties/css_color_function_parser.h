@@ -32,6 +32,13 @@ class CORE_EXPORT ColorFunctionParser {
       const CSSParserContext& context,
       CSSParserLocalContext&,
       const css_parsing_utils::ColorParserContext& color_parser_context);
+  // Parses the alpha() relative color function.
+  // https://drafts.csswg.org/css-color-5/#relative-alpha
+  CSSValue* ConsumeRelativeAlphaFunction(
+      CSSParserTokenStream& stream,
+      const CSSParserContext& context,
+      CSSParserLocalContext&,
+      const css_parsing_utils::ColorParserContext& color_parser_context);
 
   // These are exposed so that StyleColor::UnresolvedRelativeColor
   // or similar can reuse our logic.
@@ -76,9 +83,6 @@ class CORE_EXPORT ColorFunctionParser {
   // function.
   const ColorFunction::Metadata* function_metadata_ = nullptr;
 
-  // Legacy colors have commas separating their channels. This syntax is
-  // incompatible with CSSColor4 features like "none" or alpha with a slash.
-  bool is_legacy_syntax_ = false;
   bool has_none_ = false;
 
   // For relative colors

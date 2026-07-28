@@ -174,7 +174,7 @@ class SupervisedUserPendingStateNavigationTest
                                             "*.example.com"}}};
 
   void SetManualHost(const GURL& url, bool allowlist) {
-    supervised_user_test_util::SetManualFilterForHost(browser()->profile(),
+    supervised_user_test_util::SetManualFilterForHost(browser()->GetProfile(),
                                                       url.GetHost(), allowlist);
   }
 
@@ -448,8 +448,8 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserPendingStateNavigationTest,
           supervision_mixin_.GetIdentityTestEnvironment()
               ->identity_manager()
               ->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-          GoogleServiceAuthError(
-              GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+          GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+              GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   kids_management_api_mock().AllowSubsequentClassifyUrl();
 
   ASSERT_TRUE(
@@ -478,8 +478,8 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserPendingStateNavigationTest,
           supervision_mixin_.GetIdentityTestEnvironment()
               ->identity_manager()
               ->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-          GoogleServiceAuthError(
-              GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+          GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+              GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
 
   ASSERT_TRUE(WaitForRenderFrameReady(contents()->GetPrimaryMainFrame()));
 

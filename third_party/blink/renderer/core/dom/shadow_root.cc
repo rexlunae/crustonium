@@ -27,7 +27,6 @@
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/bindings/core/v8/module_request.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_css_style_sheet.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_observable_array_css_style_sheet.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_set_html_unsafe_options.h"
@@ -39,6 +38,7 @@
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/css/style_sheet_list.h"
+#include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer.h"
@@ -55,16 +55,20 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
+#include "third_party/blink/renderer/core/html/parser/fragment_parser.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetch_request.h"
 #include "third_party/blink/renderer/core/sanitizer/sanitizer_api.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/script/module_script.h"
 #include "third_party/blink/renderer/core/script/value_wrapper_synthetic_module_script.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_parser_options.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_types_names.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
@@ -89,8 +93,9 @@ class ReferenceTargetIdObserver : public IdTargetObserver {
 
 struct SameSizeAsShadowRoot : public DocumentFragment,
                               public TreeScope,
-                              public ElementRareDataField {
+                              public NodeRareDataField {
   Member<void*> member[2];
+  AtomicString string_member;
   unsigned flags[1];
 };
 
@@ -145,80 +150,118 @@ String ShadowRoot::GetInnerHTMLString() const {
   return CreateMarkup(this, kChildrenOnly);
 }
 
-V8UnionStringLegacyNullToEmptyStringOrTrustedHTML* ShadowRoot::innerHTML()
-    const {
-  return MakeGarbageCollected<
-      V8UnionStringLegacyNullToEmptyStringOrTrustedHTML>(GetInnerHTMLString());
+String ShadowRoot::innerHTML() const {
+  return GetInnerHTMLString();
 }
 
 void ShadowRoot::SetInnerHTMLWithoutTrustedTypes(
     const String& html,
     ExceptionState& exception_state) {
-  if (DocumentFragment* fragment = CreateFragmentForInnerOuterHTML(
-          html, &host(), kAllowScriptingContent,
-          Element::ParseDeclarativeShadowRoots::kDontParse,
-          Element::ForceHtml::kDontForce, ForceInertTemplate::kDontForce,
-          customElementRegistry(), exception_state)) {
-    ReplaceChildrenWithFragment(this, fragment, exception_state);
-  }
+  SetInnerHTMLInternal(
+      html, FragmentParserOptions(), Sanitizer::Mode::kUnsafe,
+      FragmentParserConfig::ParseDeclarativeShadowRoots::kDontParse,
+      FragmentParserConfig::ForceHtml::kDontForce,
+      trusted_types_names::kInnerHTML, exception_state);
 }
 
 void ShadowRoot::setInnerHTML(
     const V8UnionStringLegacyNullToEmptyStringOrTrustedHTML* html,
     ExceptionState& exception_state) {
-  String compliant_html = TrustedTypesCheckForHTML(
-      html, GetExecutionContext(), trusted_types_names::kShadowRoot,
-      trusted_types_names::kInnerHTML, exception_state);
+  auto [compliant_string, resolved_options] =
+      TrustedTypesCheckForLegacyFragment(
+          html, GetExecutionContext(), trusted_types_names::kShadowRoot,
+          trusted_types_names::kInnerHTML, exception_state);
   if (exception_state.HadException()) {
     return;
   }
-  SetInnerHTMLWithoutTrustedTypes(compliant_html, exception_state);
+  SetInnerHTMLInternal(
+      compliant_string, resolved_options, Sanitizer::Mode::kUnsafe,
+      FragmentParserConfig::ParseDeclarativeShadowRoots::kDontParse,
+      FragmentParserConfig::ForceHtml::kDontForce,
+      trusted_types_names::kInnerHTML, exception_state);
 }
 
 void ShadowRoot::setHTMLUnsafe(const V8UnionStringOrTrustedHTML* html,
                                ExceptionState& exception_state) {
   UseCounter::Count(GetDocument(), WebFeature::kHTMLUnsafeMethods);
-  String compliant_html = TrustedTypesCheckForHTML(
-      html, GetExecutionContext(), trusted_types_names::kShadowRoot,
-      trusted_types_names::kSetHTMLUnsafe, exception_state);
+  FragmentParserOptions resolved_options;
+  String compliant_string = TrustedTypesCheckForFragment(
+      html, resolved_options, GetExecutionContext(),
+      trusted_types_names::kShadowRoot, trusted_types_names::kSetHTMLUnsafe,
+      exception_state);
   if (exception_state.HadException()) {
     return;
   }
-  if (DocumentFragment* fragment = CreateFragmentForInnerOuterHTML(
-          compliant_html, &host(), kAllowScriptingContent,
-          Element::ParseDeclarativeShadowRoots::kParse,
-          Element::ForceHtml::kDontForce, ForceInertTemplate::kForce,
-          customElementRegistry(), exception_state)) {
-    if (RuntimeEnabledFeatures::SanitizerAPIEnabled()) {
-      SanitizerAPI::SanitizeUnsafeInternal(this, fragment, nullptr,
-                                           exception_state);
-    }
-    ReplaceChildrenWithFragment(this, fragment, exception_state);
-  }
+  SetInnerHTMLInternal(
+      compliant_string, resolved_options, Sanitizer::Mode::kUnsafe,
+      FragmentParserConfig::ParseDeclarativeShadowRoots::kParse,
+      FragmentParserConfig::ForceHtml::kForce,
+      trusted_types_names::kSetHTMLUnsafe, exception_state);
 }
 
+// TODO(nrosenthal): merge these calls once all the flags are merged.
 void ShadowRoot::setHTMLUnsafe(const V8UnionStringOrTrustedHTML* html,
                                SetHTMLUnsafeOptions* options,
                                ExceptionState& exception_state) {
-  String compliant_html = TrustedTypesCheckForHTML(
-      html, GetExecutionContext(), trusted_types_names::kShadowRoot,
-      trusted_types_names::kSetHTMLUnsafe, exception_state);
+  UseCounter::Count(GetDocument(), WebFeature::kHTMLUnsafeMethods);
+  FragmentParserOptions resolved_options(options);
+  String compliant_string = TrustedTypesCheckForFragment(
+      html, resolved_options, GetExecutionContext(),
+      trusted_types_names::kShadowRoot, trusted_types_names::kSetHTMLUnsafe,
+      exception_state);
   if (exception_state.HadException()) {
     return;
   }
-  if (DocumentFragment* fragment = CreateFragmentForInnerOuterHTML(
-          compliant_html, &host(),
-          RuntimeEnabledFeatures::SetHTMLCanRunScriptsEnabled() &&
-                  options->runScripts()
-              ? kAllowScriptingContentAndDoNotMarkAlreadyStarted
-              : kAllowScriptingContent,
-          Element::ParseDeclarativeShadowRoots::kParse,
-          Element::ForceHtml::kDontForce, ForceInertTemplate::kForce,
-          customElementRegistry(), exception_state)) {
-    if (RuntimeEnabledFeatures::SanitizerAPIEnabled()) {
-      SanitizerAPI::SanitizeUnsafeInternal(this, fragment, options,
-                                           exception_state);
-    }
+  SetInnerHTMLInternal(
+      compliant_string, resolved_options, Sanitizer::Mode::kUnsafe,
+      FragmentParserConfig::ParseDeclarativeShadowRoots::kParse,
+      FragmentParserConfig::ForceHtml::kForce,
+      trusted_types_names::kSetHTMLUnsafe, exception_state);
+}
+
+void ShadowRoot::setHTMLUnsafe(const V8UnionStringOrTrustedHTML* html,
+                               TrustedParserOptions* options,
+                               ExceptionState& exception_state) {
+  UseCounter::Count(GetDocument(), WebFeature::kHTMLUnsafeMethods);
+  FragmentParserOptions resolved_options(options);
+  String compliant_string = TrustedTypesCheckForFragment(
+      html, resolved_options, GetExecutionContext(),
+      trusted_types_names::kShadowRoot, trusted_types_names::kSetHTMLUnsafe,
+      exception_state);
+  if (exception_state.HadException()) {
+    return;
+  }
+  SetInnerHTMLInternal(
+      compliant_string, resolved_options, Sanitizer::Mode::kUnsafe,
+      FragmentParserConfig::ParseDeclarativeShadowRoots::kParse,
+      FragmentParserConfig::ForceHtml::kForce,
+      trusted_types_names::kSetHTMLUnsafe, exception_state);
+}
+
+void ShadowRoot::SetInnerHTMLInternal(
+    const String& html,
+    FragmentParserOptions options,
+    Sanitizer::Mode sanitizer_mode,
+    FragmentParserConfig::ParseDeclarativeShadowRoots parse_shadow_roots,
+    FragmentParserConfig::ForceHtml force_html,
+    const AtomicString& property_name,
+    ExceptionState& exception_state) {
+  if (exception_state.HadException()) {
+    return;
+  }
+
+  if (DocumentFragment* fragment = ParseHTMLFragment(
+          html,
+          {
+              .sanitizer_mode = sanitizer_mode,
+              .parse_declarative_shadows = parse_shadow_roots,
+              .force_html = force_html,
+              .interface_name = trusted_types_names::kShadowRoot,
+              .property_name = property_name,
+              .context_element = &host(),
+              .registry = customElementRegistry(),
+          },
+          options, exception_state)) {
     ReplaceChildrenWithFragment(this, fragment, exception_state);
   }
 }
@@ -226,17 +269,11 @@ void ShadowRoot::setHTMLUnsafe(const V8UnionStringOrTrustedHTML* html,
 void ShadowRoot::setHTML(const String& html,
                          SetHTMLOptions* options,
                          ExceptionState& exception_state) {
-  if (DocumentFragment* fragment = CreateFragmentForInnerOuterHTML(
-          html, &host(), kAllowScriptingContent,
-          Element::ParseDeclarativeShadowRoots::kParse,
-          Element::ForceHtml::kDontForce, ForceInertTemplate::kForce,
-          customElementRegistry(), exception_state)) {
-    if (RuntimeEnabledFeatures::SanitizerAPIEnabled()) {
-      SanitizerAPI::SanitizeSafeInternal(this, fragment, options,
-                                         exception_state);
-    }
-    ReplaceChildrenWithFragment(this, fragment, exception_state);
-  }
+  SetInnerHTMLInternal(
+      html, FragmentParserOptions(options), Sanitizer::Mode::kSafe,
+      FragmentParserConfig::ParseDeclarativeShadowRoots::kParse,
+      FragmentParserConfig::ForceHtml::kForce, trusted_types_names::kSetHTML,
+      exception_state);
 }
 
 void ShadowRoot::RebuildLayoutTree(WhitespaceAttacher& whitespace_attacher) {
@@ -323,10 +360,10 @@ V8SlotAssignmentMode ShadowRoot::slotAssignment() const {
                                   : V8SlotAssignmentMode::Enum::kNamed);
 }
 
-HeapVector<Member<CSSStyleSheet>>
-ShadowRoot::GetFetchedStyleSheetsFromModuleMap(
+HeapVector<Member<CSSStyleSheet>> ShadowRoot::ResolveAdoptedStyleSheets(
     const AtomicString& shadowrootadoptedstylesheets_attribute_value) {
-  CHECK(RuntimeEnabledFeatures::DeclarativeCSSModulesEnabled());
+  CHECK(RuntimeEnabledFeatures::ShadowRootAdoptedStyleSheetEnabled(
+      GetDocument().GetExecutionContext()));
 
   // Early exit if `domWindow` isn't available. This won't work in contexts such
   // as `Document.parseHTMLUnsafe`. This is probably fine, as adopted
@@ -376,16 +413,38 @@ ShadowRoot::GetFetchedStyleSheetsFromModuleMap(
                                ModuleScriptCustomFetchType::kNone, nullptr);
       }
 
+      // If the module is not yet in the module map, initiate a fetch. This
+      // pre-creates an empty CSSStyleSheet wrapped in a module on the entry.
+      // FetchSingle is a no-op if the entry already exists.
       const ModuleScript* module_script =
           modulator->GetFetchedModuleScript(resolved_url, ModuleType::kCSS);
-      if (module_script) {
-        CSSStyleSheet* sheet = V8CSSStyleSheet::ToWrappable(
-            isolate,
-            static_cast<const ValueWrapperSyntheticModuleScript*>(module_script)
-                ->GetExport(isolate));
-        CHECK_EQ(sheet->ConstructorDocument(), GetDocument());
-        sheets.push_back(*sheet);
+      if (!module_script) {
+        ScriptFetchOptions options;
+        ModuleScriptFetchRequest module_request(
+            resolved_url, ModuleType::kCSS,
+            mojom::blink::RequestContextType::STYLE,
+            network::mojom::RequestDestination::kStyle, options,
+            Referrer::ClientReferrerString(), TextPosition::MinimumPosition(),
+            ModuleImportPhase::kEvaluation);
+        modulator->FetchSingle(module_request, window->Fetcher(),
+                               ModuleGraphLevel::kTopLevelModuleFetch,
+                               ModuleScriptCustomFetchType::kNone, nullptr);
+        module_script =
+            modulator->GetFetchedModuleScript(resolved_url, ModuleType::kCSS);
       }
+
+      // If the module map already has a finished failed entry for this URL,
+      // there is no pre-created sheet to adopt, so skip this specifier.
+      // TODO(crbug.com/448174611): Add devtools message for this scenario.
+      if (!module_script) {
+        continue;
+      }
+      CSSStyleSheet* sheet = V8CSSStyleSheet::ToWrappable(
+          isolate,
+          static_cast<const ValueWrapperSyntheticModuleScript*>(module_script)
+              ->GetExport(isolate));
+      CHECK_EQ(sheet->ConstructorDocument(), GetDocument());
+      sheets.push_back(*sheet);
     }
   }
   return sheets;
@@ -393,9 +452,12 @@ ShadowRoot::GetFetchedStyleSheetsFromModuleMap(
 
 void ShadowRoot::ProcessAdoptedStylesheetAttribute(
     AtomicString value) {
-  CHECK(RuntimeEnabledFeatures::DeclarativeCSSModulesEnabled());
+  CHECK(RuntimeEnabledFeatures::ShadowRootAdoptedStyleSheetEnabled(
+      GetDocument().GetExecutionContext()));
+  adopted_stylesheets_attr_value_ = value;
   if (!value.empty()) {
-    AppendAdoptedStyleSheets(GetFetchedStyleSheetsFromModuleMap(value));
+    UseCounter::Count(GetDocument(), WebFeature::kShadowRootAdoptedStyleSheets);
+    AppendAdoptedStyleSheets(ResolveAdoptedStyleSheets(value));
   }
 }
 
@@ -446,8 +508,7 @@ void ShadowRoot::setReferenceTarget(const AtomicString& reference_target) {
     return;
   }
 
-  UseCounter::CountWebDXFeature(GetDocument(),
-                                WebDXFeature::kDRAFT_ReferenceTarget);
+  UseCounter::CountWebDXFeature(GetDocument(), WebDXFeature::kReferencetarget);
 
   if (referenceTarget() == reference_target) {
     return;
@@ -498,7 +559,7 @@ void ShadowRoot::ReferenceTargetChanged() {
 void ShadowRoot::Trace(Visitor* visitor) const {
   visitor->Trace(slot_assignment_);
   visitor->Trace(reference_target_id_observer_);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
   TreeScope::Trace(visitor);
   DocumentFragment::Trace(visitor);
 }

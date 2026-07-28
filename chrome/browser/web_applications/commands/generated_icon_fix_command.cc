@@ -25,7 +25,6 @@
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_contents/web_app_icon_downloader.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace web_app {
@@ -87,7 +86,8 @@ void GeneratedIconFixCommand::StartWithLock(
   icon_downloader_->Start(
       &lock_->shared_web_contents(), icon_urls,
       base::BindOnce(&GeneratedIconFixCommand::OnIconsDownloaded,
-                     weak_factory_.GetWeakPtr()));
+                     weak_factory_.GetWeakPtr()),
+      IconDownloaderOptions{.download_page_favicons = false});
 }
 
 void GeneratedIconFixCommand::OnIconsDownloaded(

@@ -7,9 +7,13 @@ include_rules = [
   "+components/saved_tab_groups/public/tab_group_sync_service.h",
   "+components/sharing_message",
   "+components/skills",
+  "+components/sync_tab_context",
   "+components/trusted_vault",
   "+components/webauthn/core/browser",
+  "+ios/chrome/browser/account_settings/model",
+  "+ios/chrome/browser/aim/model/ios_chrome_aim_eligibility_service_factory.h",
   "+ios/chrome/browser/bookmarks/model",
+  "+ios/chrome/browser/cobrowse/model/ios_contextual_tasks_service_factory.h",
   "+ios/chrome/browser/collaboration/model",
   "+ios/chrome/browser/complex_tasks/model",
   "+ios/chrome/browser/consent_auditor/model",
@@ -18,11 +22,11 @@ include_rules = [
   "+ios/chrome/browser/favicon/model",
   "+ios/chrome/browser/gcm/model",
   "+ios/chrome/browser/history/model",
+  "+ios/chrome/browser/home_customization/model",
   "+ios/chrome/browser/infobars/model",
   "+ios/chrome/browser/invalidation/model",
   "+ios/chrome/browser/metrics/model",
   "+ios/chrome/browser/passwords/model",
-  "+ios/chrome/browser/plus_addresses/model",
   "+ios/chrome/browser/push_notification/model",
   "+ios/chrome/browser/reading_list/model",
   "+ios/chrome/browser/saved_tab_groups/model",
@@ -41,7 +45,7 @@ include_rules = [
 
 specific_include_rules = {
   # TODO(crbug.com/40228056): Remove exceptions as soon as BVC refactoring is complete
-  "sync_error_browser_agent\.mm": [
+  "sync_error_browser_agent\\.mm": [
     "+ios/chrome/browser/authentication/ui_bundled/re_signin_infobar_delegate.h",
     "+ios/chrome/browser/authentication/ui_bundled/signin_presenter.h",
     "+ios/chrome/browser/settings/ui_bundled/sync/utils/sync_util.h",

@@ -12,21 +12,12 @@
 class Browser;
 class ExtensionsToolbarDesktop;
 
-class ExtensionsToolbarDesktopViewController final
-    : public TabStripModelObserver,
-      public extensions::PermissionsManager::Observer {
+class ExtensionsToolbarDesktopViewController final {
  public:
   // Flex behavior precedence for the container's views.
   static constexpr int kFlexOrderExtensionsButton = 1;
   static constexpr int kFlexOrderRequestAccessButton = 2;
   static constexpr int kFlexOrderActionView = 3;
-
-  // In a live environment, the Extensions Zero State Promo IPH will only open
-  // after at least 10 minutes into the browsing session.
-  //
-  // This function sets the Zero State Promo show timer so that the IPH can
-  // show immediately.
-  static void WakeZeroStatePromoForTesting();
 
   ExtensionsToolbarDesktopViewController(
       Browser* browser,
@@ -35,7 +26,7 @@ class ExtensionsToolbarDesktopViewController final
       const ExtensionsToolbarDesktopViewController&) = delete;
   const ExtensionsToolbarDesktopViewController& operator=(
       const ExtensionsToolbarDesktopViewController&) = delete;
-  ~ExtensionsToolbarDesktopViewController() override;
+  ~ExtensionsToolbarDesktopViewController();
 
   // Updates the flex layout rules for the extension toolbar container to have
   // views::MinimumFlexSizeRule::kPreferred when WindowControlsOverlay (WCO) is
@@ -45,35 +36,8 @@ class ExtensionsToolbarDesktopViewController final
   void WindowControlsOverlayEnabledChanged(bool enabled);
 
  private:
-  // Maybe displays the In-Product-Help with a specific priority order.
-  void MaybeShowIPH();
-
-  // Updates the request access button in the toolbar.
-  void UpdateRequestAccessButton();
-
-  // TabStripModelObserver:
-  void OnTabStripModelChanged(
-      TabStripModel* tab_strip_model,
-      const TabStripModelChange& change,
-      const TabStripSelectionChange& selection) override;
-  void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
-                      TabChangeType change_type) override;
-
-  // PermissionsManager::Observer:
-  void OnUserPermissionsSettingsChanged(
-      const extensions::PermissionsManager::UserPermissionsSettings& settings)
-      override;
-  void OnShowAccessRequestsInToolbarChanged(
-      const extensions::ExtensionId& extension_id,
-      bool can_show_requests) override;
-
   const raw_ptr<Browser> browser_;
 
   raw_ptr<ExtensionsToolbarDesktop> extensions_container_;
-
-  base::ScopedObservation<extensions::PermissionsManager,
-                          extensions::PermissionsManager::Observer>
-      permissions_manager_observation_{this};
 };
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_TOOLBAR_DESKTOP_VIEW_CONTROLLER_H_

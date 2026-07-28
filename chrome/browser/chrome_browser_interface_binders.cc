@@ -12,6 +12,7 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
+#include "chrome/browser/actor/actor_script_tool_receiver.h"
 #include "chrome/browser/buildflags.h"
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor.h"
@@ -77,8 +78,8 @@
 #include "ui/accessibility/accessibility_features.h"
 
 #if BUILDFLAG(ENABLE_UNHANDLED_TAP)
-#include "chrome/browser/android/contextualsearch/unhandled_tap_notifier_impl.h"
-#include "chrome/browser/android/contextualsearch/unhandled_tap_web_contents_observer.h"
+#include "chrome/browser/android/contextualsearch/unhandled_tap_notifier_impl.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/android/contextualsearch/unhandled_tap_web_contents_observer.h"  // nogncheck crbug.com/40147906
 #include "third_party/blink/public/mojom/unhandled_tap_notifier/unhandled_tap_notifier.mojom.h"
 #endif  // BUILDFLAG(ENABLE_UNHANDLED_TAP)
 
@@ -86,7 +87,7 @@
     BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
-#include "chrome/browser/ui/web_applications/sub_apps_service_impl.h"
+#include "chrome/browser/web_applications/sub_apps/sub_apps_service_impl.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -108,6 +109,7 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/apps/digital_goods/digital_goods_factory_impl.h"
 #include "chrome/browser/speech/cros_speech_recognition_service_factory.h"
+#include "chromeos/ash/experiences/isolated_web_app/isolated_web_app_api_bridge_impl.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
@@ -131,6 +133,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/media/media_foundation_service_monitor.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "media/mojo/mojom/media_foundation_preferences.mojom.h"
 #include "media/mojo/services/media_foundation_preferences.h"
@@ -259,6 +262,10 @@ void BindNoStatePrefetchCanceler(
 void BindNoStatePrefetchProcessor(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<blink::mojom::NoStatePrefetchProcessor> receiver) {
+  // NoStatePrefetch is not supported inside fenced frames.
+  if (frame_host->IsNestedWithinFencedFrame()) {
+    return;
+  }
   prerender::NoStatePrefetchProcessorImpl::Create(
       frame_host, std::move(receiver),
       std::make_unique<
@@ -293,13 +300,19 @@ void BindNetworkHintsHandler(
 void BindSpeechRecognitionContextHandler(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<media::mojom::SpeechRecognitionContext> receiver) {
-  if (!captions::IsLiveCaptionFeatureSupported()) {
+  Profile* profile = Profile::FromBrowserContext(
+      frame_host->GetProcess()->GetBrowserContext());
+  if (!profile) {
+    return;
+  }
+  PrefService* profile_prefs = profile->GetPrefs();
+  if (!(profile_prefs->GetBoolean(prefs::kLiveCaptionEnabled) ||
+        profile_prefs->GetBoolean(prefs::kHeadlessCaptionEnabled)) ||
+      !captions::IsLiveCaptionFeatureSupported()) {
     return;
   }
 
   // Bind via the appropriate factory.
-  Profile* profile = Profile::FromBrowserContext(
-      frame_host->GetProcess()->GetBrowserContext());
 #if BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
   auto* factory = SpeechRecognitionServiceFactory::GetForProfile(profile);
 #elif BUILDFLAG(IS_CHROMEOS)
@@ -364,7 +377,9 @@ void BindMediaFoundationPreferences(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<media::mojom::MediaFoundationPreferences> receiver) {
   MediaFoundationPreferencesImpl::Create(
-      frame_host->GetSiteInstance()->GetSiteURL(),
+      frame_host->GetSiteInstance()
+          ->GetSecurityPrincipal()
+          .GetDeprecatedSiteURL(),
       base::BindRepeating(&MediaFoundationServiceMonitor::
                               IsHardwareSecureDecryptionAllowedForSite),
       std::move(receiver));
@@ -437,6 +452,9 @@ void PopulateChromeFrameBinders(
     mojo::BinderMapWithContext<content::RenderFrameHost*>* map,
     content::RenderFrameHost* render_frame_host) {
   map->Add<image_annotation::mojom::Annotator>(&BindImageAnnotator);
+
+  map->Add<blink::mojom::ScriptToolHost>(
+      &actor::ActorScriptToolReceiver::Create);
 
   map->Add<blink::mojom::AnchorElementMetricsHost>(
       &NavigationPredictor::Create);
@@ -513,6 +531,8 @@ void PopulateChromeFrameBinders(
 #if BUILDFLAG(IS_CHROMEOS)
   map->Add<payments::mojom::DigitalGoodsFactory>(
       &apps::DigitalGoodsFactoryImpl::BindDigitalGoodsFactory);
+  map->Add<blink::mojom::IsolatedWebAppApiBridge>(
+      &ash::IsolatedWebAppApiBridgeImpl::Create);
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
@@ -542,7 +562,7 @@ void PopulateChromeFrameBinders(
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(blink::features::kDesktopPWAsSubApps) &&
+  if (base::FeatureList::IsEnabled(blink::features::kSubApps) &&
       !render_frame_host->GetParentOrOuterDocument()) {
     // The service binder will reject non-primary main frames, but we still need
     // to register it for them because a non-primary main frame could become a

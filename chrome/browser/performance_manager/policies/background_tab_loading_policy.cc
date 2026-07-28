@@ -11,6 +11,7 @@
 
 #include "base/check.h"
 #include "base/functional/callback.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
@@ -44,6 +45,11 @@ namespace policies {
 namespace {
 
 const char kDescriberName[] = "BackgroundTabLoadingPolicy";
+
+constexpr base::MemoryConsumerTraits kBackgroundTabLoadingPolicyTraits(
+    base::MemoryConsumerTraits::ConsumerType::kPassive,
+    // Prevents allocations in renderer processes (out-of-process).
+    base::MemoryConsumerTraits::InProcess::kNo);
 
 }  // namespace
 
@@ -156,10 +162,9 @@ BackgroundTabLoadingPolicy::BackgroundTabLoadingPolicy(
     : all_restored_tabs_loaded_callback_(
           std::move(all_restored_tabs_loaded_callback)),
       page_loader_(std::make_unique<mechanism::PageLoader>()),
-      memory_pressure_listener_registration_(
-          FROM_HERE,
-          base::MemoryPressureListenerTag::kBackgroundTabLoadingPolicy,
-          this) {
+      memory_consumer_registration_("BackgroundTabLoadingPolicy",
+                                    kBackgroundTabLoadingPolicyTraits,
+                                    this) {
   max_simultaneous_tab_loads_ = CalculateMaxSimultaneousTabLoads(
       kMinSimultaneousTabLoads, kMaxSimultaneousTabLoads,
       kCoresPerSimultaneousTabLoad, base::SysInfo::NumberOfProcessors());
@@ -448,23 +453,17 @@ void BackgroundTabLoadingPolicy::StopLoadingTabs() {
   UpdateHasRestoredTabsToLoad();
 }
 
-void BackgroundTabLoadingPolicy::OnMemoryPressure(
-    base::MemoryPressureLevel new_level) {
+void BackgroundTabLoadingPolicy::OnUpdateMemoryLimit() {
   TRACE_EVENT_INSTANT(
-      "browser", "BackgroundTabLoadingPolicy::OnMemoryPressure",
+      "browser", "BackgroundTabLoadingPolicy::OnUpdateMemoryLimitStopLoading",
       [&](perfetto::EventContext ctx) {
         auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
-        auto* data = event->set_chrome_memory_pressure_notification();
-        data->set_level(
-            base::trace_event::MemoryPressureLevelToTraceEnum(new_level));
+        auto* debug = event->add_debug_annotations();
+        debug->set_name("memory_limit");
+        debug->set_int_value(memory_limit());
       });
-  switch (new_level) {
-    case base::MEMORY_PRESSURE_LEVEL_NONE:
-      break;
-    case base::MEMORY_PRESSURE_LEVEL_MODERATE:
-    case base::MEMORY_PRESSURE_LEVEL_CRITICAL:
-      StopLoadingTabs();
-      break;
+  if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
+    StopLoadingTabs();
   }
 }
 

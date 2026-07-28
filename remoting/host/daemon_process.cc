@@ -17,16 +17,23 @@
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/values.h"
+#include "components/named_mojo_ipc_server/connection_info.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "remoting/base/auto_thread_task_runner.h"
+#include "remoting/base/branding.h"
 #include "remoting/base/constants.h"
+#include "remoting/base/logging.h"
 #include "remoting/host/base/host_exit_codes.h"
 #include "remoting/host/base/screen_resolution.h"
-#include "remoting/host/branding.h"
+#include "remoting/host/base/switches.h"
+#include "remoting/host/chromoting_host_services_server.h"
 #include "remoting/host/config_file_watcher.h"
 #include "remoting/host/desktop_session.h"
+#include "remoting/host/host_config.h"
 #include "remoting/host/host_event_logger.h"
 #include "remoting/host/host_status_observer.h"
+#include "remoting/host/peer_connection_process_handler.h"
 #include "remoting/protocol/transport.h"
 
 namespace remoting {
@@ -58,7 +65,7 @@ void DaemonProcess::OnConfigUpdated(const std::string& serialized_config) {
 void DaemonProcess::OnConfigWatcherError() {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  Stop();
+  Stop(kInvalidHostConfigurationExitCode);
 }
 
 void DaemonProcess::OnChannelConnected(int32_t peer_pid) {
@@ -72,6 +79,12 @@ void DaemonProcess::OnChannelConnected(int32_t peer_pid) {
   // by the the newly started process yet.
   next_terminal_id_ = 0;
 
+  BindAssociatedInterfaces();
+
+  if (!OnInitAfterChannelConnected(peer_pid)) {
+    return;
+  }
+
   SendHostConfigToNetworkProcess(serialized_config_);
 }
 
@@ -80,12 +93,18 @@ void DaemonProcess::OnPermanentError(int exit_code) {
   DCHECK(kMinPermanentErrorExitCode <= exit_code &&
          exit_code <= kMaxPermanentErrorExitCode);
 
-  Stop();
+  Stop(exit_code);
 }
 
 void DaemonProcess::OnWorkerProcessStopped() {
   desktop_session_manager_.reset();
   host_status_observer_.reset();
+  // Reset our IPC remote so it's ready to re-init if the network process is
+  // re-launched.
+  remoting_host_control_.reset();
+  desktop_session_connection_events_.reset();
+  peer_connection_launchers_.clear();
+  DeleteAllDesktopSessions();
 }
 
 void DaemonProcess::OnAssociatedInterfaceRequest(
@@ -130,6 +149,14 @@ void DaemonProcess::OnAssociatedInterfaceRequest(
 }
 
 void DaemonProcess::CloseDesktopSession(int terminal_id) {
+  CloseDesktopSessionWithError(terminal_id, ErrorCode::OK, {}, FROM_HERE);
+}
+
+void DaemonProcess::CloseDesktopSessionWithError(
+    int terminal_id,
+    ErrorCode error_code,
+    const std::string& error_details,
+    const SourceLocation& error_location) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
   // Validate the supplied terminal ID. An attempt to use a desktop session ID
@@ -149,7 +176,7 @@ void DaemonProcess::CloseDesktopSession(int terminal_id) {
   }
 
   // It is OK if the terminal ID wasn't found. There is a race between
-  // the network and daemon processes. Each frees its own recources first and
+  // the network and daemon processes. Each frees its own resources first and
   // notifies the other party if there was something to clean up.
   if (i == desktop_sessions_.end()) {
     return;
@@ -159,15 +186,47 @@ void DaemonProcess::CloseDesktopSession(int terminal_id) {
   desktop_sessions_.erase(i);
 
   VLOG(1) << "Daemon: closed desktop session " << terminal_id;
-  SendTerminalDisconnected(terminal_id);
+  SendTerminalDisconnected(terminal_id, error_code, error_details,
+                           error_location);
+
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          kEnablePeerConnectionProcessSwitch)) {
+    ClosePeerConnectionProcess(terminal_id);
+  }
+}
+
+void DaemonProcess::LaunchPeerConnectionProcess(int terminal_id) {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+
+  auto delegate = CreatePeerConnectionProcessLauncherDelegate(terminal_id);
+  if (!delegate) {
+    LOG(ERROR) << "Failed to create launcher delegate.";
+    return;
+  }
+
+  // Safe to use base::Unretained(this) because DaemonProcess owns the
+  // PeerConnectionProcessHandler instances (in peer_connection_launchers_)
+  // which outlive the lifetime of the callbacks.
+  peer_connection_launchers_[terminal_id] =
+      std::make_unique<PeerConnectionProcessHandler>(
+          terminal_id, caller_task_runner(), std::move(delegate),
+          base::BindOnce(&DaemonProcess::ClosePeerConnectionProcess,
+                         base::Unretained(this)));
+}
+
+void DaemonProcess::ClosePeerConnectionProcess(int terminal_id) {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+  peer_connection_launchers_.erase(terminal_id);
 }
 
 DaemonProcess::DaemonProcess(
     scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
     scoped_refptr<AutoThreadTaskRunner> io_task_runner,
-    base::OnceClosure stopped_callback)
+    StoppedCallback stopped_callback)
     : caller_task_runner_(caller_task_runner),
       io_task_runner_(io_task_runner),
+      ipc_support_(io_task_runner->task_runner(),
+                   mojo::core::ScopedIPCSupport::ShutdownPolicy::FAST),
       next_terminal_id_(0),
       stopped_callback_(std::move(stopped_callback)),
       status_monitor_(new HostStatusMonitor()) {
@@ -182,9 +241,9 @@ DaemonProcess::DaemonProcess(
   }
 }
 
-void DaemonProcess::CreateDesktopSession(int terminal_id,
-                                         const ScreenResolution& resolution,
-                                         bool is_curtained) {
+void DaemonProcess::CreateDesktopSession(
+    int terminal_id,
+    mojom::DesktopSessionOptionsPtr options) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
   // Validate the supplied terminal ID. An attempt to create a desktop session
@@ -201,15 +260,40 @@ void DaemonProcess::CreateDesktopSession(int terminal_id,
 
   // Create the desktop session.
   std::unique_ptr<DesktopSession> session =
-      DoCreateDesktopSession(terminal_id, resolution, is_curtained);
+      DoCreateDesktopSession(terminal_id, *options);
   if (!session) {
     LOG(ERROR) << "Failed to create a desktop session.";
-    SendTerminalDisconnected(terminal_id);
+    SendTerminalDisconnected(terminal_id, ErrorCode::HOST_CONFIGURATION_ERROR,
+                             "Failed to create a desktop session.", FROM_HERE);
     return;
   }
 
   VLOG(1) << "Daemon: opened desktop session " << terminal_id;
   desktop_sessions_.push_back(session.release());
+
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          kEnablePeerConnectionProcessSwitch)) {
+    LaunchPeerConnectionProcess(terminal_id);
+  }
+}
+
+void DaemonProcess::ReconnectDesktopSession(
+    int terminal_id,
+    mojom::DesktopSessionOptionsPtr options) {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+
+  auto it = std::ranges::find_if(desktop_sessions_,
+                                 [terminal_id](DesktopSession* session) {
+                                   return session->id() == terminal_id;
+                                 });
+
+  if (it == desktop_sessions_.end()) {
+    LOG(ERROR) << "Invalid terminal ID: " << terminal_id;
+    CrashNetworkProcess(FROM_HERE);
+    return;
+  }
+  VLOG(1) << "Daemon: reconnecting desktop session " << terminal_id;
+  (*it)->ReconnectNetworkChannel(*options);
 }
 
 void DaemonProcess::SetScreenResolution(int terminal_id,
@@ -256,6 +340,97 @@ void DaemonProcess::CrashNetworkProcess(const base::Location& location) {
   DeleteAllDesktopSessions();
 }
 
+void DaemonProcess::DoCrashNetworkProcess(const base::Location& location) {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+  if (network_launcher_) {
+    network_launcher_->Crash(location);
+  }
+}
+
+void DaemonProcess::SetNetworkLauncherDelegate(
+    std::unique_ptr<WorkerProcessLauncher::Delegate> delegate) {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+  DCHECK(!network_launcher_);
+  network_launcher_ =
+      std::make_unique<WorkerProcessLauncher>(std::move(delegate), this);
+}
+
+bool DaemonProcess::OnDesktopSessionAgentAttached(
+    int terminal_id,
+    mojo::ScopedMessagePipeHandle desktop_pipe) {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          kEnablePeerConnectionProcessSwitch)) {
+    auto it = peer_connection_launchers_.find(terminal_id);
+    if (it != peer_connection_launchers_.end()) {
+      it->second->ConnectDesktopChannel(std::move(desktop_pipe));
+    } else {
+      LOG(ERROR) << "No PC process launcher found for terminal " << terminal_id;
+    }
+    return true;
+  }
+
+  if (desktop_session_connection_events_) {
+    desktop_session_connection_events_->OnDesktopSessionAgentAttached(
+        terminal_id, std::move(desktop_pipe));
+  }
+
+  return true;
+}
+
+void DaemonProcess::SendTerminalDisconnected(
+    int terminal_id,
+    ErrorCode error_code,
+    const std::string& error_details,
+    const SourceLocation& error_location) {
+  if (desktop_session_connection_events_) {
+    desktop_session_connection_events_->OnTerminalDisconnected(
+        terminal_id, error_code, error_details, error_location);
+  }
+}
+
+void DaemonProcess::SendHostConfigToNetworkProcess(
+    const std::string& serialized_config) {
+  if (!remoting_host_control_) {
+    return;
+  }
+
+  LOG_IF(ERROR, !remoting_host_control_.is_connected())
+      << "IPC channel not connected. HostConfig message will be dropped.";
+
+  std::optional<base::DictValue> config(HostConfigFromJson(serialized_config));
+  if (!config.has_value()) {
+    LOG(ERROR) << "Invalid host config, shutting down.";
+    OnPermanentError(kInvalidHostConfigurationExitCode);
+    return;
+  }
+
+  remoting_host_control_->ApplyHostConfig(std::move(config.value()));
+}
+
+void DaemonProcess::BindAssociatedInterfaces() {
+  if (!network_launcher_) {
+    return;
+  }
+  // Typically the Daemon process is responsible for disconnecting the remote
+  // however in cases where the network process crashes, we want to ensure that
+  // |remoting_host_control_| is reset so it can be reused after the network
+  // process is relaunched.
+  remoting_host_control_.reset();
+  network_launcher_->GetRemoteAssociatedInterface(
+      remoting_host_control_.BindNewEndpointAndPassReceiver());
+  desktop_session_connection_events_.reset();
+  network_launcher_->GetRemoteAssociatedInterface(
+      desktop_session_connection_events_.BindNewEndpointAndPassReceiver());
+}
+
+bool DaemonProcess::OnInitAfterChannelConnected(int32_t peer_pid) {
+  return true;
+}
+
+void DaemonProcess::Cleanup(base::OnceClosure callback) {
+  std::move(callback).Run();
+}
+
 void DaemonProcess::Initialize() {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
@@ -271,18 +446,41 @@ void DaemonProcess::Initialize() {
   LaunchNetworkProcess();
 }
 
-void DaemonProcess::Stop() {
+void DaemonProcess::Stop(int exit_code) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
   OnWorkerProcessStopped();
 
   if (stopped_callback_) {
-    std::move(stopped_callback_).Run();
+    std::move(stopped_callback_).Run(exit_code);
   }
 }
 
 bool DaemonProcess::WasTerminalIdAllocated(int terminal_id) {
   return terminal_id < next_terminal_id_;
+}
+
+void DaemonProcess::StartChromotingHostServices() {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+  DCHECK(!host_services_server_);
+
+  host_services_server_ =
+      std::make_unique<ChromotingHostServicesServer>(base::BindRepeating(
+          &DaemonProcess::BindChromotingHostServices, base::Unretained(this)));
+  host_services_server_->StartServer();
+  HOST_LOG << "ChromotingHostServices IPC server has been started.";
+}
+
+void DaemonProcess::BindChromotingHostServices(
+    mojo::PendingReceiver<mojom::ChromotingHostServices> receiver,
+    std::unique_ptr<named_mojo_ipc_server::ConnectionInfo> connection_info) {
+  DCHECK(caller_task_runner()->BelongsToCurrentThread());
+  if (!connection_info) {
+    LOG(WARNING) << "Binding rejected because no connection info was provided.";
+    return;
+  }
+  host_services_receivers_.Add(this, std::move(receiver),
+                               std::move(connection_info));
 }
 
 void DaemonProcess::OnClientAccessDenied(const std::string& signaling_id) {
@@ -350,6 +548,7 @@ void DaemonProcess::DeleteAllDesktopSessions() {
   }
 }
 
+// static
 base::FilePath DaemonProcess::GetConfigPath() {
   base::FilePath config_path;
   const base::CommandLine* command_line =

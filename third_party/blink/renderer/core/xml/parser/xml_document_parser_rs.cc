@@ -46,24 +46,28 @@
 #include "third_party/blink/renderer/core/html/custom/ce_reactions_scope.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/html/html_template_element.h"
 #include "third_party/blink/renderer/core/html/parser/html_construction_site.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
 #include "third_party/blink/renderer/core/xml/document_xml_tree_viewer.h"
 #include "third_party/blink/renderer/core/xml/parser/xhtml_subset.h"
+#include "third_party/blink/renderer/core/xml/parser/xml_document_parser.h"
 #include "third_party/blink/renderer/core/xmlns_names.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 namespace {
 
 inline String RustStrToWtfString(rust::Str str) {
-  return String::FromUTF8(base::RustStrToStringView(str));
+  return String::FromUtf8(base::RustStrToStringView(str));
 }
 
 inline AtomicString RustStrToAtomicString(rust::Str str) {
-  return AtomicString::FromUTF8(base::RustStrToStringView(str));
+  return AtomicString::FromUtf8(base::RustStrToStringView(str));
 }
 
 inline bool HasNoStyleInformation(Document* document) {
@@ -75,9 +79,20 @@ inline bool HasNoStyleInformation(Document* document) {
     return false;
   }
 
-  if (!document->IsInMainFrame() ||
-      document->GetFrame()->IsInFencedFrameTree()) {
+  if (document->GetFrame()->IsInFencedFrameTree()) {
     return false;  // This document has style information from a parent.
+  }
+
+  if (!document->IsInMainFrame()) {
+    if (!RuntimeEnabledFeatures::XMLViewerForIframesEnabled()) {
+      return false;
+    }
+    auto* owner = document->GetFrame()->DeprecatedLocalOwner();
+    if (!owner || !IsA<HTMLIFrameElement>(*owner) ||
+        document->Url().ProtocolIs("blob") ||
+        document->contentType() == "image/svg+xml") {
+      return false;
+    }
   }
 
   if (SVGImage::IsInSVGImage(document)) {
@@ -255,7 +270,13 @@ void XMLDocumentParserRs::ProcessEvents() {
           OrdinalNumber::FromZeroBasedInt(static_cast<int>(row)),
           OrdinalNumber::FromZeroBasedInt(static_cast<int>(column)));
     }
-    HandleError(XMLErrors::kErrorTypeFatal, error_message.c_str(), position);
+    if (xml_ffi::is_error_resumable(*read_state_) && !finish_called_) {
+      carry_unbalanced_root_error_ = {String::FromUtf8(error_message.c_str()),
+                                      position};
+      xml_ffi::reset_error(*read_state_);
+    } else {
+      HandleError(XMLErrors::kErrorTypeFatal, error_message.c_str(), position);
+    }
   }
 }
 
@@ -324,13 +345,22 @@ void XMLDocumentParserRs::ProcessingInstruction(rust::Str target,
     return;
   }
 
-  // ASSERT_NO_EXCEPTION here as we expect the XML parser to produce an error if
-  // the processing instruction would have had an invalid target name or would
-  // have contained the closing sequence '?>'.
   class ProcessingInstruction* pi =
       current_node_->GetDocument().createProcessingInstruction(
           RustStrToWtfString(target), RustStrToWtfString(data),
-          ASSERT_NO_EXCEPTION);
+          IGNORE_EXCEPTION);
+
+  // This situation can arise when the parser accepts a target name or data
+  // because of the XML definition of what a valid character is, but the
+  // construction of the ProcessingInstruction fails when document.cc's
+  // IsValidChar() rejects the target name or data. Follow the non-Rust
+  // implementation here to ignore this situation without throwing a
+  // non-wellformedness error.
+  // For other nullptr result cases of createProcessingInstruction the parser is
+  // expected to report parsing errors before getting here.
+  if (!pi) {
+    return;
+  }
 
   // Insertion needs to be done first to determine is_css_ in
   // ProcessingInstruction.
@@ -360,6 +390,11 @@ void XMLDocumentParserRs::StartElementNs(
 
   bool is_first_element = !saw_first_element_;
   saw_first_element_ = true;
+
+  if (!parsing_fragment_ && is_first_element && local_name == "alert" &&
+      has_ns && IsCAPAlertNamespace(RustStrToAtomicString(ns))) {
+    UseCounter::Count(document_, WebFeature::kXmlCAPAlert);
+  }
 
   Vector<Attribute, kAttributePrealloc> prefixed_attributes;
   bool encountered_namespace_reset = false;
@@ -406,11 +441,14 @@ void XMLDocumentParserRs::StartElementNs(
   }
 
   AtomicString is;
+  bool has_customelementregistry_attr = false;
 
   for (const auto& attr : prefixed_attributes) {
     if (attr.GetName() == html_names::kIsAttr) {
       is = attr.Value();
-      break;
+    } else if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
+               attr.GetName() == html_names::kCustomelementregistryAttr) {
+      has_customelementregistry_attr = true;
     }
   }
 
@@ -424,6 +462,19 @@ void XMLDocumentParserRs::StartElementNs(
                       g_null_atom);
   }
 
+  CustomElementRegistry* registry = nullptr;
+  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
+      !has_customelementregistry_attr) {
+    // If the element doesn't have the customelementregistry attribute, then
+    // it should inherit its registry from its parent.
+    if (auto* parent_element = DynamicTo<Element>(current_node_.Get())) {
+      registry = parent_element->customElementRegistry();
+    } else {
+      registry =
+          CustomElementRegistry::DefaultRegistry(current_node_->GetDocument());
+    }
+  }
+
   // Ported from XmlDocumentParser:
   // If we are constructing a custom element, then we must run extra steps as
   // described in the HTML spec below. This is similar to the steps in
@@ -434,8 +485,8 @@ void XMLDocumentParserRs::StartElementNs(
   std::optional<ThrowOnDynamicMarkupInsertionCountIncrementer>
       throw_on_dynamic_markup_insertions;
   if (!parsing_fragment_) {
-    if (HTMLConstructionSite::LookUpCustomElementDefinition(
-            *document_, q_name, is, document_->customElementRegistry())) {
+    if (HTMLConstructionSite::LookUpCustomElementDefinition(*document_, q_name,
+                                                            is, registry)) {
       throw_on_dynamic_markup_insertions.emplace(document_);
       document_->GetAgent().event_loop()->PerformMicrotaskCheckpoint();
       reactions.emplace(isolate);
@@ -446,7 +497,7 @@ void XMLDocumentParserRs::StartElementNs(
       q_name,
       parsing_fragment_ ? CreateElementFlags::ByFragmentParser(document_)
                         : CreateElementFlags::ByParser(document_),
-      is, CustomElementRegistry::DefaultRegistry(current_node_->GetDocument()));
+      is, registry);
 
   if (!new_element) {
     StopParsing();
@@ -455,7 +506,8 @@ void XMLDocumentParserRs::StartElementNs(
 
   SetAttributes(new_element, prefixed_attributes, GetParserContentPolicy());
 
-  if (parsing_fragment_ && encountered_namespace_reset) {
+  if (parsing_fragment_ && encountered_namespace_reset &&
+      !ancestor_resetting_namespace_) {
     ancestor_resetting_namespace_ = new_element;
   }
 
@@ -502,6 +554,15 @@ void XMLDocumentParserRs::EndElementNs(rust::Str local_name,
   ContainerNode* n = current_node_;
   auto* element = DynamicTo<Element>(n);
   if (!element) {
+    // Check if the current node is the DocumentFragment for an
+    // HTMLTemplateElement that is ancestor_resetting_namespace_.
+    if (auto* resetting_template = DynamicTo<HTMLTemplateElement>(
+            ancestor_resetting_namespace_.Get())) {
+      if (resetting_template->content() == current_node_) {
+        ancestor_resetting_namespace_ = nullptr;
+      }
+    }
+
     PopCurrentNode();
     return;
   }
@@ -604,11 +665,14 @@ void XMLDocumentParserRs::DocType(rust::Str name_rs,
 
 void XMLDocumentParserRs::EndDocument() {
   UpdateLeafTextNode();
+  carry_unbalanced_root_error_ = std::nullopt;
   bool xml_viewer_mode =
       !saw_error_ && !saw_css_ && HasNoStyleInformation(GetDocument());
   if (xml_viewer_mode) {
     GetDocument()->SetIsViewSource(true);
-    TransformDocumentToXMLTreeView(*GetDocument());
+    TransformDocumentToXMLTreeView(
+        *GetDocument(),
+        /*preserve_document_element=*/!GetDocument()->IsInMainFrame());
   }
   // The XML crate keeps sending EndDocument as a next event if you keep
   // querying. Change state here to break out of the ProcessEvents loop.
@@ -678,6 +742,12 @@ void XMLDocumentParserRs::Finish() {
     return;
   }
 
+  if (carry_unbalanced_root_error_) {
+    HandleError(XMLErrors::kErrorTypeFatal,
+                carry_unbalanced_root_error_->error_message.Utf8().c_str(),
+                carry_unbalanced_root_error_->position);
+  }
+
   if (parser_paused_) {
     finish_called_ = true;
   } else {
@@ -727,7 +797,7 @@ void XMLDocumentParserRs::Detach() {
 }
 
 bool XMLDocumentParserRs::WellFormed() const {
-  return !xml_ffi::saw_error(*read_state_);
+  return !xml_ffi::saw_error(*read_state_) && !carry_unbalanced_root_error_;
 }
 
 void XMLDocumentParserRs::InsertErrorMessageBlock() {

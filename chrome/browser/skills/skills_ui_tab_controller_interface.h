@@ -5,9 +5,17 @@
 #ifndef CHROME_BROWSER_SKILLS_SKILLS_UI_TAB_CONTROLLER_INTERFACE_H_
 #define CHROME_BROWSER_SKILLS_SKILLS_UI_TAB_CONTROLLER_INTERFACE_H_
 
+#include <memory>
+#include <optional>
 #include <string>
 
+namespace glic {
+struct Target;
+}
+
 #include "base/memory/weak_ptr.h"
+#include "components/skills/public/skill.mojom-forward.h"
+#include "components/skills/public/skills_metrics.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace tabs {
@@ -29,14 +37,13 @@ class SkillsUiTabControllerInterface {
   static SkillsUiTabControllerInterface* From(tabs::TabInterface* tab);
 
   // Opens the skills dialog.
-  virtual void ShowDialog(const skills::Skill& skill) = 0;
+  virtual void ShowDialog(Skill skill,
+                          SkillsDialogEntryPoint entrypoint,
+                          skills::mojom::SkillsDialogType dialog_type,
+                          std::unique_ptr<glic::Target> target) = 0;
 
-  // Closes the dialog if it is currently open.
-  virtual void CloseDialog() = 0;
-
-  // Called by the WebUI when a skill is successfully saved.
-  // Delegates visual feedback to the Window Controller.
-  virtual void OnSkillSaved(const std::string& skill_id) = 0;
+  // Invokes the skill with skill_id in sidepanel.
+  virtual void InvokeSkill(std::string_view skill_id) = 0;
 
  private:
   ::ui::ScopedUnownedUserData<SkillsUiTabControllerInterface>

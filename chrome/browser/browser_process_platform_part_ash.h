@@ -107,6 +107,8 @@ class BrowserProcessPlatformPart : public BrowserProcessPlatformPartBase {
   // primary profile.
   void InitializePrimaryProfileServices(Profile* primary_profile);
 
+  void InitializeTimezoneResolverManager();
+
   // Used to register a KeepAlive when Ash is initialized, and release it
   // when until Chrome starts exiting. Ensure we stay running the whole time.
   void RegisterKeepAlive();
@@ -177,10 +179,6 @@ class BrowserProcessPlatformPart : public BrowserProcessPlatformPartBase {
   ash::system::SystemClock* GetSystemClock();
   void DestroySystemClock();
 
-  // DEPRECATED: Use ash::AccountManagerFactory::Get() instead.
-  // TODO(crbug.com/393260347): Remove this.
-  ash::AccountManagerFactory* GetAccountManagerFactory();
-
   static void EnsureFactoryBuilt();
 
  private:
@@ -236,6 +234,7 @@ class BrowserProcessPlatformPart : public BrowserProcessPlatformPartBase {
   bool using_testing_component_manager_ash_ = false;
   scoped_refptr<component_updater::ComponentManagerAsh> component_manager_ash_;
 
+  // NOTE: Use ash::AccountManagerFactory::Get() to get the singleton instance.
   std::unique_ptr<ash::AccountManagerFactory> account_manager_factory_;
 
   std::unique_ptr<app_list::EssentialSearchManager> essential_search_manager_;

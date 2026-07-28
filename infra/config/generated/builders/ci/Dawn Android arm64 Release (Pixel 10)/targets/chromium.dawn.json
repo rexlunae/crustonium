@@ -30,13 +30,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "io_timeout": 1800,
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
@@ -72,13 +71,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "io_timeout": 1800,
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
@@ -115,13 +113,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "idempotent": false,
           "io_timeout": 1800,
@@ -158,13 +155,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "idempotent": false,
           "io_timeout": 1800,
@@ -201,13 +197,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "idempotent": false,
           "io_timeout": 1800,
@@ -243,13 +238,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "idempotent": false,
           "io_timeout": 1800,
@@ -286,13 +280,12 @@
         },
         "swarming": {
           "dimensions": {
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "device_type": "frankel",
             "os": "Android",
             "pool": "chromium.tests.gpu"
           },
-          "expiration": 21600,
           "hard_timeout": 1800,
           "idempotent": false,
           "io_timeout": 1800,

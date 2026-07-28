@@ -54,42 +54,19 @@ static int64_t JNI_FeedSurfaceRendererBridge_Init(
     int32_t stream_kind,
     int64_t native_feed_reliability_logging_bridge) {
   return reinterpret_cast<intptr_t>(new FeedSurfaceRendererBridge(
-      j_this, profile, stream_kind, std::string(),
+      j_this, profile, stream_kind,
       reinterpret_cast<FeedReliabilityLoggingBridge*>(
-          native_feed_reliability_logging_bridge),
-      (int)SingleWebFeedEntryPoint::kOther));
-}
-
-static int64_t JNI_FeedSurfaceRendererBridge_InitWebFeed(
-    JNIEnv* env,
-    const JavaRef<jobject>& j_this,
-    Profile* profile,
-    const JavaRef<jbyteArray>& j_web_feed_id,
-    int64_t native_feed_reliability_logging_bridge,
-    int32_t j_entry_point) {
-  std::string web_feed_id;
-  base::android::JavaByteArrayToString(env, j_web_feed_id, &web_feed_id);
-  return reinterpret_cast<intptr_t>(new FeedSurfaceRendererBridge(
-      j_this, profile, static_cast<int32_t>(StreamKind::kSingleWebFeed),
-      web_feed_id,
-      reinterpret_cast<FeedReliabilityLoggingBridge*>(
-          native_feed_reliability_logging_bridge),
-      j_entry_point));
+          native_feed_reliability_logging_bridge)));
 }
 
 FeedSurfaceRendererBridge::FeedSurfaceRendererBridge(
     const JavaRef<jobject>& j_this,
     Profile* profile,
     int32_t stream_kind,
-    std::string web_feed_id,
-    FeedReliabilityLoggingBridge* reliability_logging_bridge,
-    int32_t feed_entry_point)
+    FeedReliabilityLoggingBridge* reliability_logging_bridge)
     : feed_stream_api_(nullptr),
       reliability_logging_bridge_(reliability_logging_bridge) {
   java_ref_.Reset(j_this);
-
-  auto single_web_feed_entry_point =
-      static_cast<SingleWebFeedEntryPoint>(feed_entry_point);
 
   feed_stream_api_ = GetFeedApi(profile);
   if (!feed_stream_api_) {
@@ -97,9 +74,7 @@ FeedSurfaceRendererBridge::FeedSurfaceRendererBridge(
   }
 
   surface_id_ = feed_stream_api_->CreateSurface(
-      StreamType(static_cast<StreamKind>(stream_kind), std::move(web_feed_id),
-                 single_web_feed_entry_point),
-      single_web_feed_entry_point);
+      StreamType(static_cast<StreamKind>(stream_kind)));
 }
 
 FeedSurfaceRendererBridge::~FeedSurfaceRendererBridge() {
@@ -145,25 +120,20 @@ void FeedSurfaceRendererBridge::RemoveDataStoreEntry(std::string_view key) {
       env, java_ref_, base::android::ConvertUTF8ToJavaString(env, key));
 }
 
-void FeedSurfaceRendererBridge::LoadMore(JNIEnv* env,
-                                         const JavaRef<jobject>& callback_obj) {
+void FeedSurfaceRendererBridge::LoadMore(
+    base::OnceCallback<void(bool)> callback) {
   if (!feed_stream_api_) {
     return;
   }
-  feed_stream_api_->LoadMore(
-      surface_id_, base::BindOnce(&base::android::RunBooleanCallbackAndroid,
-                                  ScopedJavaGlobalRef<jobject>(callback_obj)));
+  feed_stream_api_->LoadMore(surface_id_, std::move(callback));
 }
 
 void FeedSurfaceRendererBridge::ManualRefresh(
-    JNIEnv* env,
-    const JavaRef<jobject>& callback_obj) {
+    base::OnceCallback<void(bool)> callback) {
   if (!feed_stream_api_) {
     return;
   }
-  feed_stream_api_->ManualRefresh(
-      surface_id_, base::BindOnce(&base::android::RunBooleanCallbackAndroid,
-                                  ScopedJavaGlobalRef<jobject>(callback_obj)));
+  feed_stream_api_->ManualRefresh(surface_id_, std::move(callback));
 }
 
 static void JNI_FeedSurfaceRendererBridge_ProcessThereAndBackAgain(
@@ -243,7 +213,7 @@ static void JNI_FeedSurfaceRendererBridge_ReportOpenAction(
     Profile* profile,
     int32_t surface_id,
     const JavaRef<jobject>& j_url,
-    std::string& slice_id,
+    const std::string& slice_id,
     int action_type) {
   FeedApi* feed_api = GetFeedApi(profile);
   if (!feed_api) {
@@ -287,7 +257,7 @@ static void JNI_FeedSurfaceRendererBridge_ReportSliceViewed(
     JNIEnv* env,
     Profile* profile,
     int32_t surface_id,
-    std::string& slice_id) {
+    const std::string& slice_id) {
   FeedApi* feed_api = GetFeedApi(profile);
   if (!feed_api) {
     return;

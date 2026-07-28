@@ -352,6 +352,82 @@ TEST(TimeFormattingTest, TimeFormatHTTP) {
   EXPECT_EQ("Sat, 30 Apr 2011 22:42:07 GMT", TimeFormatHTTP(time));
 }
 
+// Regression test: `TimeFormatHTTP()` must render the weekday, month, and day
+// from UTC as unlocalized English, independent of both the machine's local
+// timezone and the ICU default locale (set to a non-English locale below). Each
+// case places the local wall-clock on a different calendar day than UTC --
+// negative-offset zones roll back to the previous day, positive-offset zones
+// forward to the next day -- so a weekday/month taken from local time would
+// disagree with the UTC output (e.g. "Sat, 01 Apr 2011 ..." for an instant that
+// is Sunday, May 1 in GMT). A month boundary always also moves the day, so
+// there is no "month-only" case.
+TEST(TimeFormattingTest, TimeFormatHTTPUsesGmtRegardlessOfTimeZone) {
+  // Use a non-English default locale so the assertions also verify that the
+  // weekday/month names stay English (RFC 7231) rather than being localized.
+  test::ScopedRestoreICUDefaultLocale restore_locale;
+  i18n::SetICUDefaultLocale("fr_FR");
+
+  // Negative offset (Los Angeles): the local wall-clock is the previous day.
+  {
+    // Previous day, same month (Jan 15 00:30 UTC == Jan 14 PST).
+    test::ScopedRestoreDefaultTimezone time_zone("America/Los_Angeles");
+    Time time;
+    ASSERT_TRUE(Time::FromUTCExploded({.year = 2011,
+                                       .month = 1,
+                                       .day_of_week = 6,
+                                       .day_of_month = 15,
+                                       .hour = 0,
+                                       .minute = 30,
+                                       .second = 0},
+                                      &time));
+    EXPECT_EQ("Sat, 15 Jan 2011 00:30:00 GMT", TimeFormatHTTP(time));
+  }
+  {
+    // Previous day and month (May 1 00:30 UTC == Apr 30 PDT).
+    test::ScopedRestoreDefaultTimezone time_zone("America/Los_Angeles");
+    Time time;
+    ASSERT_TRUE(Time::FromUTCExploded({.year = 2011,
+                                       .month = 5,
+                                       .day_of_week = 0,
+                                       .day_of_month = 1,
+                                       .hour = 0,
+                                       .minute = 30,
+                                       .second = 0},
+                                      &time));
+    EXPECT_EQ("Sun, 01 May 2011 00:30:00 GMT", TimeFormatHTTP(time));
+  }
+
+  // Positive offset (Tokyo): the local wall-clock is the next day.
+  {
+    // Next day, same month (Jan 15 23:30 UTC == Jan 16 JST).
+    test::ScopedRestoreDefaultTimezone time_zone("Asia/Tokyo");
+    Time time;
+    ASSERT_TRUE(Time::FromUTCExploded({.year = 2011,
+                                       .month = 1,
+                                       .day_of_week = 6,
+                                       .day_of_month = 15,
+                                       .hour = 23,
+                                       .minute = 30,
+                                       .second = 0},
+                                      &time));
+    EXPECT_EQ("Sat, 15 Jan 2011 23:30:00 GMT", TimeFormatHTTP(time));
+  }
+  {
+    // Next day and month (Apr 30 23:30 UTC == May 1 JST).
+    test::ScopedRestoreDefaultTimezone time_zone("Asia/Tokyo");
+    Time time;
+    ASSERT_TRUE(Time::FromUTCExploded({.year = 2011,
+                                       .month = 4,
+                                       .day_of_week = 6,
+                                       .day_of_month = 30,
+                                       .hour = 23,
+                                       .minute = 30,
+                                       .second = 0},
+                                      &time));
+    EXPECT_EQ("Sat, 30 Apr 2011 23:30:00 GMT", TimeFormatHTTP(time));
+  }
+}
+
 TEST(TimeFormattingTest, TimeDurationFormat) {
   test::ScopedRestoreICUDefaultLocale restore_locale;
   TimeDelta delta = Minutes(15 * 60 + 42);
@@ -570,44 +646,17 @@ TEST(TimeFormattingTest, TimeDurationCompactFormatWithSeconds) {
                             delta, DURATION_WIDTH_NUMERIC));
 }
 
-TEST(TimeFormattingTest, TimeIntervalFormat) {
+TEST(TimeFormattingTest, GetHourClockType_Persian) {
   test::ScopedRestoreICUDefaultLocale restore_locale;
-  i18n::SetICUDefaultLocale("en_US");
-  test::ScopedRestoreDefaultTimezone la_time("America/Los_Angeles");
-
-  const Time::Exploded kTestIntervalEndTimeExploded = {
-      2011, 5,  6, 28,  // Sat, May 28, 2012
-      22,   42, 7, 0    // 22:42:07.000
-  };
-
-  Time begin_time;
-  EXPECT_TRUE(Time::FromUTCExploded(kTestDateTimeExploded, &begin_time));
-  Time end_time;
-  EXPECT_TRUE(Time::FromUTCExploded(kTestIntervalEndTimeExploded, &end_time));
-
-  EXPECT_EQ(
-      u"Saturday, April 30\u2009–\u2009Saturday, May 28",
-      DateIntervalFormat(begin_time, end_time, DATE_FORMAT_MONTH_WEEKDAY_DAY));
-
-  const Time::Exploded kTestIntervalBeginTimeExploded = {
-      2011, 5,  1, 16,  // Mon, May 16, 2012
-      22,   42, 7, 0    // 22:42:07.000
-  };
-  EXPECT_TRUE(
-      Time::FromUTCExploded(kTestIntervalBeginTimeExploded, &begin_time));
-  EXPECT_EQ(
-      u"Monday, May 16\u2009–\u2009Saturday, May 28",
-      DateIntervalFormat(begin_time, end_time, DATE_FORMAT_MONTH_WEEKDAY_DAY));
-
-  i18n::SetICUDefaultLocale("en_GB");
-  EXPECT_EQ(
-      u"Monday 16 May\u2009–\u2009Saturday 28 May",
-      DateIntervalFormat(begin_time, end_time, DATE_FORMAT_MONTH_WEEKDAY_DAY));
-
-  i18n::SetICUDefaultLocale("ja");
-  EXPECT_EQ(
-      u"5月16日(月曜日)～28日(土曜日)",
-      DateIntervalFormat(begin_time, end_time, DATE_FORMAT_MONTH_WEEKDAY_DAY));
+  i18n::SetICUDefaultLocale("fa");
+  Time time;
+  EXPECT_TRUE(Time::FromUTCString("2026-05-25 22:30:00", &time));
+  std::u16string result = TimeFormatTimeOfDay(time);
+  // Use std::cout for debugging.
+  std::cout << "Formatted time for fa: " << base::UTF16ToUTF8(result)
+            << std::endl;
+  HourClockType type = GetHourClockType();
+  EXPECT_EQ(k24HourClock, type);
 }
 
 }  // namespace

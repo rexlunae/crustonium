@@ -5,7 +5,7 @@
 import * as fill_constants from '//components/autofill/ios/form_util/resources/fill_constants.js';
 import * as inferenceUtil from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
 import * as fillUtil from '//components/autofill/ios/form_util/resources/fill_util.js';
-import {fieldWasEditedByUser, unownedFormElementsAndFieldSetsToFormData, webFormElementToFormData} from '//components/autofill/ios/form_util/resources/fill_web_form.js';
+import {fieldWasEditedByUser, unownedFormElementsAndFieldSetsToFormData, wasEditedByUser, webFormElementToFormData} from '//components/autofill/ios/form_util/resources/fill_web_form.js';
 import {getFormControlElements, getFormElementFromIdentifier, getFormElementFromRendererId, getIframeElements} from '//components/autofill/ios/form_util/resources/form_utils.js';
 import {getElementByUniqueID} from '//components/autofill/ios/form_util/resources/renderer_id.js';
 import {CrWebApi, gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
@@ -76,6 +76,13 @@ const autofillFormFeaturesApi =
     gCrWeb.getRegisteredApi('autofill_form_features');
 
 /**
+ * Returns true if the undo autofill feature is enabled.
+ */
+function isAutofillUndoEnabled() {
+  return window.gCrWebPlaceholderAutofillUndo;
+}
+
+/**
  * Determines whether the form is interesting enough to send to the browser for
  * further operations.
  *
@@ -130,8 +137,19 @@ function countEditableElements_(elements) {
  *     empty if no match.
  */
 function getUnownedIframes() {
-  return Array.from(getIframeElements(document))
-      .filter(e => !e.closest('form'));
+  if (fillUtil.isAutofillOptimizationFormSearchEnabled()) {
+    const iframes = getIframeElements(document);
+    const result = [];
+    for (const iframe of iframes) {
+      if (!iframe.closest('form')) {
+        result.push(iframe);
+      }
+    }
+    return result;
+  } else {
+    return Array.from(getIframeElements(document))
+        .filter(e => !e.closest('form'));
+  }
 }
 
 /**
@@ -145,7 +163,7 @@ function getUnownedIframes() {
 function extractUnownedFields(restrictUnownedFieldsToFormlessCheckout) {
   const fieldsets = [];
   const unownedControlElements =
-      fillUtil.getUnownedAutofillableFormFieldElements(document.all, fieldsets);
+      fillUtil.getUnownedAutofillableFormFieldElements(fieldsets);
   const numEditableUnownedElements =
       countEditableElements_(unownedControlElements);
   const iframeElements =
@@ -233,11 +251,9 @@ function controlElementInputListener_(evt) {
  * |forceFillFieldID| will always be filled even if non-empty.
  *
  * @param {!FormData} data Autofill data to fill in.
- * @param {number} forceFillFieldID Identified field will always be
- *     filled even if non-empty. May be RENDERER_ID_NOT_SET.
  * @return {string} JSON encoded list of renderer IDs of filled elements.
  */
-function fillForm(data, forceFillFieldID) {
+function fillForm(data) {
   // Inject CSS to style the autofilled elements with a yellow background.
   if (!styleInjected) {
     const style = document.createElement('style');
@@ -272,7 +288,7 @@ function fillForm(data, forceFillFieldID) {
     //    always autofilled; see AutofillManager::FillOrPreviewDataModelForm().
     // c) The "value" or "placeholder" attributes match the value, if any; or
     // d) The value has not been set by the user.
-    const shouldBeForceFilled = fieldId === forceFillFieldID.toString();
+    const shouldBeForceFilled = element === document.activeElement;
     if (element.value && fieldWasEditedByUser(element) &&
         !sanitizedFieldIsEmpty(element.value) && !shouldBeForceFilled &&
         !inferenceUtil.isSelectElement(element) &&
@@ -378,9 +394,7 @@ function clearAutofilledFields(formUniqueID, fieldUniqueID) {
 
   const controlElements = form ?
       getFormControlElements(form) :
-      fillUtil.getUnownedAutofillableFormFieldElements(
-          document.all,
-          /*fieldsets=*/[]);
+      fillUtil.getUnownedAutofillableFormFieldElements(/*fieldsets=*/[]);
 
   let formField = null;
   for (let i = 0; i < controlElements.length; ++i) {
@@ -554,7 +568,10 @@ function fillFormField(data, field) {
   }
 
   let filled = false;
-  if (isTextField(field) || inferenceUtil.isTextAreaElement(field)) {
+  if (isTextField(field) || inferenceUtil.isTextAreaElement(field) ||
+      (inferenceUtil.isDateField(field) &&
+       autofillFormFeaturesApi.getFunction(
+           'isAutofillSupportDateInputEnabled')())) {
     let sanitizedValue = data['value'];
 
     if (isTextField(field)) {
@@ -569,7 +586,9 @@ function fillFormField(data, field) {
 
     filled = fillUtil.setInputElementValue(sanitizedValue, field);
     // If kAutofillUndoIos is enabled, avoid showing the Clear/Undo button.
-    if (!window.gCrWebPlaceholderAutofillUndo) {
+    if (isAutofillUndoEnabled()) {
+      wasEditedByUser.set(field, true);
+    } else {
       field.isAutofilled = true;
     }
   } else if (inferenceUtil.isSelectElement(field)) {
@@ -667,7 +686,7 @@ function sanitizedFieldIsEmpty(value) {
   return trim(value.replace(/[-_()/|]/g, '')) === '';
 }
 
-const autofillAPI = new CrWebApi();
+const autofillAPI = new CrWebApi('autofill');
 
 autofillAPI.addFunction('clearAutofilledFields', clearAutofilledFields);
 autofillAPI.addFunction(
@@ -681,4 +700,4 @@ autofillAPI.addFunction('fillPredictionData', fillPredictionData);
 autofillAPI.addFunction('fillSpecificFormField', fillSpecificFormField);
 autofillAPI.addFunction('sanitizedFieldIsEmpty', sanitizedFieldIsEmpty);
 
-gCrWeb.registerApi('autofill', autofillAPI);
+gCrWeb.registerApi(autofillAPI);

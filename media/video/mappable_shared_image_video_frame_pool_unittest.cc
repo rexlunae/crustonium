@@ -27,12 +27,6 @@ using ::testing::AtLeast;
 
 namespace media {
 
-// Note that we are continuing to skip some tests when MappableSI is enabled
-// until we port over facilities that the tests were using to force failure
-// of GMB creation.
-// TODO(crbug.com/366375486): Convert the currently skipped tests.
-const bool SkipTestWithMappableSI = true;
-
 class MappableSharedImageVideoFramePoolTest : public ::testing::Test {
  public:
   MappableSharedImageVideoFramePoolTest() = default;
@@ -670,6 +664,24 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareXR30Frame) {
   EXPECT_TRUE(frame->metadata().read_lock_fences_enabled);
 }
 
+TEST_F(MappableSharedImageVideoFramePoolTest,
+       CreateOneHardwareXR30FrameWithOddSize) {
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(9, 10);
+  scoped_refptr<VideoFrame> frame;
+  mock_gpu_factories_->SetVideoFrameOutputFormat(
+      media::GpuVideoAcceleratorFactories::OutputFormat::XR30);
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_EQ(PIXEL_FORMAT_XR30, frame->format());
+  EXPECT_TRUE(frame->HasSharedImage());
+  EXPECT_EQ(1u, sii_->shared_image_count());
+  EXPECT_EQ(gfx::Size(9, 9), frame->coded_size());
+}
+
 TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareP010Frame) {
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10, 10);
   scoped_refptr<VideoFrame> frame;
@@ -834,6 +846,24 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareXB30Frame) {
   EXPECT_EQ(as_xr30(0, 543, 0), *static_cast<uint32_t*>(memory));
 }
 
+TEST_F(MappableSharedImageVideoFramePoolTest,
+       CreateOneHardwareXB30FrameWithOddSize) {
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(9, 10);
+  scoped_refptr<VideoFrame> frame;
+  mock_gpu_factories_->SetVideoFrameOutputFormat(
+      media::GpuVideoAcceleratorFactories::OutputFormat::XB30);
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_EQ(PIXEL_FORMAT_XB30, frame->format());
+  EXPECT_TRUE(frame->HasSharedImage());
+  EXPECT_EQ(1u, sii_->shared_image_count());
+  EXPECT_EQ(gfx::Size(9, 9), frame->coded_size());
+}
+
 TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareRGBAFrame) {
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVAVideoFrame(10);
   scoped_refptr<VideoFrame> frame;
@@ -847,7 +877,7 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareRGBAFrame) {
 
 TEST_F(MappableSharedImageVideoFramePoolTest, PreservesMetadata) {
   gfx::HDRMetadata hdr_metadata;
-  hdr_metadata.cta_861_3 = gfx::HdrMetadataCta861_3(5000, 1000);
+  hdr_metadata.SetCLLI(skhdr::ContentLightLevelInformation{5000, 1000});
 
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
   software_frame->metadata().end_of_stream = true;
@@ -868,16 +898,14 @@ TEST_F(MappableSharedImageVideoFramePoolTest, PreservesMetadata) {
   EXPECT_EQ(kTestReferenceTime, *frame->metadata().reference_time);
 }
 
-// CreateGpuMemoryBuffer can return null (e.g: when the GPU process is down).
+// Creation of a mappable SharedImage can return null (e.g: when the GPU process
+// is down).
 // This test checks that in that case we don't crash and don't create the
 // textures.
-TEST_F(MappableSharedImageVideoFramePoolTest, CreateGpuMemoryBufferFail) {
-  if (SkipTestWithMappableSI) {
-    return;
-  }
+TEST_F(MappableSharedImageVideoFramePoolTest, CreateMappableSharedImageFail) {
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
   scoped_refptr<VideoFrame> frame;
-  mock_gpu_factories_->SetFailToAllocateGpuMemoryBufferForTesting(true);
+  sii_->SetFailSharedImageCreationWithBufferUsage(true);
   mappable_shared_image_pool_->MaybeCreateHardwareFrame(
       software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
 
@@ -889,13 +917,10 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateGpuMemoryBufferFail) {
 }
 
 TEST_F(MappableSharedImageVideoFramePoolTest,
-       CreateGpuMemoryBufferFailAfterShutdown) {
-  if (SkipTestWithMappableSI) {
-    return;
-  }
+       CreateMappableSharedImageFailAfterShutdown) {
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
   scoped_refptr<VideoFrame> frame;
-  mock_gpu_factories_->SetFailToMapGpuMemoryBufferForTesting(true);
+  sii_->SetFailSharedImageCreationWithBufferUsage(true);
   mappable_shared_image_pool_->MaybeCreateHardwareFrame(
       software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
   mappable_shared_image_pool_.reset();
@@ -1070,6 +1095,26 @@ TEST_F(MappableSharedImageVideoFramePoolTest, AbortCopies) {
   EXPECT_EQ(0u, copy_task_runner_->NumPendingTasks());
   RunUntilIdle();
   ASSERT_FALSE(frame_2);
+}
+
+TEST_F(MappableSharedImageVideoFramePoolTest,
+       RespectColorSpaceForSharedImageBackedFrame) {
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
+  // Color space is invalid by default.
+  ASSERT_FALSE(software_frame->ColorSpace().IsValid());
+
+  scoped_refptr<VideoFrame> frame;
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_TRUE(frame->HasSharedImage());
+  // The color space should have been set to REC709 by default.
+  EXPECT_EQ(gfx::ColorSpace::CreateREC709(), frame->ColorSpace());
+  EXPECT_EQ(gfx::ColorSpace::CreateREC709(),
+            frame->shared_image()->color_space());
 }
 
 }  // namespace media

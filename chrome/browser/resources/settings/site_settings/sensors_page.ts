@@ -10,6 +10,7 @@ import '../settings_shared.css.js';
 
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {loadTimeData} from '../i18n_setup.js';
 import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
 import {ContentSettingsTypes} from '../site_settings/constants.js';
 
@@ -35,14 +36,33 @@ export class SensorsPageElement extends SensorsPageElementBase {
         type: Object,
         value: ContentSettingsTypes,
       },
+
+      isSensorsAllowAskBlockPermissionModelEnabled_: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean(
+            'sensorsAllowAskBlockPermissionModelEnabled'),
+      },
     };
   }
 
   declare searchTerm: string;
+  private declare isSensorsAllowAskBlockPermissionModelEnabled_: boolean;
 
   // SettingsViewMixin implementation.
   override focusBackButton() {
     this.shadowRoot!.querySelector('settings-subpage')!.focusBackButton();
+  }
+
+  protected getSensorsIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:sensors' :
+        'privacy:sensors-old';
+  }
+
+  protected getSensorsOffIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'privacy:sensors-off' :
+        'privacy:sensors-off-old';
   }
 }
 

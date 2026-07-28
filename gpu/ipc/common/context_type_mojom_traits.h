@@ -23,32 +23,23 @@ struct GPU_IPC_COMMON_EXPORT EnumTraits<gpu::mojom::ContextType,
         return gpu::mojom::ContextType::kWebGL2;
       case gpu::CONTEXT_TYPE_OPENGLES2:
         return gpu::mojom::ContextType::kOpenGLES2;
-      // OPENGLES3 and OPENGLES31_FOR_TESTING should not be serialized as there
-      // are no production usages and it is planned to be removed.
+      // OPENGLES3  should not be serialized as there are no production usages
+      // and it is planned to be removed.
       case gpu::CONTEXT_TYPE_OPENGLES3:
-      case gpu::CONTEXT_TYPE_OPENGLES31_FOR_TESTING:
         NOTREACHED();
     }
   }
 
-  static bool FromMojom(gpu::mojom::ContextType type, gpu::ContextType* out) {
+  static gpu::ContextType FromMojom(gpu::mojom::ContextType type) {
     switch (type) {
       case gpu::mojom::ContextType::kWebGL1:
-        *out = gpu::CONTEXT_TYPE_WEBGL1;
-        return true;
+        return gpu::CONTEXT_TYPE_WEBGL1;
       case gpu::mojom::ContextType::kWebGL2:
-        *out = gpu::CONTEXT_TYPE_WEBGL2;
-        return true;
+        return gpu::CONTEXT_TYPE_WEBGL2;
       case gpu::mojom::ContextType::kOpenGLES2:
-        *out = gpu::CONTEXT_TYPE_OPENGLES2;
-        return true;
-      // OPENGLES3 and OPENGLES31_FOR_TESTING should not be serialized as there
-      // are no production usages and it is planned to be removed.
-      case gpu::mojom::ContextType::kOpenGLES3:
-      case gpu::mojom::ContextType::kOpenGLES31ForTesting:
-        return false;
+        return gpu::CONTEXT_TYPE_OPENGLES2;
     }
-    return false;
+    NOTREACHED();
   }
 };
 

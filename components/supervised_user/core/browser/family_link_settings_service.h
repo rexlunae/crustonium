@@ -211,6 +211,8 @@ class FamilyLinkSettingsService : public KeyedService,
   HostExceptions GetHostExceptions() const;
   UrlExceptions GetUrlExceptions() const;
 
+  bool IsSafeSitesEnabled() const;
+
  private:
   // Returns parsed logical value for the default filtering behavior setting,
   // considering its default value.
@@ -239,6 +241,8 @@ class FamilyLinkSettingsService : public KeyedService,
   // last time a notification was sent.
   void InformSubscribers();
 
+  void ClearWaitUntilReadyToSyncTrap();
+
   // Used for persisting the settings. Unlike other PrefStores, this one is not
   // directly hooked up to the PrefService.
   scoped_refptr<PersistentPrefStore> store_;
@@ -265,6 +269,9 @@ class FamilyLinkSettingsService : public KeyedService,
       shutdown_callback_list_;
 
   std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
+
+  // TODO(crbug.com/480137930): remove once issue is resolved.
+  bool wait_until_ready_to_sync_trap_ = false;
 
   base::WeakPtrFactory<FamilyLinkSettingsService> weak_ptr_factory_{this};
 };

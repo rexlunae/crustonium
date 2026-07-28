@@ -51,12 +51,12 @@ class Range;
 class SetSelectionOptions;
 class TreeScope;
 
-class CORE_EXPORT DOMSelection final : public ScriptWrappable,
+class CORE_EXPORT DomSelection final : public ScriptWrappable,
                                        public ExecutionContextClient {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  explicit DOMSelection(const TreeScope*);
+  explicit DomSelection(const TreeScope*);
 
   void ClearTreeScope();
 
@@ -118,19 +118,19 @@ class CORE_EXPORT DOMSelection final : public ScriptWrappable,
     STACK_ALLOCATED();
 
    public:
-    TemporaryRange(const DOMSelection*, Range*);
+    TemporaryRange(const DomSelection*, Range*);
     ~TemporaryRange();
     Range* GetRange();
 
    private:
     Range* range_ = nullptr;
-    const DOMSelection* owner_dom_selection_ = nullptr;
+    const DomSelection* owner_dom_selection_ = nullptr;
   };
 
   FrameSelection& Selection() const;
   bool IsAvailable() const;
 
-  void UpdateFrameSelection(const SelectionInDOMTree&,
+  void UpdateFrameSelection(const SelectionInDomTree&,
                             Range*,
                             const SetSelectionOptions&) const;
   // Convenience methods for accessors, does not check owner Frame presence.
@@ -154,12 +154,9 @@ class CORE_EXPORT DOMSelection final : public ScriptWrappable,
   // Rescope the provided selection endpoint to be within the list of shadow
   // roots. If endpoint is inside a not listed shadow root, the endpoint will
   // be rescoped to include the host element for that shadow root.
-  // Both arguments node and offset are references and might be modified by
-  // this function.
-  void Rescope(Node*& node,
-               unsigned& offset,
-               const HeapVector<Member<ShadowRoot>>&,
-               bool) const;
+  Position Rescope(const Position&,
+                   const HeapVector<Member<ShadowRoot>>&,
+                   bool) const;
 
   Member<const TreeScope> tree_scope_;
 };

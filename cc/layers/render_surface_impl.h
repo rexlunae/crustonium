@@ -289,6 +289,9 @@ class CC_EXPORT RenderSurfaceImpl {
   // Returns true if the owning effect node has a view transition resource.
   bool IsViewTransitionElement() const;
 
+  // Returns true if this render surface is for an unbounded element.
+  bool IsUnbounded() const;
+
   // Returns the view transition element resource id for this render surface.
   // This may be invalid, if this render surface is not a view transition
   // element.
@@ -399,7 +402,7 @@ class CC_EXPORT RenderSurfaceImpl {
   // A ViewTransitionContentLayer only knows its final visible drawable rect
   // once its originating surface's content rect has been computed. So we defer
   // adding this contribution until that is complete.
-  std::vector<LayerImpl*> deferred_contributing_layers_;
+  std::vector<raw_ptr<LayerImpl>> deferred_contributing_layers_;
 
   gfx::Rect view_transition_capture_content_rect_;
 

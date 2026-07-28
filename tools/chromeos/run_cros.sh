@@ -52,14 +52,18 @@ declare -A DISPLAY_RES=(
 # Use WXGA as default panel.
 DISPLAY_CONFIG=${DISPLAY_RES[wxga]}
 
-FEATURES=
-
 # GLIC specific feature flags.
-GLIC_FEATURES=Glic,TabstripComboButton,GlicDevelopmentCookies,\
-ContextualCueing,GlicKeyboardShortcutNewBadge,GlicRollout,GlicFreWarming,\
-GlicUseNonClient,GlicSidePanel,GlicMultiInstance,FeatureManagementGlic,\
-GlicDefaultTabContextSetting,GlicLiveModeOnlyGlow,GlicDaisyChainNewTabs,\
-GlicUnifiedFreScreen
+GLIC_FEATURES=Glic,TabstripComboButton,GlicUserStatusCheck,\
+ContextualCueing,GlicKeyboardShortcutNewBadge,GlicRollout,\
+GlicZeroStateSuggestions,FeatureManagementGlic,GlicMultiInstance,\
+GlicDefaultTabContextSetting,GlicUnifiedFreScreen,GlicDaisyChainNewTabs,\
+GlicLiveModeOnlyGlow
+
+# Webium feature flags.
+WEBIUM_FEATURES=Webium,AttachUnownedInnerWebContents,\
+ExtensionsMenuAccessControl
+
+FEATURES=VerticalTabs,FeatureManagementRoundedWindows,${GLIC_FEATURES}
 
 export XDG_RUNTIME_DIR=${USER_TMP_DIR}/xdg1
 
@@ -172,6 +176,7 @@ command
                          'show-xinput-device-id'.
   --user-data-dir        specifies the user data dir
   --wayland-debug        Enable WAYLAND_DEBUG=1
+  --webium               Enable webium.
   --<chrome commandline flags>
                          Pass extra command line flags to ash-chrome.
                          The script will reject if the string does not exist in
@@ -206,11 +211,8 @@ do
     --wayland-debug)
       export WAYLAND_DEBUG=1
       ;;
-    --glic-side-panel)
-      echo "Warning: --glic-side-panel is deprecated. use --glic instead."
-      ;&
-    --glic)
-      FEATURES=${FEATURES},${GLIC_FEATURES}
+    --webium)
+      FEATURES=${FEATURES},${WEBIUM_FEATURES}
       ;;
     --touch-device-id=*)
       id=${1:18}

@@ -92,7 +92,7 @@ class AutofillPopupControllerBrowserTest : public InProcessBrowserTest {
         autofill_driver().GetAutofillManager());
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   TestAutofillExternalDelegate& autofill_external_delegate() {
     return static_cast<TestAutofillExternalDelegate&>(
@@ -110,8 +110,9 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
                                         /*expect_popup_to_be_shown=*/true));
 
   // Move the window, which should close the popup.
-  gfx::Rect new_bounds = browser()->window()->GetBounds() - gfx::Vector2d(1, 1);
-  browser()->window()->SetBounds(new_bounds);
+  gfx::Rect new_bounds =
+      browser()->GetWindow()->GetBounds() - gfx::Vector2d(1, 1);
+  browser()->GetWindow()->SetBounds(new_bounds);
 
   autofill_external_delegate().WaitForPopupHidden();
   EXPECT_TRUE(autofill_external_delegate().popup_hidden());
@@ -123,9 +124,9 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
                                         /*expect_popup_to_be_shown=*/true));
 
   // Resize the window, which should cause the popup to hide.
-  gfx::Rect new_bounds = browser()->window()->GetBounds();
+  gfx::Rect new_bounds = browser()->GetWindow()->GetBounds();
   new_bounds.Inset(1);
-  browser()->window()->SetBounds(new_bounds);
+  browser()->GetWindow()->SetBounds(new_bounds);
 
   autofill_external_delegate().WaitForPopupHidden();
   EXPECT_TRUE(autofill_external_delegate().popup_hidden());
@@ -136,8 +137,8 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
   constexpr float kSize = 100.0f;
   // Set to smallest possible size. The actual minimum size is larger and
   // platform dependent.
-  browser()->window()->SetBounds(gfx::Rect(1, 1));
-  gfx::Rect window_bounds = browser()->window()->GetBounds();
+  browser()->GetWindow()->SetBounds(gfx::Rect(1, 1));
+  gfx::Rect window_bounds = browser()->GetWindow()->GetBounds();
   // Position the popup in the lower right corner so that there is not enough
   // space to display it.
   EXPECT_TRUE(GenerateTestAutofillPopup(
@@ -148,24 +149,24 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
 }
 
 // Tests that entering fullscreen hides the popup and, in particular, does not
-// crash (crbug.com/1267047).
+// crash (crbug.com/40204318).
 IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
                        HidePopupOnWindowEnterFullscreen) {
   EXPECT_TRUE(GenerateTestAutofillPopup(autofill_driver(), profile(),
                                         /*expect_popup_to_be_shown=*/true));
 
   // Enter fullscreen, which should cause the popup to hide.
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
+  ASSERT_FALSE(browser()->GetWindow()->IsFullscreen());
   content::WebContentsDelegate* wcd = browser();
   wcd->EnterFullscreenModeForTab(main_rfh(), {});
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
 
   autofill_external_delegate().WaitForPopupHidden();
   EXPECT_TRUE(autofill_external_delegate().popup_hidden());
 }
 
 // Tests that exiting fullscreen hides the popup and, in particular, does not
-// crash (crbug.com/1267047).
+// crash (crbug.com/40204318).
 IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
                        HidePopupOnWindowExitFullscreen) {
   content::WebContentsDelegate* wcd = browser();
@@ -175,9 +176,9 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
                                         /*expect_popup_to_be_shown=*/true));
 
   // Exit fullscreen, which should cause the popup to hide.
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
   wcd->ExitFullscreenModeForTab(web_contents());
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
+  ASSERT_FALSE(browser()->GetWindow()->IsFullscreen());
 
   autofill_external_delegate().WaitForPopupHidden();
   EXPECT_TRUE(autofill_external_delegate().popup_hidden());
@@ -192,20 +193,20 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest,
 
   // Delete the external delegate here so that is gets deleted before popup is
   // hidden. This can happen if the web_contents are destroyed before the popup
-  // is hidden. See http://crbug.com/232475.
+  // is hidden. See http://crbug.com/40077420.
   // To do that, simulate that the RFH is deleted. This causes driver deletion,
   // which deletes the AutofillManager, which deletes the ExternalDelegate.
   ContentAutofillDriverFactory::FromWebContents(web_contents())
       ->RenderFrameDeleted(main_rfh());
 }
 
-// crbug.com/965025
+// crbug.com/40095103
 IN_PROC_BROWSER_TEST_F(AutofillPopupControllerBrowserTest, ResetSelectedLine) {
   EXPECT_TRUE(GenerateTestAutofillPopup(autofill_driver(), profile(),
                                         /*expect_popup_to_be_shown=*/true));
 
   auto* client =
-      autofill::ChromeAutofillClient::FromWebContentsForTesting(web_contents());
+      ChromeAutofillClient::FromWebContentsForTesting(web_contents());
   base::WeakPtr<AutofillSuggestionController> controller =
       client->suggestion_controller_for_testing();
   ASSERT_TRUE(controller);

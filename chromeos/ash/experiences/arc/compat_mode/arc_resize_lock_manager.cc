@@ -13,8 +13,8 @@
 #include "ash/wm/resize_shadow_controller.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
@@ -43,11 +43,12 @@ class ArcResizeLockManagerFactory
   static constexpr const char* kName = "ArcResizeLockManagerFactory";
 
   static ArcResizeLockManagerFactory* GetInstance() {
-    return base::Singleton<ArcResizeLockManagerFactory>::get();
+    static base::NoDestructor<ArcResizeLockManagerFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend struct base::DefaultSingletonTraits<ArcResizeLockManagerFactory>;
+  friend base::NoDestructor<ArcResizeLockManagerFactory>;
   ArcResizeLockManagerFactory() = default;
   ~ArcResizeLockManagerFactory() override = default;
 };
@@ -190,12 +191,11 @@ void ArcResizeLockManager::OnWindowPropertyChanged(aura::Window* window,
 
   if (key == ash::kAppIDKey) {
     if (GetAppId(window)) {
-      if (auto it = pending_app_id_callbacks_.find(window);
-          it != pending_app_id_callbacks_.end()) {
-        for (auto& callback : it->second) {
+      if (auto callbacks = pending_app_id_callbacks_.extract(window);
+          callbacks) {
+        for (auto& callback : callbacks.mapped()) {
           std::move(callback).Run();
         }
-        pending_app_id_callbacks_.erase(it);
       }
     }
     return;

@@ -44,7 +44,7 @@
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_config.h"
 #import "ios/chrome/browser/content_suggestions/price_tracking_promo/coordinator/price_tracking_promo_mediator+testing.h"
 #import "ios/chrome/browser/content_suggestions/price_tracking_promo/coordinator/price_tracking_promo_mediator.h"
-#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_item.h"
+#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_config.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/coordinator/safety_check_magic_stack_mediator.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/coordinator/safety_check_magic_stack_mediator_delegate.h"
@@ -56,8 +56,9 @@
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_tile_view.h"
 #import "ios/chrome/browser/content_suggestions/tab_resumption/coordinator/tab_resumption_mediator.h"
 #import "ios/chrome/browser/content_suggestions/tab_resumption/coordinator/tab_resumption_mediator_delegate.h"
-#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_item.h"
+#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_config.h"
 #import "ios/chrome/browser/content_suggestions/tips/coordinator/tips_magic_stack_mediator.h"
+#import "ios/chrome/browser/content_suggestions/tips/coordinator/tips_magic_stack_mediator_delegate.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_consumer.h"
 #import "ios/chrome/browser/default_browser/model/utils_test_support.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_large_icon_cache_factory.h"
@@ -65,6 +66,8 @@
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/first_run/model/first_run.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
+#import "ios/chrome/browser/level_up/model/level_up_service.h"
+#import "ios/chrome/browser/level_up/model/level_up_service_factory.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_prefs.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_constants.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_model_factory.h"
@@ -97,6 +100,7 @@
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/providers/app_store_bundle/test_app_store_bundle_service.h"
 #import "ios/web/public/test/web_task_environment.h"
+#import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
@@ -138,15 +142,15 @@ std::unique_ptr<KeyedService> BuildFeatureEngagementMockTracker(
 @end
 
 @implementation FakeTabResumptionMediator {
-  TabResumptionItem* _item;
+  TabResumptionConfig* _config;
 }
 
-- (TabResumptionItem*)itemConfig {
-  if (!_item) {
-    _item = [[TabResumptionItem alloc] initWithItemType:kMostRecentTab];
-    _item.tabURL = GURL("http://test.com");
+- (TabResumptionConfig*)itemConfig {
+  if (!_config) {
+    _config = [[TabResumptionConfig alloc] initWithItemType:kMostRecentTab];
+    _config.tabURL = GURL("http://test.com");
   }
-  return _item;
+  return _config;
 }
 
 - (void)fetchLastTabResumptionItem {
@@ -219,8 +223,8 @@ std::unique_ptr<KeyedService> BuildFeatureEngagementMockTracker(
 // Expose -hasReceivedMagicStackResponse for waiting for ranking to return.
 @interface MagicStackRankingModel (Testing) <
     SafetyCheckMagicStackMediatorDelegate,
-    TipsMagicStackMediatorDelegate,
-    TabResumptionMediatorDelegate>
+    TabResumptionMediatorDelegate,
+    TipsMagicStackMediatorDelegate>
 @property(nonatomic, assign, readonly) BOOL hasReceivedMagicStackResponse;
 @property(nonatomic, assign, readonly) BOOL hasReceivedEphemericalCardResponse;
 @end
@@ -314,11 +318,7 @@ class MagicStackRankingModelTest : public PlatformTest {
                  identityManager:identityManager
                          browser:browser_.get()
         optimizationGuideService:nil
-          impressionLimitService:nil
-                 shoppingService:nil
-                   bookmarkModel:nil
-         pushNotificationService:nil
-           authenticationService:nil];
+                 shoppingService:nil];
     history::HistoryService* history_service =
         ios::HistoryServiceFactory::GetForProfile(
             GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
@@ -377,8 +377,8 @@ class MagicStackRankingModelTest : public PlatformTest {
           authenticationService:nil
                   faviconLoader:nil];
 
-    PriceTrackingPromoItem* item = [[PriceTrackingPromoItem alloc] init];
-    [_priceTrackingPromoMediator setPriceTrackingPromoItemForTesting:item];
+    PriceTrackingPromoConfig* config = [[PriceTrackingPromoConfig alloc] init];
+    [_priceTrackingPromoMediator setPriceTrackingPromoConfigForTesting:config];
 
     _magicStackRankingModel = [[MagicStackRankingModel alloc]
         initWithSegmentationService:segmentation_platform::
@@ -403,10 +403,11 @@ class MagicStackRankingModelTest : public PlatformTest {
                  templateURLService:ios::TemplateURLServiceFactory::
                                         GetForProfile(browser_->GetProfile())
               appStoreBundleService:app_store_bundle_service_.get()
-                      bookmarkModel:bookmark_model_.get()];
+                      bookmarkModel:bookmark_model_.get()
+                     levelUpService:LevelUpServiceFactory::GetForProfile(
+                                        GetProfile())];
 
-    metrics_recorder_ = [[ContentSuggestionsMetricsRecorder alloc]
-        initWithLocalState:GetLocalState()];
+    metrics_recorder_ = [[ContentSuggestionsMetricsRecorder alloc] init];
     _magicStackRankingModel.contentSuggestionsMetricsRecorder =
         metrics_recorder_;
     _setUpListMediator.contentSuggestionsMetricsRecorder = metrics_recorder_;
@@ -576,7 +577,7 @@ TEST_F(MagicStackRankingModelTest, TestModelDidGetLatestRankingOrder) {
   EXPECT_EQ([delegate_.rank count], [expectedModuleRank count]);
   for (NSUInteger i = 0; i < [expectedModuleRank count]; i++) {
     MagicStackModule* config = delegate_.rank[i];
-    EXPECT_EQ(@(int(config.type)), expectedModuleRank[i])
+    EXPECT_NSEQ(expectedModuleRank[i], @(int(config.type)))
         << "For Magic Stack order index " << i;
   }
 }
@@ -708,7 +709,7 @@ TEST_F(MagicStackRankingModelTest, TestEphemeralModelDidGetCardToShow) {
   EXPECT_EQ([delegate_.rank count], [expectedModuleRank count]);
   for (NSUInteger i = 0; i < [expectedModuleRank count]; i++) {
     MagicStackModule* config = delegate_.rank[i];
-    EXPECT_EQ(@(int(config.type)), expectedModuleRank[i])
+    EXPECT_NSEQ(expectedModuleRank[i], @(int(config.type)))
         << "For Magic Stack order index " << i;
   }
 }
@@ -728,4 +729,58 @@ TEST_F(MagicStackRankingModelTest, TestNumSubscriptions) {
       bookmark_model(), u"product 3", GURL("http://example.com/product3"), 789L,
       true, 2230000, "usd", std::nullopt, 3000000));
   EXPECT_EQ(2, getNumPriceDrops(products));
+}
+
+// Tests that Level Up module is included in the ranking order when enabled.
+TEST_F(MagicStackRankingModelTest, TestLevelUpModuleRanking) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitWithFeatures({kIOSLevelUp}, {});
+
+  std::unique_ptr<LevelUpService> level_up_service =
+      std::make_unique<LevelUpService>(GetProfile()->GetPrefs());
+  MagicStackRankingModel* ranking_model = [[MagicStackRankingModel alloc]
+      initWithSegmentationService:segmentation_platform::
+                                      SegmentationPlatformServiceFactory::
+                                          GetForProfile(GetProfile())
+                  shoppingService:commerce::ShoppingServiceFactory::
+                                      GetForProfile(GetProfile())
+                      authService:AuthenticationServiceFactory::GetForProfile(
+                                      GetProfile())
+                      prefService:GetProfile()->GetPrefs()
+                       localState:GetLocalState()
+                  moduleMediators:@[
+                    _shortcutsMediator,
+                    _setUpListMediator,
+                    _tabResumptionMediator,
+                    _mostVisitedTilesMediator,
+                    _safetyCheckMediator,
+                    _tipsMediator,
+                    _priceTrackingPromoMediator,
+                  ]
+                      tipsManager:TipsManagerIOSFactory::GetForProfile(
+                                      browser_->GetProfile())
+               templateURLService:ios::TemplateURLServiceFactory::GetForProfile(
+                                      browser_->GetProfile())
+            appStoreBundleService:app_store_bundle_service_.get()
+                    bookmarkModel:bookmark_model_.get()
+                   levelUpService:level_up_service.get()];
+
+  FakeMagicStackRankingModelDelegate* delegate_ =
+      [[FakeMagicStackRankingModelDelegate alloc] init];
+  ranking_model.delegate = delegate_;
+  [ranking_model fetchLatestMagicStackRanking];
+
+  EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+      TestTimeouts::action_timeout(), true, ^bool() {
+        return [delegate_.rank count] > 0;
+      }));
+
+  BOOL found_level_up = NO;
+  for (MagicStackModule* config in delegate_.rank) {
+    if (config.type == ContentSuggestionsModuleType::kLevelUp) {
+      found_level_up = YES;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_level_up);
 }

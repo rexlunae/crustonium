@@ -11,15 +11,18 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/spellcheck/browser/pref_names.h"
+#include "components/spellcheck/common/spellcheck_features.h"
 #include "components/spellcheck/common/spellcheck_result.h"
 #include "content/public/test/browser_task_environment.h"
 #include "net/base/load_flags.h"
@@ -167,8 +170,9 @@ TEST_P(SpellingServiceClientTest, RequestTextCheck) {
   head->mime_type = "application/json";
 
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = test_case.response_data.size();
-  GURL expected_request_url = client_.BuildEndpointUrl(test_case.request_type);
+  status.decoded_body_length = base::ByteSize(test_case.response_data.size());
+  GURL expected_request_url =
+      client_.BuildEndpointUrl(&profile_, test_case.request_type);
   client_.test_url_loader_factory()->AddResponse(
       expected_request_url, std::move(head), test_case.response_data, status,
       Redirects(),
@@ -410,4 +414,82 @@ TEST_F(SpellingServiceClientTest, AvailableServices) {
 TEST_F(SpellingServiceClientTest, ResponseErrorTest) {
   EXPECT_TRUE(client_.ParseResponseSuccess("{\"result\": {}}"));
   EXPECT_FALSE(client_.ParseResponseSuccess("{\"error\": {}}"));
+}
+
+// Verify that the default endpoint is used when the regional signal feature is
+// disabled.
+TEST_F(SpellingServiceClientTest, BuildEndpointUrlFeatureDisabled) {
+  PrefService* pref = profile_.GetPrefs();
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckEnable, true);
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckUseSpellingService, true);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      spellcheck::kEnableSpellcheckRegionalSignal);
+  GURL url =
+      client_.BuildEndpointUrl(&profile_, SpellingServiceClient::SUGGEST);
+
+  EXPECT_NE(
+      url.spec().find("https://www.googleapis.com/spelling/v1/spelling/check"),
+      std::string::npos);
+}
+
+// Verify that the default endpoint is used when the regional signal feature is
+// enabled but no region preference is set.
+TEST_F(SpellingServiceClientTest, BuildEndpointUrlNoPreference) {
+  PrefService* pref = profile_.GetPrefs();
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckEnable, true);
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckUseSpellingService, true);
+
+  base::test::ScopedFeatureList feature_list(
+      spellcheck::kEnableSpellcheckRegionalSignal);
+  pref->SetInteger(spellcheck::prefs::kChromeDataRegionSetting, 0);
+  GURL url =
+      client_.BuildEndpointUrl(&profile_, SpellingServiceClient::SUGGEST);
+
+  EXPECT_NE(
+      url.spec().find("https://www.googleapis.com/spelling/v1/spelling/check"),
+      std::string::npos);
+}
+
+// Verify that the US endpoint is used when the regional signal feature is
+// enabled and the region is set to US.
+TEST_F(SpellingServiceClientTest, BuildEndpointUrlUS) {
+  PrefService* pref = profile_.GetPrefs();
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckEnable, true);
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckUseSpellingService, true);
+
+  base::test::ScopedFeatureList feature_list(
+      spellcheck::kEnableSpellcheckRegionalSignal);
+  pref->SetInteger(spellcheck::prefs::kChromeDataRegionSetting, 1);
+  GURL url =
+      client_.BuildEndpointUrl(&profile_, SpellingServiceClient::SUGGEST);
+
+  EXPECT_NE(url.spec().find("https://spelling-us.googleapis.com/spelling/"
+                            "v2/spelling/check"),
+            std::string::npos);
+
+  url = client_.BuildEndpointUrl(&profile_, SpellingServiceClient::SPELLCHECK);
+
+  EXPECT_NE(url.spec().find("https://spelling-us.googleapis.com/spelling/"
+                            "v2/spelling/check"),
+            std::string::npos);
+}
+
+// Verify that the EU endpoint is used when the regional signal feature is
+// enabled and the region is set to EU.
+TEST_F(SpellingServiceClientTest, BuildEndpointUrlEU) {
+  PrefService* pref = profile_.GetPrefs();
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckEnable, true);
+  pref->SetBoolean(spellcheck::prefs::kSpellCheckUseSpellingService, true);
+
+  base::test::ScopedFeatureList feature_list(
+      spellcheck::kEnableSpellcheckRegionalSignal);
+  pref->SetInteger(spellcheck::prefs::kChromeDataRegionSetting, 2);
+  GURL url =
+      client_.BuildEndpointUrl(&profile_, SpellingServiceClient::SUGGEST);
+
+  EXPECT_NE(url.spec().find("https://spelling-eu.googleapis.com/spelling/"
+                            "v2/spelling/check"),
+            std::string::npos);
 }

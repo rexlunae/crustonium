@@ -4,6 +4,7 @@
 
 import("//build/config/android/rules.gni")
 import("//chrome/android/features/android_library_factory_tmpl.gni")
+import("//third_party/jni_zero/jni_zero.gni")
 
 android_library_factory("factory_java") {
   deps = [ "//components/browser_ui/settings/android:java" ]
@@ -12,20 +13,30 @@ android_library_factory("factory_java") {
 }
 
 android_library("search_java") {
+  srcjar_deps = [ ":jni_headers" ]
   sources = [
     "search/java/src/org/chromium/chrome/browser/settings/search/ChromeBaseSearchIndexProvider.java",
     "search/java/src/org/chromium/chrome/browser/settings/search/ChromeSearchIndexProvider.java",
+    "search/java/src/org/chromium/chrome/browser/settings/search/RecentSearchQueue.java",
   ]
 
   deps = [
     "//base:base_java",
+    "//base:base_shared_preferences_java",
     "//chrome/browser/flags:java",
+    "//chrome/browser/preferences:java",
     "//chrome/browser/profiles/android:java",
     "//components/browser_ui/settings/android:java",
+    "//components/cached_flags:java",
     "//content/public/android:content_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_preference_preference_java",
+    "//third_party/jni_zero:jni_zero_java",
   ]
+}
+
+generate_jni("jni_headers") {
+  sources = [ "search/java/src/org/chromium/chrome/browser/settings/search/RecentSearchQueue.java" ]
 }
 
 android_library("internal_java") {
@@ -42,10 +53,13 @@ android_library("internal_java") {
 
 android_library("java") {
   sources = [
+    "android/java/src/org/chromium/chrome/browser/settings/ActivityUtil.java",
     "android/java/src/org/chromium/chrome/browser/settings/ChromeBaseSettingsFragment.java",
     "android/java/src/org/chromium/chrome/browser/settings/ChromeManagedPreferenceDelegate.java",
     "android/java/src/org/chromium/chrome/browser/settings/FaviconLoader.java",
     "android/java/src/org/chromium/chrome/browser/settings/ProfileDependentSetting.java",
+    "android/java/src/org/chromium/chrome/browser/settings/SettingsInTab.java",
+    "android/java/src/org/chromium/chrome/browser/settings/SettingsPage.java",
   ]
   public_deps = [
     ":factory_java",
@@ -53,17 +67,19 @@ android_library("java") {
   ]
   deps = [
     "//base:base_java",
+    "//chrome/android:chrome_app_java_resources",
     "//chrome/browser/feedback/android:factory_java",
     "//chrome/browser/feedback/android:java",
     "//chrome/browser/flags:java",
     "//chrome/browser/preferences:java",
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/ui/android/favicon:java",
+    "//chrome/browser/ui/android/native_page:java",
     "//components/browser_ui/settings/android:java",
     "//components/browser_ui/settings/android:managed_prefs_java_resources",
     "//components/browser_ui/styles/android:java",
     "//components/browser_ui/widget/android:java",
-    "//components/cached_flags:java",
+    "//components/embedder_support/android:util_java",
     "//components/favicon/android:java",
     "//components/prefs/android:java",
     "//components/user_prefs/android:java",
@@ -72,7 +88,7 @@ android_library("java") {
     "//third_party/androidx:androidx_constraintlayout_constraintlayout_java",
     "//third_party/androidx:androidx_fragment_fragment_java",
     "//third_party/androidx:androidx_preference_preference_java",
-    "//third_party/androidx:androidx_recyclerview_recyclerview_java",
+    "//ui/android:ui_no_recycler_view_java",
     "//url:gurl_java",
   ]
   resources_package = "org.chromium.chrome.browser.settings"

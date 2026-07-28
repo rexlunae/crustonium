@@ -211,8 +211,7 @@ SigninCoordinatorResult HistorySyncResultToSigninCoordinatorResult(
   // coordinators.
   AuthenticationService* authService =
       AuthenticationServiceFactory::GetForProfile(self.profile);
-  id<SystemIdentity> identity =
-      authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = authService->GetPrimaryIdentity();
   SigninCoordinatorResult result;
   if (previousResult == SigninCoordinatorResultInterrupted) {
     result = SigninCoordinatorResultInterrupted;
@@ -253,6 +252,7 @@ SigninCoordinatorResult HistorySyncResultToSigninCoordinatorResult(
                              browser:self.browser
                         contextStyle:self.contextStyle
                          accessPoint:self.accessPoint
+                confirmChangeProfile:nil
                 prepareChangeProfile:nil
                 continuationProvider:_continuationProvider];
       __weak __typeof(self) weakSelf = self;

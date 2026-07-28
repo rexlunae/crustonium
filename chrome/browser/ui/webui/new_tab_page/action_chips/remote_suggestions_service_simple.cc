@@ -26,8 +26,8 @@
 #include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "net/base/net_errors.h"
-#include "third_party/omnibox_proto/aim_tools.pb.h"
 #include "third_party/omnibox_proto/page_vertical.pb.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 #include "url/origin.h"
 #include "url/url_util.h"
 
@@ -64,9 +64,7 @@ std::string GenerateTruncatedTitle(const std::u16string_view title) {
   static constexpr size_t kMaxPageTitleLength = 128;
   std::string truncated =
       base::UTF16ToUTF8(TruncateUTF16(title, kMaxPageTitleLength));
-  url::RawCanonOutputT<char> encoded;
-  url::EncodeURIComponent(truncated, &encoded);
-  return std::string(encoded.view());
+  return url::EncodeUriComponent(truncated);
 }
 
 base::expected<std::optional<std::string>,

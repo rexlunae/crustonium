@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_AUTOFILL_PRIVATE_AUTOFILL_PRIVATE_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_AUTOFILL_PRIVATE_AUTOFILL_PRIVATE_API_H_
 
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_histogram_value.h"
@@ -12,6 +13,7 @@
 namespace autofill {
 class AddressDataManager;
 class ContentAutofillClient;
+class EntityDataManager;
 class PaymentsDataManager;
 }  // namespace autofill
 
@@ -428,24 +430,6 @@ class AutofillPrivateBulkDeleteAllCvcsFunction
   ResponseAction Run() override;
 };
 
-class AutofillPrivateSetAutofillSyncToggleEnabledFunction
-    : public AutofillPrivateExtensionFunction {
- public:
-  AutofillPrivateSetAutofillSyncToggleEnabledFunction() = default;
-  AutofillPrivateSetAutofillSyncToggleEnabledFunction(
-      const AutofillPrivateSetAutofillSyncToggleEnabledFunction&) = delete;
-  AutofillPrivateSetAutofillSyncToggleEnabledFunction& operator=(
-      const AutofillPrivateSetAutofillSyncToggleEnabledFunction&) = delete;
-  DECLARE_EXTENSION_FUNCTION("autofillPrivate.setAutofillSyncToggleEnabled",
-                             AUTOFILLPRIVATE_SETAUTOFILLSYNCTOGGLEENABLED)
-
- protected:
-  ~AutofillPrivateSetAutofillSyncToggleEnabledFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
 class AutofillPrivateAddOrUpdateEntityInstanceFunction
     : public AutofillPrivateExtensionFunction {
  public:
@@ -462,6 +446,25 @@ class AutofillPrivateAddOrUpdateEntityInstanceFunction
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
+
+ private:
+  // Helper to initiate an asynchronous save request of a private pass
+  // `entity_instance` through the Wallet API. Returns true if the async request
+  // was started, false otherwise.
+  bool TrySavePrivatePassWithWalletAPI(
+      const autofill::EntityInstance& entity_instance);
+
+  // Callback for the WalletPassAccessManager::SaveWalletEntityInstance request
+  // for private passes.
+  void OnSavePrivatePassToWalletFinished(
+      autofill::EntityInstance original_entity,
+      std::optional<autofill::EntityInstance> saved_entity);
+
+  // Helper to save the entity locally and show a notification informing the
+  // user that the private pass couldn't be saved to wallet.
+  void SavePrivatePassLocallyAndNotifyAsFallback(
+      autofill::EntityDataManager& manager,
+      autofill::EntityInstance entity);
 };
 
 class AutofillPrivateRemoveEntityInstanceFunction
@@ -503,7 +506,7 @@ class AutofillPrivateLoadEntityInstancesFunction
 class AutofillPrivateGetEntityInstanceByGuidFunction
     : public AutofillPrivateExtensionFunction {
  public:
-  AutofillPrivateGetEntityInstanceByGuidFunction() = default;
+  AutofillPrivateGetEntityInstanceByGuidFunction();
   AutofillPrivateGetEntityInstanceByGuidFunction(
       const AutofillPrivateGetEntityInstanceByGuidFunction&) = delete;
   AutofillPrivateGetEntityInstanceByGuidFunction& operator=(
@@ -512,10 +515,16 @@ class AutofillPrivateGetEntityInstanceByGuidFunction
                              AUTOFILLPRIVATE_GETENTITYINSTANCEBYGUID)
 
  protected:
-  ~AutofillPrivateGetEntityInstanceByGuidFunction() override = default;
+  ~AutofillPrivateGetEntityInstanceByGuidFunction() override;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
+
+ private:
+  void OnReauthCompleted(const autofill::EntityInstance& entity_instance,
+                         bool auth_succeeded);
+
+  std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator_;
 };
 
 class AutofillPrivateGetWritableEntityTypesFunction

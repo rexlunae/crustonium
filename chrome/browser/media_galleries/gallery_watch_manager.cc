@@ -10,7 +10,7 @@
 
 #include "base/check_op.h"
 #include "base/functional/bind.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -39,7 +39,9 @@ class GalleryWatchManagerShutdownNotifierFactory
     : public BrowserContextKeyedServiceShutdownNotifierFactory {
  public:
   static GalleryWatchManagerShutdownNotifierFactory* GetInstance() {
-    return base::Singleton<GalleryWatchManagerShutdownNotifierFactory>::get();
+    static base::NoDestructor<GalleryWatchManagerShutdownNotifierFactory>
+        instance;
+    return instance.get();
   }
 
   GalleryWatchManagerShutdownNotifierFactory(
@@ -48,8 +50,7 @@ class GalleryWatchManagerShutdownNotifierFactory
       const GalleryWatchManagerShutdownNotifierFactory&) = delete;
 
  private:
-  friend struct base::DefaultSingletonTraits<
-      GalleryWatchManagerShutdownNotifierFactory>;
+  friend base::NoDestructor<GalleryWatchManagerShutdownNotifierFactory>;
 
   GalleryWatchManagerShutdownNotifierFactory()
       : BrowserContextKeyedServiceShutdownNotifierFactory(
@@ -124,7 +125,7 @@ void GalleryWatchManager::FileWatchManager::AddFileWatch(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // This can occur if the GalleryWatchManager attempts to watch the same path
-  // again before recieving the callback. It's benign.
+  // again before receiving the callback. It's benign.
   if (watchers_.contains(path)) {
     content::GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), false));
@@ -289,8 +290,8 @@ void GalleryWatchManager::AddWatch(BrowserContext* browser_context,
   }
 
   // Observe the preferences if we haven't already.
-  if (!observed_preferences_.contains(preferences)) {
-    observed_preferences_.insert(preferences);
+  if (bool inserted = observed_preferences_.emplace(preferences).second;
+      inserted) {
     preferences->AddGalleryChangeObserver(this);
   }
 
@@ -416,8 +417,9 @@ void GalleryWatchManager::OnFilePathChanged(const base::FilePath& path,
     for (auto it = owners.begin(); it != owners.end(); ++it) {
       Profile* profile = Profile::FromBrowserContext(it->browser_context);
       RemoveWatch(it->browser_context, it->extension_id, it->gallery_id);
-      if (observers_.contains(profile)) {
-        observers_[profile]->OnGalleryWatchDropped(it->extension_id,
+      if (auto observer_it = observers_.find(profile);
+          observer_it != observers_.end()) {
+        observer_it->second->OnGalleryWatchDropped(it->extension_id,
                                                    it->gallery_id);
       }
     }
@@ -449,9 +451,9 @@ void GalleryWatchManager::OnFilePathChanged(const base::FilePath& path,
        it != notification_info->second.owners.end();
        ++it) {
     DCHECK(watches_.contains(*it));
-    if (observers_.contains(it->browser_context)) {
-      observers_[it->browser_context]->OnGalleryChanged(it->extension_id,
-                                                        it->gallery_id);
+    if (auto observer_it = observers_.find(it->browser_context);
+        observer_it != observers_.end()) {
+      observer_it->second->OnGalleryChanged(it->extension_id, it->gallery_id);
     }
   }
 }
@@ -460,8 +462,9 @@ void GalleryWatchManager::OnPermissionRemoved(MediaGalleriesPreferences* pref,
                                               const std::string& extension_id,
                                               MediaGalleryPrefId pref_id) {
   RemoveWatch(pref->profile(), extension_id, pref_id);
-  if (observers_.contains(pref->profile())) {
-    observers_[pref->profile()]->OnGalleryWatchDropped(extension_id, pref_id);
+  if (auto observer_it = observers_.find(pref->profile());
+      observer_it != observers_.end()) {
+    observer_it->second->OnGalleryWatchDropped(extension_id, pref_id);
   }
 }
 
@@ -479,8 +482,9 @@ void GalleryWatchManager::OnGalleryRemoved(MediaGalleriesPreferences* pref,
 
   for (auto it = extension_ids.begin(); it != extension_ids.end(); ++it) {
     RemoveWatch(pref->profile(), *it, pref_id);
-    if (observers_.contains(pref->profile())) {
-      observers_[pref->profile()]->OnGalleryWatchDropped(*it, pref_id);
+    if (auto observer_it = observers_.find(pref->profile());
+        observer_it != observers_.end()) {
+      observer_it->second->OnGalleryWatchDropped(*it, pref_id);
     }
   }
 }

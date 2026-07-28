@@ -17,6 +17,7 @@
 #import "components/version_info/version_info.h"
 #import "ios/chrome/browser/omnibox/eg_tests/omnibox_earl_grey.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
@@ -148,6 +149,11 @@ class PausableRequestHandler {
 @end
 
 @implementation VisibleURLWithCachedRestoreTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  return config;
+}
 
 - (void)setUp {
   [super setUp];
@@ -390,15 +396,15 @@ class PausableRequestHandler {
 @end
 
 // Test using synthesized restore.
-@interface VisibleURLWithWithSynthesizedRestoreTestCase
+@interface VisibleURLWithSynthesizedRestoreTestCase
     : VisibleURLWithCachedRestoreTestCase
 @end
 
-@implementation VisibleURLWithWithSynthesizedRestoreTestCase
+@implementation VisibleURLWithSynthesizedRestoreTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_disabled.push_back(
+  config.features_enabled.push_back(
       web::features::kForceSynthesizedRestoreSession);
   return config;
 }

@@ -10,6 +10,7 @@
 #include "base/containers/id_map.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/page_manifest_manager.h"
 #include "content/public/browser/page_user_data.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -17,6 +18,7 @@
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 #include "third_party/blink/public/mojom/manifest/manifest_manager.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest_observer.mojom.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -24,9 +26,10 @@ namespace content {
 // associated with the main frame of the observed WebContents. It handles the
 // IPC messaging with the child process.
 // TODO(mlamouri): keep a cached version and a dirty bit here.
-class ManifestManagerHost : public PageUserData<ManifestManagerHost>,
-                            public PageManifestManager,
-                            public blink::mojom::ManifestUrlChangeObserver {
+class CONTENT_EXPORT ManifestManagerHost
+    : public PageUserData<ManifestManagerHost>,
+      public PageManifestManager,
+      public blink::mojom::ManifestUrlChangeObserver {
  public:
   ManifestManagerHost(const ManifestManagerHost&) = delete;
   ManifestManagerHost& operator=(const ManifestManagerHost&) = delete;
@@ -55,6 +58,15 @@ class ManifestManagerHost : public PageUserData<ManifestManagerHost>,
       mojo::PendingAssociatedReceiver<blink::mojom::ManifestUrlChangeObserver>
           receiver);
 
+  // Exposes internal manifest validation and override logic for tests. This
+  // allows testing the bad message termination (e.g., cross-site migration
+  // checks) natively without spinning up an end-to-end generic mojo pipe.
+  // Note: Callers testing mojo::ReportBadMessage usually need to setup a
+  // mojo::FakeMessageDispatchContext before calling this method.
+  void ValidateAndMaybeOverrideManifestForTesting(
+      blink::mojom::ManifestRequestResult result,
+      blink::mojom::ManifestPtr manifest);
+
  private:
   explicit ManifestManagerHost(Page& page);
 
@@ -77,6 +89,7 @@ class ManifestManagerHost : public PageUserData<ManifestManagerHost>,
                                  const GURL& url,
                                  blink::mojom::ManifestPtr manifest);
   void OnRequestManifestAndErrors(
+      const GURL& manifest_url_for_fetch,
       base::expected<blink::mojom::ManifestPtr,
                      blink::mojom::RequestManifestErrorPtr>);
 
@@ -98,6 +111,10 @@ class ManifestManagerHost : public PageUserData<ManifestManagerHost>,
 
   std::optional<blink::mojom::ManifestPtr> last_manifest_success_result_ =
       std::nullopt;
+
+  // Keep track of the manifest url that is currently being fetched, to prevent
+  // duplicate manifest fetches being triggered if one is already in progress.
+  std::optional<GURL> current_fetching_manifest_url_;
 
   ManifestCallbackList developer_manifest_callback_list_;
   AllManifestsCallbackList all_manifests_callback_list_;

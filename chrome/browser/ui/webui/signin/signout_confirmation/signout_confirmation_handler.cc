@@ -18,6 +18,7 @@
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/base/features.h"
+#include "components/sync_bookmarks/constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
@@ -92,7 +93,7 @@ std::string ComputeDialogSubtitle(
     case ChromeSignoutConfirmationPromptVariant::kTooManyBookmarks:
       return l10n_util::GetStringFUTF8(
           IDS_CHROME_SIGNOUT_CONFIRMATION_PROMPT_TOO_MANY_BOOKMARKS_BODY,
-          base::FormatNumber(syncer::kSyncBookmarksLimitValue.Get()));
+          base::FormatNumber(sync_bookmarks::kSyncBookmarksLimit));
     default:
       NOTREACHED();
   }
@@ -233,7 +234,7 @@ void SignoutConfirmationHandler::FinishAndCloseDialog(
     bool uninstall_account_extensions) {
   RecordChromeSignoutConfirmationPromptMetrics(variant_, choice);
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  if (browser_ && HasAccountExtensions(browser_->profile())) {
+  if (browser_ && HasAccountExtensions(browser_->GetProfile())) {
     RecordAccountExtensionsSignoutChoice(choice, !uninstall_account_extensions);
   }
 #endif
@@ -264,7 +265,7 @@ void SignoutConfirmationHandler::ComputeAccountExtensions() {
   }
 
   extensions::AccountExtensionTracker* tracker =
-      extensions::AccountExtensionTracker::Get(browser_->profile());
+      extensions::AccountExtensionTracker::Get(browser_->GetProfile());
   std::vector<const extensions::Extension*> account_extensions =
       tracker->GetSignedInAccountExtensions();
   if (account_extensions.empty()) {
@@ -279,7 +280,7 @@ void SignoutConfirmationHandler::ComputeAccountExtensions() {
           &SignoutConfirmationHandler::ComputeAndSendSignoutConfirmationData,
           weak_ptr_factory_.GetWeakPtr()));
 
-  auto* image_loader = extensions::ImageLoader::Get(browser_->profile());
+  auto* image_loader = extensions::ImageLoader::Get(browser_->GetProfile());
 
   for (const extensions::Extension* extension : account_extensions) {
     extensions::ExtensionResource icon = extensions::IconsInfo::GetIconResource(

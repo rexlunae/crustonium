@@ -59,6 +59,7 @@ class NullDelegate : public EventListenerMap::Delegate {
  public:
   void OnListenerAdded(const EventListener* listener) override {}
   void OnListenerRemoved(const EventListener* listener) override {}
+  void OnListenerUpdated(const EventListener* listener) override {}
 };
 
 // Testing subclass of MDnsAPI which replaces calls to core browser components
@@ -273,7 +274,7 @@ TEST_F(MDnsAPIDiscoveryTest, ServiceListenersAddedAndRemoved) {
   extensions::EventListenerMap::ListenerList listeners;
 
   extensions::EventListenerInfo listener_info(
-      kEventFilterServiceTypeKey, kExtId, GURL(), browser_context());
+      kEventFilterServiceTypeKey, kExtId, GURL(), nullptr, browser_context());
 
   EXPECT_CALL(*mdns_api_, GetEventListeners())
       .WillRepeatedly(ReturnRef(listeners));

@@ -9,15 +9,15 @@
 #import "base/test/scoped_mock_clock_override.h"
 #import "base/time/time.h"
 #import "components/prefs/testing_pref_service.h"
-#import "ios/chrome/browser/incognito_reauth/ui_bundled/features.h"
-#import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_constants.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_activation_level.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/incognito_lock_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
-#import "ios/chrome/browser/shared/coordinator/scene/test/stub_browser_provider_interface.h"
+#import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
-#import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
@@ -47,10 +47,11 @@
 
 - (void)attemptReauthWithLocalizedReason:(NSString*)localizedReason
                     canReusePreviousAuth:(BOOL)canReusePreviousAuth
-                                 handler:
-                                     (void (^)(ReauthenticationResult success))
-                                         handler {
+                                 handler:(ReauthenticationResultBlock)handler {
   handler(self.returnedResult);
+}
+
+- (void)clearAuthValidity {
 }
 
 @end
@@ -63,8 +64,7 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
  public:
   IncognitoReauthSceneAgentTest()
       : profile_(TestProfileIOS::Builder().Build()),
-        scene_state_([[SceneState alloc] initWithAppState:nil]),
-        scene_state_mock_(OCMPartialMock(scene_state_)),
+        scene_state_([[FakeSceneState alloc] initWithProfile:profile_.get()]),
         scene_controller_(
             [[SceneController alloc] initWithSceneState:scene_state_]),
         scene_controller_mock_(OCMPartialMock(scene_controller_)),
@@ -73,19 +73,16 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
         tab_grid_commands_handler_mock_(
             OCMProtocolMock(@protocol(TabGridCommands))),
         agent_([[IncognitoReauthSceneAgent alloc]
-            initWithReauthModule:stub_reauth_module_
-                    sceneHandler:scene_handler_mock_]) {
+            initWithReauthModule:stub_reauth_module_]) {
     scene_state_.controller = scene_controller_;
-    // Set UIEnabled here as this would trigger a callback in the agent, and we
-    // usually test the behavior when foregrounding. When testing the UIEnabled
-    // callback, we first set it to NO.
+    [IncognitoReauthSceneAgent registerLocalState:pref_service_.registry()];
+    agent_.localState = &pref_service_;
+    [scene_state_ addAgent:agent_];
     scene_state_.UIEnabled = YES;
     scene_state_.activationLevel = SceneActivationLevelForegroundInactive;
-    [scene_state_ addAgent:agent_];
   }
 
   ~IncognitoReauthSceneAgentTest() override {
-    EXPECT_OCMOCK_VERIFY(scene_state_mock_);
     EXPECT_OCMOCK_VERIFY(scene_controller_mock_);
     EXPECT_OCMOCK_VERIFY(scene_handler_mock_);
     EXPECT_OCMOCK_VERIFY(tab_grid_commands_handler_mock_);
@@ -96,31 +93,19 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
                         bool reauth_enabled,
                         bool soft_lock_feature_enabled,
                         bool soft_lock_pref_enabled) {
-    // Stub all calls to be able to mock the following:
-    // 1. sceneState.browserProviderInterface.incognitoBrowserProvider
-    //            .browser->GetWebStateList()->count()
-    // 2. sceneState.browserProviderInterface.hasIncognitoBrowserProvider
-    test_browser_ = std::make_unique<TestBrowser>(profile_.get());
+    Browser* browser = incognito_browser();
     for (int i = 0; i < tab_count; ++i) {
-      test_browser_->GetWebStateList()->InsertWebState(
+      browser->GetWebStateList()->InsertWebState(
           std::make_unique<web::FakeWebState>(),
           WebStateList::InsertionParams::AtIndex(i));
     }
 
-    stub_browser_interface_provider_ =
-        [[StubBrowserProviderInterface alloc] init];
-    stub_browser_interface_provider_.incognitoBrowserProvider.browser =
-        test_browser_.get();
-
-    OCMStub([scene_state_mock_ browserProviderInterface])
-        .andReturn(stub_browser_interface_provider_);
-
-    CommandDispatcher* dispatcher = test_browser_->GetCommandDispatcher();
+    CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
     [dispatcher startDispatchingToTarget:tab_grid_commands_handler_mock_
                              forProtocol:@protocol(TabGridCommands)];
+    [dispatcher startDispatchingToTarget:scene_handler_mock_
+                             forProtocol:@protocol(SceneCommands)];
 
-    [IncognitoReauthSceneAgent registerLocalState:pref_service_.registry()];
-    agent_.localState = &pref_service_;
     pref_service_.SetBoolean(prefs::kIncognitoAuthenticationSetting,
                              reauth_enabled);
     feature_list_.InitWithFeatureState(kIOSSoftLock, soft_lock_feature_enabled);
@@ -141,7 +126,13 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
     stub_reauth_module_.returnedResult = ReauthenticationResult::kSuccess;
   }
 
-  void TearDown() override { scene_state_.UIEnabled = NO; }
+  void TearDown() override {
+    @autoreleasepool {
+      scene_state_.UIEnabled = NO;
+      [scene_state_ shutdown];
+      scene_state_ = nil;
+    }
+  }
 
   void AdvanceClock(const base::TimeDelta& delay) {
     scoped_clock_.Advance(delay);
@@ -151,13 +142,16 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
     pref_service_.SetTime(prefs::kLastBackgroundedTime, scoped_clock_.Now());
   }
 
+  Browser* incognito_browser() {
+    return scene_state_.browserProviderInterface.incognitoBrowserProvider
+        .browser;
+  }
+
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
 
   // The scene state that the agent works with.
-  SceneState* scene_state_;
-  // Partial mock for stubbing scene_state_'s methods
-  id scene_state_mock_;
+  FakeSceneState* scene_state_;
   SceneController* scene_controller_;
   id scene_controller_mock_;
   StubReauthenticationModule* stub_reauth_module_;
@@ -165,8 +159,6 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
   id tab_grid_commands_handler_mock_;
   // The tested agent
   IncognitoReauthSceneAgent* agent_;
-  StubBrowserProviderInterface* stub_browser_interface_provider_;
-  std::unique_ptr<TestBrowser> test_browser_;
   TestingPrefServiceSimple pref_service_;
   base::test::ScopedFeatureList feature_list_;
   base::ScopedMockClockOverride scoped_clock_;
@@ -180,7 +172,7 @@ TEST_F(IncognitoReauthSceneAgentTest, PrefDisabled) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when the feature is enabled, we're foregrounded with some incognito
@@ -191,7 +183,7 @@ TEST_F(IncognitoReauthSceneAgentTest, NeedsAuth) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when auth is required and is successfully performed, it's not
@@ -202,17 +194,17 @@ TEST_F(IncognitoReauthSceneAgentTest, SuccessfulAuth) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   [agent_ authenticateIncognitoContent];
 
   // Auth not required
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Auth required after backgrounding.
   scene_state_.activationLevel = SceneActivationLevelBackground;
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Tests that authentication is still required if authentication fails.
@@ -222,18 +214,18 @@ TEST_F(IncognitoReauthSceneAgentTest, FailedSkippedAuth) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   stub_reauth_module_.returnedResult = ReauthenticationResult::kFailure;
 
   [agent_ authenticateIncognitoContent];
   // Auth still required
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   stub_reauth_module_.returnedResult = ReauthenticationResult::kSkipped;
   [agent_ authenticateIncognitoContent];
   // Auth still required
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when the feature is enabled, auth is required if we foreground
@@ -244,7 +236,7 @@ TEST_F(IncognitoReauthSceneAgentTest, AuthRequiredWhenNoIncognitoTabs) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when the feature is enabled, we're foregrounded with some incognito
@@ -256,14 +248,14 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   // Open another tab.
-  test_browser_->GetWebStateList()->InsertWebState(
+  incognito_browser()->GetWebStateList()->InsertWebState(
       std::make_unique<web::FakeWebState>(),
       WebStateList::InsertionParams::AtIndex(0));
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 #pragma mark - Soft Lock tests
@@ -283,7 +275,7 @@ TEST_F(IncognitoReauthSceneAgentTest, AllFeaturesDisabled) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_EQ(agent_.incognitoLockState, IncognitoLockState::kNone);
+  EXPECT_EQ(scene_state_.incognitoState.lockState, IncognitoLockState::kNone);
 }
 
 // Test that the correct overlay is displayed when both reauth and soft lock are
@@ -301,7 +293,7 @@ TEST_F(IncognitoReauthSceneAgentTest, AllFeaturesEnabled) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_EQ(agent_.incognitoLockState, IncognitoLockState::kReauth);
+  EXPECT_EQ(scene_state_.incognitoState.lockState, IncognitoLockState::kReauth);
 }
 
 // Test that when unlock is required and is successfully performed, it's
@@ -318,18 +310,18 @@ TEST_F(IncognitoReauthSceneAgentTest, SuccessfulSoftUnlock) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   [agent_ authenticateIncognitoContent];
 
   // Auth not required
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Auth required after backgrounding.
   scene_state_.activationLevel = SceneActivationLevelBackground;
   AdvanceClock(kIOSSoftLockBackgroundThreshold.Get());
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when soft lock is enabled, unlock isn't required if we foreground
@@ -347,7 +339,7 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when soft lock is enabled, we're foregrounded with some incognito
@@ -365,14 +357,14 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Open another tab.
-  test_browser_->GetWebStateList()->InsertWebState(
+  incognito_browser()->GetWebStateList()->InsertWebState(
       std::make_unique<web::FakeWebState>(),
       WebStateList::InsertionParams::AtIndex(0));
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that unlock is not required when we have not cached a value for the
@@ -386,7 +378,7 @@ TEST_F(IncognitoReauthSceneAgentTest, SoftLockNotRequiredWithoutCachedPref) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that unlock is not required when we have saved a value for the pref,
@@ -401,7 +393,7 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that unlock is required when we have saved a value for the pref that is
@@ -418,7 +410,7 @@ TEST_F(IncognitoReauthSceneAgentTest, SoftLockRequiredWithPrefAfterThreshold) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that unlock is not required when we background the app and foreground
@@ -432,12 +424,12 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go background.
   scene_state_.activationLevel = SceneActivationLevelBackground;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Foreground the app.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that unlock is required when we background the app and foreground after
@@ -451,13 +443,13 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go background.
   scene_state_.activationLevel = SceneActivationLevelBackground;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Advance the clock and foreground the app.
   AdvanceClock(kIOSSoftLockBackgroundThreshold.Get());
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that when unlock is required, backgrounding and foregrounding the app
@@ -471,19 +463,19 @@ TEST_F(IncognitoReauthSceneAgentTest,
   // Go background.
   scene_state_.activationLevel = SceneActivationLevelBackground;
 
-  EXPECT_FALSE(agent_.authenticationRequired);
+  EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Advance the clock and foreground the app.
   AdvanceClock(kIOSSoftLockBackgroundThreshold.Get());
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   // Re-background and foreground
   scene_state_.activationLevel = SceneActivationLevelBackground;
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_TRUE(agent_.authenticationRequired);
+  EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
 
 // Test that, if the conditions are met, the screen transitions on foreground.
@@ -652,7 +644,7 @@ TEST_F(IncognitoReauthSceneAgentTest, NoSoftLockOnExternalIntents) {
   AdvanceClock(kIOSSoftLockBackgroundThreshold.Get());
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_EQ(agent_.incognitoLockState, IncognitoLockState::kNone);
+  EXPECT_EQ(scene_state_.incognitoState.lockState, IncognitoLockState::kNone);
 }
 
 // Test that reauth is required when Chrome was launched via an external intent.
@@ -665,7 +657,7 @@ TEST_F(IncognitoReauthSceneAgentTest, ReauthOnExternalIntents) {
   // Go foreground.
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
-  EXPECT_EQ(agent_.incognitoLockState, IncognitoLockState::kReauth);
+  EXPECT_EQ(scene_state_.incognitoState.lockState, IncognitoLockState::kReauth);
 }
 
 }  // namespace

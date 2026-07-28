@@ -50,8 +50,6 @@ class MockPrivacySandboxServiceTestInterface
   MOCK_METHOD(base::Time, TopicsConsentLastUpdateTime, (), (override, const));
   MOCK_METHOD(std::string, TopicsConsentLastUpdateText, (), (override, const));
   MOCK_METHOD(void, ForceChromeBuildForTests, (bool), (override, const));
-  MOCK_METHOD(int, GetRequiredPromptType, (int), (override, const));
-  MOCK_METHOD(void, PromptActionOccurred, (int, int), (override, const));
 };
 
 }  // namespace
@@ -73,7 +71,7 @@ class PrivacySandboxTestUtilTest {
     cookie_settings_ = new content_settings::CookieSettings(
         host_content_settings_map_.get(), &prefs_, false,
         content_settings::CookieSettings::NoFedCmSharingPermissionsCallback(),
-        /*tpcd_metadata_manager=*/nullptr, "chrome-extension");
+        "chrome-extension");
   }
 
   ~PrivacySandboxTestUtilTest() {
@@ -338,14 +336,6 @@ TEST_F(PrivacySandboxBaseTestUtilTest, VerifyAdvanceClockByStateKey) {
   EXPECT_EQ(start_time + base::Hours(1), base::Time::Now());
 }
 
-TEST_F(PrivacySandboxBaseTestUtilTest, VerifyPromptActionOccurredInputKey) {
-  constexpr int kArbitraryValue = 7;
-  testing::Mock::VerifyAndClearExpectations(mock_privacy_sandbox_service());
-  EXPECT_CALL(*mock_privacy_sandbox_service(),
-              PromptActionOccurred(kArbitraryValue, /*kDesktop*/ 0));
-  ProvideInput(InputKey::kPromptAction, kArbitraryValue);
-}
-
 TEST_F(PrivacySandboxBaseTestUtilTest,
        VerifyIsTopicsAllowedForContextOutputKey) {
   GURL kTopicsURL = GURL("https://topics.com");
@@ -369,54 +359,15 @@ TEST_F(PrivacySandboxBaseTestUtilTest, VerifyIsFledgeAllowedOutputKey) {
   url::Origin kFledgeAuctionPartyOrigin =
       url::Origin::Create(GURL("https://fledge.com"));
 
-  EXPECT_CALL(
-      *mock_privacy_sandbox_settings(),
-      IsFledgeAllowed(TopFrameOrigin(), kFledgeAuctionPartyOrigin,
-                      content::InterestGroupApiOperation::kJoin, nullptr))
+  EXPECT_CALL(*mock_privacy_sandbox_settings(),
+              IsFledgeAllowed(TopFrameOrigin(), kFledgeAuctionPartyOrigin,
+                              privacy_sandbox::InterestGroupApiOperation::kJoin,
+                              nullptr))
       .WillOnce(testing::Return(true));
 
   CheckOutput({{InputKey::kFledgeAuctionPartyOrigin, kFledgeAuctionPartyOrigin},
                {InputKey::kTopFrameOrigin, TopFrameOrigin()}},
               {OutputKey::kIsFledgeJoinAllowed, true});
-}
-
-TEST_F(PrivacySandboxBaseTestUtilTest,
-       VerifyIsAttributionReportingAllowedOutputKey) {
-  url::Origin kAdMeasurementReportingOrigin =
-      url::Origin::Create(GURL("https://measurement.com"));
-
-  EXPECT_CALL(*mock_privacy_sandbox_settings(),
-              IsAttributionReportingAllowed(
-                  TopFrameOrigin(), kAdMeasurementReportingOrigin, nullptr))
-      .WillOnce(testing::Return(true));
-
-  CheckOutput(
-      {{InputKey::kAdMeasurementReportingOrigin, kAdMeasurementReportingOrigin},
-       {InputKey::kTopFrameOrigin, TopFrameOrigin()}},
-      {OutputKey::kIsAttributionReportingAllowed, true});
-}
-
-TEST_F(PrivacySandboxBaseTestUtilTest,
-       VerifyMaySendAttributionReportOutputKey) {
-  url::Origin kAdMeasurementSourceOrigin =
-      url::Origin::Create(GURL("https://source.com"));
-  url::Origin kAdMeasurementDestinationOrigin =
-      url::Origin::Create(GURL("https://dest.com"));
-  url::Origin kAdMeasurementReportingOrigin =
-      url::Origin::Create(GURL("https://reporting.com"));
-  EXPECT_CALL(*mock_privacy_sandbox_settings(),
-              MaySendAttributionReport(kAdMeasurementSourceOrigin,
-                                       kAdMeasurementDestinationOrigin,
-                                       kAdMeasurementReportingOrigin, nullptr))
-      .WillOnce(testing::Return(true));
-
-  CheckOutput(
-      {{InputKey::kAdMeasurementSourceOrigin, kAdMeasurementSourceOrigin},
-       {InputKey::kAdMeasurementDestinationOrigin,
-        kAdMeasurementDestinationOrigin},
-       {InputKey::kAdMeasurementReportingOrigin,
-        kAdMeasurementReportingOrigin}},
-      {OutputKey::kMaySendAttributionReport, true});
 }
 
 TEST_F(PrivacySandboxBaseTestUtilTest, VerifyIsSharedStorageAllowedOutputKey) {

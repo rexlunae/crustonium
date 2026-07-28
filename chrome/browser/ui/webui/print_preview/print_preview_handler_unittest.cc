@@ -29,6 +29,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
@@ -77,15 +78,12 @@
 #endif  // BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 #include "chrome/test/base/testing_profile_manager.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
-#include "chrome/browser/ash/crosapi/test_local_printer_ash.h"
-#include "chromeos/ash/components/login/login_state/login_state.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
+#include "ash/constants/ash_pref_names.h"
 #endif
 
 namespace printing {
@@ -416,13 +414,8 @@ class PrintPreviewHandlerTest : public testing::Test {
           test_remote_, test_print_backend_, /*sandboxed=*/true);
     }
 #endif
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
     ASSERT_TRUE(testing_profile_manager_.SetUp());
-#endif
-#if BUILDFLAG(IS_CHROMEOS)
-    local_printer_ = std::make_unique<TestLocalPrinterAsh>(&profile_, nullptr);
-    ash::LoginState::Initialize();
-    manager_ = std::make_unique<crosapi::CrosapiManager>();
 #endif
 
     // Create the initiator.
@@ -450,9 +443,6 @@ class PrintPreviewHandlerTest : public testing::Test {
     auto preview_handler = CreateHandler(std::move(printer_handler), initiator);
     handler_ = preview_handler.get();
     handler_->set_web_ui(web_ui());
-#if BUILDFLAG(IS_CHROMEOS)
-    handler_->local_printer_ = local_printer_.get();
-#endif
 
     auto preview_ui = std::make_unique<FakePrintPreviewUI>(
         web_ui(), std::move(preview_handler));
@@ -461,10 +451,6 @@ class PrintPreviewHandlerTest : public testing::Test {
   }
 
   void TearDown() override {
-#if BUILDFLAG(IS_CHROMEOS)
-    manager_.reset();
-    ash::LoginState::Shutdown();
-#endif
     PrintViewManager::FromWebContents(initiator_web_contents_.get())
         ->PrintPreviewDone();
 
@@ -475,10 +461,6 @@ class PrintPreviewHandlerTest : public testing::Test {
 
     PrintBackend::SetPrintBackendForTesting(/*print_backend=*/nullptr);
   }
-
-#if BUILDFLAG(IS_CHROMEOS)
-  void DisableAshChrome() { handler_->local_printer_ = nullptr; }
-#endif
 
   virtual std::unique_ptr<TestPrinterHandler> CreatePrinterHandler(
       const std::vector<PrinterInfo>& printers) {
@@ -743,7 +725,7 @@ class PrintPreviewHandlerTest : public testing::Test {
   TestingProfile* profile() { return &profile_; }
   TestPrinterHandler* printer_handler() { return printer_handler_; }
   std::vector<PrinterInfo>& printers() { return printers_; }
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
   TestingProfileManager* testing_profile_manager() {
     return &testing_profile_manager_;
   }
@@ -751,14 +733,11 @@ class PrintPreviewHandlerTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
   TestingProfileManager testing_profile_manager_{
       TestingBrowserProcess::GetGlobal()};
 #endif
-#if BUILDFLAG(IS_CHROMEOS)
-  std::unique_ptr<TestLocalPrinterAsh> local_printer_;
-  std::unique_ptr<crosapi::CrosapiManager> manager_;
-#endif
+
   TestingProfile profile_;
   scoped_refptr<TestPrintBackend> test_print_backend_;
 #if BUILDFLAG(ENABLE_OOP_PRINTING)
@@ -827,27 +806,6 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsSilentPrinting) {
       "en", ",", ".",
       /*kiosk_auto_print_mode=*/true);
 }
-
-#if BUILDFLAG(IS_CHROMEOS)
-TEST_F(PrintPreviewHandlerTest, InitialSettingsNoAsh) {
-  DisableAshChrome();
-  Initialize();
-  // Verify initial settings were sent.
-  ValidateInitialSettings(*web_ui()->call_data().back(), test::kPrinterName,
-                          kDummyInitiatorName);
-  // Verify policy settings are empty.
-  ValidateInitialSettingsAllowedDefaultModePolicy(*web_ui()->call_data().back(),
-                                                  "headerFooter", std::nullopt,
-                                                  std::nullopt);
-  ValidateInitialSettingsAllowedDefaultModePolicy(*web_ui()->call_data().back(),
-                                                  "cssBackground", std::nullopt,
-                                                  std::nullopt);
-  ValidateInitialSettingsAllowedDefaultModePolicy(
-      *web_ui()->call_data().back(), "mediaSize", std::nullopt, std::nullopt);
-  ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
-                                     std::nullopt);
-}
-#endif
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsRestrictHeaderFooterEnabled) {
   // Set a pref with allowed value.
@@ -973,15 +931,29 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultPaperSizeCustomSize) {
 
 #if BUILDFLAG(IS_CHROMEOS)
 TEST_F(PrintPreviewHandlerTest, InitialSettingsMaxSheetsAllowedPolicy) {
-  prefs()->SetInteger(prefs::kPrintingMaxSheetsAllowed, 2);
+  prefs()->SetInteger(ash::prefs::kPrintingMaxSheetsAllowed, 2);
   Initialize();
   ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
                                      base::Value(2));
 }
 
+TEST_F(PrintPreviewHandlerTest, InitialSettingsZeroSheetsAllowedPolicy) {
+  prefs()->SetInteger(ash::prefs::kPrintingMaxSheetsAllowed, 0);
+  Initialize();
+  ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
+                                     base::Value(0));
+}
+
+TEST_F(PrintPreviewHandlerTest, InitialSettingsNegativeMaxSheetsPolicy) {
+  prefs()->SetInteger(ash::prefs::kPrintingMaxSheetsAllowed, -1);
+  Initialize();
+  ValidateInitialSettingsValuePolicy(*web_ui()->call_data().back(), "sheets",
+                                     std::nullopt);
+}
+
 TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableColorAndMonochrome) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingAllowedColorModes, 3);
+  prefs()->SetInteger(ash::prefs::kPrintingAllowedColorModes, 3);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "color", base::Value(3), std::nullopt);
@@ -989,7 +961,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableColorAndMonochrome) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultColor) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingColorDefault, 2);
+  prefs()->SetInteger(ash::prefs::kPrintingColorDefault, 2);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "color", std::nullopt, base::Value(2));
@@ -997,7 +969,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultColor) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableSimplexAndDuplex) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingAllowedDuplexModes, 7);
+  prefs()->SetInteger(ash::prefs::kPrintingAllowedDuplexModes, 7);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "duplex", base::Value(7), std::nullopt);
@@ -1005,7 +977,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsEnableSimplexAndDuplex) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultSimplex) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingDuplexDefault, 1);
+  prefs()->SetInteger(ash::prefs::kPrintingDuplexDefault, 1);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "duplex", std::nullopt, base::Value(1));
@@ -1013,7 +985,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultSimplex) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsRestrictPin) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingAllowedPinModes, 1);
+  prefs()->SetInteger(ash::prefs::kPrintingAllowedPinModes, 1);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "pin", base::Value(1), std::nullopt);
@@ -1021,7 +993,7 @@ TEST_F(PrintPreviewHandlerTest, InitialSettingsRestrictPin) {
 
 TEST_F(PrintPreviewHandlerTest, InitialSettingsDefaultNoPin) {
   // Set a pref that should take priority over StickySettings.
-  prefs()->SetInteger(prefs::kPrintingPinDefault, 2);
+  prefs()->SetInteger(ash::prefs::kPrintingPinDefault, 2);
   Initialize();
   ValidateInitialSettingsAllowedDefaultModePolicy(
       *web_ui()->call_data().back(), "pin", std::nullopt, base::Value(2));
@@ -1319,9 +1291,11 @@ TEST_F(PrintPreviewHandlerTest, SendPreviewUpdates) {
   ASSERT_TRUE(request_value.has_value());
   int preview_request_id = request_value.value();
 
-  std::optional<int> ui_value = preview_params.FindInt(kPreviewUIID);
-  ASSERT_TRUE(ui_value.has_value());
-  int preview_ui_id = ui_value.value();
+  const std::string* ui_value = preview_params.FindString(kPreviewUIID);
+  ASSERT_TRUE(ui_value);
+  std::optional<base::UnguessableToken> preview_ui_id =
+      base::UnguessableToken::DeserializeFromString(*ui_value);
+  ASSERT_TRUE(preview_ui_id.has_value());
 
   // Simulate renderer responses: PageLayoutReady, PageCountReady,
   // PagePreviewReady, and OnPrintPreviewReady will be called in that order.
@@ -1349,11 +1323,11 @@ TEST_F(PrintPreviewHandlerTest, SendPreviewUpdates) {
   AssertWebUIEventFired(*web_ui()->call_data().back(), "page-count-ready");
 
   // Page at index 0 is ready.
-  handler()->SendPagePreviewReady(0, preview_ui_id, preview_request_id);
+  handler()->SendPagePreviewReady(0, preview_ui_id.value(), preview_request_id);
   AssertWebUIEventFired(*web_ui()->call_data().back(), "page-preview-ready");
 
   // Print preview is ready.
-  handler()->OnPrintPreviewReady(preview_ui_id, preview_request_id);
+  handler()->OnPrintPreviewReady(preview_ui_id.value(), preview_request_id);
   CheckWebUIResponse(*web_ui()->call_data().back(), callback_id_in, true);
 
   // Renderer responses have been as expected.
@@ -1369,7 +1343,7 @@ TEST_F(PrintPreviewHandlerTest, SendPreviewUpdates) {
   EXPECT_EQ(message_count, web_ui()->call_data().size());
   handler()->SendPageCountReady(1, -1, 0);
   EXPECT_EQ(message_count, web_ui()->call_data().size());
-  handler()->OnPrintPreviewReady(0, 0);
+  handler()->OnPrintPreviewReady(base::UnguessableToken(), 0);
   EXPECT_EQ(message_count, web_ui()->call_data().size());
 
   // Handler should have tried to kill the renderer for each of these.

@@ -17,34 +17,31 @@ import static org.mockito.Mockito.verify;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.ScrollBehavior;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlType;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate;
 
 /** Unit tests for {@link TopControlsStacker}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@EnableFeatures({
-    ChromeFeatureList.TOP_CONTROLS_REFACTOR,
-    ChromeFeatureList.TOP_CONTROLS_REFACTOR_V2
-})
 public class TopControlsStackerUnitTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final int OFFSET_NOT_OBSERVED = -1024;
 
     /** Mock implementation of TestLayer for testing purposes. */
@@ -221,15 +218,14 @@ public class TopControlsStackerUnitTest {
     }
 
     @Mock private BrowserControlsSizer mBrowserControlsSizer;
-    @Mock private BrowserControlsVisibilityDelegate mVisibilityDelegate;
     @Captor private ArgumentCaptor<Callback<Integer>> mVisibilityCallbackCaptor;
 
+    private BrowserControlsVisibilityDelegate mVisibilityDelegate;
     private TopControlsStacker mTopControlsStacker;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.openMocks(this);
-        doReturn(BrowserControlsState.BOTH).when(mVisibilityDelegate).get();
+        mVisibilityDelegate = new BrowserControlsVisibilityDelegate(BrowserControlsState.BOTH);
         doReturn(true).when(mBrowserControlsSizer).offsetOverridden();
         mTopControlsStacker = new TopControlsStacker(mBrowserControlsSizer, mVisibilityDelegate);
     }
@@ -352,8 +348,7 @@ public class TopControlsStackerUnitTest {
         // Simulate a browser controls state change without offset tag update.
         reset(mBrowserControlsSizer);
 
-        verify(mVisibilityDelegate).addObserver(mVisibilityCallbackCaptor.capture());
-        mVisibilityCallbackCaptor.getValue().onResult(BrowserControlsState.SHOWN);
+        mVisibilityDelegate.set(BrowserControlsState.SHOWN);
         assertControlsHeight(100, 100);
         toolbar.assertHasNoOffsetTags();
     }
@@ -1363,7 +1358,7 @@ public class TopControlsStackerUnitTest {
         verify(mTopControlsStacker, never()).updateLayersInternally(anyBoolean(), anyBoolean());
 
         // Execute the posted runnable.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Verify that requestLayerUpdateSync is called only once with animate=true.
         verify(mTopControlsStacker, times(1)).updateLayersInternally(true, true);

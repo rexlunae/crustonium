@@ -1473,8 +1473,7 @@ bool EventRewriterAsh::RewriteModifierKeys(const KeyEvent& key_event,
     // current key is already pressed or not.
     bool is_repeat = std::ranges::find(
                          pressed_key_states_,
-                         std::tuple(key_event.code(),
-                                    DomKey::Base{key_event.GetDomKey()},
+                         std::tuple(key_event.code(), key_event.GetDomKey(),
                                     key_event.key_code()),
                          [](auto entry) {
                            return std::tuple(entry.first.code, entry.first.key,
@@ -1575,9 +1574,7 @@ bool EventRewriterAsh::ShouldRemapToRightClick(
   // TODO(crbug.com/1179893): When enabling the deprecate alt click flag by
   // default, decide whether kUseSearchClickForRightClick being disabled
   // should be able to override it.
-  bool use_search_key = base::FeatureList::IsEnabled(
-                            ::ash::features::kUseSearchClickForRightClick) ||
-                        ::features::IsDeprecateAltClickEnabled();
+  bool use_search_key = ::features::IsDeprecateAltClickEnabled();
   bool use_alt_key = is_alt_down_remapping_enabled_;
 
   const bool alt_click_down = AreFlagsSet(flags, kAltLeftButton);

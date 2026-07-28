@@ -16,7 +16,9 @@ source_set("js_messaging") {
     ":setup_frame_js",
     ":web_view_js_utils",
     "//base",
+    "//ios/public/provider/web:cobalt",
     "//ios/web/common:features",
+    "//ios/web/js_features/window_error:error_reporting",
     "//ios/web/navigation:wk_navigation_util",
     "//ios/web/public",
     "//ios/web/public/js_messaging",
@@ -28,6 +30,7 @@ source_set("js_messaging") {
   ]
 
   sources = [
+    "origin_filter.mm",
     "page_script_util.h",
     "page_script_util.mm",
     "web_frame_impl.h",
@@ -55,9 +58,11 @@ source_set("java_script_feature") {
     "//base",
     "//build:blink_buildflags",
     "//ios/web:features",
+    "//ios/web/common:features",
     "//ios/web/public",
     "//ios/web/public/js_messaging",
     "//ios/web/public/js_messaging:web_view_js_utils",
+    "//ios/web/util",
     "//ios/web/web_state:web_state_impl_header",
     "//ios/web/web_state/ui:web_controller_header",
     "//ios/web/web_state/ui:wk_web_view_configuration_provider_header",
@@ -72,6 +77,11 @@ source_set("java_script_feature") {
     "java_script_feature.mm",
     "java_script_feature_manager.mm",
     "script_message.mm",
+    "script_message_dict_value_impl.mm",
+    "script_message_list_value_impl.mm",
+    "script_message_value_impl.mm",
+    "script_message_value_util.h",
+    "script_message_value_util.mm",
   ]
 }
 
@@ -111,7 +121,6 @@ source_set("java_script_feature_util") {
   deps = [
     ":js_messaging",
     "//base",
-    "//ios/components/enterprise/data_controls:features",
     "//ios/web/annotations",
     "//ios/web/common",
     "//ios/web/favicon",
@@ -212,6 +221,10 @@ source_set("unittests") {
     "java_script_feature_unittest.mm",
     "page_script_util_unittest.mm",
     "scoped_wk_script_message_handler_unittest.mm",
+    "script_message_dict_value_impl_unittest.mm",
+    "script_message_list_value_impl_unittest.mm",
+    "script_message_value_impl_unittest.mm",
+    "script_message_value_util_unittest.mm",
     "web_frame_impl_unittest.mm",
     "web_frames_manager_impl_unittest.mm",
     "web_frames_manager_java_script_feature_unittest.mm",

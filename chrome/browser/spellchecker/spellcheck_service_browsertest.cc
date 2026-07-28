@@ -113,7 +113,7 @@ class SpellcheckServiceBrowserTest : public InProcessBrowserTest,
   RenderProcessHost* GetRenderer() const { return renderer_.get(); }
 
   BrowserContext* GetContext() const {
-    return static_cast<BrowserContext*>(browser()->profile());
+    return static_cast<BrowserContext*>(browser()->GetProfile());
   }
 
   PrefService* GetPrefs() const { return prefs_; }
@@ -451,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
 // Starting without spellcheck languages should send the 'disable spellcheck'
 // message to the renderer. Consequently adding spellchecking languages should
 // enable spellcheck.
-// Flaky, see https://crbug.com/600153
+// Flaky, see https://crbug.com/41247248
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
                        DISABLED_StartWithoutLanguages) {
   InitSpellcheck(true, "", "");
@@ -488,7 +488,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, CustomDictionaryChanged) {
   EXPECT_TRUE(GetCustomDictionaryChangedState());
 }
 
-// Regression test for https://crbug.com/854540.
+// Regression test for https://crbug.com/41395638.
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
                        CustomDictionaryChangedAfterRendererCrash) {
   InitSpellcheck(true, "en-US", "");

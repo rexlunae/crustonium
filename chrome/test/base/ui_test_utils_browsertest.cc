@@ -22,7 +22,7 @@ class UITestUtilsBrowserTest : public InProcessBrowserTest {
   }
 };
 
-// This is a regression test for crbug.com/1187241, where
+// This is a regression test for crbug.com/40172821, where
 // NavigateToURLWithDisposition incorrectly inferred the index in the tab strip
 // of the second background tab and waited for the wrong tab to finish loading
 // (which never happened).
@@ -49,7 +49,7 @@ IN_PROC_BROWSER_TEST_F(UITestUtilsBrowserTest, OpenTwoTabsInBackground) {
 IN_PROC_BROWSER_TEST_F(UITestUtilsBrowserTest, FindMatchingBrowsers) {
   BrowserWindowInterface* const regular_browser1 = browser();
   BrowserWindowInterface* const regular_browser2 =
-      CreateBrowser(browser()->profile());
+      CreateBrowser(browser()->GetProfile());
   BrowserWindowInterface* const incognito_browser = CreateIncognitoBrowser();
 
   // All browsers.

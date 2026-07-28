@@ -29,7 +29,6 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/buildflag.h"
-#include "chrome/browser/extensions/api/web_authentication_proxy/web_authentication_proxy_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
@@ -58,7 +57,6 @@
 #include "content/public/browser/web_contents.h"
 #include "crypto/unexportable_key.h"
 #include "device/fido/enclave/constants.h"
-#include "device/fido/mac/credential_metadata.h"
 #include "device/fido/public/features.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
@@ -71,10 +69,18 @@
 #include "url/url_constants.h"
 #include "url/url_util.h"
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/extensions/api/web_authentication_proxy/web_authentication_proxy_service.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/components/webauthn/webauthn_request_registrar.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/aura/window.h"
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include "device/fido/mac/credential_metadata.h"
 #endif
 
 namespace {
@@ -146,80 +152,32 @@ bool ExtensionCanAssertRpId(const extensions::Extension& extension,
     return false;
   }
 
-  // An extension should be able to assert a WebAuthn RP ID if it has host
-  // permissions over any host that can assert that RP ID. This code duplicates
-  // some of the logic on content/public/browser/webauthn_security_utils.h.
-  // https://w3c.github.io/webauthn/#relying-party-identifier
-  for (const URLPattern& pattern :
-       extension.permissions_data()->active_permissions().explicit_hosts()) {
-    // Only https hosts and localhost are allowed to assert RP IDs. By design,
-    // this means extensions cannot claim RP IDs for other extensions.
-    if (!pattern.MatchesScheme(url::kHttpsScheme) &&
-        !(pattern.MatchesScheme(url::kHttpScheme) &&
-          net::HostStringIsLocalhost(pattern.host()))) {
-      continue;
-    }
-    // IP hosts are not allowed to assert RP IDs.
-    if (url::HostIsIPAddress(pattern.host())) {
-      continue;
-    }
-    // If the pattern matches the RP ID, then it is allowed to assert it.
-    // Pattern                   RP ID                     Allowed?
-    // *.com                     example.com               Yes
-    // example.com               example.com               Yes
-    // *.example.com             subdomain.example.com     Yes
-    if (pattern.MatchesHost(rp_id)) {
-      return true;
-    }
-    // If the pattern matchens any valid subdomain of the RP ID, then it is
-    // allowed to assert it, since subdomains can assert parent components up to
-    // eTLD+1 on WebAuthn.
-    // Pattern                   RP ID                     Allowed?
-    // subdomain.example.com     example.com               Yes
-    // *.subdomain.example.com   example.com               Yes
-    // example.com               subdomain.example.com     No
-    if (url::DomainIs(pattern.host(), rp_id)) {
-      return true;
-    }
+  // http origins are allowed to claim localhost, so this needs special
+  // handling.
+  if (rp_id == "localhost" && extension.permissions_data()->HasHostPermission(
+                                  GURL("http://localhost"))) {
+    return true;
   }
-  return false;
-}
 
-void DeleteUnacceptedPasskeys(
-    content::WebContents* web_contents,
-    const std::string& relying_party_id,
-    const std::vector<uint8_t>& user_id,
-    const std::vector<std::vector<uint8_t>>& all_accepted_credentials_ids) {
-  webauthn::PasskeyModel* passkey_store =
-      PasskeyModelFactory::GetInstance()->GetForProfile(
-          Profile::FromBrowserContext(web_contents->GetBrowserContext()));
-  bool is_passkey_deleted = false;
-  for (const auto& passkey : passkey_store->GetPasskeys(
-           relying_party_id,
-           webauthn::PasskeyModel::ShadowedCredentials::kExclude)) {
-    if (std::vector<uint8_t>(passkey.user_id().begin(),
-                             passkey.user_id().end()) == user_id &&
-        !std::ranges::contains(
-            all_accepted_credentials_ids,
-            std::vector<uint8_t>(passkey.credential_id().begin(),
-                                 passkey.credential_id().end()))) {
-      passkey_store->DeletePasskey(passkey.credential_id(), FROM_HERE);
-      is_passkey_deleted = true;
-    }
+  // Extension permissions logic operates on URLs. Convert the RP ID into a
+  // https URL, and make sure the host matches the rp_id (to disallow RP IDs
+  // like example.com/site).
+  GURL rp_id_url(
+      base::StrCat({url::kHttpsScheme, url::kStandardSchemeSeparator, rp_id}));
+  if (!rp_id_url.is_valid() || rp_id_url.host() != rp_id) {
+    return false;
   }
-  if (is_passkey_deleted) {
-    PasswordsClientUIDelegate* manage_passwords_ui_controller =
-        PasswordsClientUIDelegateFromWebContents(web_contents);
-    if (manage_passwords_ui_controller) {
-      manage_passwords_ui_controller->OnPasskeyNotAccepted(relying_party_id);
-    }
+
+  // RP IDs must not be IP origins.
+  if (rp_id_url.HostIsIPAddress()) {
+    return false;
   }
-  LogSignalAllAcceptedCredentials(
-      is_passkey_deleted
-          ? ChromeWebAuthenticationDelegate::
-                SignalAllAcceptedCredentialsResult::kPasskeyRemoved
-          : ChromeWebAuthenticationDelegate::
-                SignalAllAcceptedCredentialsResult::kNoPasskeyChanged);
+
+  // Allow claiming an RP ID if an extension can access this page. This is more
+  // restrictive than WebAuthn on the web:
+  // * Subdomains are not allowed to claim domains up.
+  // * Non-default ports are not allowed to claim their domains.
+  return extension.permissions_data()->HasHostPermission(rp_id_url);
 }
 
 void HideAndRestorePasskeys(
@@ -247,8 +205,7 @@ void HideAndRestorePasskeys(
           webauthn::PasskeyModel::ShadowedCredentials::kExclude);
   const auto passkey_it =
       std::ranges::find_if(passkeys, [&user_id](const auto& passkey) {
-        return std::vector<uint8_t>(passkey.user_id().begin(),
-                                    passkey.user_id().end()) == user_id;
+        return base::as_byte_span(passkey.user_id()) == user_id;
       });
   if (passkey_it == passkeys.end()) {
     LogSignalAllAcceptedCredentials(
@@ -256,10 +213,9 @@ void HideAndRestorePasskeys(
             kNoPasskeyChanged);
     return;
   }
-  bool passkey_in_list = std::ranges::contains(
-      all_accepted_credentials_ids,
-      std::vector<uint8_t>(passkey_it->credential_id().begin(),
-                           passkey_it->credential_id().end()));
+  bool passkey_in_list =
+      std::ranges::contains(all_accepted_credentials_ids,
+                            base::as_byte_span(passkey_it->credential_id()));
   if ((passkey_in_list && !passkey_it->hidden()) ||
       (!passkey_in_list && passkey_it->hidden())) {
     LogSignalAllAcceptedCredentials(
@@ -421,9 +377,14 @@ content::WebAuthenticationRequestProxy*
 ChromeWebAuthenticationDelegate::MaybeGetRequestProxy(
     content::BrowserContext* browser_context,
     const url::Origin& caller_origin) {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  // The webAuthenticationProxy extension API is supported on Win/Mac/Linux.
   auto* service = extensions::WebAuthenticationProxyService::GetIfProxyAttached(
       Profile::FromBrowserContext(browser_context));
   return service && service->IsActive(caller_origin) ? service : nullptr;
+#else
+  return nullptr;
+#endif
 }
 
 void ChromeWebAuthenticationDelegate::PasskeyUnrecognized(
@@ -433,13 +394,11 @@ void ChromeWebAuthenticationDelegate::PasskeyUnrecognized(
     const std::string& relying_party_id) {
   webauthn::PasskeyChangeQuotaTracker* quota_tracker =
       webauthn::PasskeyChangeQuotaTracker::GetInstance();
-  if (base::FeatureList::IsEnabled(device::kWebAuthnSignalApiHidePasskeys)) {
-    if (!quota_tracker->CanMakeChange(origin)) {
-      LogSignalUnknownCredential(SignalUnknownCredentialResult::kQuotaExceeded);
-      FIDO_LOG(ERROR) << "Dropping removal request from " << origin
-                      << ": quota exceeded.";
-      return;
-    }
+  if (!quota_tracker->CanMakeChange(origin)) {
+    LogSignalUnknownCredential(SignalUnknownCredentialResult::kQuotaExceeded);
+    FIDO_LOG(ERROR) << "Dropping removal request from " << origin
+                    << ": quota exceeded.";
+    return;
   }
   webauthn::PasskeyModel* passkey_store =
       PasskeyModelFactory::GetInstance()->GetForProfile(
@@ -454,20 +413,15 @@ void ChromeWebAuthenticationDelegate::PasskeyUnrecognized(
     LogSignalUnknownCredential(SignalUnknownCredentialResult::kPasskeyNotFound);
     return;
   }
-  if (base::FeatureList::IsEnabled(device::kWebAuthnSignalApiHidePasskeys)) {
-    if (credential_specifics->hidden()) {
-      LogSignalUnknownCredential(
-          SignalUnknownCredentialResult::kPasskeyAlreadyHidden);
-      return;
-    }
-    quota_tracker->TrackChange(origin);
-    passkey_store->HidePasskey(std::move(credential_id),
-                               /*hidden_time=*/base::Time::Now());
-    LogSignalUnknownCredential(SignalUnknownCredentialResult::kPasskeyHidden);
-  } else {
-    passkey_store->DeletePasskey(std::move(credential_id), FROM_HERE);
-    LogSignalUnknownCredential(SignalUnknownCredentialResult::kPasskeyRemoved);
+  if (credential_specifics->hidden()) {
+    LogSignalUnknownCredential(
+        SignalUnknownCredentialResult::kPasskeyAlreadyHidden);
+    return;
   }
+  quota_tracker->TrackChange(origin);
+  passkey_store->HidePasskey(std::move(credential_id),
+                             /*hidden_time=*/base::Time::Now());
+  LogSignalUnknownCredential(SignalUnknownCredentialResult::kPasskeyHidden);
   PasswordsClientUIDelegate* manage_passwords_ui_controller =
       PasswordsClientUIDelegateFromWebContents(web_contents);
   if (manage_passwords_ui_controller) {
@@ -481,13 +435,8 @@ void ChromeWebAuthenticationDelegate::SignalAllAcceptedCredentials(
     const std::string& relying_party_id,
     const std::vector<uint8_t>& user_id,
     const std::vector<std::vector<uint8_t>>& all_accepted_credentials_ids) {
-  if (base::FeatureList::IsEnabled(device::kWebAuthnSignalApiHidePasskeys)) {
-    HideAndRestorePasskeys(web_contents, origin, relying_party_id, user_id,
-                           all_accepted_credentials_ids);
-  } else {
-    DeleteUnacceptedPasskeys(web_contents, relying_party_id, user_id,
-                             all_accepted_credentials_ids);
-  }
+  HideAndRestorePasskeys(web_contents, origin, relying_party_id, user_id,
+                         all_accepted_credentials_ids);
 }
 
 void ChromeWebAuthenticationDelegate::UpdateUserPasskeys(
@@ -513,15 +462,15 @@ void ChromeWebAuthenticationDelegate::UpdateUserPasskeys(
   for (const auto& passkey : passkey_store->GetPasskeys(
            relying_party_id,
            webauthn::PasskeyModel::ShadowedCredentials::kExclude)) {
-    if (std::vector<uint8_t>(passkey.user_id().begin(),
-                             passkey.user_id().end()) == user_id &&
+    if (base::as_byte_span(passkey.user_id()) == user_id &&
         (passkey.user_name() != name ||
          passkey.user_display_name() != display_name)) {
-      passkey_store->UpdatePasskey(
-          passkey.credential_id(),
-          {.user_name = name, .user_display_name = display_name},
-          /*updated_by_user=*/false);
-      is_passkey_updated = true;
+      if (passkey_store->UpdatePasskey(
+              passkey.credential_id(),
+              {.user_name = name, .user_display_name = display_name},
+              /*updated_by_user=*/false)) {
+        is_passkey_updated = true;
+      }
     }
   }
   if (is_passkey_updated) {
@@ -574,10 +523,10 @@ content::WebAuthenticationDelegate::ChromeOSGenerateRequestIdCallback
 ChromeWebAuthenticationDelegate::GetGenerateRequestIdCallback(
     content::RenderFrameHost* render_frame_host) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  aura::Window* window =
-      render_frame_host->GetNativeView()->GetToplevelWindow();
+  auto* window = render_frame_host->GetNativeView();
+  auto* toplevel_window = window ? window->GetToplevelWindow() : nullptr;
   return chromeos::webauthn::WebAuthnRequestRegistrar::Get()
-      ->GetRegisterCallback(window);
+      ->GetRegisterCallback(toplevel_window);
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 

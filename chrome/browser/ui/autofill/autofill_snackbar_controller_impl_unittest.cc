@@ -13,6 +13,7 @@
 #include "chrome/browser/autofill/mock_manual_filling_view.h"
 #include "chrome/browser/keyboard_accessory/android/manual_filling_controller_impl.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_address_accessory_controller.h"
+#include "chrome/browser/keyboard_accessory/test_utils/android/mock_at_memory_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_password_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_payment_method_accessory_controller.h"
 #include "chrome/browser/ui/autofill/autofill_snackbar_view.h"
@@ -39,6 +40,7 @@ class AutofillSnackbarControllerImplTest
         web_contents(), mock_pwd_controller_.AsWeakPtr(),
         mock_address_controller_.AsWeakPtr(),
         mock_payment_method_controller_.AsWeakPtr(),
+        mock_at_memory_controller_.AsWeakPtr(),
         std::make_unique<NiceMock<MockManualFillingView>>());
   }
 
@@ -55,6 +57,7 @@ class AutofillSnackbarControllerImplTest
   NiceMock<MockAddressAccessoryController> mock_address_controller_;
   NiceMock<MockPaymentMethodAccessoryController>
       mock_payment_method_controller_;
+  NiceMock<MockAtMemoryAccessoryController> mock_at_memory_controller_;
 
   base::WeakPtrFactory<AutofillSnackbarControllerImplTest> weak_ptr_factory_{
       this};
@@ -150,22 +153,6 @@ TEST_F(AutofillSnackbarControllerImplTest, Metrics_VirtualCardEnrollSuccess) {
       "Autofill.Snackbar.VirtualCardEnrollSuccess.ActionClicked", true, 1);
 }
 
-TEST_F(AutofillSnackbarControllerImplTest, Metrics_UndoPlusAddressEmailSwap) {
-  base::HistogramTester histogram_tester;
-
-  controller()->Show(AutofillSnackbarType::kPlusAddressEmailOverride,
-                     base::DoNothing());
-
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.Snackbar.PlusAddressEmailOverride.Shown", true, 1);
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.Snackbar.PlusAddressEmailOverride.ActionClicked", true, 0);
-
-  controller()->OnActionClicked();
-
-  histogram_tester.ExpectUniqueSample(
-      "Autofill.Snackbar.PlusAddressEmailOverride.ActionClicked", true, 1);
-}
 
 TEST_F(AutofillSnackbarControllerImplTest, Metrics_CardInfoRetrieval) {
   base::HistogramTester histogram_tester;
@@ -226,9 +213,11 @@ TEST_F(AutofillSnackbarControllerImplTest,
 }
 
 TEST_F(AutofillSnackbarControllerImplTest,
-       SaveCardSuccessMessageAndActionButtonText) {
-  base::test::ScopedFeatureList features(
-      features::kAutofillEnableWalletBranding);
+       SaveCardSuccessMessageAndActionButtonText_WalletBrandingEnabled) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures(
+      /*enabled_features=*/{features::kAutofillEnableWalletBranding},
+      /*disabled_features=*/{features::kAutofillEnableWalletBrandingV2});
 
   controller()->Show(AutofillSnackbarType::kSaveCardSuccess, base::DoNothing());
 
@@ -236,6 +225,26 @@ TEST_F(AutofillSnackbarControllerImplTest,
       controller()->GetMessageText(),
       l10n_util::GetStringUTF16(
           IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT));
+  EXPECT_EQ(
+      controller()->GetActionButtonText(),
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_SAVE_CARD_AND_VIRTUAL_CARD_ENROLL_CONFIRMATION_BUTTON_TEXT));
+}
+
+TEST_F(AutofillSnackbarControllerImplTest,
+       SaveCardSuccessMessageAndActionButtonText) {
+  base::test::ScopedFeatureList features;
+    features.InitWithFeatures(
+        /*enabled_features=*/{features::kAutofillEnableWalletBranding,
+                              features::kAutofillEnableWalletBrandingV2},
+        /*disabled_features=*/{});
+
+  controller()->Show(AutofillSnackbarType::kSaveCardSuccess, base::DoNothing());
+
+  EXPECT_EQ(
+      controller()->GetMessageText(),
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT_V2));
   EXPECT_EQ(
       controller()->GetActionButtonText(),
       l10n_util::GetStringUTF16(

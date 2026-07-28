@@ -4,13 +4,29 @@
 
 package org.chromium.chrome.browser.media;
 
+import android.app.Activity;
+import android.app.ActivityManager.AppTask;
 import android.content.Context;
+import android.content.Intent;
 
+import androidx.annotation.IntDef;
+
+import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.base.Callback;
+import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.blink.mojom.PreferredDisplaySurface;
 import org.chromium.blink.mojom.WindowAudioPreference;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.IntentHandler;
+import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabwindow.TabWindowManager;
+import org.chromium.chrome.browser.util.AndroidTaskUtils;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 
@@ -20,6 +36,44 @@ import org.chromium.ui.base.WindowAndroid;
  */
 @NullMarked
 public class MediaCapturePickerManager {
+    private static final String TAG = "MediaCapture";
+    private static final String RESULT_HISTOGRAM = "Media.MediaCapture.UI.Android.Picker.Result";
+    private static final String PRE_SHOW_FAILURE_HISTOGRAM =
+            "Media.MediaCapture.UI.Android.Picker.PreShowFailure";
+
+    // These values are persisted to logs. Entries should not be renumbered and numeric values
+    // should never be reused.
+    // LINT.IfChange
+    @IntDef({Result.CANCELLED, Result.TAB_SELECTED, Result.WINDOW_SELECTED, Result.SCREEN_SELECTED})
+    public @interface Result {
+        int CANCELLED = 0;
+        int TAB_SELECTED = 1;
+        int WINDOW_SELECTED = 2;
+        int SCREEN_SELECTED = 3;
+        int NUM_ENTRIES = 4;
+    }
+
+    // LINT.ThenChange(/tools/metrics/histograms/metadata/media/enums.xml:MediaCapturePickerResultEnum)
+
+    // These values are persisted to logs. Entries should not be renumbered and numeric values
+    // should never be reused.
+    // LINT.IfChange
+    @IntDef({
+        PreShowFailure.CONTEXT_NULL_ERROR,
+        PreShowFailure.PICKER_DELEGATE_NULL_ERROR,
+        PreShowFailure.APP_CONTENT_SHARING_DISABLED_ERROR,
+        PreShowFailure.MEDIA_PROJECTION_MANAGER_NULL_ERROR
+    })
+    public @interface PreShowFailure {
+        int CONTEXT_NULL_ERROR = 0;
+        int PICKER_DELEGATE_NULL_ERROR = 1;
+        int APP_CONTENT_SHARING_DISABLED_ERROR = 2;
+        int MEDIA_PROJECTION_MANAGER_NULL_ERROR = 3;
+        int NUM_ENTRIES = 4;
+    }
+
+    // LINT.ThenChange(/tools/metrics/histograms/metadata/media/enums.xml:MediaCapturePreShowFailureEnum)
+
     /** A delegate for handling returning the picker result. */
     public interface Delegate extends MediaCapturePickerTabObserver.FilterDelegate {
         /**
@@ -134,14 +188,92 @@ public class MediaCapturePickerManager {
     public static void showDialog(Params params, Delegate delegate) {
         final Context context = maybeGetContext(params.webContents);
         if (context == null) {
+            Log.e(
+                    TAG,
+                    "Cannot get Context from params web contents to show picker dialog, cancel "
+                            + "media capture request");
+            recordPreShowFailure(PreShowFailure.CONTEXT_NULL_ERROR);
             delegate.onCancel();
             return;
         }
 
         if (ChromeFeatureList.sAndroidNewMediaPicker.isEnabled()) {
+            Log.d(TAG, "New media picker is enabled, showing MediaCapturePickerInvoker");
             MediaCapturePickerInvoker.show(context, params, delegate);
         } else {
+            Log.d(TAG, "New media picker is disabled, showing MediaCapturePickerDialog");
             new MediaCapturePickerDialog(context, params, delegate).show();
         }
+    }
+
+    static void recordResult(@Result int result) {
+        RecordHistogram.recordEnumeratedHistogram(RESULT_HISTOGRAM, result, Result.NUM_ENTRIES);
+    }
+
+    public static void recordPreShowFailure(@PreShowFailure int reason) {
+        RecordHistogram.recordEnumeratedHistogram(
+                PRE_SHOW_FAILURE_HISTOGRAM, reason, PreShowFailure.NUM_ENTRIES);
+    }
+
+    private static @Nullable Callback<Tab> sBringTabToFrontCallbackForTesting;
+
+    /**
+     * Move the window of the given tab to the front, with the tab selected if it is from a Chrome
+     * tabbed activity. To ensure the tab is visible and could be shared.
+     *
+     * @param tab The tab to be brought forward.
+     */
+    public static void bringTabToFront(Context context, Tab tab) {
+        if (sBringTabToFrontCallbackForTesting != null) {
+            sBringTabToFrontCallbackForTesting.onResult(tab);
+            return;
+        }
+
+        // We should always get a non-null window and activity.
+        Activity activity = tab.getWindowAndroidChecked().getActivity().get();
+        if (activity == null) {
+            Log.e(TAG, "PickerManager.bringTabToFront: cannot get activity for tab %s", tab);
+            return;
+        }
+
+        int windowId = TabWindowManagerSingleton.getInstance().getIdForWindow(activity);
+        if (windowId != TabWindowManager.INVALID_WINDOW_ID) {
+            Intent intent =
+                    IntentHandler.createTrustedBringTabToFrontIntent(
+                            tab.getId(), IntentHandler.BringToFrontSource.ACTIVATE_TAB);
+            if (MultiWindowUtils.launchIntentInInstance(intent, windowId)) {
+                return;
+            }
+        }
+        Log.w(
+                TAG,
+                "PickerManager.bringTabToFront: launch MultiWindowUtils.launchIntentInInstance"
+                        + " failed; fallback to ApiCompatibilityUtils.moveTaskToFront");
+
+        // Fallback for non-tabbed activities (e.g. Custom Tabs) which are not handled by
+        // MultiWindowUtils.launchIntentInInstance.
+        // Since they are non-tabbed, we ony need to bring window to front and no manual tab switch
+        // is needed.
+        AppTask appTask = AndroidTaskUtils.getAppTaskFromId(activity, activity.getTaskId());
+        if (appTask != null) {
+            try {
+                Intent intent = new Intent(activity, activity.getClass());
+                appTask.startActivity(context, intent, null);
+                return;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to start activity via AppTask", e);
+            }
+        }
+        Log.w(
+                TAG,
+                "PickerManager.bringTabToFront: start activity via app task failed, fallback to"
+                        + " ApiCompatibilityUtils.moveTaskToFront");
+
+        ApiCompatibilityUtils.moveTaskToFront(activity, activity.getTaskId(), 0);
+    }
+
+    public static void setBringTabToFrontCallbackForTesting(@Nullable Callback<Tab> callback) {
+        sBringTabToFrontCallbackForTesting = callback;
+        ResettersForTesting.register(() -> sBringTabToFrontCallbackForTesting = null);
     }
 }

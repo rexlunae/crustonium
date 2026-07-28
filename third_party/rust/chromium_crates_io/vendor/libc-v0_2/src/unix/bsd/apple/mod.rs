@@ -278,6 +278,20 @@ s! {
         __unused8: Padding<*mut c_void>,
     }
 
+    pub struct tm {
+        pub tm_sec: c_int,
+        pub tm_min: c_int,
+        pub tm_hour: c_int,
+        pub tm_mday: c_int,
+        pub tm_mon: c_int,
+        pub tm_year: c_int,
+        pub tm_wday: c_int,
+        pub tm_yday: c_int,
+        pub tm_isdst: c_int,
+        pub tm_gmtoff: c_long,
+        pub tm_zone: *mut c_char,
+    }
+
     pub struct addrinfo {
         pub ai_flags: c_int,
         pub ai_family: c_int,
@@ -2529,6 +2543,7 @@ pub const MADV_ZERO_WIRED_PAGES: c_int = 6;
 pub const MADV_FREE_REUSABLE: c_int = 7;
 pub const MADV_FREE_REUSE: c_int = 8;
 pub const MADV_CAN_REUSE: c_int = 9;
+pub const MADV_ZERO: c_int = 11;
 
 pub const MINCORE_INCORE: c_int = 0x1;
 pub const MINCORE_REFERENCED: c_int = 0x2;
@@ -3169,6 +3184,10 @@ pub const EV_OOBAND: u16 = 0x2000;
 pub const EV_ERROR: u16 = 0x4000;
 pub const EV_EOF: u16 = 0x8000;
 pub const EV_SYSFLAGS: u16 = 0xf000;
+
+pub const KEVENT_FLAG_NONE: c_uint = 0x000000;
+pub const KEVENT_FLAG_IMMEDIATE: c_uint = 0x000001;
+pub const KEVENT_FLAG_ERROR_EVENTS: c_uint = 0x000002;
 
 pub const NOTE_TRIGGER: u32 = 0x01000000;
 pub const NOTE_FFNOP: u32 = 0x00000000;

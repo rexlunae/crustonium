@@ -25,7 +25,6 @@
 #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -53,6 +52,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/app_mode/kiosk_cryptohome_remover.h"
 #include "chrome/browser/ash/app_mode/web_app/kiosk_web_app_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
@@ -134,7 +134,7 @@ class PermissionRequestManagerTest
 #if BUILDFLAG(IS_CHROMEOS)
   void SetKioskBrowserPermissionsAllowedForOrigins(const std::string& origin) {
     profile()->GetPrefs()->SetList(
-        prefs::kKioskBrowserPermissionsAllowedForOrigins,
+        ash::prefs::kKioskBrowserPermissionsAllowedForOrigins,
         base::ListValue().Append(std::move(origin)));
   }
 
@@ -196,22 +196,32 @@ class PermissionRequestManagerTest
 TEST_F(PermissionRequestManagerTest, UMAForSimpleAcceptedGestureBubble) {
   base::HistogramTester histograms;
 
+  permissions::RequestTypeForUma geolocation_request_type =
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? permissions::RequestTypeForUma::
+                PERMISSION_GEOLOCATION_APPROXIMATE_OR_PRECISE
+          : permissions::RequestTypeForUma::PERMISSION_GEOLOCATION;
+  std::string_view geolocation_prompt_name =
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? "GeolocationApproximateOrPrecise"
+          : "Geolocation";
+
   manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
                        CreateRequest(params_request1_));
   WaitForBubbleToBeShown();
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptShown,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptShownGesture,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptShownNoGesture, 0);
-  histograms.ExpectTotalCount("Permissions.Engagement.Accepted.Geolocation", 0);
+  histograms.ExpectTotalCount(base::StrCat({"Permissions.Engagement.Accepted.",
+                                            geolocation_prompt_name}),
+                              0);
 
   Accept(base::FeatureList::IsEnabled(
              content_settings::features::kApproximateGeolocationPermission)
@@ -220,21 +230,19 @@ TEST_F(PermissionRequestManagerTest, UMAForSimpleAcceptedGestureBubble) {
              : std::monostate());
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptAccepted,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptDenied, 0);
 
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptAcceptedGesture,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptAcceptedNoGesture, 0);
-  histograms.ExpectUniqueSample("Permissions.Engagement.Accepted.Geolocation",
-                                kTestEngagementScore, 1);
+  histograms.ExpectUniqueSample(
+      base::StrCat(
+          {"Permissions.Engagement.Accepted.", geolocation_prompt_name}),
+      kTestEngagementScore, 1);
 }
 
 TEST_F(PermissionRequestManagerTest, UMAForSimpleDeniedNoGestureBubble) {
@@ -338,14 +346,23 @@ TEST_F(PermissionRequestManagerTest, UMAForMergedDeniedBubble) {
 TEST_F(PermissionRequestManagerTest, UMAForIgnores) {
   base::HistogramTester histograms;
 
+  std::string_view geolocation_prompt_name =
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? "GeolocationApproximateOrPrecise"
+          : "Geolocation";
+
   manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
                        CreateRequest(params_request1_));
   WaitForBubbleToBeShown();
-  histograms.ExpectTotalCount("Permissions.Engagement.Ignored.Geolocation", 0);
+  histograms.ExpectTotalCount(base::StrCat({"Permissions.Engagement.Ignored.",
+                                            geolocation_prompt_name}),
+                              0);
 
   GURL youtube("http://www.youtube.com/");
   NavigateAndCommit(youtube);
-  histograms.ExpectUniqueSample("Permissions.Engagement.Ignored.Geolocation",
+  histograms.ExpectUniqueSample(base::StrCat({"Permissions.Engagement.Ignored.",
+                                              geolocation_prompt_name}),
                                 kTestEngagementScore, 1);
 
   auto youtube_request = std::make_unique<permissions::MockPermissionRequest>(

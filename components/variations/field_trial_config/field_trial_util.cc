@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
@@ -19,6 +20,7 @@
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/values.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/field_trial_config/fieldtrial_testing_config.h"
 #include "components/variations/study_filtering.h"
@@ -136,6 +138,14 @@ Study::Filter CreateFilter(const FieldTrialTestingExperiment& experiment) {
   for (const auto* excluded_hw_class : experiment.exclude_hardware_classes) {
     filter.add_exclude_hardware_class(excluded_hw_class);
   }
+  for (const auto* included_hw_manufacturer :
+       experiment.hardware_manufacturers) {
+    filter.add_hardware_manufacturer(included_hw_manufacturer);
+  }
+  for (const auto* excluded_hw_manufacturer :
+       experiment.exclude_hardware_manufacturers) {
+    filter.add_exclude_hardware_manufacturer(excluded_hw_manufacturer);
+  }
   return filter;
 }
 
@@ -160,8 +170,12 @@ void ChooseExperiment(
     base::FeatureList* feature_list) {
   const auto& command_line = *base::CommandLine::ForCurrentProcess();
   std::string hardware_class = ClientFilterableState::GetHardwareClass();
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
   const bool is_benchmarking_enabled =
-      command_line.HasSwitch(switches::kEnableBenchmarking);
+      command_line.HasSwitch(::switches::kEnableBenchmarking) ||
+      command_line.GetSwitchValueASCII(
+          switches::kEnableFieldTrialTestingConfig) == "benchmarking";
   const FieldTrialTestingExperiment* chosen_experiment = nullptr;
   for (const FieldTrialTestingExperiment& experiment : study.experiments) {
     if (HasPlatform(experiment, platform)) {
@@ -173,6 +187,8 @@ void ChooseExperiment(
           HasFormFactor(experiment, current_form_factor) &&
           HasMinOSVersion(experiment) &&
           internal::CheckStudyHardwareClass(filter, hardware_class) &&
+          internal::CheckStudyHardwareManufacturer(filter,
+                                                   hardware_manufacturer) &&
           IsEnabledForBenchmarking(experiment, is_benchmarking_enabled)) {
         chosen_experiment = &experiment;
       }

@@ -20,6 +20,7 @@ import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
@@ -48,6 +49,13 @@ public abstract class PrivacySandboxSettingsBaseFragment extends ChromeBaseSetti
     /** Launches the right version of PrivacySandboxSettings depending on feature flags. */
     public static void launchPrivacySandboxSettings(
             Context context, @PrivacySandboxReferrer int referrer) {
+        // Hide the Privacy Sandbox if the Ad Privacy UX Deprecation feature is enabled.
+        // TODO(crbug.com/494266203): Once all surfaces are properly gated with this feature, add a
+        // crash to make sure other components don't call this if the feature is enabled.
+        if (ChromeFeatureList.isEnabled(
+                ChromeFeatureList.PRIVACY_SANDBOX_AD_PRIVACY_UX_DEPRECATION)) {
+            return;
+        }
         Bundle fragmentArgs = new Bundle();
         fragmentArgs.putInt(PRIVACY_SANDBOX_REFERRER, referrer);
         SettingsNavigationFactory.createSettingsNavigation()
@@ -70,7 +78,7 @@ public abstract class PrivacySandboxSettingsBaseFragment extends ChromeBaseSetti
         // Add the custom question mark button.
         menu.clear();
         MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
+                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, getHelpMenuStringRes());
         help.setIcon(
                 TraceEventVectorDrawableCompat.create(
                         getResources(), R.drawable.ic_help_24dp, getActivity().getTheme()));

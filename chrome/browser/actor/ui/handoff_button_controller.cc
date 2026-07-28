@@ -12,9 +12,10 @@
 #include "chrome/browser/actor/ui/actor_ui_metrics.h"
 #include "chrome/browser/actor/ui/actor_ui_tab_controller.h"
 #include "chrome/browser/actor/ui/actor_ui_window_controller.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
@@ -29,6 +30,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/events/types/event_type.h"
@@ -44,10 +46,6 @@
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget_delegate.h"
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
-#endif
 
 namespace {
 
@@ -262,17 +260,20 @@ void HandoffButtonController::UpdateState(HandoffButtonState state,
       text = l10n_util::GetStringUTF16(IDS_HANDOFF_TAKE_OVER_TASK_LABEL);
       a11y_text =
           l10n_util::GetStringUTF16(IDS_HANDOFF_TAKE_OVER_TASK_A11Y_LABEL);
-      icon = ImageModel::FromVectorIcon(vector_icons::kPauseIcon,
-                                        ::ui::kColorLabelForeground,
-                                        kHandoffButtonIconSize);
+      icon = ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? vector_icons::kPauseFilledIcon
+                                            : vector_icons::kPauseOldIcon,
+          ::ui::kColorLabelForeground, kHandoffButtonIconSize);
       break;
     case kClient:
       text = l10n_util::GetStringUTF16(IDS_HANDOFF_GIVE_TASK_BACK_LABEL);
       a11y_text =
           l10n_util::GetStringUTF16(IDS_HANDOFF_GIVE_TASK_BACK_A11Y_LABEL);
-      icon = ImageModel::FromVectorIcon(vector_icons::kPlayArrowIcon,
-                                        ::ui::kColorLabelForeground,
-                                        kHandoffButtonIconSize);
+      icon = ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled()
+              ? vector_icons::kPlayArrowFilledFlippableIcon
+              : vector_icons::kPlayArrowOldIcon,
+          ::ui::kColorLabelForeground, kHandoffButtonIconSize);
       break;
   }
 
@@ -421,7 +422,6 @@ void HandoffButtonController::OnButtonPressed() {
   if (auto* tab_controller = GetTabController()) {
     if (ownership_ == kActor) {
       tab_controller->SetActorTaskPaused();
-#if BUILDFLAG(ENABLE_GLIC)
       BrowserWindowInterface* bwi = tab_interface_->GetBrowserWindowInterface();
       auto* glic_service =
           glic::GlicKeyedServiceFactory::GetGlicKeyedService(bwi->GetProfile());
@@ -429,7 +429,6 @@ void HandoffButtonController::OnButtonPressed() {
         glic_service->ToggleUI(bwi, /*prevent_close=*/true,
                                glic::mojom::InvocationSource::kHandoffButton);
       }
-#endif
     } else {
       tab_controller->SetActorTaskResume();
     }

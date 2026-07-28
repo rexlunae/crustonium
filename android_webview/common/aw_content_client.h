@@ -47,6 +47,7 @@ class AwContentClient : public content::ContentClient {
   bool ShouldAllowDefaultSiteInstanceGroup() override;
   bool ShouldIgnoreDuplicateNavs(const GURL& url,
                                  bool is_renderer_initiated) const override;
+  base::TimeDelta GetIgnoreDuplicateNavsThreshold() const override;
 
  private:
   // Used to lock when |origin_trial_policy_| is initialized.

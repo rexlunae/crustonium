@@ -6,14 +6,20 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/test/run_until.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/drop_data.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_renderer_host.h"
-#include "content/test/test_content_browser_client.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -85,12 +91,68 @@ TEST_F(WebContentsViewMacTest, StartDragging_DisallowedByPolicy) {
   DropData drop_data;
   drop_data.text = u"test data";
 
-  view()->StartDragging(drop_data, url::Origin(), blink::kDragOperationCopy,
+  view()->StartDragging(*main_rfh(), drop_data, blink::kDragOperationCopy,
                         CreateValidDragImage(), gfx::Vector2d(), gfx::Rect(),
-                        blink::mojom::DragEventSourceInfo(),
-                        GetRenderWidgetHost());
+                        blink::mojom::DragEventSourceInfo());
 
   EXPECT_TRUE(fake_client().was_called());
+}
+
+TEST_F(WebContentsViewMacTest, DragPromisedFileTo_ImageDrag) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  DropData drop_data;
+  drop_data.file_contents =
+      base::ToVector(base::byte_span_from_cstring("fake data"));
+
+  base::FilePath target_path = temp_dir.GetPath().AppendASCII("test.png");
+  base::FilePath actual_path;
+
+  // The overridden Mojo methods are private, so downcast to the base class to
+  // work around that.
+  remote_cocoa::mojom::WebContentsNSViewHost* host = view();
+  bool result = host->DragPromisedFileTo(process()->GetID(),
+                                         main_test_rfh()->GetDocumentToken(),
+                                         target_path, drop_data, &actual_path);
+
+  EXPECT_TRUE(result);
+  EXPECT_EQ(target_path, actual_path);
+
+  // The actual file contents are written out by a task posted to the thread
+  // pool.
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    std::optional<std::vector<uint8_t>> file_content =
+        ReadFileToBytes(actual_path);
+    if (!file_content) {
+      return false;
+    }
+
+    return drop_data.file_contents == file_content.value();
+  }));
+}
+
+TEST_F(WebContentsViewMacTest, DragPromisedFileTo_DownloadURL) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  DropData drop_data;
+  drop_data.download_metadata = DownloadUrlMetadata();
+  drop_data.download_metadata->url = GURL("https://example.com/file.txt");
+  drop_data.download_metadata->mime_type = "text/plain";
+
+  base::FilePath target_path = temp_dir.GetPath().AppendASCII("file.txt");
+  base::FilePath actual_path;
+
+  // The overridden Mojo methods are private, so downcast to the base class to
+  // work around that.
+  remote_cocoa::mojom::WebContentsNSViewHost* host = view();
+  bool result = host->DragPromisedFileTo(process()->GetID(),
+                                         main_test_rfh()->GetDocumentToken(),
+                                         target_path, drop_data, &actual_path);
+
+  EXPECT_TRUE(result);
+  EXPECT_EQ(target_path, actual_path);
 }
 
 }  // namespace

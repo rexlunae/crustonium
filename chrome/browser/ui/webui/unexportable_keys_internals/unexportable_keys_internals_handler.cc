@@ -40,10 +40,8 @@ std::string_view GetAlgorithmName(
 UnexportableKeysInternalsHandler::UnexportableKeysInternalsHandler(
     mojo::PendingReceiver<unexportable_keys_internals::mojom::PageHandler>
         receiver,
-    mojo::PendingRemote<unexportable_keys_internals::mojom::Page> page,
     std::unique_ptr<unexportable_keys::UnexportableKeyService> key_service)
     : receiver_(this, std::move(receiver)),
-      page_(std::move(page)),
       key_service_(std::move(key_service)) {
   CHECK(key_service_);
 }
@@ -52,17 +50,17 @@ UnexportableKeysInternalsHandler::~UnexportableKeysInternalsHandler() = default;
 
 void UnexportableKeysInternalsHandler::GetUnexportableKeysInfo(
     GetUnexportableKeysInfoCallback callback) {
-  key_service_->GetAllSigningKeysForGarbageCollectionSlowlyAsync(
+  key_service_->GetAllKeysForGarbageCollectionSlowlyAsync(
       unexportable_keys::BackgroundTaskPriority::kBestEffort,
-      base::BindOnce(&UnexportableKeysInternalsHandler::
-                         OnGetAllSigningKeysForGarbageCollection,
-                     // `this` is guaranteed to be alive because `key_service_`
-                     // is owned by `this`.
-                     base::Unretained(this), std::move(callback)));
+      base::BindOnce(
+          &UnexportableKeysInternalsHandler::OnGetAllKeysForGarbageCollection,
+          // `this` is guaranteed to be alive because `key_service_`
+          // is owned by `this`.
+          base::Unretained(this), std::move(callback)));
 }
 
 void UnexportableKeysInternalsHandler::DeleteKey(
-    const unexportable_keys::UnexportableKeyId& key_id,
+    const unexportable_keys::UnexportableSigningKeyId& key_id,
     DeleteKeyCallback callback) {
   key_service_->DeleteKeysSlowlyAsync(
       {key_id}, unexportable_keys::BackgroundTaskPriority::kBestEffort,
@@ -74,10 +72,10 @@ void UnexportableKeysInternalsHandler::DeleteKey(
           std::move(callback)));
 }
 
-void UnexportableKeysInternalsHandler::OnGetAllSigningKeysForGarbageCollection(
+void UnexportableKeysInternalsHandler::OnGetAllKeysForGarbageCollection(
     GetUnexportableKeysInfoCallback callback,
     unexportable_keys::ServiceErrorOr<
-        std::vector<unexportable_keys::UnexportableKeyId>> keys) {
+        std::vector<unexportable_keys::UnexportableSigningKeyId>> keys) {
   if (!keys.has_value()) {
     std::move(callback).Run({});
     return;

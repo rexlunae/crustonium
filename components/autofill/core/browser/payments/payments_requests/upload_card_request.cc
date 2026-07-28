@@ -4,17 +4,31 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/upload_card_request.h"
 
+#include <stdint.h>
+
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
-#include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request_constants.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
+#include "url/gurl.h"
 
 namespace autofill::payments {
 
@@ -104,16 +118,15 @@ std::string UploadCardRequest::GetRequestContent() {
   if (request_details_.cvc.empty()) {
     request_content = base::StringPrintf(
         kUploadCardRequestFormatWithoutCvc,
-        base::EscapeUrlEncodedData(json_request, true).c_str(),
-        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true).c_str());
+        base::EscapeUrlEncodedData(json_request, true),
+        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true));
   } else {
     request_content = base::StringPrintf(
         kUploadCardRequestFormat,
-        base::EscapeUrlEncodedData(json_request, true).c_str(),
-        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true).c_str(),
+        base::EscapeUrlEncodedData(json_request, true),
+        base::EscapeUrlEncodedData(base::UTF16ToASCII(pan), true),
         base::EscapeUrlEncodedData(base::UTF16ToASCII(request_details_.cvc),
-                                   true)
-            .c_str());
+                                   true));
   }
   DVLOG(3) << "savecard request body: " << request_content;
   return request_content;

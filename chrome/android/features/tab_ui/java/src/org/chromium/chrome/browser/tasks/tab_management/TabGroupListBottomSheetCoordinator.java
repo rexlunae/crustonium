@@ -17,9 +17,11 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabFavicon;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabGroupUtils.TabGroupCreationCallback;
 import org.chromium.chrome.browser.tabmodel.TabGroupUtils.TabMovedCallback;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
@@ -47,6 +49,17 @@ public class TabGroupListBottomSheetCoordinator {
 
         /** Hides the bottom sheet. */
         void hide(@StateChangeReason int hideReason);
+
+        /** Adds padding to the bottom of the recycler view. */
+        void addPadding();
+
+        /**
+         * Checks to see see whether the bottom sheet content is the same as this bottom sheet's
+         * content view.
+         *
+         * @param content The content to be checked.
+         */
+        boolean isSameContentView(@Nullable BottomSheetContent content);
     }
 
     private final TabGroupListBottomSheetView mView;
@@ -60,7 +73,7 @@ public class TabGroupListBottomSheetCoordinator {
      * @param profile The current user profile.
      * @param tabGroupCreationCallback Used to follow up on tab group creation.
      * @param tabMovedCallback Used to follow up on a tab being moved groups or ungrouped.
-     * @param filter Used to read current tab groups.
+     * @param tabModel Used to read current tab groups.
      * @param bottomSheetController Used to interact with the bottom sheet.
      * @param supportsShowNewGroup Whether the 'New Tab Group' row is supported.
      * @param destroyOnHide Whether this object should be destroyed on hiding the bottom sheet.
@@ -70,7 +83,7 @@ public class TabGroupListBottomSheetCoordinator {
             Profile profile,
             TabGroupCreationCallback tabGroupCreationCallback,
             @Nullable TabMovedCallback tabMovedCallback,
-            TabGroupModelFilter filter,
+            TabModel tabModel,
             BottomSheetController bottomSheetController,
             boolean supportsShowNewGroup,
             boolean destroyOnHide) {
@@ -104,7 +117,7 @@ public class TabGroupListBottomSheetCoordinator {
         mTabListFaviconProvider =
                 new TabListFaviconProvider(
                         context,
-                        /* isTabStrip= */ false,
+                        TabListMode.GRID,
                         R.dimen.default_favicon_corner_radius,
                         TabFavicon::getBitmap);
 
@@ -121,7 +134,7 @@ public class TabGroupListBottomSheetCoordinator {
         mMediator =
                 new TabGroupListBottomSheetMediator(
                         modelList,
-                        filter,
+                        tabModel,
                         tabGroupCreationCallback,
                         tabMovedCallback,
                         faviconResolver,
@@ -147,6 +160,16 @@ public class TabGroupListBottomSheetCoordinator {
                     destroy();
                 }
             }
+
+            @Override
+            public void addPadding() {
+                mView.addBottomPadding();
+            }
+
+            @Override
+            public boolean isSameContentView(@Nullable BottomSheetContent content) {
+                return content != null && content.getContentView() == mView.getContentView();
+            }
         };
     }
 
@@ -161,6 +184,7 @@ public class TabGroupListBottomSheetCoordinator {
 
     /** Permanently cleans up this component. */
     public void destroy() {
+        mMediator.destroy();
         mSimpleRecyclerViewAdapter.destroy();
         mTabListFaviconProvider.destroy();
     }

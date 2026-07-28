@@ -8,6 +8,7 @@
 #include <array>
 #include <optional>
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_anchor_query_enums.h"
 #include "third_party/blink/renderer/core/css/css_counter_value.h"
@@ -39,6 +40,7 @@ class CSSParserTokenStream;
 class CSSPropertyValue;
 class CSSShadowValue;
 class CSSStringValue;
+struct CSSUrlRequestModifiers;
 class CSSURLPatternValue;
 class CSSValue;
 class CSSValueList;
@@ -82,11 +84,14 @@ class ColorParserContext {
   static ColorParserContext AbsoluteColorContext() {
     return {.absolute_colors_ = true};
   }
-  static ColorParserContext NoElementContext() { return {.no_element_ = true}; }
+  static ColorParserContext NoElementNoPropertyContext() {
+    return {.no_element_ = true, .no_property_ = true};
+  }
 
   bool AllColorsAllowed() const { return !absolute_colors_ && !no_element_; }
   bool OnlyAbsoluteColorsAllowed() const { return absolute_colors_; }
   bool InElementContext() const { return !(no_element_ || absolute_colors_); }
+  bool InPropertyContext() const { return !(no_property_ || absolute_colors_); }
 
   // Parsing absolute <color> values:
   // https://drafts.csswg.org/css-color-5/#absolute-color
@@ -95,6 +100,10 @@ class ColorParserContext {
   // Parsing <color> values without an element context.
   // Disallow tree counting functions.
   bool no_element_ = false;
+
+  // Parsing <color> values without a property context.
+  // Disallow random() function.
+  bool no_property_ = false;
 };
 enum class EmptyPathStringHandling { kFailure, kTreatAsNone };
 
@@ -177,13 +186,6 @@ CORE_EXPORT CSSPrimitiveValue* ConsumeAngle(
     const CSSParserContext&,
     CSSParserLocalContext&,
     std::optional<WebFeature> unitless_zero_feature);
-CORE_EXPORT CSSPrimitiveValue* ConsumeAngle(
-    CSSParserTokenStream&,
-    const CSSParserContext&,
-    CSSParserLocalContext&,
-    std::optional<WebFeature> unitless_zero_feature,
-    double minimum_value,
-    double maximum_value);
 CSSPrimitiveValue* ConsumeTime(CSSParserTokenStream&,
                                const CSSParserContext&,
                                CSSParserLocalContext&,
@@ -213,8 +215,7 @@ cssvalue::CSSScopedKeywordValue* ConsumeScopedKeywordValue(
 
 // https://drafts.csswg.org/css-values-5/#ident
 CSSFunctionValue* ConsumeIdentFunction(CSSParserTokenStream&,
-                                       const CSSParserContext&,
-                                       CSSParserLocalContext&);
+                                       const CSSParserContext&);
 CSSCustomIdentValue* ConsumeCustomIdent(CSSParserTokenStream&,
                                         const CSSParserContext&,
                                         CSSParserLocalContext&);
@@ -226,11 +227,25 @@ cssvalue::CSSScopedKeywordValue* ConsumeScopedKeywordValue(
 CSSStringValue* ConsumeString(CSSParserTokenStream&);
 cssvalue::CSSURIValue* ConsumeUrl(CSSParserTokenStream&,
                                   const CSSParserContext&);
-CSSURLPatternValue* ConsumeUrlPattern(CSSParserTokenStream&,
-                                      const CSSParserContext&);
+bool ConsumeUrlRequestModifiers(CSSParserTokenStream&,
+                                const CSSParserContext&,
+                                CSSUrlRequestModifiers&);
+CORE_EXPORT CSSURLPatternValue* ConsumeUrlPattern(CSSParserTokenStream&,
+                                                  const CSSParserContext&);
+
+// Parses a comma-separated list of param() functions for the
+// link-parameters property.
+// Grammar: param(<dashed-ident>, <declaration-value>?)#
+// Returns a CSSValueList of CSSParamValuePair, or nullptr on failure.
+// Spec: https://drafts.csswg.org/css-link-params/
+CORE_EXPORT CSSValue* ConsumeLinkParameters(CSSParserTokenStream&,
+                                            const CSSParserContext&,
+                                            CSSParserLocalContext&);
 
 // Some properties accept non-standard colors, like rgb values without a
-// preceding hash, in quirks mode.
+// preceding hash, in quirks mode. This corresponds to the <quirky-color>
+// production.
+// https://drafts.csswg.org/css-color-4/#quirky-color
 CORE_EXPORT CSSValue* ConsumeColorMaybeQuirky(CSSParserTokenStream&,
                                               const CSSParserContext&,
                                               CSSParserLocalContext&);
@@ -242,9 +257,10 @@ CORE_EXPORT CSSValue* ConsumeColor(
     const ColorParserContext& = ColorParserContext());
 
 // To parse in context without element (e.g. to prevent sibling-index()).
-CORE_EXPORT CSSValue* ConsumeColorWithoutElementContext(CSSParserTokenStream&,
-                                                        const CSSParserContext&,
-                                                        CSSParserLocalContext&);
+CORE_EXPORT CSSValue* ConsumeColorWithoutElementAndPropertyContext(
+    CSSParserTokenStream&,
+    const CSSParserContext&,
+    CSSParserLocalContext&);
 
 // https://drafts.csswg.org/css-color-5/#absolute-color
 CORE_EXPORT CSSValue* ConsumeAbsoluteColor(CSSParserTokenStream&,
@@ -338,8 +354,8 @@ void WarnInvalidKeywordPropertyUsage(CSSPropertyID,
                                      CSSValueID);
 
 const CSSValue* ParseLonghand(CSSPropertyID unresolved_property,
-                              CSSPropertyID current_shorthand,
                               const CSSParserContext&,
+                              CSSParserLocalContext&,
                               CSSParserTokenStream&);
 
 bool ConsumeShorthandVia2Longhands(
@@ -374,13 +390,15 @@ CSSValue* ConsumeFilterFunctionList(CSSParserTokenStream&,
                                     CSSParserLocalContext&);
 
 bool IsBaselineKeyword(CSSValueID id);
-bool IsSelfPositionKeyword(CSSValueID);
-bool IsSelfPositionOrLeftOrRightKeyword(CSSValueID);
+bool IsSelfAlignmentKeyword(CSSValueID);
+bool IsSelfAlignmentOrLeftOrRightKeyword(CSSValueID);
+bool IsDefaultAlignmentKeyword(CSSValueID);
+bool IsDefaultAlignmentOrLeftOrRightKeyword(CSSValueID);
 bool IsContentPositionKeyword(CSSValueID);
 bool IsContentPositionOrLeftOrRightKeyword(CSSValueID);
 CORE_EXPORT bool IsCSSWideKeyword(CSSValueID);
 CORE_EXPORT bool IsCSSWideKeyword(StringView);
-bool IsInvalidFontFamily(const AtomicString&);
+bool FontFamilyNeedsQuoting(const AtomicString&);
 bool IsRevertKeyword(StringView);
 bool IsDefaultKeyword(StringView);
 bool IsHashIdentifier(const CSSParserToken&);
@@ -388,11 +406,14 @@ CORE_EXPORT bool IsDashedIdent(const CSSParserToken&);
 
 // https://drafts.csswg.org/css-mixins-1/#function-rule
 inline bool IsDashedFunctionName(const CSSParserToken& token) {
+  // SAFETY: token value length checked before use in &&-expression.
   return token.GetType() == kFunctionToken && token.Value().length() >= 3 &&
-         token.Value()[0] == '-' && token.Value()[1] == '-';
+         UNSAFE_BUFFERS(token.Value()[0]) == '-' &&
+         UNSAFE_BUFFERS(token.Value()[1]) == '-';
 }
 
-CSSValue* ConsumeCSSWideKeyword(CSSParserTokenStream&);
+CORE_EXPORT CSSValue* ConsumeCSSWideKeyword(CSSParserTokenStream&,
+                                            const CSSParserContext& context);
 
 // This function returns false for CSS-wide keywords, 'default', and any
 // template parameters provided.
@@ -476,7 +497,11 @@ void AddBackgroundValue(CSSValue*& list, const CSSValue*);
 CSSValue* ConsumeBackgroundAttachment(CSSParserTokenStream&);
 CSSValue* ConsumeBackgroundBlendMode(CSSParserTokenStream&);
 CSSValue* ConsumeBackgroundBox(CSSParserTokenStream&);
-CSSValue* ConsumeBackgroundBoxOrText(CSSParserTokenStream&);
+
+enum class AllowBorderAreaValue { kAllow, kForbid };
+CSSValue* ConsumeBackgroundClip(
+    CSSParserTokenStream&,
+    AllowBorderAreaValue = AllowBorderAreaValue::kAllow);
 CSSValue* ConsumeMaskComposite(CSSParserTokenStream&);
 CSSValue* ConsumePrefixedMaskComposite(CSSParserTokenStream&);
 CSSValue* ConsumeMaskMode(CSSParserTokenStream&);
@@ -543,7 +568,8 @@ CSSValue* ParseBorderWidthSide(CSSParserTokenStream&,
                                const CSSParserContext&,
                                CSSParserLocalContext&);
 const CSSValue* ParseBorderStyleSide(CSSParserTokenStream&,
-                                     const CSSParserContext&);
+                                     const CSSParserContext&,
+                                     CSSParserLocalContext&);
 
 CSSValue* ConsumeCornerShape(CSSParserTokenStream&,
                              const CSSParserContext&,
@@ -677,33 +703,49 @@ bool ConsumeGridTemplateShorthand(bool important,
                                   const CSSValue*& template_columns,
                                   const CSSValue*& template_areas);
 
+bool ConsumeGridLanesShorthand(bool important,
+                               CSSParserTokenStream&,
+                               const CSSParserContext&,
+                               CSSParserLocalContext&,
+                               const CSSValue*& grid_lanes_direction,
+                               const CSSValue*& template_columns,
+                               const CSSValue*& template_rows,
+                               const CSSValue*& template_areas);
+
 CSSValue* ParseGridLanesTemplateAreasValue(
     const String& grid_lanes_template_areas,
-    bool is_template_columns);
-
+    bool is_for_columns);
 CSSValue* ParseGridLanesDirection(CSSParserTokenStream&);
 
 CSSValue* ConsumeFlowTolerance(CSSParserTokenStream&,
                                const CSSParserContext&,
                                CSSParserLocalContext&);
 
-bool ConsumeGapDecorationsRuleEdgeInteriorInsetShorthand(
+bool ConsumeGapDecorationsRuleInsetCapJunctionShorthand(
     bool important,
     const CSSParserContext& context,
     CSSParserLocalContext& local_context,
     CSSParserTokenStream& stream,
-    CSSValue*& rule_edge_inset,
-    CSSValue*& rule_interior_inset);
+    CSSValue*& rule_inset_cap,
+    CSSValue*& rule_inset_junction);
+
+bool ConsumeGapDecorationsRuleInsetStartEndShorthand(
+    bool important,
+    const CSSParserContext& context,
+    CSSParserLocalContext& local_context,
+    CSSParserTokenStream& stream,
+    CSSValue*& rule_inset_value);
+CSSValue* ConsumeHangingPunctuation(CSSParserTokenStream&);
 
 bool ConsumeGapDecorationsRuleInsetShorthand(
     bool important,
     const CSSParserContext& context,
     CSSParserLocalContext&,
     CSSParserTokenStream& stream,
-    CSSValue*& rule_edge_start_inset,
-    CSSValue*& rule_edge_end_inset,
-    CSSValue*& rule_interior_start_inset,
-    CSSValue*& rule_interior_end_inset);
+    CSSValue*& rule_inset_cap_start,
+    CSSValue*& rule_inset_cap_end,
+    CSSValue*& rule_inset_junction_start,
+    CSSValue*& rule_inset_junction_end);
 
 bool ConsumeGapDecorationsRuleShorthand(bool important,
                                         const CSSParserContext& context,
@@ -770,6 +812,8 @@ bool ConsumeRadii(std::array<CSSValue*, 4>& horizontal_radii,
                   CSSParserLocalContext& local_context);
 
 CSSValue* ConsumeTextDecorationLine(CSSParserTokenStream&);
+CSSValue* ConsumeTextDecorationSkipSpaces(CSSParserTokenStream&);
+CSSValue* ConsumeTextTransform(CSSParserTokenStream&);
 CSSValue* ConsumeTextBoxEdge(CSSParserTokenStream&);
 CSSValue* ConsumeTextBoxTrim(CSSParserTokenStream&);
 
@@ -994,7 +1038,7 @@ CSSValue* ConsumeBackgroundPositionLonghand(
 
 inline bool AtIdent(const CSSParserToken& token, const char* ident) {
   return token.GetType() == kIdentToken &&
-         EqualIgnoringASCIICase(token.Value(), ident);
+         EqualIgnoringAsciiCase(token.Value(), ident);
 }
 
 inline bool ConsumeIfIdent(CSSParserTokenStream& stream, const char* ident) {
@@ -1024,7 +1068,7 @@ CORE_EXPORT CSSValue* ConsumePositionTryFallbacks(CSSParserTokenStream&,
                                                   const CSSParserContext&,
                                                   CSSParserLocalContext&);
 
-CSSValue* ConsumeFitText(CSSParserTokenStream&,
+CSSValue* ConsumeTextFit(CSSParserTokenStream&,
                          const CSSParserContext&,
                          CSSParserLocalContext&);
 

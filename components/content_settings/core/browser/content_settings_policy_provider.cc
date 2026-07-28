@@ -51,6 +51,10 @@ struct PrefsForManagedContentSettingsMapEntry {
 // verifies this invariant or documents any necessary deviation.
 constexpr PrefsForManagedContentSettingsMapEntry
     kPrefsForManagedContentSettingsMap[] = {
+        {prefs::kManagedAutomaticDownloadsAllowedForUrls,
+         ContentSettingsType::AUTOMATIC_DOWNLOADS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedAutomaticDownloadsBlockedForUrls,
+         ContentSettingsType::AUTOMATIC_DOWNLOADS, CONTENT_SETTING_BLOCK},
         {prefs::kManagedAutomaticFullscreenAllowedForUrls,
          ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_ALLOW},
         {prefs::kManagedAutomaticFullscreenBlockedForUrls,
@@ -151,6 +155,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
         {prefs::kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls,
          ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
          CONTENT_SETTING_BLOCK},
+        {prefs::kManagedSubAppsWithoutPromptsAllowedForOrigins,
+         ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedSubAppsWithoutPromptsBlockedForOrigins,
+         ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS, CONTENT_SETTING_BLOCK},
 #if BUILDFLAG(IS_CHROMEOS)
         {prefs::kManagedSmartCardConnectAllowedForUrls,
          ContentSettingsType::SMART_CARD_GUARD, CONTENT_SETTING_ALLOW},
@@ -167,12 +175,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::CONTROLLED_FRAME, CONTENT_SETTING_BLOCK},
         // LocalNetworkAccess:
         // * Block takes precedence over Allow
-        // * Policies apply to all 3 LNA permissions while we migrate to
-        //   split permissions (see crbug.com/465491626).
-        {prefs::kManagedLocalNetworkAccessAllowedForUrls,
-         ContentSettingsType::LOCAL_NETWORK_ACCESS, CONTENT_SETTING_ALLOW},
-        {prefs::kManagedLocalNetworkAccessBlockedForUrls,
-         ContentSettingsType::LOCAL_NETWORK_ACCESS, CONTENT_SETTING_BLOCK},
+        // * LocalNetworkAccessAllowed/Blocked applies to both LNA permissions
+        // * More specific permission (LocalNetworkAllowed/Blocked and
+        //   LoopbackNetworkAllowed/Blocked) take precedence over the more
+        //   general LocalNetworkAccessAllowed/Blocked policies
         {prefs::kManagedLocalNetworkAccessAllowedForUrls,
          ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_ALLOW},
         {prefs::kManagedLocalNetworkAccessBlockedForUrls,
@@ -181,6 +187,15 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_ALLOW},
         {prefs::kManagedLocalNetworkAccessBlockedForUrls,
          ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedLocalNetworkAllowedForUrls,
+         ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLocalNetworkBlockedForUrls,
+         ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedLoopbackNetworkAllowedForUrls,
+         ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLoopbackNetworkBlockedForUrls,
+         ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_BLOCK},
+
         {prefs::kManagedIdleDetectionAllowedForUrls,
          ContentSettingsType::IDLE_DETECTION, CONTENT_SETTING_ALLOW},
         {prefs::kManagedIdleDetectionBlockedForUrls,
@@ -188,6 +203,8 @@ constexpr PrefsForManagedContentSettingsMapEntry
 };
 
 constexpr const char* kManagedPrefs[] = {
+    prefs::kManagedAutomaticDownloadsAllowedForUrls,
+    prefs::kManagedAutomaticDownloadsBlockedForUrls,
     prefs::kManagedAutomaticFullscreenAllowedForUrls,
     prefs::kManagedAutomaticFullscreenBlockedForUrls,
     prefs::kManagedAutoSelectCertificateForUrls,
@@ -219,6 +236,10 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedLegacyCookieScopeForDomains,
     prefs::kManagedLocalNetworkAccessAllowedForUrls,
     prefs::kManagedLocalNetworkAccessBlockedForUrls,
+    prefs::kManagedLocalNetworkAllowedForUrls,
+    prefs::kManagedLocalNetworkBlockedForUrls,
+    prefs::kManagedLoopbackNetworkAllowedForUrls,
+    prefs::kManagedLoopbackNetworkBlockedForUrls,
     prefs::kManagedNotificationsAllowedForUrls,
     prefs::kManagedNotificationsBlockedForUrls,
     prefs::kManagedPopupsAllowedForUrls,
@@ -242,6 +263,8 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedDirectSocketsBlockedForUrls,
     prefs::kManagedDirectSocketsPrivateNetworkAccessAllowedForUrls,
     prefs::kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls,
+    prefs::kManagedSubAppsWithoutPromptsAllowedForOrigins,
+    prefs::kManagedSubAppsWithoutPromptsBlockedForOrigins,
 #if BUILDFLAG(IS_CHROMEOS)
     prefs::kManagedSmartCardConnectAllowedForUrls,
     prefs::kManagedSmartCardConnectBlockedForUrls,
@@ -260,6 +283,7 @@ constexpr const char* kManagedPrefs[] = {
 // is managed any user defined exceptions (patterns) for this type are ignored.
 constexpr const char* kManagedDefaultPrefs[] = {
     prefs::kManagedDefaultAdsSetting,
+    prefs::kManagedDefaultAutomaticDownloadsSetting,
     prefs::kManagedDefaultClipboardSetting,
     prefs::kManagedDefaultCookiesSetting,
     prefs::kManagedDefaultFileSystemReadGuardSetting,
@@ -284,6 +308,7 @@ constexpr const char* kManagedDefaultPrefs[] = {
     prefs::kManagedDefaultLocalFontsSetting,
     prefs::kManagedDefaultWebPrintingSetting,
     prefs::kManagedDefaultDirectSocketsSetting,
+    prefs::kManagedDefaultSubAppsWithoutPromptsSetting,
     prefs::kManagedDefaultDirectSocketsPrivateNetworkAccessSetting,
     prefs::kManagedDefaultControlledFrameSetting,
 #if BUILDFLAG(IS_CHROMEOS)
@@ -355,6 +380,8 @@ struct PolicyProvider::PrefsForManagedDefaultMapEntry {
 const PolicyProvider::PrefsForManagedDefaultMapEntry
     PolicyProvider::kPrefsForManagedDefault[] = {
         {ContentSettingsType::ADS, prefs::kManagedDefaultAdsSetting},
+        {ContentSettingsType::AUTOMATIC_DOWNLOADS,
+         prefs::kManagedDefaultAutomaticDownloadsSetting},
         {ContentSettingsType::CLIPBOARD_READ_WRITE,
          prefs::kManagedDefaultClipboardSetting},
         {ContentSettingsType::COOKIES, prefs::kManagedDefaultCookiesSetting},
@@ -405,6 +432,8 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
          prefs::kManagedDefaultDirectSocketsPrivateNetworkAccessSetting},
         {ContentSettingsType::CONTROLLED_FRAME,
          prefs::kManagedDefaultControlledFrameSetting},
+        {ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS,
+         prefs::kManagedDefaultSubAppsWithoutPromptsSetting},
 #if BUILDFLAG(IS_CHROMEOS)
         {ContentSettingsType::SMART_CARD_GUARD,
          prefs::kManagedDefaultSmartCardConnectSetting},
@@ -711,7 +740,7 @@ bool PolicyProvider::SetWebsiteSetting(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
-    base::Value&& value,
+    const base::Value& value,
     const ContentSettingConstraints& constraints) {
   return false;
 }

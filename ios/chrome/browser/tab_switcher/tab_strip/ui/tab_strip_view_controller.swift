@@ -92,13 +92,6 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
   // Leading constraint for the collectionView,
   public var collectionViewLeadingConstraint: NSLayoutConstraint?
 
-  /// The LayoutGuideCenter.
-  @objc public var layoutGuideCenter: LayoutGuideCenter? {
-    didSet {
-      layoutGuideCenter?.reference(view: newTabButton.layoutGuideView, under: kNewTabButtonGuide)
-    }
-  }
-
   init() {
     layout = TabStripLayout()
     collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
@@ -130,6 +123,14 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
     collectionView.translatesAutoresizingMaskIntoConstraints = false
     collectionView.backgroundColor = .clear
     view.addSubview(collectionView)
+
+    // TODO(crbug.com/507248945): This is a temporary fix for an iPadOS 26 bug where
+    // tapping on the tab strip triggers the status bar "scroll to top" gesture on the underlying web view.
+    // Adding a passive gesture to the tab strip claims touches on empty space, preventing the iPadOS 26
+    // status bar gesture from intercepting them.
+    let recognizer = UITapGestureRecognizer(target: self, action: #selector(tabStripTapped))
+    recognizer.cancelsTouchesInView = false
+    collectionView.addGestureRecognizer(recognizer)
 
     let trailingPlaceholder = UIView()
     trailingPlaceholder.translatesAutoresizingMaskIntoConstraints = false
@@ -508,6 +509,13 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
 
   // MARK: - Private
 
+  /// Action for the passive gesture recognizer to claim touches on empty space.
+  @objc private func tabStripTapped() {
+    // This method is intentionally empty. Its purpose is to claim touches
+    // for the app's gesture system and prevent the system status bar gesture
+    // from intercepting them on empty space.
+  }
+
   /// Collapses or expands the group at `indexPath`.
   func collapseOrExpandGroup(at indexPath: IndexPath) {
     guard let tabGroupItem = dataSource.itemIdentifier(for: indexPath)?.tabGroupItem else {
@@ -639,7 +647,7 @@ class TabStripViewController: UIViewController, TabStripConsumer, TabStripNewTab
       guard let item = itemIdentifier.tabGroupItem else { return }
       let itemData = self.itemData[itemIdentifier] as? TabStripItemData
       cell.title = item.title
-      cell.contentContainerBackgroundColor = item.groupColor
+      cell.contentContainerBackgroundColor = item.tabStripColor
       cell.titleTextColor = item.foregroundColor
       cell.collapsed = item.collapsed
       cell.facePileProvider = self.tabGroupCellDataSource?.facePileProvider(forItem: itemIdentifier)

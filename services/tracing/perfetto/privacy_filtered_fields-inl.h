@@ -69,7 +69,7 @@ constexpr MessageInfo kChromeCompositorStateMachine = {
     kChromeCompositorStateMachineComplexMessages};
 
 // Proto Message: SourceLocation
-constexpr int kSourceLocationIndices[] = {1, 2, 3, -1};
+constexpr int kSourceLocationIndices[] = {1, 2, 3, 4, -1};
 constexpr MessageInfo kSourceLocation = {kSourceLocationIndices, nullptr};
 
 // Proto Message: BeginFrameArgs
@@ -349,39 +349,46 @@ constexpr MessageInfo kMissedVsyncsForJankReason = {
     kMissedVsyncsForJankReasonIndices, nullptr};
 
 // Proto Message: Real
-constexpr int kRealIndices[] = {1, 2, 3, -1};
+constexpr int kRealIndices[] = {1, 2, 3, 4, -1};
 constexpr MessageInfo kReal = {kRealIndices, nullptr};
 
 // Proto Message: Synthetic
-constexpr int kSyntheticIndices[] = {1, -1};
+constexpr int kSyntheticIndices[] = {1, 2, -1};
 constexpr MessageInfo kSynthetic = {kSyntheticIndices, nullptr};
 
 // Proto Message: ScrollUpdates
-constexpr int kScrollUpdatesIndices[] = {1, 2, 3, -1};
+constexpr int kScrollUpdatesIndices[] = {1, 2, 3, 4, -1};
 constexpr MessageInfo const* kScrollUpdatesComplexMessages[] = {
-    &kReal, &kSynthetic, nullptr};
+    &kReal, &kSynthetic, nullptr, nullptr};
 constexpr MessageInfo kScrollUpdates = {kScrollUpdatesIndices,
                                         kScrollUpdatesComplexMessages};
 
+// Proto Message: FrameStageCalculation
+constexpr int kFrameStageCalculationIndices[] = {1, 2, -1};
+constexpr MessageInfo kFrameStageCalculation = {kFrameStageCalculationIndices,
+                                                nullptr};
+
 // Proto Message: ScrollJankV4Result
-constexpr int kScrollJankV4ResultIndices[] = {1, 2, 3,  4,  5,  6, 7,
-                                              8, 9, 10, 11, 12, -1};
+constexpr int kScrollJankV4ResultIndices[] = {1, 2,  3,  4,  5,  6,  7, 8,
+                                              9, 10, 11, 12, 13, 14, -1};
 constexpr MessageInfo const* kScrollJankV4ResultComplexMessages[] = {
     nullptr, &kMissedVsyncsForJankReason,
     nullptr, nullptr,
     nullptr, nullptr,
     nullptr, nullptr,
     nullptr, &kScrollUpdates,
-    nullptr, nullptr};
+    nullptr, nullptr,
+    nullptr, &kFrameStageCalculation};
 constexpr MessageInfo kScrollJankV4Result = {
     kScrollJankV4ResultIndices, kScrollJankV4ResultComplexMessages};
 
 // Proto Message: EventLatency
-constexpr int kEventLatencyIndices[] = {1, 2, 4, 5, 6, 7, 8, 9, 10, -1};
+constexpr int kEventLatencyIndices[] = {1, 2, 4, 5, 6, 7, 8, 9, 10, 11, -1};
 constexpr MessageInfo const* kEventLatencyComplexMessages[] = {
     nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr,
-    nullptr, nullptr, &kScrollJankV4Result};
+    nullptr, nullptr, &kScrollJankV4Result,
+    nullptr};
 constexpr MessageInfo kEventLatency = {kEventLatencyIndices,
                                        kEventLatencyComplexMessages};
 
@@ -555,6 +562,20 @@ constexpr MessageInfo kChromeLatencyInfo2 = {
 constexpr int kEventTimingIndices[] = {1, 3, 4, 5, 6, 7, 8, 9, -1};
 constexpr MessageInfo kEventTiming = {kEventTimingIndices, nullptr};
 
+// Proto Message: FrameTimeline
+constexpr int kFrameTimelineIndices[] = {1, 2, 3, -1};
+constexpr MessageInfo kFrameTimeline = {kFrameTimelineIndices, nullptr};
+
+// Proto Message: AndroidChoreographerFrameCallbackData
+constexpr int kAndroidChoreographerFrameCallbackDataIndices[] = {1, 2, 3, 4,
+                                                                 -1};
+constexpr MessageInfo const*
+    kAndroidChoreographerFrameCallbackDataComplexMessages[] = {
+        nullptr, &kFrameTimeline, nullptr, &kFrameTimeline};
+constexpr MessageInfo kAndroidChoreographerFrameCallbackData = {
+    kAndroidChoreographerFrameCallbackDataIndices,
+    kAndroidChoreographerFrameCallbackDataComplexMessages};
+
 // Proto Message: CurrentTask
 constexpr int kCurrentTaskIndices[] = {1, 2, -1};
 constexpr MessageInfo kCurrentTask = {kCurrentTaskIndices, nullptr};
@@ -565,26 +586,72 @@ constexpr int kChromeFrameReporter2Indices[] = {1, 2, 3,  4,  5,  6,  7,
 constexpr MessageInfo kChromeFrameReporter2 = {kChromeFrameReporter2Indices,
                                                nullptr};
 
+// Proto Message: TopControlsOffset
+constexpr int kTopControlsOffsetIndices[] = {1, 2, -1};
+constexpr MessageInfo kTopControlsOffset = {kTopControlsOffsetIndices, nullptr};
+
 // Proto Message: InputTransferHandler
-constexpr int kInputTransferHandlerIndices[] = {1, -1};
-constexpr MessageInfo kInputTransferHandler = {kInputTransferHandlerIndices,
-                                               nullptr};
+constexpr int kInputTransferHandlerIndices[] = {1, 2, 3, 4, -1};
+constexpr MessageInfo const* kInputTransferHandlerComplexMessages[] = {
+    nullptr, nullptr, nullptr, &kTopControlsOffset};
+constexpr MessageInfo kInputTransferHandler = {
+    kInputTransferHandlerIndices, kInputTransferHandlerComplexMessages};
 
 // Proto Message: ResponseInfo
 constexpr int kResponseInfoIndices[] = {1, 2, -1};
 constexpr MessageInfo kResponseInfo = {kResponseInfoIndices, nullptr};
 
+// Proto Message: MemoryDumpProvider
+constexpr int kMemoryDumpProviderIndices[] = {1, -1};
+constexpr MessageInfo kMemoryDumpProvider = {kMemoryDumpProviderIndices,
+                                             nullptr};
+
+// Proto Message: ChromeAccessibilityWinNotifyWinEvent
+constexpr int kChromeAccessibilityWinNotifyWinEventIndices[] = {1, -1};
+constexpr MessageInfo kChromeAccessibilityWinNotifyWinEvent = {
+    kChromeAccessibilityWinNotifyWinEventIndices, nullptr};
+
+// Proto Message: ResultInterval
+constexpr int kResultIntervalIndices[] = {1, 2, -1};
+constexpr MessageInfo kResultInterval = {kResultIntervalIndices, nullptr};
+
+// Proto Message: Result
+constexpr int kResultIndices[] = {1, 2, -1};
+constexpr MessageInfo const* kResultComplexMessages[] = {nullptr,
+                                                         &kResultInterval};
+constexpr MessageInfo kResult = {kResultIndices, kResultComplexMessages};
+
+// Proto Message: FrameIntervalDecider
+constexpr int kFrameIntervalDeciderIndices[] = {1, 2, -1};
+constexpr MessageInfo const* kFrameIntervalDeciderComplexMessages[] = {&kResult,
+                                                                       nullptr};
+constexpr MessageInfo kFrameIntervalDecider = {
+    kFrameIntervalDeciderIndices, kFrameIntervalDeciderComplexMessages};
+
+// Proto Message: BeginFrameArgsV2
+constexpr int kBeginFrameArgsV2Indices[] = {4, 6, -1};
+constexpr MessageInfo kBeginFrameArgsV2 = {kBeginFrameArgsV2Indices, nullptr};
+
+// Proto Message: MacVoucherRelease
+constexpr int kMacVoucherReleaseIndices[] = {1, 2, 3, 4, 5, 6, 7, -1};
+constexpr MessageInfo kMacVoucherRelease = {kMacVoucherReleaseIndices, nullptr};
+
+// Proto Message: AndroidVsyncIntervalDecision
+constexpr int kAndroidVsyncIntervalDecisionIndices[] = {1, 2, 3, 4, 5, -1};
+constexpr MessageInfo kAndroidVsyncIntervalDecision = {
+    kAndroidVsyncIntervalDecisionIndices, nullptr};
+
 // Proto Message: TrackEvent
 constexpr int kTrackEventIndices[] = {
-    1,    2,    3,    5,    6,    9,    10,   11,   12,   16,   17,
-    22,   23,   24,   25,   26,   27,   28,   30,   31,   32,   33,
-    34,   35,   36,   38,   39,   40,   41,   42,   43,   44,   47,
-    48,   1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010,
-    1011, 1012, 1013, 1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021,
-    1022, 1023, 1024, 1025, 1028, 1031, 1032, 1033, 1034, 1036, 1038,
-    1039, 1040, 1041, 1042, 1046, 1047, 1048, 1049, 1050, 1051, 1052,
-    1053, 1054, 1055, 1056, 1057, 1058, 1059, 1060, 1061, 1064, 1065,
-    1066, 1067, 1068, 1069, 1071, 1075, 1076, 1077, 1078, -1};
+    1,    2,    3,    5,    6,    9,    10,   11,   12,   16,   17,   22,
+    23,   24,   25,   26,   27,   28,   30,   31,   32,   33,   34,   35,
+    36,   38,   39,   40,   41,   42,   43,   44,   47,   48,   1001, 1002,
+    1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014,
+    1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025, 1028,
+    1031, 1032, 1033, 1034, 1036, 1038, 1039, 1040, 1041, 1042, 1046, 1047,
+    1048, 1049, 1050, 1051, 1052, 1053, 1054, 1055, 1056, 1057, 1058, 1059,
+    1060, 1061, 1064, 1065, 1066, 1067, 1068, 1069, 1070, 1071, 1075, 1076,
+    1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, -1};
 constexpr MessageInfo const* kTrackEventComplexMessages[] = {
     nullptr,
     nullptr,
@@ -678,11 +745,18 @@ constexpr MessageInfo const* kTrackEventComplexMessages[] = {
     &kMainFramePipeline,
     &kChromeLatencyInfo2,
     &kEventTiming,
+    &kAndroidChoreographerFrameCallbackData,
     &kCurrentTask,
     &kChromeFrameReporter2,
     &kInputTransferHandler,
     &kResponseInfo,
-    &kScrollJankV4Result};
+    &kScrollJankV4Result,
+    &kMemoryDumpProvider,
+    &kChromeAccessibilityWinNotifyWinEvent,
+    &kFrameIntervalDecider,
+    &kBeginFrameArgsV2,
+    &kMacVoucherRelease,
+    &kAndroidVsyncIntervalDecision};
 constexpr MessageInfo kTrackEvent = {kTrackEventIndices,
                                      kTrackEventComplexMessages};
 
@@ -784,9 +858,15 @@ constexpr int kFinchHashIndices[] = {1, 2, -1};
 constexpr MessageInfo kFinchHash = {kFinchHashIndices, nullptr};
 
 // Proto Message: ChromeMetadataPacket
-constexpr int kChromeMetadataPacketIndices[] = {1, 2, 3, 4, -1};
+constexpr int kChromeMetadataPacketIndices[] = {1, 2, 3, 4, 6, 7, 8, -1};
 constexpr MessageInfo const* kChromeMetadataPacketComplexMessages[] = {
-    &kBackgroundTracingMetadata, nullptr, nullptr, &kFinchHash};
+    &kBackgroundTracingMetadata,
+    nullptr,
+    nullptr,
+    &kFinchHash,
+    nullptr,
+    nullptr,
+    nullptr};
 constexpr MessageInfo kChromeMetadataPacket = {
     kChromeMetadataPacketIndices, kChromeMetadataPacketComplexMessages};
 
@@ -847,9 +927,13 @@ constexpr MessageInfo kChromeThreadDescriptor = {kChromeThreadDescriptorIndices,
 constexpr int kCounterDescriptorIndices[] = {1, 3, 4, 5, -1};
 constexpr MessageInfo kCounterDescriptor = {kCounterDescriptorIndices, nullptr};
 
+// Proto Message: StateDescriptor
+constexpr int kStateDescriptorIndices[] = {-1};
+constexpr MessageInfo kStateDescriptor = {kStateDescriptorIndices, nullptr};
+
 // Proto Message: TrackDescriptor
-constexpr int kTrackDescriptorIndices[] = {1, 3,  4,  5,  6,  7,  8,
-                                           9, 10, 11, 12, 15, 17, -1};
+constexpr int kTrackDescriptorIndices[] = {1,  3,  4,  5,  6,  7,  8, 9,
+                                           10, 11, 12, 15, 17, 18, -1};
 constexpr MessageInfo const* kTrackDescriptorComplexMessages[] = {
     nullptr,
     &kProcessDescriptor,
@@ -863,7 +947,8 @@ constexpr MessageInfo const* kTrackDescriptorComplexMessages[] = {
     nullptr,
     nullptr,
     nullptr,
-    nullptr};
+    nullptr,
+    &kStateDescriptor};
 constexpr MessageInfo kTrackDescriptor = {kTrackDescriptorIndices,
                                           kTrackDescriptorComplexMessages};
 
@@ -892,22 +977,22 @@ constexpr MessageInfo kFileIoCreateEtwEvent = {kFileIoCreateEtwEventIndices,
                                                nullptr};
 
 // Proto Message: FileIoDirEnumEtwEvent
-constexpr int kFileIoDirEnumEtwEventIndices[] = {1, 2, 3, 4, 5, 6, 7, -1};
+constexpr int kFileIoDirEnumEtwEventIndices[] = {1, 2, 3, 4, 5, 6, 7, 9, -1};
 constexpr MessageInfo kFileIoDirEnumEtwEvent = {kFileIoDirEnumEtwEventIndices,
                                                 nullptr};
 
 // Proto Message: FileIoInfoEtwEvent
-constexpr int kFileIoInfoEtwEventIndices[] = {1, 2, 3, 4, 5, 6, -1};
+constexpr int kFileIoInfoEtwEventIndices[] = {1, 2, 3, 4, 5, 6, 7, -1};
 constexpr MessageInfo kFileIoInfoEtwEvent = {kFileIoInfoEtwEventIndices,
                                              nullptr};
 
 // Proto Message: FileIoReadWriteEtwEvent
-constexpr int kFileIoReadWriteEtwEventIndices[] = {1, 2, 3, 4, 5, 6, 7, -1};
+constexpr int kFileIoReadWriteEtwEventIndices[] = {1, 2, 3, 4, 5, 6, 7, 8, -1};
 constexpr MessageInfo kFileIoReadWriteEtwEvent = {
     kFileIoReadWriteEtwEventIndices, nullptr};
 
 // Proto Message: FileIoSimpleOpEtwEvent
-constexpr int kFileIoSimpleOpEtwEventIndices[] = {1, 2, 3, 4, -1};
+constexpr int kFileIoSimpleOpEtwEventIndices[] = {1, 2, 3, 4, 5, -1};
 constexpr MessageInfo kFileIoSimpleOpEtwEvent = {kFileIoSimpleOpEtwEventIndices,
                                                  nullptr};
 
@@ -916,9 +1001,14 @@ constexpr int kFileIoOpEndEtwEventIndices[] = {1, 2, 3, -1};
 constexpr MessageInfo kFileIoOpEndEtwEvent = {kFileIoOpEndEtwEventIndices,
                                               nullptr};
 
+// Proto Message: FileIoPathOperationEtwEvent
+constexpr int kFileIoPathOperationEtwEventIndices[] = {1, 2, 3, 4, 5, 6, 8, -1};
+constexpr MessageInfo kFileIoPathOperationEtwEvent = {
+    kFileIoPathOperationEtwEventIndices, nullptr};
+
 // Proto Message: EtwTraceEvent
-constexpr int kEtwTraceEventIndices[] = {1, 2, 3,  4,  5,  6, 7,
-                                         8, 9, 10, 11, 12, -1};
+constexpr int kEtwTraceEventIndices[] = {1, 2, 3,  4,  5,  6,  7,
+                                         8, 9, 10, 11, 12, 14, -1};
 constexpr MessageInfo const* kEtwTraceEventComplexMessages[] = {
     nullptr,
     &kCSwitchEtwEvent,
@@ -931,7 +1021,8 @@ constexpr MessageInfo const* kEtwTraceEventComplexMessages[] = {
     &kFileIoInfoEtwEvent,
     &kFileIoReadWriteEtwEvent,
     &kFileIoSimpleOpEtwEvent,
-    &kFileIoOpEndEtwEvent};
+    &kFileIoOpEndEtwEvent,
+    &kFileIoPathOperationEtwEvent};
 constexpr MessageInfo kEtwTraceEvent = {kEtwTraceEventIndices,
                                         kEtwTraceEventComplexMessages};
 

@@ -41,26 +41,33 @@ export class LetterSpacingMenuElement extends LetterSpacingMenuElementBase
     return {
       settingsPrefs: {type: Object},
       nonModal: {type: Boolean},
+      options_: {type: Array},
     };
   }
 
   accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
   accessor nonModal: boolean = false;
 
-  protected options_: Array<MenuStateItem<number>> = [
+  protected accessor options_: Array<MenuStateItem<number>> = [
     {
       title: loadTimeData.getString('letterSpacingStandardTitle'),
-      icon: 'read-anything:letter-spacing-standard',
+      icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled')?
+      'read-anything:format-letter-spacing-standard':
+          'read-anything:letter-spacing-standard-old',
       data: chrome.readingMode.standardLetterSpacing,
     },
     {
       title: loadTimeData.getString('letterSpacingWideTitle'),
-      icon: 'read-anything:letter-spacing-wide',
+      icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled')?
+      'read-anything:format-letter-spacing-wide':
+          'read-anything:letter-spacing-wide-old',
       data: chrome.readingMode.wideLetterSpacing,
     },
     {
       title: loadTimeData.getString('letterSpacingVeryWideTitle'),
-      icon: 'read-anything:letter-spacing-very-wide',
+      icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled')?
+      'read-anything:format-letter-spacing-wider':
+          'read-anything:letter-spacing-very-wide-old',
       data: chrome.readingMode.veryWideLetterSpacing,
     },
   ];

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/scroll/mac_scrollbar_animator_impl.h"
 
 #import "base/task/single_thread_task_runner.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme_mac.h"
@@ -97,6 +98,23 @@ bool MacScrollbarImplV2::DidScroll() {
     return true;
   }
   return false;
+}
+
+bool MacScrollbarImplV2::FadeInScrollbarIfExists() {
+  if (overlay_animator_) {
+    overlay_animator_->FadeInScrollbar(
+        base::FeatureList::IsEnabled(
+            blink::features::kFadeInScrollbarWhenMouseWheelMayBegin) &&
+        blink::features::kDeferFadeOutScrollbarUntilMouseWheelEnded.Get());
+    return true;
+  }
+  return false;
+}
+
+void MacScrollbarImplV2::FadeOutScrollbarIfNeeded() {
+  if (overlay_animator_) {
+    overlay_animator_->FadeOutScrollbarIfNeeded();
+  }
 }
 
 float MacScrollbarImplV2::GetKnobAlpha() {
@@ -194,14 +212,25 @@ void MacScrollbarAnimatorV2::DidChangeUserVisibleScrollOffset(
 
 bool MacScrollbarAnimatorV2::FadeInScrollbarIfExists(bool horizontal,
                                                      bool vertical) {
-  bool did_scroll = false;
+  bool did_fade_in_and_begin_deferring_fade_out = false;
   if (horizontal && horizontal_scrollbar_) {
-    did_scroll |= horizontal_scrollbar_->DidScroll();
+    did_fade_in_and_begin_deferring_fade_out |=
+        horizontal_scrollbar_->FadeInScrollbarIfExists();
   }
   if (vertical && vertical_scrollbar_) {
-    did_scroll |= vertical_scrollbar_->DidScroll();
+    did_fade_in_and_begin_deferring_fade_out |=
+        vertical_scrollbar_->FadeInScrollbarIfExists();
   }
-  return did_scroll;
+  return did_fade_in_and_begin_deferring_fade_out;
+}
+
+void MacScrollbarAnimatorV2::FadeOutScrollbarIfNeeded() {
+  if (horizontal_scrollbar_) {
+    horizontal_scrollbar_->FadeOutScrollbarIfNeeded();
+  }
+  if (vertical_scrollbar_) {
+    vertical_scrollbar_->FadeOutScrollbarIfNeeded();
+  }
 }
 
 void MacScrollbarAnimatorV2::Dispose() {

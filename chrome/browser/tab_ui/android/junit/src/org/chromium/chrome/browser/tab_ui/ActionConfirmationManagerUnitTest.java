@@ -45,7 +45,6 @@ import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.ActionConfirmationManager.MaybeBlockingResult;
 import org.chromium.components.browser_ui.widget.ActionConfirmationResult;
 import org.chromium.components.prefs.PrefService;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.sync.DataType;
@@ -100,8 +99,7 @@ public class ActionConfirmationManagerUnitTest {
 
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
         when(mIdentityServicesProvider.getIdentityManager(mProfile)).thenReturn(mIdentityManager);
-        when(mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN))
-                .thenReturn(TestAccounts.ACCOUNT1);
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(TestAccounts.ACCOUNT1);
 
         mActivityScenarioRule.getScenario().onActivity(this::onActivity);
     }
@@ -229,7 +227,7 @@ public class ActionConfirmationManagerUnitTest {
 
     @Test
     public void testProcessUngroupTabAttempt_NoSignIn() {
-        when(mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN)).thenReturn(null);
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(null);
 
         ActionConfirmationManager actionConfirmationManager =
                 new ActionConfirmationManager(mProfile, mActivity, mModalDialogManager);
@@ -289,6 +287,40 @@ public class ActionConfirmationManagerUnitTest {
                 mPropertyModelArgumentCaptor.getValue().get(ModalDialogProperties.CONTROLLER);
         controller.onClick(mPropertyModelArgumentCaptor.getValue(), ButtonType.POSITIVE);
         verify(mOnResult).onResult(ActionConfirmationResult.CONFIRMATION_POSITIVE);
+    }
+
+    @Test
+    public void testProcessActorTaskDeletionAttempt_Positive() {
+        ActionConfirmationManager actionConfirmationManager =
+                new ActionConfirmationManager(mProfile, mActivity, mModalDialogManager);
+        actionConfirmationManager.processActorTaskDeletionAttempt(mOnResult);
+        verify(mModalDialogManager).showDialog(mPropertyModelArgumentCaptor.capture(), anyInt());
+        Controller controller =
+                mPropertyModelArgumentCaptor.getValue().get(ModalDialogProperties.CONTROLLER);
+        controller.onClick(mPropertyModelArgumentCaptor.getValue(), ButtonType.POSITIVE);
+        verify(mOnResult).onResult(ActionConfirmationResult.CONFIRMATION_POSITIVE);
+
+        assertTrue(
+                mActionTester
+                        .getActions()
+                        .contains("ActorTaskTabConfirmation.StopActorTask.Proceed"));
+    }
+
+    @Test
+    public void testProcessActorTaskDeletionAttempt_Negative() {
+        ActionConfirmationManager actionConfirmationManager =
+                new ActionConfirmationManager(mProfile, mActivity, mModalDialogManager);
+        actionConfirmationManager.processActorTaskDeletionAttempt(mOnResult);
+        verify(mModalDialogManager).showDialog(mPropertyModelArgumentCaptor.capture(), anyInt());
+        Controller controller =
+                mPropertyModelArgumentCaptor.getValue().get(ModalDialogProperties.CONTROLLER);
+        controller.onClick(mPropertyModelArgumentCaptor.getValue(), ButtonType.NEGATIVE);
+        verify(mOnResult).onResult(ActionConfirmationResult.CONFIRMATION_NEGATIVE);
+
+        assertTrue(
+                mActionTester
+                        .getActions()
+                        .contains("ActorTaskTabConfirmation.StopActorTask.Abort"));
     }
 
     @Test

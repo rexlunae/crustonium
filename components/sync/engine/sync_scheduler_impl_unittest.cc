@@ -27,9 +27,9 @@
 #include "components/sync/engine/cancelation_signal.h"
 #include "components/sync/engine/data_type_activation_response.h"
 #include "components/sync/test/data_type_test_util.h"
+#include "components/sync/test/fake_connection_manager.h"
 #include "components/sync/test/fake_data_type_processor.h"
 #include "components/sync/test/fake_sync_encryption_handler.h"
-#include "components/sync/test/mock_connection_manager.h"
 #include "components/sync/test/mock_invalidation.h"
 #include "components/sync/test/mock_nudge_handler.h"
 #include "net/base/net_errors.h"
@@ -215,7 +215,7 @@ class SyncSchedulerImplTest : public testing::Test {
     delay_ = nullptr;
     extensions_activity_ = new ExtensionsActivity();
 
-    connection_ = std::make_unique<MockConnectionManager>();
+    connection_ = std::make_unique<FakeConnectionManager>();
     connection_->SetServerReachable();
 
     data_type_registry_ = std::make_unique<DataTypeRegistry>(
@@ -258,7 +258,7 @@ class SyncSchedulerImplTest : public testing::Test {
   SyncSchedulerImpl* scheduler() { return scheduler_.get(); }
   MockSyncer* syncer() { return syncer_; }
   MockDelayProvider* delay() { return delay_; }
-  MockConnectionManager* connection() { return connection_.get(); }
+  FakeConnectionManager* connection() { return connection_.get(); }
   DataTypeRegistry* data_type_registry() { return data_type_registry_.get(); }
   base::TimeDelta default_delay() { return base::Seconds(0); }
   base::TimeDelta long_delay() { return base::Seconds(60); }
@@ -435,7 +435,7 @@ class SyncSchedulerImplTest : public testing::Test {
 
   FakeSyncEncryptionHandler encryption_handler_;
   CancelationSignal cancelation_signal_;
-  std::unique_ptr<MockConnectionManager> connection_;
+  std::unique_ptr<FakeConnectionManager> connection_;
   std::unique_ptr<DataTypeRegistry> data_type_registry_;
   std::unique_ptr<SyncCycleContext> context_;
   std::unique_ptr<SyncSchedulerImpl> scheduler_;
@@ -1546,7 +1546,7 @@ TEST_F(SyncSchedulerImplTest, StartWhenNotConnected) {
   base::RunLoop().RunUntilIdle();
 
   scheduler()->OnConnectionStatusChange(
-      network::mojom::ConnectionType::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   connection()->SetServerReachable();
   connection()->UpdateConnectionStatus();
   base::RunLoop().RunUntilIdle();
@@ -1571,7 +1571,7 @@ TEST_F(SyncSchedulerImplTest, SyncShareNotCalledWhenDisconnected) {
   // Simulate a disconnect signal. The scheduler should not retry the previously
   // failed nudge.
   scheduler()->OnConnectionStatusChange(
-      network::mojom::ConnectionType::CONNECTION_NONE);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -1594,7 +1594,7 @@ TEST_F(SyncSchedulerImplTest, ServerConnectionChangeDuringBackoff) {
 
   // Before we run the scheduled retry, trigger a server connection change.
   scheduler()->OnConnectionStatusChange(
-      network::mojom::ConnectionType::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   connection()->SetServerReachable();
   connection()->UpdateConnectionStatus();
   base::RunLoop().RunUntilIdle();
@@ -1613,9 +1613,9 @@ TEST_F(SyncSchedulerImplTest, DoubleConnectionChangeDuringConfigure) {
                                      {THEMES}, base::DoNothing());
 
   scheduler()->OnConnectionStatusChange(
-      network::mojom::ConnectionType::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   scheduler()->OnConnectionStatusChange(
-      network::mojom::ConnectionType::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
 
   PumpLoop();  // Run the nudge, that will fail and schedule a quick retry.
 }

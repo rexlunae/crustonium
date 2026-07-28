@@ -17,7 +17,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -43,6 +42,7 @@
 #include "chrome/browser/ash/login/screens/fake_app_launch_splash_screen.h"
 #include "chrome/browser/ash/login/screens/network_error.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -216,6 +216,10 @@ class KioskLaunchControllerTest : public extensions::ExtensionServiceTestBase {
     accelerator_controller_ = fake_accelerator_controller.get();
     controller_ = std::make_unique<KioskLaunchController>(
         TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash()
+            ->GetPolicyService(),
         /*host=*/nullptr, &screen_, FakeLoadProfileCallback(),
         /*app_launched_callback=*/app_launched_future_.GetCallback(),
         /*done_callback=*/launch_done_future_.GetCallback(),
@@ -778,8 +782,14 @@ class KioskLaunchControllerWithExtensionTest
             policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
             policy::POLICY_SOURCE_CLOUD, base::Value(std::move(list)), nullptr);
 
+    // Ensure our `policy_server()` is informed about policy updates.
+    policy_provider()->SetupPolicyServiceForPolicyUpdates(policy_service());
+
+    // Update the policy.
     policy_provider()->UpdateChromePolicy(map);
-    base::RunLoop().RunUntilIdle();
+
+    // Deregister our `policy_server()` so later updates don't use it.
+    policy_provider()->SetupPolicyServiceForPolicyUpdates(nullptr);
   }
 
   extensions::ForceInstalledTracker* force_installed_tracker() {

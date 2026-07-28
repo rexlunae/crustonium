@@ -97,7 +97,7 @@ class Zipper {
   // A sentinel used by the iterator to constrain the comparison to make sure it
   // has the proper end of each range.
   struct ZipEnd {
-    constexpr bool operator==(iterator it) const { return it == *this; }
+    constexpr bool operator==(iterator it) const { return !(it != *this); }
   };
 
   constexpr iterator begin() noexcept LIFETIME_BOUND {
@@ -105,6 +105,16 @@ class Zipper {
   }
 
   constexpr ZipEnd end() noexcept { return ZipEnd(); }
+
+  constexpr size_t size() const
+    requires(std::ranges::sized_range<Ranges> && ...)
+  {
+    return std::apply(
+        [](Ranges&... ranges) {
+          return std::min({std::ranges::size(ranges)...});
+        },
+        ranges_);
+  }
 
  private:
   template <size_t... Is>

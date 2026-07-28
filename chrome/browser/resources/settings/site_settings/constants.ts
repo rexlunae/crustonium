@@ -33,12 +33,12 @@ export enum ContentSettingsTypes {
   HID_DEVICES = 'hid-devices',
   IDLE_DETECTION = 'idle-detection',
   IMAGES = 'images',
+  INLINE_CUE_MENU = 'inline-cue-menu',
   JAVASCRIPT = 'javascript',
   JAVASCRIPT_OPTIMIZER = 'javascript-optimizer',
   KEYBOARD_LOCK = 'keyboard-lock',
   LOCAL_FONTS = 'local-fonts',
   LOCAL_NETWORK = 'local-network',
-  LOCAL_NETWORK_ACCESS = 'local-network-access',
   LOOPBACK_NETWORK = 'loopback-network',
   MIC = 'media-stream-mic',  // AKA Microphone.
   MIDI_DEVICES = 'midi-sysex',
@@ -48,7 +48,6 @@ export enum ContentSettingsTypes {
   PERFORMANCE = 'performance',
   POINTER_LOCK = 'pointer-lock',
   POPUPS = 'popups',
-  PRIVATE_NETWORK_DEVICES = 'private-network-devices',
   PROTECTED_CONTENT = 'protected-content',
   PROTOCOL_HANDLERS = 'register-protocol-handler',
   SENSORS = 'sensors',
@@ -95,7 +94,6 @@ export enum ChooserType {
   SERIAL_PORTS = 'serial-ports-data',
   HID_DEVICES = 'hid-devices-data',
   BLUETOOTH_DEVICES = 'bluetooth-devices-data',
-  PRIVATE_NETWORK_DEVICES = 'private-network-devices-data',
   // <if expr="is_chromeos">
   SMART_CARD_READERS_DEVICES = 'smart-card-readers-data',
   // </if>
@@ -138,10 +136,10 @@ export enum SiteSettingSource {
  * chrome/browser/content_settings/generated_permission_prompting_behavior_pref.h
  */
 export enum SettingsState {
+  UNDEFINED = -1,
   LOUD = 0,
   QUIET = 1,
   CPSS = 2,
-  BLOCK = 3,
 }
 
 /**

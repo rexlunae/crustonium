@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
@@ -15,8 +16,8 @@
 #include "base/values.h"
 #include "chrome/browser/ash/login/lock/online_reauth/lock_screen_reauth_manager.h"
 #include "chrome/browser/ash/login/lock/online_reauth/lock_screen_reauth_manager_factory.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/signin_partition_manager.h"
+#include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
@@ -26,9 +27,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_reauth_dialogs.h"
 #include "chrome/browser/ui/webui/ash/login/online_login_utils.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "chromeos/ash/components/login/auth/challenge_response/cert_utils.h"
 #include "chromeos/ash/components/login/auth/public/auth_types.h"
@@ -59,7 +57,7 @@ bool ShouldDoSamlRedirect(const std::string& email) {
   const PrefService* prefs =
       user_manager::UserManager::Get()->GetPrimaryUser()->GetProfilePrefs();
   bool auto_start_reauth =
-      prefs && prefs->GetBoolean(::prefs::kLockScreenAutoStartOnlineReauth);
+      prefs && prefs->GetBoolean(ash::prefs::kLockScreenAutoStartOnlineReauth);
   if (!auto_start_reauth) {
     return false;
   }
@@ -109,8 +107,9 @@ const char kMainElement[] = "$(\'main-element\').";
 
 }  // namespace
 
-LockScreenReauthHandler::LockScreenReauthHandler(const std::string& email)
-    : email_(email) {}
+LockScreenReauthHandler::LockScreenReauthHandler(PrefService* local_state,
+                                                 const std::string& email)
+    : email_(email), auth_flow_auto_reload_manager_(local_state) {}
 
 LockScreenReauthHandler::~LockScreenReauthHandler() = default;
 
@@ -183,7 +182,7 @@ void LockScreenReauthHandler::LoadGaia(const login::GaiaContext& context,
   // Start a new session with SigninPartitionManager, generating a unique
   // StoragePartition.
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
 
   // TODO(http://crbug/1348126): we should also close signin session after the
@@ -212,7 +211,7 @@ void LockScreenReauthHandler::LoadGaiaWithPartition(
   // modification of the cookie header. So manually write the GAPS cookie into
   // the CookieManager.
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
 
   login::SetCookieForPartition(context, signin_partition_manager,
@@ -274,10 +273,10 @@ void LockScreenReauthHandler::OnSetCookieForLoadGaiaWithPartition(
   params.Set("readOnlyEmail", true);
   PrefService* local_state = g_browser_process->local_state();
   if (local_state->IsManagedPreference(
-          prefs::kUrlParameterToAutofillSAMLUsername)) {
-    params.Set(
-        "urlParameterToAutofillSAMLUsername",
-        local_state->GetString(prefs::kUrlParameterToAutofillSAMLUsername));
+          ash::prefs::kUrlParameterToAutofillSAMLUsername)) {
+    params.Set("urlParameterToAutofillSAMLUsername",
+               local_state->GetString(
+                   ash::prefs::kUrlParameterToAutofillSAMLUsername));
   }
 
   // TODO(crbug.com/377862442) Add autoreload url param.
@@ -349,7 +348,7 @@ void LockScreenReauthHandler::HandleCompleteAuthentication(
 
   // Create GaiaCookiesRetriever.
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
   gaia_cookie_retriever_ = std::make_unique<GaiaCookieRetriever>(
       signin_partition_name_, signin_partition_manager,
@@ -468,7 +467,7 @@ void LockScreenReauthHandler::HandleWebviewLoadAborted(int error_code) {
 
   if (error_code == net::ERR_INVALID_AUTH_CREDENTIALS) {
     // Silently ignore this error - it is used as an intermediate state for
-    // committed interstitials (see https://crbug.com/1049349 for details).
+    // committed interstitials (see https://crbug.com/40672487 for details).
     return;
   }
 

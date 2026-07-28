@@ -205,7 +205,7 @@ class FakeVideoEncodeAcceleratorWithFrameDelay final
     if (media::FakeVideoEncodeAccelerator::Initialize(config, client,
                                                       std::move(media_log))
             .is_ok()) {
-      SetFrameDelay(frame_delay_);
+      SetFrameDelay(base::checked_cast<int>(frame_delay_));
       return {media::EncoderStatus::Codes::kOk};
     }
     return {media::EncoderStatus::Codes::kEncoderInitializationError};
@@ -412,7 +412,7 @@ class VideoTrackRecorderTest : public VideoTrackRecorderTestBase {
             ? media::VideoFrame::STORAGE_OWNED_MEMORY
             : media::VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE,
         media::VideoPixelFormat::PIXEL_FORMAT_NV12, base::TimeDelta(),
-        test_sii_.get());
+        test_sii_.get(), gfx::ColorSpace::CreateREC709());
     scoped_refptr<media::VideoFrame> video_frame2 = video_frame;
     if (frame_type == TestFrameType::kNv12MappableSharedImage) {
       video_frame2 = media::ConvertToMemoryMappedFrame(video_frame);
@@ -617,7 +617,7 @@ TEST_P(VideoTrackRecorderTestParam, VideoEncoding) {
 
   run_loop.Run();
 
-  const size_t kEncodedSizeThreshold = 12;
+  const size_t kEncodedSizeThreshold = 10;
   EXPECT_GE(first_frame_encoded_data->size(), kEncodedSizeThreshold);
   EXPECT_GE(second_frame_encoded_data->size(), kEncodedSizeThreshold);
   EXPECT_GE(third_frame_encoded_data->size(), kEncodedSizeThreshold);

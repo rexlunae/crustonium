@@ -4,46 +4,38 @@
 
 package org.chromium.chrome.browser.setup_list;
 
+import android.os.Build;
+import android.view.View;
+import android.widget.ImageView;
+
+import androidx.annotation.VisibleForTesting;
+
+import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.educational_tip.R;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
+import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
+import org.chromium.chrome.browser.sync.SyncServiceFactory;
+import org.chromium.components.sync.SyncService;
+import org.chromium.components.sync.UserSelectableType;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 /** Utilities for setup list modules. */
 @NullMarked
 public class SetupListModuleUtils {
+    @VisibleForTesting
+    public static final String HISTOGRAM_SETUP_LIST_PREFIX = "MagicStack.Clank.SetupList.";
+
     @Nullable private static List<Integer> sRankedModuleTypesForTesting;
-
-    // TODO(crbug.com/469425754): Add all the modules once they're ready, in the following order
-    // 1. Default Browser
-    // 2. Sign In/ Sync
-    // 3. Enhanced Safe Browsing
-    // 4. PW Management
-    // 5. Address bar Placement
-    private static final List<Integer> BASE_SETUP_LIST_ORDER =
-            Arrays.asList(
-                    ModuleType.SIGN_IN_PROMO,
-                    ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
-                    ModuleType.SAVE_PASSWORDS_PROMO,
-                    ModuleType.PASSWORD_CHECKUP_PROMO,
-                    ModuleType.ADDRESS_BAR_PLACEMENT_PROMO);
-
-    private static final Map<Integer, Integer> sModuleRankMap;
-
-    static {
-        sModuleRankMap = new HashMap<>();
-        for (int i = 0; i < BASE_SETUP_LIST_ORDER.size(); i++) {
-            sModuleRankMap.put(BASE_SETUP_LIST_ORDER.get(i), i);
-        }
-    }
-
-    private static final @ModuleType int TWO_CELL_CONTAINER_MODULE_TYPE =
-            ModuleType.SETUP_LIST_TWO_CELL_CONTAINER;
 
     /**
      * Returns a ranked list of module types supported by the setup list. The order of modules in
@@ -54,12 +46,20 @@ public class SetupListModuleUtils {
         if (sRankedModuleTypesForTesting != null) {
             return sRankedModuleTypesForTesting;
         }
-        return new ArrayList<>(BASE_SETUP_LIST_ORDER);
+        return SetupListManager.getInstance().getRankedModuleTypes();
     }
 
     /** Returns the module type list for the two-cell container. */
     public static List<Integer> getTwoCellContainerModuleTypes() {
-        return List.of(TWO_CELL_CONTAINER_MODULE_TYPE);
+        return SetupListManager.getInstance().getTwoCellContainerModuleTypes();
+    }
+
+    /** Returns the list of module types to be registered with the framework. */
+    public static List<Integer> getModuleTypesForRegistration(boolean showTwoCell) {
+        List<Integer> modules = new ArrayList<>(SetupListManager.BASE_SETUP_LIST_ORDER);
+        modules.addAll(getTwoCellContainerModuleTypes());
+        modules.add(ModuleType.SETUP_LIST_CELEBRATORY_PROMO);
+        return modules;
     }
 
     /** Returns whether the setup list is active based on the 14-day window. */
@@ -78,34 +78,186 @@ public class SetupListModuleUtils {
      */
     @Nullable
     public static Integer getManualRank(@ModuleType int moduleType) {
-        if (!isSetupListActive()) {
-            return null;
-        }
-
-        if (shouldShowTwoCellLayout()) {
-            return (moduleType == TWO_CELL_CONTAINER_MODULE_TYPE) ? 0 : null;
-        }
-        return sModuleRankMap.get(moduleType);
+        return SetupListManager.getInstance().getManualRank(moduleType);
     }
 
     /** Returns whether the module type belongs to the currently active setup list view. */
     public static boolean isSetupListModule(@ModuleType int moduleType) {
-        if (!isSetupListActive()) return false;
-        if (shouldShowTwoCellLayout()) {
-            return moduleType == TWO_CELL_CONTAINER_MODULE_TYPE;
-        } else {
-            return sModuleRankMap.containsKey(moduleType);
+        return SetupListManager.getInstance().isSetupListModule(moduleType);
+    }
+
+    /** Returns whether the given module is completed, using the optimized manager state. */
+    public static boolean isModuleCompleted(@ModuleType int moduleType) {
+        return SetupListManager.getInstance().isModuleCompleted(moduleType);
+    }
+
+    /** Returns whether the given module is eligible, using the optimized manager state. */
+    public static boolean isModuleEligible(@ModuleType int moduleType) {
+        return SetupListManager.getInstance().isModuleEligible(moduleType);
+    }
+
+    /**
+     * Marks the given module type as completed by setting its individual boolean preference key.
+     * The {@link SetupListManager} will observe this change and update the ranking automatically.
+     *
+     * @param moduleType The module to mark as completed.
+     * @param silent Whether to bypass the completion animation. If true, the module is reordered
+     *     immediately.
+     */
+    public static void setModuleCompleted(@ModuleType int moduleType, boolean silent) {
+        SetupListManager.getInstance().setModuleCompleted(moduleType, silent);
+    }
+
+    @Nullable
+    public static String getCompletionKeyForModule(@ModuleType int type) {
+        if (SetupListManager.isBaseSetupListModule(type)
+                || type == ModuleType.SETUP_LIST_CELEBRATORY_PROMO) {
+            return ChromePreferenceKeys.SETUP_LIST_COMPLETED_KEY_PREFIX.createKey(
+                    String.valueOf(type));
+        }
+        return null;
+    }
+
+    /** Returns whether the module is awaiting its completion animation. */
+    public static boolean isModuleAwaitingCompletionAnimation(@ModuleType int moduleType) {
+        return SetupListManager.getInstance().isModuleAwaitingCompletionAnimation(moduleType);
+    }
+
+    /** Signals that the completion animation for a module has finished. */
+    public static void finishCompletionAnimation(@ModuleType int moduleType) {
+        SetupListManager.getInstance().onCompletionAnimationFinished(moduleType);
+    }
+
+    /**
+     * Checks the actual status of tasks that have external state (e.g. Enhanced Safe Browsing)
+     * based on the system state.
+     */
+    public static boolean checkIsTaskCompletedInSystem(
+            @ModuleType int moduleType, Profile profile) {
+        switch (moduleType) {
+            case ModuleType.ENHANCED_SAFE_BROWSING_PROMO:
+                return new SafeBrowsingBridge(profile).getSafeBrowsingState()
+                        == SafeBrowsingState.ENHANCED_PROTECTION;
+            case ModuleType.HISTORY_SYNC_PROMO:
+                SyncService syncService = SyncServiceFactory.getForProfile(profile);
+                return syncService != null
+                        && syncService
+                                .getSelectedTypes()
+                                .containsAll(
+                                        Set.of(
+                                                UserSelectableType.HISTORY,
+                                                UserSelectableType.TABS));
+            default:
+                return false;
+        }
+    }
+
+    /** Resets the completion status of all Setup List modules to incomplete for testing. */
+    public static void resetAllModuleCompletionForTesting() {
+        List<Integer> modules = new ArrayList<>(SetupListManager.BASE_SETUP_LIST_ORDER);
+        modules.add(ModuleType.SETUP_LIST_CELEBRATORY_PROMO);
+        for (int moduleType : modules) {
+            String individualPrefKey = getCompletionKeyForModule(moduleType);
+            if (individualPrefKey != null) {
+                ChromeSharedPreferences.getInstance().writeBoolean(individualPrefKey, false);
+            }
         }
     }
 
     public static void setRankedModuleTypesForTesting(List<Integer> rankedModuleTypes) {
         sRankedModuleTypesForTesting = rankedModuleTypes;
-        // Rebuild the map for testing
-        sModuleRankMap.clear();
-        if (rankedModuleTypes != null) {
-            for (int i = 0; i < rankedModuleTypes.size(); i++) {
-                sModuleRankMap.put(rankedModuleTypes.get(i), i);
-            }
+    }
+
+    /**
+     * Updates an {@link ImageView}'s resource with a fade-out then fade-in animation.
+     *
+     * @param imageView The ImageView to animate.
+     * @param iconResId The new image resource ID.
+     */
+    public static void updateIconWithAnimation(ImageView imageView, int iconResId) {
+        int duration = SetupListManager.STRIKETHROUGH_DURATION_MS / 2;
+        imageView.animate().cancel();
+        imageView.setAlpha(1f);
+        imageView
+                .animate()
+                .alpha(0.5f)
+                .setDuration(duration)
+                .withEndAction(
+                        () -> {
+                            imageView.setImageResource(iconResId);
+                            imageView.animate().alpha(1f).setDuration(duration).start();
+                        })
+                .start();
+    }
+
+    /** Records a feature-level impression for the Setup List. */
+    public static void recordSetupListImpression() {
+        RecordUserAction.record("MobileNTP.SetupList.Impression");
+    }
+
+    /** Records a feature-level click for the Setup List. */
+    public static void recordSetupListClick() {
+        RecordUserAction.record("MobileNTP.SetupList.Click");
+    }
+
+    /**
+     * Records an impression for a specific Setup List item.
+     *
+     * @param moduleType The type of Setup List item.
+     * @param isCompleted Whether the item is in the completed state.
+     */
+    public static void recordSetupListItemImpression(
+            @ModuleType int moduleType, boolean isCompleted) {
+        String name =
+                HISTOGRAM_SETUP_LIST_PREFIX
+                        + "ItemImpression."
+                        + (isCompleted ? "Completed" : "Active");
+        RecordHistogram.recordEnumeratedHistogram(name, moduleType, ModuleType.NUM_ENTRIES);
+    }
+
+    /**
+     * Records a click for a specific Setup List item.
+     *
+     * @param moduleType The type of Setup List item.
+     */
+    public static void recordSetupListItemClick(@ModuleType int moduleType) {
+        RecordHistogram.recordEnumeratedHistogram(
+                HISTOGRAM_SETUP_LIST_PREFIX + "ItemClick.Active",
+                moduleType,
+                ModuleType.NUM_ENTRIES);
+    }
+
+    /**
+     * Records the completion of a specific Setup List task.
+     *
+     * @param moduleType The type of Setup List task.
+     */
+    public static void recordSetupListItemCompletion(@ModuleType int moduleType) {
+        RecordHistogram.recordEnumeratedHistogram(
+                HISTOGRAM_SETUP_LIST_PREFIX + "ItemCompletion", moduleType, ModuleType.NUM_ENTRIES);
+    }
+
+    /**
+     * Sets the accessibility state description for a completed Setup List task view.
+     *
+     * @param view The view to set the state description on.
+     */
+    public static void setCompletedAccessibilityStateDescription(View view) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            view.setStateDescription(
+                    view.getContext()
+                            .getString(R.string.educational_tip_accessibility_item_completed));
+        }
+    }
+
+    /**
+     * Clears the accessibility state description for a Setup List task view.
+     *
+     * @param view The view to clear the state description on.
+     */
+    public static void clearAccessibilityStateDescription(View view) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            view.setStateDescription(null);
         }
     }
 }

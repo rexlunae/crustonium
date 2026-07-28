@@ -27,9 +27,16 @@
 #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
 #include "v8/include/v8-promise.h"
 
+namespace blink {
+class ScriptToolContext;
+}
+
 namespace blink::scheduler {
 
 namespace {
+
+BASE_FEATURE(kTaskAttributionClearStateOnNestedEventLoop,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 perfetto::protos::pbzero::BlinkTaskScope::TaskScopeType ToProtoEnum(
     TaskAttributionTracker::TaskScopeType type) {
@@ -59,6 +66,8 @@ perfetto::protos::pbzero::BlinkTaskScope::TaskScopeType ToProtoEnum(
       return ProtoType::TASK_SCOPE_MISC_EVENT;
     case TaskAttributionTracker::TaskScopeType::kMicrotask:
       return ProtoType::TASK_SCOPE_MICROTASK;
+    case TaskAttributionTracker::TaskScopeType::kScriptToolExecution:
+      return ProtoType::TASK_SCOPE_SCRIPT_TOOL_EXECUTION;
   }
 }
 
@@ -150,9 +159,20 @@ std::optional<TaskAttributionTracker::TaskScope>
 TaskAttributionTrackerImpl::SetCurrentTaskStateIfTopLevel(
     TaskAttributionInfo* task_state,
     TaskScopeType type) {
+  bool should_override_top_level_check =
+      std::exchange(should_override_top_level_check_, false);
+  // Since we only propagate for top-level script and task state is cleared
+  // after running script, there is no need to clear the task state if
+  // `task_state` is null.
+  if (!task_state) {
+    return std::nullopt;
+  }
   // Don't propagate `task_state` if JavaScript is running, e.g. if dispatching
-  // a synchronous event.
-  if (!task_state || isolate_->InContext()) {
+  // a synchronous event, unless overridden.
+  //
+  // TODO(crbug.com/490536691): This should be replaced with a better mechanism
+  // of detecting if JavaScript is currently executing.
+  if (!should_override_top_level_check && isolate_->InContext()) {
     return std::nullopt;
   }
   return SetCurrentTaskStateImpl(UnsafeTo<TaskAttributionInfoImpl>(task_state),
@@ -177,13 +197,13 @@ TaskAttributionTrackerImpl::SetTaskStateVariable(
       TaskAttributionTaskState::GetCurrent(isolate_);
 
   TaskAttributionTaskState* next_task_state =
-      previous_task_state ? previous_task_state->ForkAndSetVariable(
-                                next_task_id_, soft_navigation_context)
-                          : MakeGarbageCollected<TaskAttributionInfoImpl>(
-                                next_task_id_, soft_navigation_context,
-                                /*resource_timing_context=*/nullptr);
+      previous_task_state
+          ? previous_task_state->ForkAndSetVariable(soft_navigation_context)
+          : MakeGarbageCollected<TaskAttributionInfoImpl>(
+                soft_navigation_context,
+                /*resource_timing_context=*/nullptr,
+                /*script_tool_context=*/nullptr);
 
-  next_task_id_ = next_task_id_.NextId();
   return SetCurrentTaskStateImpl(next_task_state, previous_task_state,
                                  TaskScopeType::kSoftNavigation);
 }
@@ -196,15 +216,30 @@ TaskAttributionTrackerImpl::SetTaskStateVariable(
 
   TaskAttributionTaskState* next_task_state =
       previous_task_state
-          ? previous_task_state->ForkAndSetVariable(next_task_id_,
-                                                    resource_timing_context)
+          ? previous_task_state->ForkAndSetVariable(resource_timing_context)
           : MakeGarbageCollected<TaskAttributionInfoImpl>(
-                next_task_id_, /*soft_navigation_context=*/nullptr,
-                resource_timing_context);
+                /*soft_navigation_context=*/nullptr, resource_timing_context,
+                /*script_tool_context=*/nullptr);
 
-  next_task_id_ = next_task_id_.NextId();
   return SetCurrentTaskStateImpl(next_task_state, previous_task_state,
                                  TaskScopeType::kResourceTiming);
+}
+
+TaskAttributionTracker::TaskScope
+TaskAttributionTrackerImpl::SetTaskStateVariable(
+    ScriptToolContext* script_tool_context) {
+  TaskAttributionTaskState* previous_task_state =
+      TaskAttributionTaskState::GetCurrent(isolate_);
+
+  TaskAttributionTaskState* next_task_state =
+      previous_task_state
+          ? previous_task_state->ForkAndSetVariable(script_tool_context)
+          : MakeGarbageCollected<TaskAttributionInfoImpl>(
+                /*soft_navigation_context=*/nullptr,
+                /*resource_timing_context=*/nullptr, script_tool_context);
+
+  return SetCurrentTaskStateImpl(next_task_state, previous_task_state,
+                                 TaskScopeType::kScriptToolExecution);
 }
 
 TaskAttributionTracker::TaskScope
@@ -291,6 +326,32 @@ void TaskAttributionTrackerImpl::BeginMicrotaskTrace() {
 
 void TaskAttributionTrackerImpl::EndMicrotaskTrace() {
   EndBlinkTaskStateTrace();
+}
+
+void TaskAttributionTrackerImpl::OnBeginNestedRunLoop() {
+  if (!base::FeatureList::IsEnabled(
+          kTaskAttributionClearStateOnNestedEventLoop)) {
+    return;
+  }
+  auto* state = TaskAttributionTaskState::GetCurrent(isolate_);
+  nested_event_loop_task_state_.emplace_back(state);
+  if (state) {
+    TaskAttributionTaskState::SetCurrent(isolate_, nullptr);
+  }
+}
+
+void TaskAttributionTrackerImpl::OnExitNestedRunLoop() {
+  if (!base::FeatureList::IsEnabled(
+          kTaskAttributionClearStateOnNestedEventLoop)) {
+    return;
+  }
+  CHECK_GT(nested_event_loop_task_state_.size(), 0u);
+  TaskAttributionTaskState* state = nested_event_loop_task_state_.back().Get();
+  nested_event_loop_task_state_.pop_back();
+  DCHECK(!TaskAttributionTaskState::GetCurrent(isolate_));
+  if (state) {
+    TaskAttributionTaskState::SetCurrent(isolate_, state);
+  }
 }
 
 }  // namespace blink::scheduler

@@ -114,9 +114,11 @@ void TestFillingExpirationMonth(const std::vector<const char*>& values,
   // Try a single-digit month.
   CreditCard credit_card = test::GetCreditCard();
   credit_card.SetExpirationMonth(3);
-  std::u16string value_to_fill = GetFillingValueForCreditCard(
-      credit_card, kAppLocale, mojom::ActionPersistence::kFill, field,
-      /*is_cvc_filling_supported=*/true);
+  std::u16string value_to_fill =
+      GetFillingValueAndTypeForCreditCard(
+          credit_card, kAppLocale, mojom::ActionPersistence::kFill, field,
+          /*is_cvc_filling_supported=*/true)
+          .value;
 
   ASSERT_FALSE(value_to_fill.empty());
   content_index = GetIndexOfValue(field.options(), value_to_fill);
@@ -124,9 +126,11 @@ void TestFillingExpirationMonth(const std::vector<const char*>& values,
 
   // Try a two-digit month.
   credit_card.SetExpirationMonth(11);
-  value_to_fill = GetFillingValueForCreditCard(
-      credit_card, kAppLocale, mojom::ActionPersistence::kFill, field,
-      /*is_cvc_filling_supported=*/true);
+  value_to_fill =
+      GetFillingValueAndTypeForCreditCard(
+          credit_card, kAppLocale, mojom::ActionPersistence::kFill, field,
+          /*is_cvc_filling_supported=*/true)
+          .value;
 
   ASSERT_FALSE(value_to_fill.empty());
   content_index = GetIndexOfValue(field.options(), value_to_fill);
@@ -153,10 +157,21 @@ class FieldFillingPaymentsUtilTest : public testing::Test {
  public:
   FieldFillingPaymentsUtilTest() = default;
 
+  std::u16string GetFillingValueForCreditCard(
+      const CreditCard& credit_card,
+      const std::string& app_locale,
+      mojom::ActionPersistence action_persistence,
+      const AutofillField& field,
+      bool is_cvc_filling_supported) {
+    return GetFillingValueAndTypeForCreditCard(credit_card, app_locale,
+                                               action_persistence, field,
+                                               is_cvc_filling_supported)
+        .value;
+  }
+
  private:
   test::AutofillUnitTestEnvironment autofill_test_environment_;
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kAutofillEnableCvcStorageAndFilling};
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Verify that credit card related fields with the autocomplete attribute
@@ -1468,7 +1483,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
   test_api(form_structure).SetFieldTypes({NAME_FIRST});
 
   EXPECT_FALSE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1490,7 +1505,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
       .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_NUMBER});
 
   EXPECT_FALSE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1504,15 +1519,16 @@ TEST_F(FieldFillingPaymentsUtilTest,
                                      .label = u"First Name on Card"},
                                     {.role = CREDIT_CARD_NUMBER,
                                      .label = u"Card Number",
-                                     .is_autofilled = true,
+                                     .value = u"4111111111111111",
                                      .properties_mask = kUserTyped}}});
 
   FormStructure form_structure(form_data);
   test_api(form_structure)
       .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_NUMBER});
+  form_structure.field(1)->AddFieldModifier(FieldModifier::kAutofill);
 
   EXPECT_FALSE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1533,34 +1549,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
       .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_NUMBER});
 
   EXPECT_TRUE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
-      AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
-      AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
-}
-
-// Verify that `WillFillCreditCardNumberOrCvc` return true on a form where the
-// credit card number field is present and not empty but was not typed by the
-// user if `features::kAutofillSkipPreFilledFields` is disabled.
-TEST_F(FieldFillingPaymentsUtilTest,
-       WillFillCreditCardNumberOrCvc_CCNumberFieldNotEmpty_NotUserTyped) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/{features::kAutofillEnableCvcStorageAndFilling},
-      /*disabled_features=*/{features::kAutofillSkipPreFilledFields});
-  FormData form_data = test::GetFormData(
-      {.fields = {
-           {.role = CREDIT_CARD_NAME_FULL, .label = u"First Name on Card"},
-           {.role = CREDIT_CARD_NUMBER,
-            .label = u"Card Number",
-            .value = u"field is not empty",
-            .properties_mask = kAutofilledOnPageLoad}}});
-
-  FormStructure form_structure(form_data);
-  test_api(form_structure)
-      .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_NUMBER});
-
-  EXPECT_TRUE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1578,7 +1567,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
       .SetFieldTypes({CREDIT_CARD_STANDALONE_VERIFICATION_CODE});
 
   EXPECT_TRUE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1595,7 +1584,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
   test_api(form_structure).SetFieldTypes({CREDIT_CARD_VERIFICATION_CODE});
 
   EXPECT_TRUE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1620,7 +1609,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
       .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_VERIFICATION_CODE});
 
   EXPECT_FALSE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1641,7 +1630,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
       .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_VERIFICATION_CODE});
 
   EXPECT_TRUE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/true,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }
@@ -1662,7 +1651,7 @@ TEST_F(FieldFillingPaymentsUtilTest,
       .SetFieldTypes({CREDIT_CARD_NAME_FIRST, CREDIT_CARD_VERIFICATION_CODE});
 
   EXPECT_FALSE(WillFillCreditCardNumberOrCvc(
-      form_data.fields(), form_structure.fields(), *form_structure.fields()[0],
+      form_structure.fields(), *form_structure.fields()[0],
       AutofillTriggerSource::kPopup, /*card_has_cvc=*/false,
       AutocompleteUnrecognizedBehavior::kSuggestionsSuppressed));
 }

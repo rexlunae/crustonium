@@ -20,6 +20,11 @@ if (is_android) {
   }
 }
 
+source_set("bubble_controller_base") {
+  public = [ "bubble_controller_base.h" ]
+  public_deps = [ "//base" ]
+}
+
 source_set("autofill_ai_ui_utils") {
   sources = [
     "autofill_ai/autofill_ai_import_string_utils.h",
@@ -57,7 +62,6 @@ source_set("autofill") {
     "autofill_popup_view_delegate.h",
     "autofill_suggestion_controller.h",
     "autofill_suggestion_controller_utils.h",
-    "bubble_controller_base.h",
     "chrome_autofill_client.h",
     "next_idle_barrier.h",
     "popup_controller_common.h",
@@ -66,9 +70,11 @@ source_set("autofill") {
 
   public_deps = [
     ":autofill_ai_ui_utils",
+    ":bubble_controller_base",
     "//base",
     "//base:i18n",
     "//chrome/browser:global_features",
+    "//chrome/browser/actor",
     "//chrome/browser/feature_engagement",
     "//chrome/browser/picture_in_picture",
     "//chrome/browser/profiles:profile",
@@ -82,6 +88,7 @@ source_set("autofill") {
     "//components/input",
     "//components/keyed_service/core",
     "//components/optimization_guide/proto:optimization_guide_proto",
+    "//components/personal_context/core",
     "//components/signin/public/identity_manager",
     "//components/zoom",
     "//content/public/browser",
@@ -92,6 +99,9 @@ source_set("autofill") {
 
   if (is_android) {
     sources += [
+      "at_memory_suggestion_controller.h",
+      "autofill_dialog_controller.h",
+      "autofill_dialog_controller_impl.h",
       "autofill_keyboard_accessory_controller.h",
       "autofill_keyboard_accessory_controller_impl.h",
       "autofill_keyboard_accessory_view.h",
@@ -130,11 +140,12 @@ source_set("autofill") {
       "edit_address_profile_dialog_controller.h",
       "edit_address_profile_dialog_controller_impl.h",
       "edit_address_profile_view.h",
+      "email_verifier/email_verification_popup_controller.h",
+      "email_verifier/email_verified_toast_menu_model.h",
       "save_address_bubble_controller.h",
       "update_address_bubble_controller.h",
     ]
     public_deps += [
-      "//chrome/browser/actor",
       "//components/autofill/core/browser",
       "//components/password_manager/core/browser",
       "//components/password_manager/core/browser:password_form",
@@ -160,9 +171,11 @@ source_set("autofill") {
 source_set("impl") {
   sources = [
     "autofill_bubble_controller_base.cc",
+    "autofill_bubble_handler.cc",
     "autofill_client_provider.cc",
     "autofill_client_provider_factory.cc",
     "autofill_popup_hide_helper.cc",
+    "autofill_popup_view.cc",
     "autofill_suggestion_controller.cc",
     "autofill_suggestion_controller_utils.cc",
     "chrome_autofill_client.cc",
@@ -179,27 +192,42 @@ source_set("impl") {
     ":autofill",
     ":autofill_ai_ui_utils_impl",
     "//chrome/browser:browser_process",
+    "//chrome/browser/accessibility_annotator",
+    "//chrome/browser/account_settings",
     "//chrome/browser/actor",
     "//chrome/browser/autofill",
+    "//chrome/browser/autofill/actor",
+    "//chrome/browser/consent_auditor",
+    "//chrome/browser/device_reauth",
+    "//chrome/browser/glic",
     "//chrome/browser/history",
+    "//chrome/browser/metrics",
     "//chrome/browser/optimization_guide",
+    "//chrome/browser/password_manager",
     "//chrome/browser/password_manager/factories",
+    "//chrome/browser/personal_context",
+    "//chrome/browser/personal_context/first_run",
     "//chrome/browser/plus_addresses",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/signin",
     "//chrome/browser/strike_database",
+    "//chrome/browser/subscription_eligibility",
     "//chrome/browser/sync",
     "//chrome/browser/ui:browser_element_identifiers",
+    "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/autofill/payments",
+    "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/hats",
     "//chrome/browser/ui/page_info",
     "//chrome/browser/ui/passwords",
-    "//chrome/browser/ui/plus_addresses",
     "//chrome/browser/webdata_services",
+    "//components/accessibility_annotator/core/annotation_reducer",
+    "//components/account_settings",
     "//components/autofill/content/browser",
     "//components/autofill/content/browser:risk_proto",
     "//components/compose/core/browser",
     "//components/compose/core/browser:features",
+    "//components/device_reauth",
     "//components/embedder_support:user_agent",
     "//components/feature_engagement/public",
     "//components/infobars/content",
@@ -212,11 +240,14 @@ source_set("impl") {
     "//components/password_manager/core/browser:metrics_util",
     "//components/password_manager/core/browser:password_form",
     "//components/password_manager/core/browser/form_parsing",
+    "//components/personal_context/core",
+    "//components/personal_context/first_run",
     "//components/profile_metrics",
     "//components/security_state/content",
     "//components/strings:components_strings_grit",
     "//components/unified_consent",
     "//components/variations/service",
+    "//components/vector_icons",
   ]
 
   if (safe_browsing_mode != 0) {
@@ -225,6 +256,8 @@ source_set("impl") {
 
   if (is_android) {
     sources += [
+      "at_memory_suggestion_controller.cc",
+      "autofill_dialog_controller_impl.cc",
       "autofill_keyboard_accessory_controller.cc",
       "autofill_keyboard_accessory_controller_impl.cc",
       "autofill_message_controller_impl.cc",
@@ -233,7 +266,11 @@ source_set("impl") {
     ]
     deps += [
       "//chrome/browser/autofill/android:jni_headers",
-      "//chrome/browser/keyboard_accessory/android:public",
+      "//chrome/browser/keyboard_accessory/android",
+      "//chrome/browser/keyboard_accessory/android:impl",
+      "//chrome/browser/touch_to_fill/autofill/android",
+      "//chrome/browser/touch_to_fill/autofill/android:public",
+      "//chrome/browser/ui/android/autofill",
       "//components/android_autofill/browser:android",
       "//components/messages/android:feature_flags",
       "//components/password_manager/core/browser/features:password_features",
@@ -252,6 +289,8 @@ source_set("impl") {
       "bubble_manager_impl.cc",
       "delete_address_profile_dialog_controller_impl.cc",
       "edit_address_profile_dialog_controller_impl.cc",
+      "email_verifier/email_verification_popup_controller.cc",
+      "email_verifier/email_verified_toast_menu_model.cc",
       "save_address_bubble_controller.cc",
       "update_address_bubble_controller.cc",
     ]
@@ -259,11 +298,14 @@ source_set("impl") {
       "//chrome/app:command_ids",
       "//chrome/app/vector_icons",
       "//chrome/browser/apps/platform_apps",
+      "//chrome/browser/desktop_to_mobile_promos:utils",
       "//chrome/browser/feedback",
+      "//chrome/browser/profiles:profile_manager",
       "//chrome/browser/profiles:profile_util",
-      "//chrome/browser/promos:utils",
+      "//chrome/browser/ui:chrome_pages",
       "//chrome/browser/ui/browser_window",
-      "//chrome/browser/ui/promos:utils",
+      "//chrome/browser/ui/desktop_to_mobile_promos:utils",
+      "//chrome/browser/ui/page_action",
       "//chrome/browser/ui/toasts",
       "//chrome/browser/ui/toasts/api:toasts",
       "//chrome/browser/ui/user_education",
@@ -284,6 +326,7 @@ source_set("impl") {
 
   if (is_mac) {
     sources += [ "autofill_popup_controller_impl_mac.mm" ]
+    deps += [ "//chrome/browser/ui/cocoa" ]
   }
 
   if (enable_compose) {
@@ -309,9 +352,14 @@ source_set("unit_tests") {
     "//build:branding_buildflags",
     "//chrome/browser",
     "//chrome/browser:browser_process",
+    "//chrome/browser/accessibility_annotator",
+    "//chrome/browser/account_settings",
+    "//chrome/browser/actor:test_support",
     "//chrome/browser/autofill",
     "//chrome/browser/autofill:test_support",
-    "//chrome/browser/plus_addresses",
+    "//chrome/browser/glic",
+    "//chrome/browser/personal_context",
+    "//chrome/browser/ssl",
     "//chrome/browser/sync",
     "//chrome/browser/ui",
     "//chrome/browser/ui:browser_element_identifiers",
@@ -329,9 +377,6 @@ source_set("unit_tests") {
     "//components/keyed_service/core",
     "//components/password_manager/core/browser:password_form",
     "//components/password_manager/core/common",
-    "//components/plus_addresses/core/browser:hats_utils",
-    "//components/plus_addresses/core/browser:test_support",
-    "//components/plus_addresses/core/common:features",
     "//components/prefs:test_support",
     "//components/signin/public/identity_manager",
     "//components/strings:components_strings",
@@ -357,6 +402,8 @@ source_set("unit_tests") {
 
   if (is_android) {
     sources += [
+      "at_memory_suggestion_controller_unittest.cc",
+      "autofill_dialog_controller_impl_unittest.cc",
       "autofill_keyboard_accessory_controller_impl_unittest.cc",
       "autofill_message_controller_impl_unittest.cc",
       "autofill_message_model_unittest.cc",
@@ -364,7 +411,9 @@ source_set("unit_tests") {
     ]
     deps += [
       "//chrome/browser/autofill/android:jni_test_headers",
+      "//chrome/browser/keyboard_accessory/android:impl",
       "//chrome/browser/preferences:android",
+      "//chrome/browser/ui/android/autofill",
       "//components/messages/android:test_support",
     ]
   } else {
@@ -373,15 +422,22 @@ source_set("unit_tests") {
       "autofill_field_promo_controller_impl_unittest.cc",
       "autofill_popup_controller_impl_unittest.cc",
       "bubble_manager_impl_unittest.cc",
+      "edit_address_profile_dialog_controller_impl_unittest.cc",
       "save_address_bubble_controller_unittest.cc",
       "update_address_bubble_controller_unittest.cc",
     ]
     deps += [
+      "//chrome/browser/glic/test_support",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/hats:test_support",
       "//chrome/browser/ui/user_education",
+      "//chrome/test/user_education:impl",
       "//components/tabs:test_support",
     ]
+  }
+
+  if (is_mac) {
+    sources += [ "autofill_popup_controller_impl_mac_unittest.mm" ]
   }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
@@ -406,6 +462,10 @@ source_set("test_support") {
       "autofill_keyboard_accessory_controller_impl_test_api.h",
       "autofill_message_controller_test_api.h",
       "autofill_message_model_test_api.h",
+      "mock_autofill_dialog_controller.cc",
+      "mock_autofill_dialog_controller.h",
+      "mock_autofill_dialog_view.cc",
+      "mock_autofill_dialog_view.h",
       "mock_autofill_message_controller.cc",
       "mock_autofill_message_controller.h",
     ]
@@ -416,7 +476,12 @@ source_set("test_support") {
       "autofill_popup_controller_impl_test_api.h",
       "mock_autofill_popup_controller.cc",
       "mock_autofill_popup_controller.h",
+      "mock_bubble_manager.cc",
+      "mock_bubble_manager.h",
     ]
+    if (is_mac) {
+      sources += [ "autofill_popup_controller_impl_mac_test_api.h" ]
+    }
     public_deps += [ "//ui/gfx:test_support" ]
   }
 }
@@ -512,6 +577,7 @@ source_set("test_support_unit") {
       "mock_autofill_keyboard_accessory_view.h",
       "test_autofill_keyboard_accessory_controller_autofill_client.h",
     ]
+    deps = [ "//chrome/browser/keyboard_accessory/android:impl" ]
     public_deps += [ "//chrome/browser/keyboard_accessory/test_utils/android" ]
   } else {
     sources += [ "test_autofill_popup_controller_autofill_client.h" ]
@@ -533,7 +599,6 @@ if (!is_android) {
       "autofill_ai/autofill_ai_import_data_controller_impl_browsertest.cc",
       "autofill_context_menu_manager_browsertest.cc",
       "delete_address_profile_dialog_controller_impl_browsertest.cc",
-      "edit_address_profile_dialog_controller_impl_browsertest.cc",
     ]
 
     deps = [
@@ -545,13 +610,17 @@ if (!is_android) {
       "//chrome/browser",
       "//chrome/browser/autofill",
       "//chrome/browser/autofill:test_support",
-      "//chrome/browser/password_manager/factories:password_factory_headers",
+      "//chrome/browser/password_manager",
+      "//chrome/browser/password_manager:test_support",
+      "//chrome/browser/password_manager/factories",
       "//chrome/browser/plus_addresses",
       "//chrome/browser/signin",
+      "//chrome/browser/signin:signin_browser_test_base",
       "//chrome/browser/sync",
       "//chrome/browser/ui",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/hats:test_support",
+      "//chrome/browser/ui/side_panel:side_panel_views_dependent",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
       "//components/autofill/content/browser:test_support",
@@ -568,7 +637,7 @@ if (!is_android) {
       "//components/password_manager/core/browser/password_store:password_store_interface",
       "//components/password_manager/core/browser/password_store:test_support",
       "//components/password_manager/core/common",
-      "//components/plus_addresses/core/browser:blocklist_data",
+      "//components/personal_context/core:test_support",
       "//components/plus_addresses/core/browser:test_support",
       "//components/plus_addresses/core/browser/resources/strings",
       "//components/signin/public/base",

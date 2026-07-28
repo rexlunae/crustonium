@@ -206,15 +206,17 @@ bool IsOpaqueResponse(const std::optional<url::Origin>& request_initiator,
 
 bool HasNoSniff(
     const mojom::URLResponseHead& response) {
-  // TODO(vogelheim): Check for compatibility with spec &
-  //   ParseContentTypeOptionsHeader. Maybe move this to parsed_headers.
+  // https://fetch.spec.whatwg.org/#determine-nosniff
   if (!response.headers) {
     return false;
   }
   std::string nosniff_header =
       response.headers->GetNormalizedHeader("x-content-type-options")
           .value_or(std::string());
-  return base::EqualsCaseInsensitiveASCII(nosniff_header, "nosniff");
+  net::HttpUtil::ValuesIterator it(nosniff_header, ',',
+                                   /*ignore_empty_values=*/false);
+  return it.GetNext() &&
+         base::EqualsCaseInsensitiveASCII(it.value(), "nosniff");
 }
 
 }  // namespace
@@ -253,15 +255,7 @@ Decision OpaqueResponseBlockingAnalyzer::Init(
     is_empty_response_ = true;
   if (response.headers && response.headers->response_code() == 204)
     is_empty_response_ = true;
-  if (response.headers &&
-      (response.headers->HasHeader("Attribution-Reporting-Register-Source") ||
-       response.headers->HasHeader("Attribution-Reporting-Register-Trigger") ||
-       response.headers->HasHeader(
-           "Attribution-Reporting-Register-OS-Source") ||
-       response.headers->HasHeader(
-           "Attribution-Reporting-Register-OS-Trigger"))) {
-    is_attribution_response_ = true;
-  }
+
   // TODO(lukasza): Consider tweaking how `final_request_url_` is used to
   // properly handle interactions between redirects and range requests.  For
   // example, ORB might sniff an initial a.com/a1 -> a.com/a2 redirect as media
@@ -481,11 +475,7 @@ Decision OpaqueResponseBlockingAnalyzer::HandleEndOfSniffableResponseBody() {
 }
 
 bool OpaqueResponseBlockingAnalyzer::ShouldReportBlockedResponse() const {
-  // Empty attribution responses may still result in changes to web-visible
-  // behavior when blocked, so they should always be reported. See
-  // https://crbug.com/1369637.
-  return (!is_empty_response_ && is_http_status_okay_) ||
-         is_attribution_response_;
+  return !is_empty_response_ && is_http_status_okay_;
 }
 
 ResponseAnalyzer::BlockedResponseHandling

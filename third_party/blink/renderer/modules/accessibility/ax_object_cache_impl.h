@@ -191,7 +191,8 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
     IncrementGenerationalCacheId();
 
     CHECK(FocusedObject());
-    DUMP_WILL_BE_CHECK(!IsDirty());
+    // TODO(crbug.com/500793607): Investigate and convert to CHECK.
+    DCHECK(!IsDirty());
   }
   void Thaw() override {
     CHECK_GE(frozen_count_, 1);
@@ -284,6 +285,29 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
   // this child, if one exists.
   void ChildrenChangedOnAncestorOf(AXObject*);
 
+  // Marks the extent of AXObject::UpdateCachedAttributeValuesIfNeeded().
+  // Inside this scope, NotifyParentChildrenChanged() invalidates ancestors
+  // immediately but queues the ChildrenChangedWithCleanLayout() dispatch,
+  // because dispatching it during an ongoing update can restructure the tree
+  // and detach the object whose cached values are still being recomputed.
+  // The outermost scope processes the queue after the recomputation completes.
+  class MODULES_EXPORT ScopedCachedAttributeValuesUpdate {
+    STACK_ALLOCATED();
+
+   public:
+    explicit ScopedCachedAttributeValuesUpdate(AXObjectCacheImpl& cache);
+    ~ScopedCachedAttributeValuesUpdate();
+
+    ScopedCachedAttributeValuesUpdate(
+        const ScopedCachedAttributeValuesUpdate&) = delete;
+    ScopedCachedAttributeValuesUpdate& operator=(
+        const ScopedCachedAttributeValuesUpdate&) = delete;
+
+   private:
+    AXObjectCacheImpl& cache_;
+    bool was_in_cached_attribute_values_update_;
+  };
+
   const Element* RootAXEditableElement(const Node*) override;
 
   // Called when aspects of the style (e.g. color, alignment) change.
@@ -331,7 +355,7 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
   void HandleTextFormControlChanged(Node*) override;
   void HandleEditableTextContentChanged(Node*) override;
   void HandleDeletionOrInsertionInTextField(
-      const SelectionInDOMTree& changed_selection,
+      const SelectionInDomTree& changed_selection,
       bool is_deletion) override;
   void HandleTextMarkerDataAdded(Node* start, Node* end) override;
   void HandleValueChanged(Node*) override;
@@ -392,7 +416,7 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
   // Called when the scroll offset changes.
   void HandleScrollPositionChanged(LayoutObject*) override;
 
-  void HandleScrollMarkerTabSelectionChanged(Element* scroller) override;
+  void HandleScrollMarkerTabSelectionChanged(Element& scroller) override;
 
   void HandleScrolledToAnchor(const Node* anchor_node) override;
 
@@ -512,6 +536,7 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
 
   // Returns the parent of the given object due to aria-owns, if valid.
   AXObject* ValidatedAriaOwner(const AXObject*) const;
+  AXRelationCache* RelationCache() { return relation_cache_.get(); }
 
   // Given an object that has an aria-owns attribute, return the validated
   // set of aria-owned children.
@@ -904,6 +929,14 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
   // Helper to clean up any references to the AXObject's AXID.
   void RemoveReferencesToAXID(AXID);
 
+  // Recursive implementation for RemoveSubtree(). |removing_subtree_axids|
+  // is scoped to a single top-level removal and prevents cycles through cached
+  // child references from re-entering the same AXObject.
+  void RemoveSubtreeInternal(const Node*,
+                             bool remove_root,
+                             bool notify_parent,
+                             HashSet<AXID>& removing_subtree_axids);
+
   HeapMojoRemote<mojom::blink::RenderAccessibilityHost>&
   GetOrCreateRemoteRenderAccessibilityHost();
   WebLocalFrameClient* GetWebLocalFrameClient() const;
@@ -1206,7 +1239,6 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
   // `processing_deferred_events_` for more details.
   void NotifyParentChildrenChanged(AXObject* parent);
 
-  void MaybeSendCanvasHasNonTrivialFallbackUKM(const AXObject* canvas);
 
   void IncrementGenerationalCacheId() { ++generational_cache_id_; }
 
@@ -1223,6 +1255,16 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
 
   // Help de-dupe processing of repetitive events.
   HashSet<AXID> nodes_with_pending_children_changed_;
+
+  // True from the construction of the outermost
+  // ScopedCachedAttributeValuesUpdate until it has finished dispatching the
+  // queued children-changed notifications; see that class for details.
+  bool in_cached_attribute_values_update_ = false;
+
+  // Included ancestors awaiting ChildrenChangedWithCleanLayout() once the
+  // outermost ScopedCachedAttributeValuesUpdate exits. Deduped by pointer at
+  // enqueue time.
+  HeapVector<Member<AXObject>, 1> queued_children_changed_ancestors_;
 
   // Nodes with document markers that have received accessibility updates.
   HashSet<AXID> nodes_with_spelling_or_grammar_markers_;
@@ -1393,7 +1435,14 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
   FRIEND_TEST_ALL_PREFIXES(AccessibilityTest,
                            UpdateAXForAllDocumentsAfterPausedUpdates);
   FRIEND_TEST_ALL_PREFIXES(AccessibilityTest, RemoveReferencesToAXID);
+  FRIEND_TEST_ALL_PREFIXES(AccessibilityTest,
+                           QueuedChildrenChangedFlattensReentrantDispatch);
+  FRIEND_TEST_ALL_PREFIXES(
+      AccessibilityTest,
+      UpdateChildrenIfNecessaryToleratesDetachDuringCachedValueUpdate);
   FRIEND_TEST_ALL_PREFIXES(AccessibilityTest, NodesRequiringCacheUpdate);
+  FRIEND_TEST_ALL_PREFIXES(AccessibilityTest,
+                           SetMenuListOptionsBoundsBasePickerClearsState);
 
   // The ID of the object to fetch image data for.
   AXID image_data_node_id_ = ui::AXNodeData::kInvalidAXID;
@@ -1424,8 +1473,6 @@ class MODULES_EXPORT AXObjectCacheImpl : public AXObjectCacheBase {
 
   // Whether or not the load event was sent in a previous serialization.
   bool load_sent_ = false;
-
-  bool has_emitted_canvas_fallback_ukm_ = false;
 
   // Used to determine if a previously computed attribute is from the same
   // serialization update.

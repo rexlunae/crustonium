@@ -4,13 +4,21 @@
 
 #include "base/memory/memory_pressure_listener.h"
 
+#include <optional>
+
 #include "base/functional/callback_helpers.h"
 #include "base/memory/memory_pressure_level.h"
 #include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/mock_memory_pressure_listener.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/test/bind.h"
+#include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/threading/platform_thread.h"
 #include "base/threading/sequence_bound.h"
+#include "base/threading/thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace base {
@@ -282,6 +290,155 @@ TEST(MemoryPressureListenerTest, AsyncIgnoreRepeatedNotifications) {
       MEMORY_PRESSURE_LEVEL_CRITICAL, task_env.QuitClosure());
   task_env.RunUntilQuit();
   EXPECT_EQ(listener.memory_pressure_level(), MEMORY_PRESSURE_LEVEL_CRITICAL);
+}
+
+TEST(MemoryPressureListenerTest, SuppressMemoryListenersSyncInitial) {
+  test::ScopedFeatureList feature_list;
+  // Suppress kTest (tag 0) for MODERATE.
+  // Mask '1' suppresses non-critical (MODERATE).
+  feature_list.InitFromCommandLine(
+      "SuppressMemoryListeners<Trial.Group:suppress_memory_listeners_mask/1",
+      "");
+
+  MemoryPressureListenerRegistry registry;
+  MockMemoryPressureListener listener;
+
+  // Simulate before registration.
+  MemoryPressureListenerRegistry::SimulatePressureNotification(
+      MEMORY_PRESSURE_LEVEL_MODERATE);
+
+  EXPECT_CALL(listener, OnMemoryPressure(_)).Times(0);
+
+  MemoryPressureListenerRegistration registration(
+      MemoryPressureListenerTag::kTest, &listener);
+
+  // Since it is suppressed, it should be initialized to NONE.
+  EXPECT_EQ(listener.memory_pressure_level(), MEMORY_PRESSURE_LEVEL_NONE);
+}
+
+TEST(MemoryPressureListenerTest,
+     SuppressMemoryListenersSyncInitialCriticalNotSuppressed) {
+  test::ScopedFeatureList feature_list;
+  // Suppress kTest (tag 0) for MODERATE only (mask '1').
+  feature_list.InitFromCommandLine(
+      "SuppressMemoryListeners<Trial.Group:suppress_memory_listeners_mask/1",
+      "");
+
+  MemoryPressureListenerRegistry registry;
+  MockMemoryPressureListener listener;
+
+  // Simulate CRITICAL before registration.
+  MemoryPressureListenerRegistry::SimulatePressureNotification(
+      MEMORY_PRESSURE_LEVEL_CRITICAL);
+
+  EXPECT_CALL(listener, OnMemoryPressure(_)).Times(0);
+
+  MemoryPressureListenerRegistration registration(
+      MemoryPressureListenerTag::kTest, &listener);
+
+  // Since it is NOT suppressed for CRITICAL, it should be initialized to
+  // CRITICAL.
+  EXPECT_EQ(listener.memory_pressure_level(), MEMORY_PRESSURE_LEVEL_CRITICAL);
+}
+
+TEST(MemoryPressureListenerTest, SuppressMemoryListenersAsyncInitial) {
+  test::ScopedFeatureList feature_list;
+  // Suppress kTest (tag 0) for MODERATE.
+  feature_list.InitFromCommandLine(
+      "SuppressMemoryListeners<Trial.Group:suppress_memory_listeners_mask/1",
+      "");
+
+  MemoryPressureListenerRegistry registry;
+  test::TaskEnvironment task_env;
+
+  // Simulate before registration.
+  MemoryPressureListenerRegistry::SimulatePressureNotification(
+      MEMORY_PRESSURE_LEVEL_MODERATE);
+
+  MockMemoryPressureListener listener;
+  EXPECT_CALL(listener, OnMemoryPressure(_)).Times(0);
+
+  AsyncMemoryPressureListenerRegistration registration(
+      FROM_HERE, MemoryPressureListenerTag::kTest, &listener);
+
+  // Spin the loop to run pending tasks.
+  SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                        task_env.QuitClosure());
+  task_env.RunUntilQuit();
+
+  EXPECT_EQ(listener.memory_pressure_level(), MEMORY_PRESSURE_LEVEL_NONE);
+}
+
+TEST(MemoryPressureListenerTest, SuppressionTokenFromNonMainThread) {
+  test::TaskEnvironment task_env;
+  MemoryPressureListenerRegistry registry;
+
+  const PlatformThreadRef main_thread_ref = PlatformThread::CurrentRef();
+
+  MockMemoryPressureListener listener;
+  MemoryPressureListenerRegistration registration(
+      MemoryPressureListenerTag::kTest, &listener);
+
+  // The listener must only ever be notified on the main thread. If any part of
+  // the suppression path ran on the background thread, this would fire
+  // off-thread and fail the test.
+  EXPECT_CALL(listener, OnMemoryPressure(_))
+      .WillRepeatedly([&](MemoryPressureLevel) {
+        EXPECT_TRUE(PlatformThread::CurrentRef() == main_thread_ref);
+      });
+
+  // Baseline pressure level, notified synchronously on the main thread.
+  MemoryPressureListenerRegistry::NotifyMemoryPressure(
+      MEMORY_PRESSURE_LEVEL_MODERATE);
+  EXPECT_EQ(listener.memory_pressure_level(), MEMORY_PRESSURE_LEVEL_MODERATE);
+
+  // A regular base::Thread does not register itself as the process main thread,
+  // so the main-thread default handle stays pointed at the test's main thread.
+  // This mimics the in-process Renderer thread that owns MemoryPurgeManager.
+  Thread renderer_thread("renderer");
+  ASSERT_TRUE(renderer_thread.Start());
+
+  // The suppression token lives across two renderer-thread tasks so that the
+  // process main thread can change the pressure level while suppressed.
+  std::optional<MemoryPressureSuppressionToken> token;
+
+  // Create the token on the renderer thread. This increases the suppression
+  // count; the captured "simulated" level is the current MODERATE.
+  renderer_thread.task_runner()->PostTask(
+      FROM_HERE, BindLambdaForTesting([&]() {
+        EXPECT_FALSE(SingleThreadTaskRunner::GetMainThreadDefault()
+                         ->BelongsToCurrentThread());
+        token.emplace();
+      }));
+  renderer_thread.FlushForTesting();
+  // Wait for the marshaled increase to run on the main thread.
+  ASSERT_TRUE(test::RunUntil([]() {
+    return MemoryPressureListenerRegistry::AreNotificationsSuppressed();
+  }));
+
+  // Change the level while suppressed. No notification is sent now, but the new
+  // CRITICAL level is remembered and differs from the captured MODERATE.
+  MemoryPressureListenerRegistry::NotifyMemoryPressure(
+      MEMORY_PRESSURE_LEVEL_CRITICAL);
+  EXPECT_EQ(listener.memory_pressure_level(), MEMORY_PRESSURE_LEVEL_MODERATE);
+
+  // Destroy the token on the renderer thread. Lifting suppression must resend
+  // the remembered CRITICAL level, and that notification must run on the main
+  // thread, not on the renderer thread.
+  renderer_thread.task_runner()->PostTask(
+      FROM_HERE, BindLambdaForTesting([&]() {
+        EXPECT_FALSE(SingleThreadTaskRunner::GetMainThreadDefault()
+                         ->BelongsToCurrentThread());
+        token.reset();
+      }));
+  renderer_thread.FlushForTesting();
+  // Wait for the marshaled decrease and resulting notification to run on the
+  // main thread.
+  ASSERT_TRUE(test::RunUntil([&listener]() {
+    return listener.memory_pressure_level() == MEMORY_PRESSURE_LEVEL_CRITICAL;
+  }));
+
+  EXPECT_FALSE(MemoryPressureListenerRegistry::AreNotificationsSuppressed());
 }
 
 }  // namespace base

@@ -6,8 +6,10 @@
  * #type=style-lit
  * #import=//resources/cr_elements/cr_shared_style_lit.css.js
  * #import=chrome://resources/cr_elements/cr_shared_vars.css.js
+ * #import=./shared_style.css.js
+ * #import=./shared_vars.css.js
  * #scheme=relative
- * #include=cr-shared-style-lit
+ * #include=cr-shared-style-lit shared-style
  * #css_wrapper_metadata_end */
 
 :host {
@@ -15,9 +17,10 @@
   flex-direction: column;
   flex: 1;
   overflow: hidden;
+  padding: 0 var(--page-padding) 0 var(--page-padding);
 }
 
-#empty-state {
+#emptyState {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -26,38 +29,31 @@
   text-align: center;
 }
 
-#headline {
-  font-weight: 500;
-  font-size: 18px;
-  line-height: 24px;
-  margin: 0;
-  color: var(--color-sys-on-surface);
-}
-
-#notice-message {
-  font-weight: 400;
-  font-size: 14px;
-  line-height: 20px;
-  color: var(--color-sys-on-surface-subtle);
-  margin: 8px;
-}
-
-#title {
-  font-weight: 700;
-  font-size: 14px;
-  line-height: 20px;
-  margin: 0;
-  color: var(--color-sys-on-surface-subtle);
-}
-
 #subtitle {
   margin: 0;
   font-weight: 400;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 24px;
   color: var(--color-sys-on-surface-variant);
 }
 
-cr-button {
+#browseSkillsButton {
   margin-top: 12px;
+}
+
+#header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#addSkillButton {
+  flex-shrink: 0;
+}
+
+#emptyStateText {
+  max-width: 288px;
 }

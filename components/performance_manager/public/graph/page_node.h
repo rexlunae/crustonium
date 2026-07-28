@@ -11,13 +11,16 @@
 
 #include "base/byte_size.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "components/performance_manager/public/graph/node.h"
 #include "components/performance_manager/public/graph/node_set_view.h"
 #include "components/performance_manager/public/mojom/lifecycle.mojom.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/mojom/favicon/favicon_url.mojom-forward.h"
 
 class GURL;
 
@@ -39,6 +42,8 @@ enum class PageType {
   kTab,
   // An extension background page.
   kExtension,
+  // A non-tab WebUI surface (e.g., Top Chrome WebUI, Side Panel).
+  kNonTabWebUI,
   // Anything else.
   kUnknown,
 };
@@ -47,7 +52,7 @@ enum class PageType {
 // These may correspond to normal tabs, WebViews, Chrome Apps or Extensions.
 class PageNode : public TypedNode<PageNode> {
  public:
-  using NodeSet = base::flat_set<const Node*>;
+  using NodeSet = base::flat_set<raw_ptr<const Node>>;
   template <class NodeViewPtr>
   using NodeSetView = NodeSetView<NodeSet, NodeViewPtr>;
 
@@ -88,7 +93,7 @@ class PageNode : public TypedNode<PageNode> {
   ~PageNode() override;
 
   // Returns the unique ID of the browser context that this page belongs to.
-  virtual const std::string& GetBrowserContextID() const = 0;
+  virtual const base::UnguessableToken& GetBrowserContextID() const = 0;
 
   // Returns the opener frame node, if there is one. This may change over the
   // lifetime of this page. See "OnOpenerFrameNodeChanged".
@@ -322,7 +327,9 @@ class PageNodeObserver : public base::CheckedObserver {
   // Invoked when the UkmSourceId property changes.
   virtual void OnUkmSourceIdChanged(const PageNode* page_node) {}
 
-  // Invoked when the PageLifecycleState property changes.
+  // Invoked when the PageLifecycleState property changes. Note that if the
+  // property changes because a frame is added or removed from the page, this
+  // may be invoked before OnFrameNodeAdded or after OnBeforeFrameNodeRemoved.
   virtual void OnPageLifecycleStateChanged(const PageNode* page_node) {}
 
   // Invoked when the IsHoldingWebLock property changes.
@@ -362,7 +369,8 @@ class PageNodeObserver : public base::CheckedObserver {
 
   // Fired when the favicon associated with a page is updated. This property is
   // not directly reflected on the node.
-  virtual void OnFaviconUpdated(const PageNode* page_node) {}
+  virtual void OnFaviconUpdated(const PageNode* page_node,
+                                blink::mojom::FaviconUpdateReason reason) {}
 
   // Fired after `new_page_node` is created but before `page_node` is deleted
   // from being discarded. See the equivalent function on `WebContentsObserver`

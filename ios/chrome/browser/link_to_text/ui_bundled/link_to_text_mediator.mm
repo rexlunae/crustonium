@@ -115,7 +115,8 @@ typedef void (^ProceduralBlockWithBlockWithItemArray)(
                  action:^{
                    base::RecordAction(base::UserMetricsAction(
                        "SharedHighlights.LinkGenerated.Error.SharePage"));
-                   [weakSelf.activityServiceHandler showShareSheet];
+                   [weakSelf.activityServiceHandler
+                       showShareSheetFromShareButton:nil];
                  }
                   style:UIAlertActionStyleDefault
               preferred:NO];
@@ -145,8 +146,8 @@ typedef void (^ProceduralBlockWithBlockWithItemArray)(
   NSString* linkToTextId = @"chromecommand.linktotext";
   UIAction* action = [UIAction
       actionWithTitle:title
-                image:DefaultSymbolWithPointSize(kHighlighterSymbol,
-                                                 kSymbolActionPointSize)
+                image:SymbolWithPointSize(SymbolHighlighter,
+                                          kSymbolActionPointSize)
            identifier:linkToTextId
               handler:^(UIAction* a) {
                 [weakSelf

@@ -179,6 +179,12 @@ void BeginFrameSource::SetInputClient(InputClient* input_client) {
   input_client_ = input_client;
 }
 
+// static
+base::flat_set<base::TimeDelta>
+BeginFrameSource::GetDefaultSupportedFrameIntervals(base::TimeDelta interval) {
+  return {interval, interval * 2};
+}
+
 bool BeginFrameSource::RequestCallbackOnGpuAvailable() {
   if (!is_gpu_busy_) {
     DCHECK_EQ(gpu_busy_response_state_, GpuBusyThrottlingState::kIdle);
@@ -209,6 +215,13 @@ void BeginFrameSource::AsProtozeroInto(
 
 #if BUILDFLAG(IS_MAC)
 void BeginFrameSource::RecordBeginFrameSourceAccuracy(base::TimeDelta delta) {
+  if (base::ShouldRecordSubsampledMetric(0.001)) {
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "Viz.BeginFrameSource.Accuracy.CallbackTimeError", delta,
+        /*min=*/base::Microseconds(100),
+        /*max=*/base::Milliseconds(33), /*bucket_count=*/30);
+  }
+
   total_delta_ += delta.magnitude();
   frames_since_last_recording_++;
 
@@ -285,7 +298,15 @@ void BackToBackBeginFrameSource::RemoveObserver(BeginFrameObserver* obs) {
   }
 }
 
-void BackToBackBeginFrameSource::DidFinishFrame(BeginFrameObserver* obs) {
+void BackToBackBeginFrameSource::DidFinishFrame(
+    BeginFrameObserver* obs,
+    DisplaySchedulerDrawResult result) {
+  if (result == DisplaySchedulerDrawResult::kDrawnLate ||
+      result == DisplaySchedulerDrawResult::kMayDrawLate) {
+    // BackToBackBeginFrameSource does not support multiple deadlines, so it
+    // should never receive late draw results.
+    NOTREACHED();
+  }
   if (observers_.contains(obs)) {
     pending_begin_frame_observers_.insert(obs);
     time_source_->SetActive(true);
@@ -585,11 +606,19 @@ void ExternalBeginFrameSource::OnBeginFrame(const BeginFrameArgs& args) {
     return;
   }
 
-  TRACE_EVENT2("viz,input.scrolling", "ExternalBeginFrameSource::OnBeginFrame",
-               "frame_time", args.frame_time.since_origin().InMicroseconds(),
-               "interval", args.interval.InMicroseconds());
+  TRACE_EVENT(
+      "viz,input.scrolling", "ExternalBeginFrameSource::OnBeginFrame",
+      [&](perfetto::EventContext context) {
+        // Not using `BeginFrameArgs::AsProtozeroInto()` so that we would only
+        // log the relevant pieces of information and save trace space.
+        auto* event =
+            context.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+        auto* out = event->set_begin_frame_args();
+        out->set_frame_time_us(args.frame_time.since_origin().InMicroseconds());
+        out->set_interval_delta_us(args.interval.InMicroseconds());
+      });
 
-  if (metrics_sub_sampler_.ShouldSample(0.01)) {
+  if (base::ShouldRecordSubsampledMetric(0.01)) {
     // We do not expect anything more than 1/24th of a second, but let's support
     // up to 1/10th.
     //
@@ -631,7 +660,7 @@ base::TimeDelta ExternalBeginFrameSource::GetMinimumFrameInterval() {
 
 base::flat_set<base::TimeDelta>
 ExternalBeginFrameSource::GetSupportedFrameIntervals(base::TimeDelta interval) {
-  return {interval, interval * 2};
+  return GetDefaultSupportedFrameIntervals(interval);
 }
 
 }  // namespace viz

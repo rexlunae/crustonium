@@ -6,7 +6,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
  * @fileoverview Test suite for the ImageClassifier class in
- * dom_distiller_viewer.js.
+ * image_classifier.js.
  */
 
 suite('ImageClassifier', function() {
@@ -60,6 +60,12 @@ suite('ImageClassifier', function() {
             ` xmlns="${SVG_NS}"></svg>`;
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
       }
+
+      // For synchronously loaded images (e.g., data URIs), resolve immediately
+      // if complete to prevent missed load events and test timeouts.
+      if (img.complete) {
+        resolve(img);
+      }
     });
   }
 
@@ -102,6 +108,12 @@ suite('ImageClassifier', function() {
   });
 
   test('should classify images and apply correct classes', async function() {
+    // The default 2000ms timeout is not long enough for this test on slower
+    // platforms.
+    if (this.timeout() > 0 && this.timeout() < 5000) {
+      this.timeout(5000);
+    }
+
     const {assert} = await import('./index.js');
 
     // Define all test dimensions in density-independent units (DP).

@@ -60,16 +60,22 @@ export class SigninErrorAppElement extends SigninErrorAppElementBase {
     });
   }
 
-  protected onConfirm_() {
+  protected onConfirmClick_() {
     chrome.send('confirm');
   }
 
-  protected onSwitchToExistingProfile_() {
+  protected onSwitchToExistingProfileClick_() {
     chrome.send('switchToExistingProfile');
   }
 
-  protected onLearnMore_() {
+  protected onLearnMoreClick_() {
     chrome.send('learnMore');
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'signin-error-app': SigninErrorAppElement;
   }
 }
 

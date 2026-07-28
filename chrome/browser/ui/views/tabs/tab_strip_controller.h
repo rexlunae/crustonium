@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/functional/callback_forward.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
@@ -31,6 +31,10 @@ enum class TabGroupColorId;
 class TabGroupId;
 class TabGroupVisualData;
 }  // namespace tab_groups
+
+namespace tabs {
+class TabInterface;
+}
 
 namespace ui {
 class Event;
@@ -155,9 +159,8 @@ class TabStripController {
   // from this tabstrip but the user is still dragging the tabs.
   virtual void OnStoppedDragging() = 0;
 
-  // Notifies controller that the index of the tab with keyboard focus changed
-  // to `index`.
-  virtual void OnKeyboardFocusedTabChanged(std::optional<int> index) = 0;
+  // Notifies controller that the tab with keyboard focus changed.
+  virtual void TabKeyboardFocusChangedTo(const tabs::TabInterface* tab) = 0;
 
   // Returns the title of the given `group`.
   virtual std::u16string GetGroupTitle(
@@ -208,12 +211,6 @@ class TabStripController {
 
   // Returns the interface for the browser hosting the tab strip.
   virtual BrowserWindowInterface* GetBrowserWindowInterface() = 0;
-
-#if BUILDFLAG(IS_CHROMEOS)
-  // Returns whether the current app instance is locked for OnTask. Only
-  // relevant for non-web browser scenarios.
-  virtual bool IsLockedForOnTask() = 0;
-#endif
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_TAB_STRIP_CONTROLLER_H_

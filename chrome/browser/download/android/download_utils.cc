@@ -13,7 +13,6 @@
 #include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
@@ -37,7 +36,7 @@ constexpr int kDefaultAutoResumptionSizeLimit = 10 * 1024 * 1024;  // 10 MB
 
 static int32_t JNI_DownloadUtils_GetResumeMode(
     JNIEnv* env,
-    std::string& url,
+    const std::string& url,
     offline_items_collection::FailState failState) {
   auto reason =
       OfflineItemUtils::ConvertFailStateToDownloadInterruptReason(failState);
@@ -106,12 +105,6 @@ bool DownloadUtils::ShouldAutoOpenDownload(download::DownloadItem* item) {
   JNIEnv* env = base::android::AttachCurrentThread();
   return Java_MimeUtils_canAutoOpenMimeType(env, item->GetMimeType()) &&
          IsDownloadUserInitiated(item) && item->AllowAutoOpenAfterCompletion();
-}
-
-// static
-bool DownloadUtils::IsOmaDownloadDescription(const std::string& mime_type) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  return Java_MimeUtils_isOMADownloadDescription(env, mime_type);
 }
 
 bool DownloadUtils::IsDownloadUserInitiated(download::DownloadItem* download) {

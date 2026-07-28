@@ -15,7 +15,7 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/glic/host/context/glic_focused_browser_manager.h"
 #include "chrome/browser/glic/public/glic_instance.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -34,11 +34,10 @@ class GlicFocusedBrowserManagerImpl
     : public GlicFocusedBrowserManager,
       public BrowserCollectionObserver,
       public views::WidgetObserver,
-      public GlicWindowController::StateObserver {
+      public GlicInstanceCoordinator::StateObserver {
  public:
-  explicit GlicFocusedBrowserManagerImpl(
-      GlicInstance::UIDelegate* window_controller,
-      Profile* profile);
+  explicit GlicFocusedBrowserManagerImpl(GlicInstance* glic_instance,
+                                         Profile* profile);
   ~GlicFocusedBrowserManagerImpl() override;
 
   GlicFocusedBrowserManagerImpl(const GlicFocusedBrowserManagerImpl&) = delete;
@@ -79,10 +78,8 @@ class GlicFocusedBrowserManagerImpl
                                          bool visible) override;
   void OnWidgetDestroyed(views::Widget* widget) override;
 
-  // GlicWindowController::StateObserver:
-  void PanelStateChanged(
-      const mojom::PanelState&,
-      const GlicWindowController::PanelStateContext& context) override;
+  // GlicInstanceCoordinator::StateObserver:
+  void PanelStateChanged(const mojom::PanelState& panel_state) override;
 
   // Sets whether the manager is in testing mode. When in testing mode, logic
   // for determining the active browser is modified to be more deterministic.
@@ -131,7 +128,7 @@ class GlicFocusedBrowserManagerImpl
 
   bool is_initialized_ = false;
 
-  raw_ref<GlicInstance::UIDelegate> window_controller_;
+  raw_ref<GlicInstance> glic_instance_;
 
   BrowserState browser_state_;
 

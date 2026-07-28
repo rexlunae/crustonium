@@ -20,8 +20,10 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/content_setting_site_row_view.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
+#include "chrome/browser/ui/views/sub_apps_permission_explanation.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/url_formatter/elide_url.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -30,11 +32,14 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/text_utils.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/radio_button.h"
@@ -68,14 +73,18 @@ std::u16string GetCancelButtonText(
 
 ui::ImageModel GetSiteSettingsIcon() {
   return ui::ImageModel::FromVectorIcon(
-      vector_icons::kSettingsChromeRefreshIcon, ui::kColorIcon,
-      GetLayoutConstant(LayoutConstant::kPageInfoIconSize));
+      features::IsRoundedIconsEnabled()
+          ? vector_icons::kSettingsIcon
+          : vector_icons::kSettingsChromeRefreshOldIcon,
+      ui::kColorIcon, GetLayoutConstant(LayoutConstant::kPageInfoIconSize));
 }
 
 ui::ImageModel GetLaunchIcon() {
   return ui::ImageModel::FromVectorIcon(
-      vector_icons::kLaunchChromeRefreshIcon, ui::kColorIcon,
-      GetLayoutConstant(LayoutConstant::kPageInfoIconSize));
+      features::IsRoundedIconsEnabled()
+          ? vector_icons::kOpenInNewFlippableIcon
+          : vector_icons::kLaunchChromeRefreshOldIcon,
+      ui::kColorIcon, GetLayoutConstant(LayoutConstant::kPageInfoIconSize));
 }
 
 bool ShouldShowManageButton(
@@ -97,6 +106,54 @@ struct LayoutRow {
   std::unique_ptr<views::View> view;
   LayoutRowType type;
 };
+
+// A views::Link subclass that displays a URL prefixed with a list bullet (e.g.,
+// "• https://example.com/path"). It elides the URL to fit the available
+// layout width, but always preserves the full registrable domain (TLD+1)
+// at the front to mitigate URL spoofing attacks.
+class BulletUrlLink : public views::Link {
+  METADATA_HEADER(BulletUrlLink, views::Link)
+ public:
+  BulletUrlLink(const GURL& url, const std::u16string& full_text)
+      : views::Link(full_text), url_(url), full_text_(full_text) {
+    // Force LTR embedding layout direction for the URL text display.
+    SetDirectionalityMode(gfx::DirectionalityMode::DIRECTIONALITY_AS_URL);
+    // Screen readers and tooltips should receive the full, unelided URL.
+    GetViewAccessibility().SetName(full_text);
+  }
+  BulletUrlLink(const BulletUrlLink&) = delete;
+  BulletUrlLink& operator=(const BulletUrlLink&) = delete;
+  ~BulletUrlLink() override = default;
+
+  // views::View:
+  void OnBoundsChanged(const gfx::Rect& previous) override {
+    views::Link::OnBoundsChanged(previous);
+
+    // Note: Dynamically updating the link text inside OnBoundsChanged() (which
+    // can trigger a layout recalculation) is only safe because the containing
+    // bubble has a fixed width. If the bubble had variable width, this could
+    // easily trigger an infinite layout loop.
+    std::u16string prefix =
+        ContentSettingBubbleModel::FormatTitleWithBullet(std::u16string());
+    float prefix_width = gfx::GetStringWidthF(prefix, font_list());
+    float available_url_width = std::max(0.0f, width() - prefix_width);
+
+    // Use localization to handle RTL/bi-di markers correctly.
+    std::u16string elided_text =
+        ContentSettingBubbleModel::FormatTitleWithBullet(
+            url_formatter::ElideUrl(url_, font_list(), available_url_width));
+    SetText(elided_text);
+
+    SetCustomTooltipText(full_text_);
+  }
+
+ private:
+  GURL url_;
+  std::u16string full_text_;
+};
+
+BEGIN_METADATA(BulletUrlLink)
+END_METADATA
 
 }  // namespace
 
@@ -152,14 +209,19 @@ void ContentSettingBubbleContents::ListItemContainer::AddItem(
     item_icon->SetImage(ui::ImageModel::FromVectorIcon(
         *item.image, ui::kColorLabelForeground,
         GetLayoutConstant(LayoutConstant::kLocationBarIconSize),
-        item.has_blocked_badge ? &vector_icons::kBlockedBadgeIcon
+        item.has_blocked_badge ? &vector_icons::kBlockedBadgeCustomIcon
                                : &gfx::VectorIcon::EmptyIcon()));
   }
 
   std::unique_ptr<views::View> item_contents;
   if (item.has_link) {
-    auto link = std::make_unique<views::Link>(item.title);
-    link->SetElideBehavior(gfx::ELIDE_MIDDLE);
+    std::unique_ptr<views::Link> link;
+    if (item.url.is_valid()) {
+      link = std::make_unique<BulletUrlLink>(item.url, item.title);
+    } else {
+      link = std::make_unique<views::Link>(item.title);
+      link->SetElideBehavior(gfx::ELIDE_MIDDLE);
+    }
     link->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
     link->SetCallback(base::BindRepeating(
         [](const std::vector<Row>* items, const views::Link* link,
@@ -272,10 +334,10 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ContentSettingBubbleContents,
 ContentSettingBubbleContents::ContentSettingBubbleContents(
     std::unique_ptr<ContentSettingBubbleModel> content_setting_bubble_model,
     content::WebContents* web_contents,
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     views::BubbleBorder::Arrow arrow)
     : content::WebContentsObserver(web_contents),
-      BubbleDialogDelegateView(anchor_view,
+      BubbleDialogDelegateView(anchor,
                                arrow,
                                views::BubbleBorder::DIALOG_SHADOW,
                                true),
@@ -471,6 +533,21 @@ void ContentSettingBubbleContents::Init() {
     rows.push_back({std::move(manage_checkbox), LayoutRowType::DEFAULT});
   }
 
+  if (std::optional<std::u16string> explanation =
+          GetSubAppsPermissionExplanation(web_contents())) {
+    auto custom_label = std::make_unique<views::Label>(
+        *explanation, views::style::CONTEXT_DIALOG_BODY_TEXT,
+        views::style::STYLE_BODY_4);
+    custom_label->SetMultiLine(true);
+    custom_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    custom_label->SetProperty(
+        views::kMarginsKey,
+        gfx::Insets::VH(provider->GetDistanceMetric(
+                            views::DISTANCE_RELATED_CONTROL_VERTICAL),
+                        0));
+    rows.push_back({std::move(custom_label), LayoutRowType::DEFAULT});
+  }
+
   if (bubble_content.manage_text_style == ManageTextStyle::kHoverButton) {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
     auto separator = std::make_unique<views::Separator>();
@@ -533,7 +610,8 @@ ContentSettingBubbleContents::CreateHelpAndManageView() {
               bubble->content_setting_bubble_model_->OnLearnMoreClicked();
             },
             base::Unretained(this)),
-        vector_icons::kHelpOutlineIcon);
+        features::IsRoundedIconsEnabled() ? vector_icons::kHelpIcon
+                                          : vector_icons::kHelpOutlineOldIcon);
     learn_more_button->SetTooltipText(
         l10n_util::GetStringUTF16(IDS_LEARN_MORE));
     extra_views.push_back(std::move(learn_more_button));

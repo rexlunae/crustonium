@@ -4,9 +4,8 @@
 
 import type {Module, ModuleWrapperElement, NamedWidth} from 'chrome://new-tab-page/lazy_load.js';
 import {ModuleDescriptor, ModuleRegistry, ModulesElement, SUPPORTED_MODULE_WIDTHS} from 'chrome://new-tab-page/lazy_load.js';
-import {NewTabPageProxy} from 'chrome://new-tab-page/new_tab_page.js';
-import type {PageRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
-import {PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
+import type {PageRemote} from 'chrome://new-tab-page/new_tab_page.js';
+import {NewTabPageProxy, PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -708,8 +707,8 @@ suite('NewTabPageModulesModulesV2Test', () => {
 
     function setupAutoRemovalListener() {
       let event: CustomEvent<{message: string, undo: () => void}>|null = null;
-      document.body.addEventListener('modules-auto-removed', (e: any) => {
-        event = e;
+      document.body.addEventListener('modules-auto-removed', (e: Event) => {
+        event = e as CustomEvent<{message: string, undo: () => void}>;
       }, {once: true});
       return {
         get event() {
@@ -934,14 +933,23 @@ suite('NewTabPageModulesModulesV2Test', () => {
           // Assert.
           const instance = modulesElement.moduleInstances_[0];
           assertTrue(!!instance);
-          assertTrue((modulesElement as any).moduleDisabled_(instance));
+          let hiddenModule =
+              modulesElement.shadowRoot.querySelector<ModuleWrapperElement>(
+                  'ntp-module-wrapper[hidden]');
+          assertTrue(!!hiddenModule);
+          assertEquals(hiddenModule.module, instance);
 
           // Act - Trigger the callback with the module ID as disabled.
           callbackRouterRemote.setDisabledModules(false, [removedModuleId]);
           await callbackRouterRemote.$.flushForTesting();
+          await microtasksFinished();
 
           // Assert.
-          assertTrue((modulesElement as any).moduleDisabled_(instance));
+          hiddenModule =
+              modulesElement.shadowRoot.querySelector<ModuleWrapperElement>(
+                  'ntp-module-wrapper[hidden]');
+          assertTrue(!!hiddenModule);
+          assertEquals(hiddenModule.module, instance);
         });
   });
 

@@ -36,6 +36,7 @@
 #include "device/fido/fido_request_handler_base.h"
 #include "device/fido/public/features.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -83,10 +84,6 @@ class Observer : public testing::NiceMock<
               UIShown,
               (ChromeAuthenticatorRequestDelegate * delegate),
               (override));
-  MOCK_METHOD(void,
-              CableV2ExtensionSeen,
-              (base::span<const uint8_t> server_link_data),
-              (override));
 };
 
 class ChromeWebAuthenticationDelegateTest
@@ -94,8 +91,6 @@ class ChromeWebAuthenticationDelegateTest
  public:
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
-    scoped_feature_list_.InitAndDisableFeature(
-        device::kWebAuthnSignalApiHidePasskeys);
     PasskeyModelFactory::GetInstance()->SetTestingFactoryAndUse(
         profile(),
         base::BindRepeating(
@@ -113,7 +108,6 @@ class ChromeWebAuthenticationDelegateTest
 
  protected:
   Observer observer_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(ChromeWebAuthenticationDelegateTest, IndividualAttestation) {
@@ -199,26 +193,22 @@ constexpr PatternRpIdPair kValidRelyingPartyTestCases[] = {
 
     {"<all_urls>", "google.com"},
     {"https://*/*", "google.com"},
+    {"https://google.com/", "google.com"},
     {"https://*.google.com/", "google.com"},
-    {"https://*.subdomain.google.com/", "google.com"},
 
-    // The rules below are a sanity check to verify that the implementation
-    // matches webauthn rules and are copied from
-    // content/browser/webauth/authenticator_impl_unittest.cc.
+    // Localhost is special cased.
     {"http://localhost/", "localhost"},
-    {"https://foo.bar.google.com/", "foo.bar.google.com"},
-    {"https://foo.bar.google.com/", "bar.google.com"},
-    {"https://foo.bar.google.com/", "google.com"},
-    {"https://earth.login.awesomecompany/", "login.awesomecompany"},
-    {"https://google.com:1337/", "google.com"},
+
+    // Sanity check empty domain parts.
+    // URLPattern trims all trailing dots from hosts for matching (both from the
+    // pattern and from the evaluated host). Thus, patterns or hosts with any
+    // number of trailing dots are canonicalized to the version without trailing
+    // dots and match.
     {"https://google.com./", "google.com"},
     {"https://google.com./", "google.com."},
-    {"https://google.com../", "google.com.."},
-    {"https://.google.com/", "google.com"},
-    {"https://..google.com/", "google.com"},
-    {"https://.google.com/", ".google.com"},
-    {"https://..google.com/", ".google.com"},
-    {"https://accounts.google.com/", ".google.com"},
+    {"https://google.com/", "google.com."},
+    {"https://google.com/", "google.com.."},
+    {"https://google.com../", "google.com"},
 };
 
 constexpr PatternRpIdPair kInvalidRelyingPartyTestCases[] = {
@@ -232,6 +222,14 @@ constexpr PatternRpIdPair kInvalidRelyingPartyTestCases[] = {
     {"<all_urls>", "com"},
     {"https://*/*", "com"},
     {"https://com/", "com"},
+
+    // Extensions that have access to non default ports are not allowed to claim
+    // RP IDs matching their origin.
+    {"https://google.com:1337/", "google.com"},
+
+    // Unlike regular WebAuthn processing rules, extensions are not allowed to
+    // claim higher level domains if they have permissions over a subdomain.
+    {"https://*.subdomain.google.com/", "google.com"},
 
     // Single component domains are considered eTLDs, even if not on the PSL.
     {"https://myawesomedomain/", "myawesomedomain"},
@@ -249,12 +247,7 @@ constexpr PatternRpIdPair kInvalidRelyingPartyTestCases[] = {
     {"https://not-google.com/", "google.com)"},
     {"https://evil.appspot.com/", "appspot.com"},
     {"https://evil.co.uk/", "co.uk"},
-    // TODO(nsatragno): URLPattern erroneously trims trailing dots. Fix
-    // CanonicalizeHostForMatching and uncomment this line.
-    // {"https://google.com/", "google.com."},
-    {"https://google.com/", "google.com.."},
     {"https://google.com/", ".google.com"},
-    {"https://google.com../", "google.com"},
     {"https://.com/", "com."},
     {"https://.co.uk/", "co.uk."},
     {"https://1.2.3/", "1.2.3"},
@@ -343,6 +336,38 @@ TEST_F(ChromeWebAuthenticationDelegateTest,
 }
 
 // Tests that OverrideCallerOriginAndRelyingPartyIdValidation returns false for
+// chrome-extension origins that are restricted by policy.
+// Regression test for https://crbug.com/494341321.
+TEST_F(ChromeWebAuthenticationDelegateTest,
+       OverrideValidateDomainAndRelyingPartyIDTest_PolicyRestriction) {
+  // Block extensions from google.com through policy.
+  int context_id = extensions::util::GetBrowserContextId(browser_context());
+  URLPattern default_policy_blocked_pattern =
+      URLPattern(URLPattern::SCHEME_ALL, "*://google.com/*");
+  extensions::URLPatternSet default_allowed_hosts;
+  extensions::URLPatternSet default_blocked_hosts;
+  default_blocked_hosts.AddPattern(default_policy_blocked_pattern);
+  extensions::PermissionsData::SetDefaultPolicyHostRestrictions(
+      context_id, default_blocked_hosts, default_allowed_hosts);
+
+  // Create an extension that has permissions over every site.
+  ChromeWebAuthenticationDelegate delegate;
+  scoped_refptr<const extensions::Extension> extension =
+      extensions::ExtensionBuilder("Extension name")
+          .SetID(kExtensionId)
+          .AddHostPermission("<all_urls>")
+          .Build();
+  // Extensions need a context ID set to respect policy.
+  extension->permissions_data()->SetContextId(context_id);
+  extensions::ExtensionRegistry::Get(browser_context())->AddEnabled(extension);
+
+  // Verify the extension is not allowed to claim google.com.
+  EXPECT_FALSE(delegate.OverrideCallerOriginAndRelyingPartyIdValidation(
+      GetBrowserContext(), url::Origin::Create(GURL(kExtensionOrigin)),
+      "google.com"));
+}
+
+// Tests that OverrideCallerOriginAndRelyingPartyIdValidation returns false for
 // web origins.
 TEST_F(ChromeWebAuthenticationDelegateTest,
        OverrideValidateDomainAndRelyingPartyIDTest_WebOrigin) {
@@ -368,85 +393,6 @@ TEST_F(ChromeWebAuthenticationDelegateTest, MaybeGetRelyingPartyIdOverride) {
     EXPECT_EQ(delegate.MaybeGetRelyingPartyIdOverride(
                   test.rp_id, url::Origin::Create(GURL(test.origin))),
               test.expected);
-  }
-}
-
-TEST_F(ChromeWebAuthenticationDelegateTest, DeletePasskey) {
-  const auto test_origin = url::Origin::Create(GURL("https://example.com"));
-  ChromeWebAuthenticationDelegate delegate;
-  sync_pb::WebauthnCredentialSpecifics passkey;
-  passkey.set_credential_id(kCredentialId1);
-  passkey.set_rp_id(kRpId);
-  webauthn::PasskeyModel* passkey_model =
-      PasskeyModelFactory::GetForProfile(profile());
-  ASSERT_TRUE(passkey_model);
-  passkey_model->AddNewPasskeyForTesting(std::move(passkey));
-  {
-    // Attempt removing an unknown credential.
-    base::HistogramTester histogram_tester;
-    delegate.PasskeyUnrecognized(web_contents(), test_origin,
-                                 ToByteVector(kCredentialId2), kRpId);
-    EXPECT_TRUE(passkey_model->GetPasskey(kRpId, kCredentialId1,
-                                          ShadowedCredentials::kExclude));
-    histogram_tester.ExpectUniqueSample(
-        "WebAuthentication.SignalUnknownCredentialRemovedGPMPasskey",
-        ChromeWebAuthenticationDelegate::SignalUnknownCredentialResult::
-            kPasskeyNotFound,
-        1);
-  }
-  {
-    // Remove a known credential.
-    base::HistogramTester histogram_tester;
-    delegate.PasskeyUnrecognized(web_contents(), test_origin,
-                                 ToByteVector(kCredentialId1), kRpId);
-    EXPECT_FALSE(passkey_model->GetPasskey(kRpId, kCredentialId1,
-                                           ShadowedCredentials::kExclude));
-    histogram_tester.ExpectBucketCount(
-        "WebAuthentication.SignalUnknownCredentialRemovedGPMPasskey",
-        ChromeWebAuthenticationDelegate::SignalUnknownCredentialResult::
-            kPasskeyRemoved,
-        1);
-  }
-}
-
-TEST_F(ChromeWebAuthenticationDelegateTest, DeleteUnacceptedPasskey) {
-  const auto test_origin = url::Origin::Create(GURL("https://example.com"));
-  ChromeWebAuthenticationDelegate delegate;
-  sync_pb::WebauthnCredentialSpecifics passkey;
-  passkey.set_credential_id(kCredentialId1);
-  passkey.set_rp_id(kRpId);
-  passkey.set_user_id(kUserId);
-  webauthn::PasskeyModel* passkey_model =
-      PasskeyModelFactory::GetForProfile(profile());
-  ASSERT_TRUE(passkey_model);
-  passkey_model->AddNewPasskeyForTesting(std::move(passkey));
-  {
-    // Pass a known credential. It should not be removed.
-    base::HistogramTester histogram_tester;
-    delegate.SignalAllAcceptedCredentials(web_contents(), test_origin, kRpId,
-                                          ToByteVector(kUserId),
-                                          {ToByteVector(kCredentialId1)});
-    EXPECT_TRUE(passkey_model->GetPasskey(kRpId, kCredentialId1,
-                                          ShadowedCredentials::kExclude));
-    histogram_tester.ExpectUniqueSample(
-        "WebAuthentication.SignalAllAcceptedCredentialsRemovedGPMPasskey",
-        ChromeWebAuthenticationDelegate::SignalAllAcceptedCredentialsResult::
-            kNoPasskeyChanged,
-        1);
-  }
-  {
-    // Do not pass the known credential. The known credential should be removed.
-    base::HistogramTester histogram_tester;
-    delegate.SignalAllAcceptedCredentials(web_contents(), test_origin, kRpId,
-                                          ToByteVector(kUserId),
-                                          {ToByteVector(kCredentialId2)});
-    EXPECT_FALSE(passkey_model->GetPasskey(kRpId, kCredentialId1,
-                                           ShadowedCredentials::kExclude));
-    histogram_tester.ExpectUniqueSample(
-        "WebAuthentication.SignalAllAcceptedCredentialsRemovedGPMPasskey",
-        ChromeWebAuthenticationDelegate::SignalAllAcceptedCredentialsResult::
-            kPasskeyRemoved,
-        1);
   }
 }
 
@@ -520,8 +466,6 @@ class ChromeWebAuthenticationSignalApiHidePasskeysTest
  public:
   void SetUp() override {
     ChromeWebAuthenticationDelegateTest::SetUp();
-    scoped_feature_list_.InitWithFeatureState(
-        device::kWebAuthnSignalApiHidePasskeys, true);
     passkey_model_ = PasskeyModelFactory::GetForProfile(profile());
     ASSERT_TRUE(passkey_model_);
     histogram_tester_ = std::make_unique<base::HistogramTester>();
@@ -559,7 +503,6 @@ class ChromeWebAuthenticationSignalApiHidePasskeysTest
       url::Origin::Create(GURL("https://example.com"));
   ChromeWebAuthenticationDelegate delegate_;
   raw_ptr<webauthn::PasskeyModel> passkey_model_;
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
 };
 

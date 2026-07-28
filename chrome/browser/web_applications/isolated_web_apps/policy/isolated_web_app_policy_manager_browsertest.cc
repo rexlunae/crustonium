@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_manager.h"
+
 #include <stddef.h>
 
 #include <optional>
@@ -37,17 +39,16 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_installer.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/fake_iwa_runtime_data_provider_mixin.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_test_update_server.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/policy_generator.h"
-#include "chrome/browser/web_applications/isolated_web_apps/test/test_iwa_installer_factory.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/profile_waiter.h"
 #include "components/component_updater/component_updater_paths.h"
@@ -58,6 +59,7 @@
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/webapps/common/web_app_id.h"
+#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/test_support/signing_keys.h"
 #include "components/webapps/isolated_web_apps/types/iwa_version.h"
 #include "components/webapps/isolated_web_apps/types/update_channel.h"
@@ -102,10 +104,10 @@ const UpdateChannel kBetaChannel = UpdateChannel::Create("beta").value();
 constexpr std::string kPinnedVersion = "1.0.0";
 constexpr char kOrphanedBundleDirectory[] = "6zsr4hjoudsu6ihf";
 
-using policy::DeveloperToolsPolicyHandler;
+using policy::DeveloperToolsAvailability;
 
-using UpdateDiscoveryTaskFuture =
-    base::test::TestFuture<IsolatedWebAppUpdateDiscoveryTask::CompletionStatus>;
+using UpdateDiscoveryTaskFuture = base::test::TestFuture<
+    IsolatedWebAppUpdateCheckAndPrepareTask::CompletionStatus>;
 
 #if BUILDFLAG(IS_CHROMEOS)
 constexpr char kUserMail[] = "dla@example.com";
@@ -514,9 +516,8 @@ IN_PROC_BROWSER_TEST_P(IsolatedWebAppPolicyManagerBrowserTest,
   // Empty the allowlist, so the app install is not allowed.
   SetIwaAllowlist(/*managed_allowlist=*/{});
 
-  EXPECT_FALSE(
-      ChromeIwaRuntimeDataProvider::GetInstance().IsManagedInstallPermitted(
-          kWebBundleId1.id()));
+  EXPECT_FALSE(IwaRuntimeDataProvider::GetInstance().IsManagedInstallPermitted(
+      kWebBundleId1.id()));
 
   base::RunLoop run_loop;
   IsolatedWebAppPolicyManager::SetOnInstallTaskCompletedCallbackForTesting(
@@ -553,10 +554,9 @@ IN_PROC_BROWSER_TEST_P(IsolatedWebAppPolicyManagerBrowserTest,
         .SetBlocklist({kWebBundleId1});
   });
 
-  EXPECT_TRUE(
-      ChromeIwaRuntimeDataProvider::GetInstance().IsManagedInstallPermitted(
-          kWebBundleId1.id()));
-  EXPECT_TRUE(ChromeIwaRuntimeDataProvider::GetInstance().IsBundleBlocklisted(
+  EXPECT_TRUE(IwaRuntimeDataProvider::GetInstance().IsManagedInstallPermitted(
+      kWebBundleId1.id()));
+  EXPECT_TRUE(IwaRuntimeDataProvider::GetInstance().IsBundleBlocklisted(
       kWebBundleId1.id()));
 
   base::RunLoop run_loop;
@@ -809,7 +809,7 @@ INSTANTIATE_TEST_SUITE_P(
 class IsolatedWebAppDevToolsTestWithPolicy
     : public IsolatedWebAppPolicyManagerBrowserTestBase,
       public testing::WithParamInterface<
-          std::tuple<bool, DeveloperToolsPolicyHandler::Availability>> {
+          std::tuple<bool, DeveloperToolsAvailability>> {
  public:
   IsolatedWebAppDevToolsTestWithPolicy()
       : IsolatedWebAppPolicyManagerBrowserTestBase(std::get<bool>(GetParam())) {
@@ -819,11 +819,11 @@ class IsolatedWebAppDevToolsTestWithPolicy
     GetProfileForTest()->GetPrefs()->SetInteger(
         prefs::kDevToolsAvailability,
         std::to_underlying(
-            std::get<DeveloperToolsPolicyHandler::Availability>(GetParam())));
+            std::get<DeveloperToolsAvailability>(GetParam())));
   }
   bool AreDevToolsWindowsAllowedByCurrentPolicy() const {
-    return std::get<DeveloperToolsPolicyHandler::Availability>(GetParam()) ==
-           DeveloperToolsPolicyHandler::Availability::kAllowed;
+    return std::get<DeveloperToolsAvailability>(GetParam()) ==
+           DeveloperToolsAvailability::kAllowed;
   }
 };
 
@@ -873,10 +873,10 @@ INSTANTIATE_TEST_SUITE_P(
         /*is_user_session=*/testing::ValuesIn({true}),
 #endif  // BUILDFLAG(IS_CHROMEOS)
         testing::Values(
-            DeveloperToolsPolicyHandler::Availability::kAllowed,
-            DeveloperToolsPolicyHandler::Availability::
+            DeveloperToolsAvailability::kAllowed,
+            DeveloperToolsAvailability::
                 kDisallowedForForceInstalledExtensions,
-            DeveloperToolsPolicyHandler::Availability::kDisallowed)));
+            DeveloperToolsAvailability::kDisallowed)));
 
 class CleanupOrphanedBundlesTest
     : public IsolatedWebAppPolicyManagerBrowserTestBase,

@@ -43,7 +43,7 @@ namespace {
 const char kUserScriptHead[] = "(function (unsafeWindow) {\n";
 const char kUserScriptTail[] = "\n})(window);";
 // Maximum number of total content scripts we allow (across all extensions).
-// The limit exists to diagnose https://crbug.com/723381. The number is
+// The limit exists to diagnose https://crbug.com/40521087. The number is
 // arbitrarily chosen.
 // TODO(lazyboy): Remove when the bug is fixed.
 const uint32_t kNumScriptsArbitraryMax = 100000u;
@@ -63,9 +63,9 @@ blink::WebString GetWebStringFromScriptContent(std::string_view script_content,
   if (emulate_greasemonkey) {
     std::string content_with_wrapper =
         base::StrCat({kUserScriptHead, script_content, kUserScriptTail});
-    return blink::WebString::FromUTF8(content_with_wrapper);
+    return blink::WebString::FromUtf8(content_with_wrapper);
   }
-  return blink::WebString::FromUTF8(script_content);
+  return blink::WebString::FromUtf8(script_content);
 }
 
 }  // namespace
@@ -156,10 +156,17 @@ bool UserScriptSet::UpdateUserScripts(
   bool only_inject_incognito =
       ExtensionsRendererClient::Get()->IsIncognitoProcess();
 
+  // Clear out the references in `scripts_` and `script_sources_`. These
+  // internally depend on the contents of `shared_memory_mapping_`, so we
+  // ensure these references are removed before releasing the memory.
+  scripts_.clear();
+  script_sources_.clear();
+
   // Create the shared memory mapping.
   shared_memory_mapping_ = shared_memory.Map();
-  if (!shared_memory.IsValid())
+  if (!shared_memory_mapping_.IsValid()) {
     return false;
+  }
 
   // First get the size of the memory block.
   const base::Pickle::Header* pickle_header =
@@ -177,37 +184,32 @@ bool UserScriptSet::UpdateUserScripts(
   if (!memory.size())
     return false;
 
-  base::Pickle pickle = base::Pickle::WithUnownedBuffer(memory);
-  base::PickleIterator iter(pickle);
+  base::PickleIterator iter = base::PickleIterator::WithData(memory);
   base::debug::Alias(&pickle_size);
   CHECK(iter.ReadUInt32(&num_scripts));
 
   // Sometimes the shared memory contents seem to be corrupted
-  // (https://crbug.com/723381). Set an arbitrary max limit to the number of
+  // (https://crbug.com/40521087). Set an arbitrary max limit to the number of
   // scripts so that we don't add OOM noise to crash reports.
   CHECK_LT(num_scripts, kNumScriptsArbitraryMax);
 
-  scripts_.clear();
-  script_sources_.clear();
   scripts_.reserve(num_scripts);
   for (uint32_t i = 0; i < num_scripts; ++i) {
     std::unique_ptr<UserScript> script(new UserScript());
-    script->Unpickle(pickle, &iter);
+    script->Unpickle(&iter);
 
     // Note that this is a pointer into shared memory. We don't own it. It
     // gets cleared up when the last renderer or browser process drops their
     // reference to the shared memory.
     for (const auto& js_script : script->js_scripts()) {
-      const char* body = nullptr;
-      size_t body_length = 0;
-      CHECK(iter.ReadData(&body, &body_length));
-      js_script->set_external_content(std::string_view(body, body_length));
+      std::string_view body;
+      CHECK(iter.ReadStringPiece(&body));
+      js_script->set_external_content(body);
     }
     for (const auto& css_script : script->css_scripts()) {
-      const char* body = nullptr;
-      size_t body_length = 0;
-      CHECK(iter.ReadData(&body, &body_length));
-      css_script->set_external_content(std::string_view(body, body_length));
+      std::string_view body;
+      CHECK(iter.ReadStringPiece(&body));
+      css_script->set_external_content(body);
     }
 
     if (only_inject_incognito && !script->is_incognito_enabled())
@@ -327,7 +329,7 @@ blink::WebString UserScriptSet::GetCssSource(const UserScript::Content& file) {
 
   std::string_view script_content = file.GetContent();
   return script_sources_
-      .insert(std::make_pair(url, blink::WebString::FromUTF8(script_content)))
+      .insert(std::make_pair(url, blink::WebString::FromUtf8(script_content)))
       .first->second;
 }
 

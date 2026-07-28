@@ -4,15 +4,14 @@
 
 #include "chrome/browser/web_applications/commands/os_integration_synchronize_command.h"
 
-#include <map>
 #include <memory>
 
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/manifest_update_utils.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_sub_manager.h"
 #include "chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h"
@@ -20,6 +19,7 @@
 #include "chrome/browser/web_applications/os_integration/web_app_protocol_handler_manager.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_os_integration_state.pb.h"
+#include "chrome/browser/web_applications/test/fake_web_app_origin_association_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
@@ -33,11 +33,11 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/common/chrome_features.h"
 #include "components/services/app_service/public/cpp/protocol_handler_info.h"
 #include "components/sync/base/time.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 
 namespace web_app {
@@ -58,6 +58,12 @@ class OsIntegrationSynchronizeCommandTest : public WebAppTest {
       base::ScopedAllowBlockingForTesting allow_blocking;
       test_override_ = OsIntegrationTestOverrideImpl::OverrideForTesting();
     }
+
+    auto origin_association_manager =
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
+    origin_association_manager->set_pass_through(true);
+    fake_provider().SetOriginAssociationManager(
+        std::move(origin_association_manager));
 
     test::AwaitStartWebAppProviderAndSubsystems(profile());
   }
@@ -114,7 +120,7 @@ class OsIntegrationSynchronizeCommandTest : public WebAppTest {
       IconBitmaps menu_item_icon_map;
       for (const GeneratedIconsInfo& info : icons_info) {
         DCHECK_EQ(info.sizes_px.size(), info.colors.size());
-        std::map<SquareSizePx, SkBitmap> generated_bitmaps;
+        OrderedSizeToBitmap generated_bitmaps;
         for (size_t j = 0; j < info.sizes_px.size(); ++j) {
           AddGeneratedIcon(&generated_bitmaps, info.sizes_px[j],
                            info.colors[j]);
@@ -180,6 +186,8 @@ class OsIntegrationSynchronizeCommandTest : public WebAppTest {
  private:
   std::unique_ptr<OsIntegrationTestOverrideImpl::BlockingRegistration>
       test_override_;
+  base::test::ScopedFeatureList scoped_feature_list_{
+      blink::features::kWebAppMigrationApi};
 };
 
 TEST_F(OsIntegrationSynchronizeCommandTest, ProtocolHandlers) {
@@ -383,7 +391,7 @@ TEST_F(OsIntegrationSynchronizeCommandTest, InstallSynchronizesShortcuts) {
       web_app::mojom::UserDisplayMode::kStandalone;
 
   // Add icons for shortcuts.
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   icon_map[icon_size::k16] = CreateSolidColorIcon(icon_size::k16, SK_ColorBLUE);
   icon_map[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   install_info->icon_bitmaps.any = std::move(icon_map);
@@ -493,9 +501,9 @@ TEST_F(OsIntegrationSynchronizeCommandTest, NoOsStateForMigratingApps) {
   install_info->user_display_mode =
       web_app::mojom::UserDisplayMode::kStandalone;
 
-  web_app::proto::WebAppMigrationSource source;
-  source.set_manifest_id("https://migration.example.com/start.html");
-  install_info->migration_sources.push_back(std::move(source));
+  install_info->migration_sources.emplace_back(
+      webapps::ManifestId(GURL("https://migration.example.com/start.html")),
+      MigrationBehavior::kSuggest);
 
   WebAppInstallParams params;
   params.install_state = proto::InstallState::SUGGESTED_FROM_MIGRATION;

@@ -5,6 +5,7 @@
 #include "components/permissions/contexts/local_network_access_compat_permission_context.h"
 
 #include "base/logging.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permissions_client.h"
@@ -74,11 +75,10 @@ LocalNetworkAccessCompatPermissionContext::GetContentSettingStatusInternal(
   return local_network_setting;
 }
 
-// Nothing should be setting or requesting this permission this when split
-// permissions are enabled.
-void LocalNetworkAccessCompatPermissionContext::UpdateContentSetting(
+// Nothing should be setting or requesting this permission.
+void LocalNetworkAccessCompatPermissionContext::UpdateSetting(
     const permissions::PermissionRequestData& request_data,
-    ContentSetting content_setting,
+    const PermissionSetting& setting,
     bool is_one_time) {
   NOTREACHED();
 }
@@ -91,13 +91,11 @@ void LocalNetworkAccessCompatPermissionContext::RequestPermission(
 
 // If something is looking for the local-network-access permission policy,
 // delegate to the local-network or loopback-network permission policy. This is
-// unlikely to be needed as when
-// network::features::kLocalNetworkAccessChecksSplitPermissions is enabled
-// (which is the only time this class should be used), local-network or
-// loopback-network should be checked in the Chromium implementation, but is
-// done 1) as a defense-in-depth measure, and 2) to ensure web-facing backward
-// compatibility so that the result of permission.query({name:
-// 'local-network-access'}) is mostly correctly feature-policy gated.
+// unlikely to be needed as local-network or loopback-network should be checked
+// in the Chromium implementation, but is done 1) as a defense-in-depth measure,
+// and 2) to ensure web-facing backward compatibility so that the result of
+// permission.query({name: 'local-network-access'}) is mostly correctly
+// feature-policy gated.
 //
 // Note that
 // services/network/public/cpp/permissions_policy/permissions_policy.cc also
@@ -108,6 +106,21 @@ bool LocalNetworkAccessCompatPermissionContext::
              network::mojom::PermissionsPolicyFeature::kLocalNetwork) ||
          rfh->IsFeatureEnabled(
              network::mojom::PermissionsPolicyFeature::kLoopbackNetwork);
+}
+
+// ContentSettingsType::LOCAL_NETWORK_ACCESS never changes, but instead
+// ContentSettingsType::LOCAL_NETWORK and ContentSettingsType::LOOPBACK_NETWORK
+// change; trigger obsevers when those change instead.
+void LocalNetworkAccessCompatPermissionContext::NotifyObservers(
+    const ContentSettingsPattern& primary_pattern,
+    const ContentSettingsPattern& secondary_pattern,
+    ContentSettingsTypeSet content_type_set) const {
+  if (content_type_set.Contains(ContentSettingsType::LOCAL_NETWORK) ||
+      content_type_set.Contains(ContentSettingsType::LOOPBACK_NETWORK)) {
+    PermissionContextBase::NotifyObservers(
+        primary_pattern, secondary_pattern,
+        ContentSettingsTypeSet(ContentSettingsType::LOCAL_NETWORK_ACCESS));
+  }
 }
 
 }  // namespace permissions

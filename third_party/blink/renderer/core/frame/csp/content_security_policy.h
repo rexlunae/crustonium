@@ -356,7 +356,8 @@ class CORE_EXPORT ContentSecurityPolicy final
       const String& source = g_empty_string,
       const String& source_prefix = g_empty_string,
       std::optional<base::UnguessableToken> issue_id = std::nullopt,
-      std::optional<String> eval_hash = std::nullopt);
+      std::optional<String> eval_hash = std::nullopt,
+      std::optional<String> url_hash = std::nullopt);
 
   // Strip a URL to make it safe to report it.
   static String StripURLForUseInReport(const SecurityOrigin* security_origin,
@@ -388,6 +389,7 @@ class CORE_EXPORT ContentSecurityPolicy final
   }
 
   bool ExperimentalFeaturesEnabled() const;
+  bool ScriptSrcExtendedHashesEnabled() const;
 
   // CSP can be set from multiple sources; if a directive is set by multiple
   // sources, the strictest one will be used. A CSP can be considered strict
@@ -411,7 +413,17 @@ class CORE_EXPORT ContentSecurityPolicy final
   // main world CSP. See ExecutionContext::GetContentSecurityPolicyForWorld.
   static bool ShouldBypassMainWorldDeprecated(const DOMWrapperWorld* world);
 
+  static bool AllowBaseURI(
+      const KURL&,
+      const Vector<network::mojom::blink::ContentSecurityPolicyPtr>&);
+
   static bool IsNonceableElement(const Element*);
+
+  // Returns true if the attribute name or value contains a dangling markup
+  // signal ("<SCRIPT", "<STYLE", or "<LINK"), indicating a potential nonce
+  // hijacking attempt.
+  static bool ContainsDanglingMarkupSignal(const String& attribute_name,
+                                           const String& attribute_value);
 
   static const char* GetDirectiveName(CSPDirectiveName type);
   static CSPDirectiveName GetDirectiveType(const String& name);

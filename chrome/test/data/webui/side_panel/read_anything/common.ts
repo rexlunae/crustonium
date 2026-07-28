@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 import type {CrActionMenuElement} from '//resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrLazyRenderLitElement} from '//resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
-import type {AppElement, SettingsPrefs, SimpleActionMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import type {AppElement, SettingsPrefs} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {DEFAULT_SETTINGS, MetricsBrowserProxyImpl, NodeStore, playFromSelectionTimeout, ReadAloudNode, ReadAnythingLogger, ToolbarEvent, VoiceLanguageController} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {Segment} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertNotDeepEquals} from 'chrome-untrusted://webui-test/chai_assert.js';
@@ -21,7 +21,6 @@ export const TEST_RANDOM_VALUE_SETTINGS: SettingsPrefs = {
   speechRate: 104,
   font: 'font',
   highlightGranularity: 105,
-  lineFocus: 106,
   linksEnabled: true,
   imagesEnabled: false,
 };
@@ -40,7 +39,8 @@ export function mockMetrics(): TestMetricsBrowserProxy {
   return metrics;
 }
 
-export function emitEvent(app: AppElement, name: string, options?: any): void {
+export function emitEvent(
+    app: AppElement, name: string, options?: CustomEventInit): void {
   app.$.toolbar.dispatchEvent(new CustomEvent(name, options));
 }
 
@@ -88,13 +88,6 @@ export function assertCheckMarksForDropdown(dropdown: HTMLElement): void {
     button.click();
     assertCheckMarkVisible(checkMarks, index);
   });
-}
-
-export function assertHeadersForDropdown(
-    dropdown: SimpleActionMenuElement, shouldHaveHeaders: boolean): void {
-  const headers =
-      dropdown.$.lazyMenu.get().querySelector<HTMLElement>('.has-header-true');
-  assertEquals(shouldHaveHeaders, !!headers);
 }
 
 export function createSpeechErrorEvent(
@@ -164,4 +157,21 @@ export function setContent(
 
 export function assertTestSettingsAreNotDefaultSettings() {
   assertNotDeepEquals(DEFAULT_SETTINGS, TEST_RANDOM_VALUE_SETTINGS);
+}
+
+export function setWindowSize(height: number, width: number) {
+  if (Object.getOwnPropertyDescriptor(window, 'innerHeight')?.configurable !==
+      false) {
+    Object.defineProperty(window, 'innerHeight', {
+      value: height,
+      configurable: true,
+    });
+  }
+  if (Object.getOwnPropertyDescriptor(window, 'innerWidth')?.configurable !==
+      false) {
+    Object.defineProperty(window, 'innerWidth', {
+      value: width,
+      configurable: true,
+    });
+  }
 }

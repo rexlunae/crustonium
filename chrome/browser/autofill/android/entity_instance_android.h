@@ -24,18 +24,25 @@ struct EntityInstanceAndroid {
  public:
   static jni_zero::ScopedJavaLocalRef<jobject> Create(
       JNIEnv* env,
-      const EntityInstanceAndroid& entity_instance);
+      const EntityInstanceAndroid& entity_instance,
+      bool requires_reauth_to_see,
+      bool is_masked_server_entity);
 
   static EntityInstanceAndroid FromJavaEntityInstance(
       JNIEnv* env,
       const jni_zero::JavaRef<jobject>& j_entity_instance);
 
-  explicit EntityInstanceAndroid(const EntityInstance& entity_instance);
+  EntityInstanceAndroid(const EntityInstance& entity_instance,
+                        bool is_enabled,
+                        bool is_eligible_for_wallet_storage,
+                        bool requires_reauth_to_see);
   EntityInstanceAndroid(EntityTypeAndroid entity_type,
-                        std::string guid,
                         EntityInstance::RecordType record_type,
                         std::vector<AttributeInstanceAndroid> attribute_values,
-                        EntityMetadataAndroid metadata);
+                        std::string nickname,
+                        EntityMetadataAndroid metadata,
+                        bool requires_reauth_to_see,
+                        bool is_masked_server_entity);
   EntityInstanceAndroid(const EntityInstanceAndroid&);
   EntityInstanceAndroid& operator=(const EntityInstanceAndroid&) = default;
   EntityInstanceAndroid(EntityInstanceAndroid&&);
@@ -51,10 +58,14 @@ struct EntityInstanceAndroid {
       base::optional_ref<const EntityInstance> existing_entity) const;
 
   EntityTypeAndroid entity_type;
-  std::string guid;
   EntityInstance::RecordType record_type;
   std::vector<AttributeInstanceAndroid> attribute_instances;
+  std::string nickname;
   EntityMetadataAndroid metadata;
+  bool requires_reauth_to_see = false;
+  // TODO(crbug.com/501037715): Break this down to is_masked_entity and
+  // is_server_instance to decouple the masked status from storage type.
+  bool is_masked_server_entity = false;
 };
 
 }  // namespace autofill
@@ -71,7 +82,9 @@ template <>
 inline ScopedJavaLocalRef<jobject> ToJniType<autofill::EntityInstanceAndroid>(
     JNIEnv* env,
     const autofill::EntityInstanceAndroid& entity_instance) {
-  return autofill::EntityInstanceAndroid::Create(env, entity_instance);
+  return autofill::EntityInstanceAndroid::Create(
+      env, entity_instance, entity_instance.requires_reauth_to_see,
+      entity_instance.is_masked_server_entity);
 }
 }  // namespace jni_zero
 

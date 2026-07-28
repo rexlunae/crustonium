@@ -46,10 +46,6 @@ constexpr char kProfilePathKey[] = "path";
 
 bool g_initialized = false;
 
-const base::FeatureParam<bool> kCreateSpareRendererForDefaultIfMultiProfile{
-    &features::kCreateSpareRendererOnBrowserContextCreation,
-    "create_spare_renderer_for_default_if_multi_profile", false};
-
 }  // namespace
 
 AwBrowserContextStore::AwBrowserContextStore(PrefService* pref_service)
@@ -58,8 +54,8 @@ AwBrowserContextStore::AwBrowserContextStore(PrefService* pref_service)
   TRACE_EVENT0("startup", "AwBrowserContextStore::AwBrowserContextStore");
 
   // The pref store tracks the profile and directory names of all non-default
-  // profiles. The default profile (which could need migrations or on-disk
-  // initialization) exists implicitly and is not tracked in the pref store.
+  // profiles. The default profile exists implicitly and is not tracked in the
+  // pref store.
   ScopedListPrefUpdate update(&*prefs_, prefs::kProfileListPref);
   base::ListValue& profiles = update.Get();
   for (const auto& profile : profiles) {
@@ -152,11 +148,9 @@ AwBrowserContext* AwBrowserContextStore::Get(const std::string& name,
         std::make_unique<AwBrowserContext>(name, entry->path, is_default);
     // Ensure this code path is only taken if the IO thread is already running,
     // as it's needed for launching processes.
-    if (base::FeatureList::IsEnabled(
-            features::kCreateSpareRendererOnBrowserContextCreation) &&
-        content::BrowserThread::IsThreadInitialized(
+    if (content::BrowserThread::IsThreadInitialized(
             content::BrowserThread::IO) &&
-        (!is_default || kCreateSpareRendererForDefaultIfMultiProfile.Get())) {
+        !is_default) {
       content::SpareRenderProcessHostManager::Get().WarmupSpare(
           entry->instance.get());
     }
@@ -231,7 +225,9 @@ AwBrowserContextStore::Entry* AwBrowserContextStore::CreateNewContext(
   base::ListValue& profiles = update.Get();
   if (name == kDefaultContextName) {
     entry->path = base::FilePath(AwBrowserContextStore::kDefaultContextPath);
+    AwBrowserContext::PrepareNewContext(entry->path);
     // Do not store the default profile in prefs - it is implicit.
+
   } else {
     int number = AssignNewProfileNumber();
     entry->path = base::FilePath(
@@ -264,14 +260,14 @@ AwBrowserContext* AwBrowserContextStore::GetDefault() {
 
 static bool JNI_AwBrowserContextStore_CheckNamedContextExists(
     JNIEnv* const env,
-    std::string& jname) {
+    const std::string& jname) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   return AwBrowserContextStore::GetInstance()->Exists(jname);
 }
 
 static base::android::ScopedJavaLocalRef<jobject>
 JNI_AwBrowserContextStore_GetNamedContextJava(JNIEnv* const env,
-                                              std::string& jname,
+                                              const std::string& jname,
                                               bool create_if_needed) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   AwBrowserContext* context =
@@ -279,8 +275,9 @@ JNI_AwBrowserContextStore_GetNamedContextJava(JNIEnv* const env,
   return context ? context->GetJavaBrowserContext() : nullptr;
 }
 
-static bool JNI_AwBrowserContextStore_DeleteNamedContext(JNIEnv* const env,
-                                                         std::string& name) {
+static bool JNI_AwBrowserContextStore_DeleteNamedContext(
+    JNIEnv* const env,
+    const std::string& name) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   AwBrowserContextStore::DeletionResult result =
       AwBrowserContextStore::GetInstance()->Delete(name);
@@ -300,7 +297,7 @@ static bool JNI_AwBrowserContextStore_DeleteNamedContext(JNIEnv* const env,
 
 static std::string JNI_AwBrowserContextStore_GetNamedContextPathForTesting(
     JNIEnv* const env,
-    std::string& name) {
+    const std::string& name) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   AwBrowserContextStore* store = AwBrowserContextStore::GetInstance();
   if (!store->Exists(name)) {

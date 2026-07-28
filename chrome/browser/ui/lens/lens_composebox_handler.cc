@@ -100,8 +100,8 @@ void LensComposeboxOmniboxClient::OnAutocompleteAccept(
       lens::GetParametersMapWithoutQuery(destination_url);
 
   /* TODO(crbug.com/465154864): Add `aep` param value in lens AIM queries. */
-  lens_composebox_controller_->IssueComposeboxQuery(query_text,
-                                                    additional_query_params);
+  lens_composebox_controller_->IssueComposeboxQuery(
+      query_text, additional_query_params, /*is_voice_search=*/false);
 }
 
 std::optional<lens::proto::LensOverlaySuggestInputs>
@@ -118,21 +118,19 @@ LensComposeboxHandler::LensComposeboxHandler(
     Profile* profile,
     content::WebContents* web_contents,
     mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-    mojo::PendingRemote<composebox::mojom::Page> pending_page,
     mojo::PendingReceiver<searchbox::mojom::PageHandler>
-        pending_searchbox_handler)
-    : SearchboxHandler(
-          std::move(pending_searchbox_handler),
-          profile,
-          web_contents,
-          std::make_unique<OmniboxController>(
-              std::make_unique<LensComposeboxOmniboxClient>(
-                  profile,
-                  web_contents,
-                  /*lens_composebox_controller=*/parent_controller),
-              lens::features::GetLensAimSuggestionTimeout())),
+        pending_searchbox_handler,
+    mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page)
+    : SearchboxHandler(std::move(pending_searchbox_handler),
+                       std::move(pending_searchbox_page),
+                       profile,
+                       web_contents,
+                       std::make_unique<LensComposeboxOmniboxClient>(
+                           profile,
+                           web_contents,
+                           /*lens_composebox_controller=*/parent_controller),
+                       lens::features::GetLensAimSuggestionTimeout()),
       lens_composebox_controller_(parent_controller),
-      page_{std::move(pending_page)},
       handler_(this, std::move(pending_handler)) {
   autocomplete_controller_observation_.Observe(autocomplete_controller());
 }
@@ -144,23 +142,14 @@ void LensComposeboxHandler::SubmitQuery(const std::string& query_text,
                                         bool alt_key,
                                         bool ctrl_key,
                                         bool meta_key,
-                                        bool shift_key) {
+                                        bool shift_key,
+                                        bool is_voice_search) {
   lens_composebox_controller_->IssueComposeboxQuery(
-      query_text,
-      /*additional_query_params=*/{});
+      query_text, /*additional_query_params=*/{}, is_voice_search);
 }
 
 void LensComposeboxHandler::FocusChanged(bool focused) {
   lens_composebox_controller_->OnFocusChanged(focused);
-}
-
-void LensComposeboxHandler::SetDeepSearchMode(bool enabled) {
-  mojo::ReportBadMessage("Deep search not implemented for lens");
-}
-
-void LensComposeboxHandler::SetCreateImageMode(bool enabled,
-                                               bool image_present) {
-  mojo::ReportBadMessage("Create image not implemented for lens");
 }
 
 void LensComposeboxHandler::HandleLensButtonClick() {
@@ -171,10 +160,47 @@ void LensComposeboxHandler::HandleFileUpload(bool is_image) {
   mojo::ReportBadMessage("File upload is not implemented in Lens");
 }
 
+void LensComposeboxHandler::StartPlatformVoiceRecognition() {
+  mojo::ReportBadMessage("Voice recognition is not implemented in Lens");
+}
+
+void LensComposeboxHandler::OnContextMenuOpened() {
+  // Ignore, intentionally unimplemented for Lens.
+}
+
 void LensComposeboxHandler::NavigateUrl(const GURL& url) {
   // Intentionally unimplemented for Lens, URL navigation is not yet
   // implemented in Lens.
   mojo::ReportBadMessage("URL navigation is not implemented in Lens");
+}
+
+void LensComposeboxHandler::CloseLensOverlayFromWebUI(
+    composebox::mojom::LensOverlayDismissalSource dismissal_source) {
+  mojo::ReportBadMessage(
+      "CloseLensOverlayFromWebUI is not implemented in Lens");
+}
+
+void LensComposeboxHandler::SetSmartTabSharingActive(bool active) {
+  // No-op for Lens composebox.
+}
+
+void LensComposeboxHandler::GetSmartTabSharingActive(
+    GetSmartTabSharingActiveCallback callback) {
+  // No-op for Lens composebox.
+  std::move(callback).Run(false);
+}
+
+void LensComposeboxHandler::NotifyComposeboxQuerySubmittedWithContext() {
+  // No-op for Lens composebox.
+}
+
+void LensComposeboxHandler::CanShowNextboxAnimation(
+    CanShowNextboxAnimationCallback callback) {
+  std::move(callback).Run(false);
+}
+
+void LensComposeboxHandler::RecordNextboxAnimationImpression() {
+  // No-op for Lens composebox.
 }
 
 void LensComposeboxHandler::DeleteAutocompleteMatch(uint8_t line,
@@ -205,7 +231,7 @@ void LensComposeboxHandler::DeleteContext(
   lens_composebox_controller_->DeleteContext(file_token);
 }
 
-void LensComposeboxHandler::ClearFiles() {
+void LensComposeboxHandler::ClearFiles(bool should_block_auto_suggested_tabs) {
   lens_composebox_controller_->ClearFiles();
 }
 

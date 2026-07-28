@@ -90,7 +90,7 @@ static unsigned ComputePresentationAttributeCacheHash(
   DCHECK(key.tag_name);
   DCHECK(key.attributes_and_values.size());
   unsigned attribute_hash =
-      StringHasher::HashMemory(base::as_byte_span(key.attributes_and_values));
+      StringHasher::HashMemory32(base::as_byte_span(key.attributes_and_values));
   return HashInts(key.tag_name->ExistingHash(), attribute_hash);
 }
 

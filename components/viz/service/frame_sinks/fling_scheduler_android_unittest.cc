@@ -58,8 +58,7 @@ class FlingSchedulerTest : public testing::Test,
     frame_sink_manager_ =
         std::make_unique<FrameSinkManagerImpl>(std::move(init_params));
     scoped_feature_list_.InitWithFeatures(
-        /* enabled_features */ {input::features::kInputOnViz,
-                                features::kFlingSchedulingImprovements},
+        /* enabled_features */ {input::features::kInputOnViz},
         /* disabled_features */ {});
   }
 
@@ -90,6 +89,7 @@ class FlingSchedulerTest : public testing::Test,
   }
 
   void TearDown() override {
+    fling_controller_.reset();
     // Cleanup hierarchy.
     frame_sink_manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot,
                                                       kFrameSinkIdA);
@@ -97,7 +97,6 @@ class FlingSchedulerTest : public testing::Test,
     // Invalidating should destroy the CompositorFrameSinkImpl's.
     frame_sink_manager_->InvalidateFrameSinkId(kFrameSinkIdA, {});
 
-    fling_controller_.reset();
     // Make sure that all FrameSinkSourceMappings have been deleted.
     EXPECT_TRUE(frame_sink_manager_->frame_sink_source_map_.empty());
     // Make sure test cleans up all [Root]CompositorFrameSinkImpls.

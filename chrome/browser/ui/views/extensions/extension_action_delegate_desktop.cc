@@ -8,24 +8,17 @@
 
 #include "base/check.h"
 #include "base/check_deref.h"
-#include "base/memory/ptr_util.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/extensions/extension_view_host_factory.h"
-#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/accelerator_priority.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "chrome/browser/ui/views/extensions/extensions_container_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "components/sessions/content/session_tab_helper.h"
-#include "extensions/browser/extension_action.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/command.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/manifest_constants.h"
 #include "ui/views/view.h"
 
 using extensions::ActionInfo;
@@ -62,7 +55,7 @@ void ExtensionActionDelegateDesktop::DoTriggerPopup(
   // Only one popup should be visible at a time.
   extensions_container_->HideActivePopup();
 
-  extensions_container_->CloseOverflowMenuIfOpen();
+  extensions_container_->CloseExtensionsMenuIfOpen();
 
   popup_host_ = host.get();
   popup_host_observation_.Observe(popup_host_.get());
@@ -100,7 +93,7 @@ void ExtensionActionDelegateDesktop::ShowPopup(
   // performs the flipping in RTL cases.
   views::BubbleBorder::Arrow arrow = views::BubbleBorder::TOP_RIGHT;
   ExtensionPopup::ShowPopup(
-      browser_->GetBrowserForMigrationOnly(), std::move(host),
+      browser_, std::move(host),
       extensions_container_views_->GetReferenceButtonForPopup(model_->GetId()),
       arrow, show_action, std::move(callback));
 
@@ -186,7 +179,7 @@ void ExtensionActionDelegateDesktop::HidePopup() {
   }
 }
 
-gfx::NativeView ExtensionActionDelegateDesktop::GetPopupNativeView() {
+gfx::NativeView ExtensionActionDelegateDesktop::GetPopupNativeViewForTesting() {
   return popup_host_ ? popup_host_->view()->GetNativeView() : gfx::NativeView();
 }
 
@@ -203,22 +196,13 @@ void ExtensionActionDelegateDesktop::ShowContextMenuAsFallback() {
   extensions_container_views_->ShowContextMenuAsFallback(model_->GetId());
 }
 
-bool ExtensionActionDelegateDesktop::CloseOverflowMenuIfOpen() {
-  return extensions_container_->CloseOverflowMenuIfOpen();
+void ExtensionActionDelegateDesktop::CloseExtensionsMenuIfOpen() {
+  extensions_container_->CloseExtensionsMenuIfOpen();
 }
 
 bool ExtensionActionDelegateDesktop::AcceleratorPressed(
     const ui::Accelerator& accelerator) {
-  DCHECK(model_->CanHandleAccelerators());
-
-  if (model_->IsShowingPopup()) {
-    model_->HidePopup();
-  } else {
-    model_->ExecuteUserAction(
-        ToolbarActionViewModel::InvocationSource::kCommand);
-  }
-
-  return true;
+  return model_->TryHandleAcceleratorPress();
 }
 
 bool ExtensionActionDelegateDesktop::CanHandleAccelerators() const {

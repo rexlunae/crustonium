@@ -14,6 +14,8 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/pass_key.h"
+#include "build/build_config.h"
+#include "build/buildflag.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "device/vr/public/mojom/hit_test_subscription_id.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -51,6 +53,7 @@
 #include "third_party/blink/renderer/modules/xr/xr_input_source_event.h"
 #include "third_party/blink/renderer/modules/xr/xr_input_sources_change_event.h"
 #include "third_party/blink/renderer/modules/xr/xr_light_probe.h"
+#include "third_party/blink/renderer/modules/xr/xr_mesh_manager.h"
 #include "third_party/blink/renderer/modules/xr/xr_plane_manager.h"
 #include "third_party/blink/renderer/modules/xr/xr_ray.h"
 #include "third_party/blink/renderer/modules/xr/xr_reference_space.h"
@@ -339,6 +342,7 @@ void XRSession::MetricsReporter::ReportFeatureUsed(
     case XRSessionFeature::ANCHORS:
     case XRSessionFeature::CAMERA_ACCESS:
     case XRSessionFeature::PLANE_DETECTION:
+    case XRSessionFeature::MESH_DETECTION:
     case XRSessionFeature::DEPTH:
     case XRSessionFeature::IMAGE_TRACKING:
     case XRSessionFeature::HAND_INPUT:
@@ -371,6 +375,9 @@ XRSession::XRSession(
           mode == device::mojom::blink::XRSessionMode::kImmersiveAr),
       device_config_(std::move(device_config)),
       enabled_feature_set_(std::move(enabled_feature_set)),
+      mesh_manager_(
+          MakeGarbageCollected<XRMeshManager>(base::PassKey<XRSession>{},
+                                              this)),
       plane_manager_(
           MakeGarbageCollected<XRPlaneManager>(base::PassKey<XRSession>{},
                                                this)),
@@ -480,6 +487,20 @@ const FrozenArray<IDLString>& XRSession::enabledFeatures() const {
   return *enabled_features_.Get();
 }
 
+bool XRSession::isSystemKeyboardSupported() const {
+#if BUILDFLAG(ENABLE_VR) && BUILDFLAG(IS_ANDROID)
+  // Cardboard and ARCore technically support the keyboard as-is, but to avoid
+  // exposing it on Quest/OpenXR before the implementation is ready, we guard
+  // it with this flag for all Android for now. This results in false-negatives
+  // for non-OpenXR runtimes, which matches the existing behavior where keyboard
+  // support was always disabled.
+  return base::FeatureList::IsEnabled(
+      device::features::kOpenXrAndroidSystemKeyboard);
+#else
+  return false;
+#endif
+}
+
 XRAnchorSet* XRSession::TrackedAnchors() const {
   DVLOG(3) << __func__;
 
@@ -577,6 +598,14 @@ void XRSession::updateRenderState(XRRenderStateInit* init,
   // should be requesting frames again. Kick off a new frame request in case
   // there are any pending callbacks to flush them out.
   MaybeRequestFrame();
+}
+
+void XRSession::AddGraphicsBinding(XRGraphicsBinding* binding) {
+  graphics_bindings_.insert(binding);
+}
+
+void XRSession::RemoveGraphicsBinding(XRGraphicsBinding* binding) {
+  graphics_bindings_.erase(binding);
 }
 
 std::optional<V8XRDepthUsage> XRSession::depthUsage(
@@ -970,7 +999,7 @@ void XRSession::ExecuteVideoFrameCallbacks(double timestamp) {
     std::move(callback).Run(timestamp);
 }
 
-int XRSession::requestAnimationFrame(V8XRFrameRequestCallback* callback) {
+uint32_t XRSession::requestAnimationFrame(V8XRFrameRequestCallback* callback) {
   DVLOG(3) << __func__;
 
   TRACE_EVENT0("gpu", "requestAnimationFrame");
@@ -978,12 +1007,12 @@ int XRSession::requestAnimationFrame(V8XRFrameRequestCallback* callback) {
   if (ended_)
     return 0;
 
-  int id = callback_collection_->RegisterCallback(callback);
+  uint32_t id = callback_collection_->RegisterCallback(callback);
   MaybeRequestFrame();
   return id;
 }
 
-void XRSession::cancelAnimationFrame(int id) {
+void XRSession::cancelAnimationFrame(uint32_t id) {
   callback_collection_->CancelCallback(id);
 }
 
@@ -1375,6 +1404,10 @@ void XRSession::ProcessAnchorsData(
          "created, got "
       << anchor_ids_to_pending_anchor_promises_.size()
       << " anchors that have not been updated";
+}
+
+XRMeshSet* XRSession::GetDetectedMeshes() const {
+  return mesh_manager_->GetDetectedMeshes();
 }
 
 XRPlaneSet* XRSession::GetDetectedPlanes() const {
@@ -1801,7 +1834,7 @@ void XRSession::MaybeRequestFrame() {
        << ", page_configured_properly=" << page_configured_properly
        << ", page_wants_frame=" << page_wants_frame
        << ", frames_throttled=" << frames_throttled_;
-    xr_->AddWebXrInternalsMessage(ss.str().c_str());
+    xr_->AddWebXrInternalsMessage(String(ss.str()));
   }
 }
 
@@ -1963,16 +1996,13 @@ void XRSession::UpdatePresentationFrameState(
 
     // Now update the input sources
     // Only process input when we can report it to the page.
+    base::span<const device::mojom::blink::XRInputSourceStatePtr> input_states;
     if (CanReportInputPoses()) {
-      base::span<const device::mojom::blink::XRInputSourceStatePtr>
-          input_states;
       if (frame_data->input_state.has_value()) {
         input_states = frame_data->input_state.value();
       }
 
       OnInputStateChangeInternal(frame_id, input_states);
-
-      ProcessInputSourceEvents(input_states);
     }
 
     // World understanding includes hit testing for transient input sources, and
@@ -1982,6 +2012,14 @@ void XRSession::UpdatePresentationFrameState(
     // generate hit test results. For this to work, this step must happen
     // after OnInputStateChangeInternal which updated input sources.
     UpdateWorldUnderstandingStateForFrame(timestamp, frame_data);
+
+    // Processing input source events may send events to the page. To this end
+    // we need to ensure that this is done *after* the WorldUnderstanding state
+    // is updated, otherwise we would be sending out input events with the old
+    // frame state, which can lead to issues with transient hit test sources.
+    if (CanReportInputPoses()) {
+      ProcessInputSourceEvents(input_states);
+    }
 
     // Now that all pose data is updated trigger a reset event if it's there.
     if (frame_data->mojo_space_reset) {
@@ -2120,6 +2158,8 @@ void XRSession::UpdateWorldUnderstandingStateForFrame(
     const device::mojom::blink::XRFrameDataPtr& frame_data) {
   // Update objects that might change on per-frame basis.
   if (frame_data) {
+    mesh_manager_->ProcessMeshInformation(
+        frame_data->detected_meshes_data.get(), timestamp);
     plane_manager_->ProcessPlaneInformation(
         frame_data->detected_planes_data.get(), timestamp);
     ProcessAnchorsData(frame_data->anchors_data.get(), timestamp);
@@ -2141,6 +2181,8 @@ void XRSession::UpdateWorldUnderstandingStateForFrame(
       camera_image_size_ = frame_data->camera_image_size;
     }
   } else {
+    mesh_manager_->ProcessMeshInformation(nullptr, timestamp);
+
     plane_manager_->ProcessPlaneInformation(nullptr, timestamp);
     ProcessAnchorsData(nullptr, timestamp);
     ProcessHitTestData(nullptr);
@@ -2300,8 +2342,29 @@ void XRSession::OnFrame(double timestamp,
     // Calling OnFrameEnd() on the render state will trigger each layer to
     // submit its drawing data to be cached by the frame provider.
     render_state_->OnFrameEnd();
-    // Submit frame with cached layers data.
-    xr_->frameProvider()->SubmitFrame(transport_delegate);
+
+    std::vector<gpu::SyncToken> camera_sync_tokens;
+    camera_sync_tokens.reserve(graphics_bindings_.size());
+
+    for (auto& binding : graphics_bindings_) {
+      gpu::SyncToken camera_sync_token = binding->OnFrameEnd();
+      if (camera_sync_token.HasData()) {
+        transport_delegate->VerifySyncToken(camera_sync_token);
+        camera_sync_tokens.push_back(camera_sync_token);
+      }
+    }
+
+    auto shared_image =
+        LayerSharedImageManager().CameraSharedImage().shared_image;
+    if (shared_image && !camera_sync_tokens.empty()) {
+      gpu::SharedImageExportResult camera_export_result =
+          shared_image->EndImport(std::move(camera_sync_tokens));
+      // Submit frame with cached layers data.
+      xr_->frameProvider()->SubmitFrame(transport_delegate,
+                                        std::move(camera_export_result));
+    } else {
+      xr_->frameProvider()->SubmitFrame(transport_delegate);
+    }
 
     // Ensure the XRFrame cannot be used outside the callbacks.
     animation_frame_->Deactivate();
@@ -2695,6 +2758,12 @@ device::mojom::blink::XRLayerManager* XRSession::LayerManager() {
   return xr()->frameProvider()->layer_manager();
 }
 
+void XRSession::OnTransferComplete(const Vector<device::LayerId>& layer_ids) {
+  if (render_state_) {
+    render_state_->OnTransferComplete(layer_ids);
+  }
+}
+
 void XRSession::Trace(Visitor* visitor) const {
   visitor->Trace(xr_);
   visitor->Trace(render_state_);
@@ -2713,7 +2782,9 @@ void XRSession::Trace(Visitor* visitor) const {
   visitor->Trace(callback_collection_);
   visitor->Trace(create_anchor_promises_);
   visitor->Trace(request_hit_test_source_promises_);
+  visitor->Trace(graphics_bindings_);
   visitor->Trace(reference_spaces_);
+  visitor->Trace(mesh_manager_);
   visitor->Trace(plane_manager_);
   visitor->Trace(anchor_ids_to_anchors_);
   visitor->Trace(anchor_ids_to_pending_anchor_promises_);

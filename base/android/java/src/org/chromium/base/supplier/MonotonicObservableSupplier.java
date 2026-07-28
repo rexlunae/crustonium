@@ -9,17 +9,13 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * A specialization of {@link NullableObservableSupplier} that starts as null, but will never be set
  * to null (except by destroy(), which does not trigger observers).
  */
 @NullMarked
-// TODO(455874046): Supplier<T> -> Supplier<@Nullable T>
-@SuppressWarnings("NullAway") // Remove "T extends @Nullable Object"
-public interface MonotonicObservableSupplier<T extends @Nullable Object>
-        extends Supplier<T>, NullableObservableSupplier<T> {
+public interface MonotonicObservableSupplier<T> extends NullableObservableSupplier<T> {
 
     /** Defines the behavior of the notification when an observer is added. */
     @interface NotifyBehavior {
@@ -54,16 +50,10 @@ public interface MonotonicObservableSupplier<T extends @Nullable Object>
         return addObserver(obs, NotifyBehavior.NOTIFY_ON_ADD | NotifyBehavior.POST_ON_ADD);
     }
 
-    @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
-    @Override
-    default @Nullable T addObserver(Callback<T> obs) {
-        return addSyncObserverAndPostIfNonNull(obs);
-    }
-
     /**
      * @return A {@link NonNullObservableSupplier} if the supplied value is not null.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default NonNullObservableSupplier<T> asNonNull() {
         // Cast from monotonic non-null -> non-null.
         assert !Boolean.TRUE.equals(BaseObservableSupplierImpl.allowsSetToNull(this))
@@ -75,7 +65,7 @@ public interface MonotonicObservableSupplier<T extends @Nullable Object>
     /**
      * Creates an ObservableSupplier that tracks an ObservableSupplier of this ObservableSupplier.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default <ChildT, FuncT extends MonotonicObservableSupplier<ChildT>>
             SettableMonotonicObservableSupplier<ChildT> createTransitiveMonotonic(
                     Function<T, FuncT> unwrapFunction) {
@@ -90,7 +80,7 @@ public interface MonotonicObservableSupplier<T extends @Nullable Object>
      * Creates an ObservableSupplier that tracks an ObservableSupplier of this ObservableSupplier.
      * The current and transitive suppliers must both be non-null or monotonic.
      */
-    @SuppressWarnings("Unchecked")
+    @SuppressWarnings("unchecked")
     default <ChildT> SettableNonNullObservableSupplier<ChildT> createTransitiveNonNull(
             Function<T, NonNullObservableSupplier<ChildT>> unwrapFunction) {
         // asNonNull() will call get(), which will update the initial value to be non-null.

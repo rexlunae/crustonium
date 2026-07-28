@@ -14,26 +14,6 @@
 
 namespace media {
 
-namespace {
-
-int ComputeChannelCount(ChannelLayout channel_layout, int channels) {
-  if (channel_layout == CHANNEL_LAYOUT_DISCRETE) {
-    CHECK_NE(0, channels);
-    return channels;
-  } else if (channel_layout == CHANNEL_LAYOUT_5_1_4_DOWNMIX && channels != 0) {
-    // For CHANNEL_LAYOUT_5_1_4_DOWNMIX we can set a custom number of channels,
-    // but we are not forced to.
-    return channels;
-  }
-  const int calculated_channel_count =
-      ChannelLayoutToChannelCount(channel_layout);
-  DCHECK(channel_layout == CHANNEL_LAYOUT_UNSUPPORTED ||
-         calculated_channel_count == channels);
-  return calculated_channel_count;
-}
-
-}  // namespace
-
 AudioOutputBufferParametersHelper::AudioOutputBufferParametersHelper() =
     default;
 AudioOutputBufferParametersHelper::~AudioOutputBufferParametersHelper() =
@@ -153,31 +133,21 @@ uint32_t ComputeAudioOutputBufferSize(int channels, int frames) {
   return result.ValueOrDie();
 }
 
-ChannelLayoutConfig::ChannelLayoutConfig(const ChannelLayoutConfig& other) =
-    default;
-ChannelLayoutConfig& ChannelLayoutConfig::operator=(
-    const ChannelLayoutConfig& other) = default;
-ChannelLayoutConfig::~ChannelLayoutConfig() = default;
-
-ChannelLayoutConfig::ChannelLayoutConfig()
-    : ChannelLayoutConfig(
-          ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_NONE>()) {}
-
-ChannelLayoutConfig::ChannelLayoutConfig(ChannelLayout channel_layout,
-                                         int channels)
-    : channel_layout_(channel_layout),
-      channels_(ComputeChannelCount(channel_layout, channels)) {}
-
-ChannelLayoutConfig ChannelLayoutConfig::Mono() {
-  return FromLayout<CHANNEL_LAYOUT_MONO>();
-}
-
-ChannelLayoutConfig ChannelLayoutConfig::Stereo() {
-  return FromLayout<CHANNEL_LAYOUT_STEREO>();
-}
-
-ChannelLayoutConfig ChannelLayoutConfig::Guess(int channels) {
-  return ChannelLayoutConfig(GuessChannelLayout(channels), channels);
+static auto FuchsiaRenderUsageToString(int usage) {
+  switch (usage) {
+    case AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND:
+      return "FUCHSIA_RENDER_USAGE_BACKGROUND";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_MEDIA:
+      return "FUCHSIA_RENDER_USAGE_MEDIA";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION:
+      return "FUCHSIA_RENDER_USAGE_INTERRUPTION";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_SYSTEM_AGENT:
+      return "FUCHSIA_RENDER_USAGE_SYSTEM_AGENT";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION:
+      return "FUCHSIA_RENDER_USAGE_COMMUNICATION";
+    default:
+      return "FUCHSIA_RENDER_USAGE_INVALID";
+  }
 }
 
 // static
@@ -217,20 +187,8 @@ std::string AudioParameters::EffectsMaskToString(int mask) {
   if (mask & AudioParameters::ALLOW_DSP_AUTOMATIC_GAIN_CONTROL) {
     effects.push_back("ALLOW_DSP_AUTOMATIC_GAIN_CONTROL");
   }
-  if (mask & AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND) {
-    effects.push_back("FUCHSIA_RENDER_USAGE_BACKGROUND");
-  }
-  if (mask & AudioParameters::FUCHSIA_RENDER_USAGE_MEDIA) {
-    effects.push_back("FUCHSIA_RENDER_USAGE_MEDIA");
-  }
-  if (mask & AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION) {
-    effects.push_back("FUCHSIA_RENDER_USAGE_INTERRUPTION");
-  }
-  if (mask & AudioParameters::FUCHSIA_RENDER_USAGE_SYSTEM_AGENT) {
-    effects.push_back("FUCHSIA_RENDER_USAGE_SYSTEM_AGENT");
-  }
-  if (mask & AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION) {
-    effects.push_back("FUCHSIA_RENDER_USAGE_COMMUNICATION");
+  if (auto fuchsia_usage = mask & AudioParameters::FUCHSIA_RENDER_USAGE_MASK) {
+    effects.push_back(FuchsiaRenderUsageToString(fuchsia_usage));
   }
   if (mask & AudioParameters::IGNORE_UI_GAINS) {
     effects.push_back("IGNORE_UI_GAINS");
@@ -345,15 +303,12 @@ std::string AudioParameters::AsHumanReadableString() const {
 }
 
 int AudioParameters::GetBytesPerBuffer(SampleFormat fmt) const {
-  return GetBytesPerFrame(fmt) * frames_per_buffer_;
+  return base::CheckMul(GetBytesPerFrame(fmt), frames_per_buffer_)
+      .ValueOrDie<int>();
 }
 
 int AudioParameters::GetBytesPerFrame(SampleFormat fmt) const {
   return channels() * SampleFormatToBytesPerChannel(fmt);
-}
-
-double AudioParameters::GetMicrosecondsPerFrame() const {
-  return static_cast<double>(base::Time::kMicrosecondsPerSecond) / sample_rate_;
 }
 
 base::TimeDelta AudioParameters::GetBufferDuration() const {

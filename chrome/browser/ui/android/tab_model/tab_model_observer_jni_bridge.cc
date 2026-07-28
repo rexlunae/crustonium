@@ -10,6 +10,7 @@
 #include "base/android/token_android.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_jni_bridge.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
@@ -46,7 +47,7 @@ void TabModelObserverJniBridge::DidSelectTab(JNIEnv* env,
     observer.DidSelectTab(tab, static_cast<TabModel::TabSelectionType>(type));
   }
   for (auto& observer : interface_observers_) {
-    observer.OnActiveTabChanged(tab);
+    observer.OnActiveTabChanged(*tab_model_, tab);
   }
 }
 
@@ -64,7 +65,7 @@ void TabModelObserverJniBridge::DidRemoveTabForClosure(JNIEnv* env,
     observer.DidRemoveTabForClosure(tab);
   }
   for (auto& observer : interface_observers_) {
-    observer.OnTabRemoved(tab);
+    observer.OnTabRemoved(*tab_model_, tab, TabRemovedReason::kDeleted);
   }
 }
 
@@ -98,15 +99,15 @@ void TabModelObserverJniBridge::WillAddTab(JNIEnv* env,
 
 void TabModelObserverJniBridge::DidAddTab(JNIEnv* env,
                                           TabAndroid* tab,
-                                          int type) {
+                                          int type,
+                                          int index) {
   CHECK(tab);
   for (auto& observer : model_observers_) {
     observer.DidAddTab(tab, static_cast<TabModel::TabLaunchType>(type));
   }
 
-  int index = tab_model_->GetIndexOfTab(tab->GetHandle());
   for (auto& observer : interface_observers_) {
-    observer.OnTabAdded(tab, index);
+    observer.OnTabAdded(*tab_model_, tab, index);
   }
 }
 
@@ -119,7 +120,7 @@ void TabModelObserverJniBridge::DidMoveTab(JNIEnv* env,
     observer.DidMoveTab(tab, new_index, cur_index);
   }
   for (auto& observer : interface_observers_) {
-    observer.OnTabMoved(tab, cur_index, new_index);
+    observer.OnTabMoved(*tab_model_, tab, cur_index, new_index);
   }
 }
 
@@ -133,26 +134,49 @@ void TabModelObserverJniBridge::OnTabClosePending(
   }
 }
 
-void TabModelObserverJniBridge::TabClosureUndone(JNIEnv* env, TabAndroid* tab) {
+void TabModelObserverJniBridge::TabClosureUndone(JNIEnv* env,
+                                                 TabAndroid* tab,
+                                                 int index) {
   CHECK(tab);
   for (auto& observer : model_observers_) {
     observer.TabClosureUndone(tab);
   }
   for (auto& observer : interface_observers_) {
-    observer.OnTabAdded(tab, tab_model_->GetIndexOfTab(tab->GetHandle()));
+    observer.OnTabAdded(*tab_model_, tab, index);
   }
 }
 
 void TabModelObserverJniBridge::OnTabCloseUndone(
     JNIEnv* env,
-    const std::vector<TabAndroid*>& tabs) {
+    const std::vector<TabAndroid*>& tabs,
+    const std::vector<int>& indices) {
+  CHECK_EQ(tabs.size(), indices.size());
   for (auto& observer : model_observers_) {
     observer.OnTabCloseUndone(tabs);
   }
   for (auto& observer : interface_observers_) {
-    for (TabAndroid* tab : tabs) {
-      observer.OnTabAdded(tab, tab_model_->GetIndexOfTab(tab->GetHandle()));
+    for (size_t i = 0; i < tabs.size(); ++i) {
+      observer.OnTabAdded(*tab_model_, tabs[i], indices[i]);
     }
+  }
+}
+
+void TabModelObserverJniBridge::OnTabsSelectionChanged(JNIEnv* env) {
+  std::set<tabs::TabInterface*> highlighted_tabs;
+  const int count = tab_model_->GetTabCount();
+
+  for (int i = 0; i < count; ++i) {
+    TabAndroid* tab = tab_model_->GetTabAt(i);
+    if (tab->IsSelected()) {
+      highlighted_tabs.insert(tab);
+    }
+  }
+
+  for (auto& observer : interface_observers_) {
+    observer.OnHighlightedTabsChanged(*tab_model_, highlighted_tabs);
+  }
+  for (auto& observer : model_observers_) {
+    observer.OnTabsSelectionsChanged();
   }
 }
 
@@ -170,13 +194,23 @@ void TabModelObserverJniBridge::AllTabsClosureCommitted(JNIEnv* env) {
   }
 }
 
+void TabModelObserverJniBridge::AllTabsAreClosing(JNIEnv* env) {
+  for (auto& observer : model_observers_) {
+    observer.AllTabsAreClosing();
+  }
+  for (auto& observer : interface_observers_) {
+    observer.OnAllTabsAreClosing(*tab_model_);
+  }
+}
+
 void TabModelObserverJniBridge::TabRemoved(JNIEnv* env, TabAndroid* tab) {
   CHECK(tab);
   for (auto& observer : model_observers_) {
     observer.TabRemoved(tab);
   }
   for (auto& observer : interface_observers_) {
-    observer.OnTabRemoved(tab);
+    observer.OnTabRemoved(*tab_model_, tab,
+                          TabRemovedReason::kInsertedIntoOtherTabStrip);
   }
 }
 
@@ -236,6 +270,9 @@ void TabModelObserverJniBridge::RemoveTabListInterfaceObserver(
 }
 
 void TabModelObserverJniBridge::NotifyShutdown() {
+  for (auto& observer : model_observers_) {
+    observer.OnTabModelDestroyed(*tab_model_);
+  }
   for (auto& observer : interface_observers_) {
     observer.OnTabListDestroyed(*tab_model_);
   }

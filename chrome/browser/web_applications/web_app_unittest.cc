@@ -22,8 +22,8 @@
 #include "base/strings/to_string.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_integrity_block_data.h"
 #include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/integrity_block_data.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
@@ -40,8 +40,6 @@
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_stack_entry.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "components/webapps/isolated_web_apps/types/update_channel.h"
-#include "services/network/public/cpp/permissions_policy/origin_with_possible_wildcards.h"
-#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/safe_url_pattern.h"
@@ -137,7 +135,7 @@ static constexpr char kEcdsaP256SHA256SignatureHex[] =
     "3044022007381524F538B04F99CCC62703F06C87F66EF41BDA18A22D8E57952AA23E53A6"
     "022063C7F81D3A44798CB95823FA38FC23B15E0483744657FF49E1E83AB8C06B63C2";
 
-IsolatedWebAppIntegrityBlockData CreateIntegrityBlockData() {
+IntegrityBlockData CreateIntegrityBlockData() {
   std::vector<web_package::SignedWebBundleSignatureInfo> signatures;
 
   // EcdsaP256SHA256:
@@ -152,7 +150,7 @@ IsolatedWebAppIntegrityBlockData CreateIntegrityBlockData() {
             std::move(public_key), std::move(signature)));
   }
 
-  return IsolatedWebAppIntegrityBlockData(std::move(signatures));
+  return IntegrityBlockData(std::move(signatures));
 }
 
 }  // namespace
@@ -489,66 +487,6 @@ TEST(WebAppTest, IsolationDataPendingUpdateInfoDebugValue) {
   base::DictValue* debug_isolation_data = debug_app.FindDict("isolation_data");
   EXPECT_TRUE(debug_isolation_data != nullptr);
   EXPECT_EQ(*debug_isolation_data, expected_isolation_data);
-}
-
-TEST(WebAppTest, PermissionsPolicyDebugValue) {
-  GURL start_url("https://example.com");
-  WebApp app(GenerateManifestIdFromStartUrlOnly(start_url), start_url,
-             start_url.GetWithoutFilename());
-  app.SetPermissionsPolicy({
-      {network::mojom::PermissionsPolicyFeature::kGyroscope,
-       /*allowed_origins=*/{},
-       /*self_if_matches=*/std::nullopt,
-       /*matches_all_origins=*/false,
-       /*matches_opaque_src=*/true},
-      {network::mojom::PermissionsPolicyFeature::kGeolocation,
-       /*allowed_origins=*/{},
-       /*self_if_matches=*/std::nullopt,
-       /*matches_all_origins=*/true,
-       /*matches_opaque_src=*/false},
-      {network::mojom::PermissionsPolicyFeature::kGamepad,
-       {*network::OriginWithPossibleWildcards::FromOriginAndWildcardsForTest(
-            url::Origin::Create(GURL("https://example.com")),
-            /*has_subdomain_wildcard=*/false),
-        *network::OriginWithPossibleWildcards::FromOriginAndWildcardsForTest(
-            url::Origin::Create(GURL("https://example.net")),
-            /*has_subdomain_wildcard=*/true)},
-       /*self_if_matches=*/std::nullopt,
-       /*matches_all_origins=*/false,
-       /*matches_opaque_src=*/false},
-  });
-
-  EXPECT_TRUE(!app.permissions_policy().empty());
-
-  base::Value expected_permissions_policy =
-      base::JSONReader::Read(R"([
-        {
-          "allowed_origins": [  ],
-          "feature": "gyroscope",
-          "matches_all_origins": false,
-          "matches_opaque_src": true
-        }
-        , {
-          "allowed_origins": [  ],
-          "feature": "geolocation",
-          "matches_all_origins": true,
-          "matches_opaque_src": false
-        }
-        , {
-          "allowed_origins": [ "https://example.com", "https://*.example.net" ],
-          "feature": "gamepad",
-          "matches_all_origins": false,
-          "matches_opaque_src": false
-        }
-      ])",
-                             base::JSON_PARSE_CHROMIUM_EXTENSIONS)
-          .value();
-
-  base::DictValue debug_app = app.AsDebugValue().GetDict().Clone();
-  base::ListValue* debug_permissions_policy =
-      debug_app.FindList("permissions_policy");
-  EXPECT_TRUE(debug_permissions_policy != nullptr);
-  EXPECT_EQ(*debug_permissions_policy, expected_permissions_policy);
 }
 
 TEST(WebAppTest, DisplayOverrideDebugValue) {

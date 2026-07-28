@@ -10,9 +10,11 @@
 #include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/debug/alias.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
@@ -111,6 +113,10 @@ std::unique_ptr<content_settings::Rule> ContentSettingsStore::GetRule(
   std::unique_ptr<content_settings::Rule> result;
 
   for (const auto& entry : entries_) {
+    if (!entry->enabled) {
+      continue;
+    }
+
     if (off_the_record) {
       {
         base::AutoLock lock(entry->incognito_session_only_settings.GetLock());

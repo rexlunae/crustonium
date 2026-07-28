@@ -106,6 +106,7 @@ class CORE_EXPORT LayoutInputNode {
   bool IsInitialLetterBox() const { return box_->IsInitialLetterBox(); }
   bool IsMedia() const { return box_->IsMedia(); }
   bool IsCanvas() const { return box_->IsCanvas(); }
+  bool IsImageReplacement() const { return box_->IsLayoutImageReplacement(); }
 
   bool IsSemiReplaced() const { return IsBlock() && box_->IsSemiReplaced(); }
 
@@ -220,6 +221,7 @@ class CORE_EXPORT LayoutInputNode {
   LayoutBox* GetLayoutBox() const { return box_.Get(); }
 
   const ComputedStyle& Style() const { return box_->StyleRef(); }
+  const ComputedStyle& FirstLineStyle() const;
 
   bool ShouldApplySizeContainment() const {
     return box_->ShouldApplySizeContainment();

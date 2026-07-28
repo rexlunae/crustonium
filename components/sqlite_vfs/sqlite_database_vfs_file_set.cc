@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -20,6 +21,7 @@
 #include "components/sqlite_vfs/file_type.h"
 #include "components/sqlite_vfs/pending_file_set.h"
 #include "components/sqlite_vfs/sandboxed_file.h"
+#include "components/sqlite_vfs/shared_locks.h"
 #include "sql/database.h"
 
 namespace {
@@ -38,16 +40,17 @@ namespace sqlite_vfs {
 std::optional<SqliteVfsFileSet> SqliteVfsFileSet::Bind(
     Client client,
     PendingFileSet pending_file_set) {
-  // Write-ahead logging requires single connection.
-  CHECK(!pending_file_set.wal_file.IsValid() ||
-        !pending_file_set.shared_lock.IsValid());
-  // Write-ahead logging requires read-write access.
-  CHECK(!pending_file_set.wal_file.IsValid() || pending_file_set.read_write);
+  // A WAL-index is required for only multi-connection WAL-mode.
+  CHECK_EQ(pending_file_set.wal_index_file.IsValid(),
+           pending_file_set.shared_lock.IsValid() &&
+               pending_file_set.wal_file.IsValid());
 
-  base::WritableSharedMemoryMapping mapped_shared_lock;
+  std::optional<SharedLocks> shared_locks;
   if (pending_file_set.shared_lock.IsValid()) {
-    mapped_shared_lock = pending_file_set.shared_lock.Map();
-    if (!mapped_shared_lock.IsValid()) {
+    shared_locks =
+        SharedLocks::Create(pending_file_set.shared_lock,
+                            /*wal_mode=*/pending_file_set.wal_file.IsValid());
+    if (!shared_locks) {
       return std::nullopt;  // Failed to map the shared lock.
     }
   }
@@ -56,46 +59,76 @@ std::optional<SqliteVfsFileSet> SqliteVfsFileSet::Bind(
                                  ? SandboxedFile::AccessRights::kReadWrite
                                  : SandboxedFile::AccessRights::kReadOnly;
 
+  const base::UnguessableToken shared_locks_id =
+      pending_file_set.shared_lock.IsValid()
+          ? pending_file_set.shared_lock.GetGUID()
+          : base::UnguessableToken();
+
   auto db_file = std::make_unique<SandboxedFile>(
       client, FileType::kMainDb, std::move(pending_file_set.db_file),
-      access_rights, std::move(mapped_shared_lock));
-  auto journal_file = std::make_unique<SandboxedFile>(
-      client, FileType::kMainJournal, std::move(pending_file_set.journal_file),
-      access_rights);
+      access_rights, std::move(shared_locks), shared_locks_id,
+      std::move(pending_file_set.wal_index_file));
+  std::unique_ptr<SandboxedFile> journal_file;
+  if (pending_file_set.journal_file.IsValid()) {
+    journal_file = std::make_unique<SandboxedFile>(
+        client, FileType::kMainJournal,
+        std::move(pending_file_set.journal_file), access_rights);
+  }
   std::unique_ptr<SandboxedFile> wal_file;
   if (pending_file_set.wal_file.IsValid()) {
     wal_file = std::make_unique<SandboxedFile>(
         client, FileType::kWal, std::move(pending_file_set.wal_file),
         access_rights);
   }
-  return SqliteVfsFileSet(std::move(db_file), std::move(journal_file),
-                          std::move(wal_file),
-                          std::move(pending_file_set.shared_lock));
+  return SqliteVfsFileSet(
+      std::move(db_file), std::move(journal_file), std::move(wal_file),
+#if !BUILDFLAG(IS_WIN)
+      std::move(pending_file_set.wal_index_file_read_only),
+#endif
+      std::move(pending_file_set.shared_lock), pending_file_set.wal_mode);
 }
 
 SqliteVfsFileSet::SqliteVfsFileSet(
     std::unique_ptr<SandboxedFile> db_file,
     std::unique_ptr<SandboxedFile> journal_file,
     std::unique_ptr<SandboxedFile> wal_journal_file,
-    base::UnsafeSharedMemoryRegion shared_lock)
+#if !BUILDFLAG(IS_WIN)
+    base::File wal_index_file_read_only,
+#endif
+    base::UnsafeSharedMemoryRegion shared_lock,
+    bool wal_mode)
     : shared_lock_(std::move(shared_lock)),
       db_file_(std::move(db_file)),
       journal_file_(std::move(journal_file)),
       wal_journal_file_(std::move(wal_journal_file)),
+#if !BUILDFLAG(IS_WIN)
+      wal_index_file_read_only_(std::move(wal_index_file_read_only)),
+#endif
       virtual_fs_path_(base::FilePath::FromASCII(
           base::NumberToString(g_file_set_id_generator.fetch_add(1)))),
       read_only_(db_file_->access_rights() ==
-                 SandboxedFile::AccessRights::kReadOnly) {
+                 SandboxedFile::AccessRights::kReadOnly),
+      wal_mode_(wal_mode) {
+  // A rollback journal is required when not opening in WAL-mode. It is optional
+  // otherwise to support migrating from WAL-mode to using a rollback journal.
+  CHECK(journal_file_ || wal_mode_);
+  // A write-ahead log file is required when opening in WAL-mode. It is optional
+  // otherwise to support migrating to WAL-mode.
+  CHECK(wal_journal_file_ || !wal_mode_);
+
   // It makes no sense to have one file writeable and not the other(s).
-  CHECK_EQ(db_file_->access_rights(), journal_file_->access_rights());
+  if (journal_file_) {
+    CHECK_EQ(db_file_->access_rights(), journal_file_->access_rights());
+  }
   if (wal_journal_file_) {
     CHECK_EQ(db_file_->access_rights(), wal_journal_file_->access_rights());
   }
-  // Write-ahead logging requires single connection.
-  CHECK(!wal_journal_file_ || !shared_lock_.IsValid());
-  // Write-ahead logging requires read-write access.
-  CHECK(!wal_journal_file_ ||
-        db_file_->access_rights() == SandboxedFile::AccessRights::kReadWrite);
+#if !BUILDFLAG(IS_WIN)
+  // Only shareable read-write sets with a WAL file have a read-only handle to
+  // the WAL-index.
+  CHECK_EQ(shared_lock_.IsValid() && !read_only_ && wal_journal_file_,
+           wal_index_file_read_only_.IsValid());
+#endif
 }
 
 SqliteVfsFileSet::SqliteVfsFileSet(SqliteVfsFileSet&& other) = default;
@@ -137,11 +170,12 @@ const base::File& SqliteVfsFileSet::GetDbFile() const {
 }
 
 const base::File& SqliteVfsFileSet::GetJournalFile() const {
+  CHECK(has_journal_file());
   return journal_file_->GetFile();
 }
 
 const base::File& SqliteVfsFileSet::GetWalJournalFile() const {
-  CHECK(wal_journal_mode());
+  CHECK(has_wal_file());
   return wal_journal_file_->GetFile();
 }
 

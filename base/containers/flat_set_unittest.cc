@@ -5,6 +5,7 @@
 #include "base/containers/flat_set.h"
 
 #include <list>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -17,7 +18,7 @@
 
 // A flat_set is basically a interface to flat_tree. So several basic
 // operations are tested to make sure things are set up properly, but the bulk
-// of the tests are in flat_tree_unittests.cc.
+// of the tests are in flat_tree_unittest.cc.
 
 using ::testing::ElementsAre;
 
@@ -72,6 +73,33 @@ TEST(FlatSet, IteratorConstructor) {
   // Move-from iterators.
   flat_set<MoveOnlyInt> orig(std::make_move_iterator(input_list.begin()),
                              std::make_move_iterator(input_list.end()));
+
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(1)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(2)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(3)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(4)));
+
+  // List contains original number of moved-from elements.
+  EXPECT_THAT(input_list, ElementsAre(0, 0, 0, 0, 0, 0));
+}
+
+TEST(FlatSet, RangesToConstruction) {
+  int input_vals[] = {1, 1, 1, 2, 2, 2, 3, 3, 3};
+
+  // Copy from range.
+  EXPECT_THAT(std::ranges::to<flat_set<int>>(input_vals), ElementsAre(1, 2, 3));
+
+  std::list<MoveOnlyInt> input_list;
+  input_list.emplace_back(1);
+  input_list.emplace_back(1);  // Duplicate.
+  input_list.emplace_back(2);
+  input_list.emplace_back(3);
+  input_list.emplace_back(3);  // Duplicate.
+  input_list.emplace_back(4);
+
+  // Move from range.
+  auto orig = std::ranges::to<flat_set<MoveOnlyInt>>(
+      base::RangeAsRvalues(std::move(input_list)));
 
   EXPECT_EQ(1U, orig.count(MoveOnlyInt(1)));
   EXPECT_EQ(1U, orig.count(MoveOnlyInt(2)));

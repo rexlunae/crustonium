@@ -25,7 +25,7 @@
 #include "chrome/browser/ui/views/tabs/dragging/dragging_tabs_session.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_context.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_target.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/split_tab_data.h"
@@ -133,6 +133,8 @@ class TabDragController : public views::WidgetObserver,
   // and is only non-empty if the original selection isn't the same as the
   // dragging set. Returns Liveness::DELETED if `this` was deleted during this
   // call, and Liveness::ALIVE if `this` still exists.
+  // Note: `dragging_views` must be ordered by their position in the source
+  // tabstrip (both visually and in the model).
   [[nodiscard]] Liveness Init(TabDragContext* source_context,
                               TabSlotView* source_view,
                               const std::vector<TabSlotView*>& dragging_views,
@@ -174,9 +176,12 @@ class TabDragController : public views::WidgetObserver,
   // Returns the tab group being dragged, if any. Will only return a value if
   // the user is dragging a tab group header, not an individual tab or tabs
   // from a group.
-  const std::optional<tab_groups::TabGroupId> group() const {
-    return drag_data_.group();
+  const std::optional<tab_groups::TabGroupId> group_header_id() const {
+    return drag_data_.group_header_id();
   }
+
+  // Used to track if tab group header was collapsed from dragging the header.
+  void SetGroupHeaderWasCollapsedFromDrag(bool was_collapsed_from_drag);
 
   bool IsMovingLastTab() const { return is_moving_last_tab_; }
 
@@ -258,7 +263,11 @@ class TabDragController : public views::WidgetObserver,
     // `can_release_capture_` is true.
     kWaitingToDragTabs,
     // The drag session has completed or been canceled.
-    kStopped
+    kStopped,
+    // The session is dragging a window, but must wait for the detached window
+    // to be shown (which may be deferred by InitialWebUI) before starting the
+    // nested move loop.
+    kWaitingForWindowToShow,
   };
 
   // Enumeration of the ways a drag session can end.
@@ -283,6 +292,29 @@ class TabDragController : public views::WidgetObserver,
   // in an attempt to detach a tab.
   enum class DetachBehavior { kDetachable, kNotDetachable };
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(TabDraggingDestination)
+  enum TabDraggingDestination {
+    kSameWindow = 0,
+    kNewWindow = 1,
+    kExistingWindow = 2,
+    kAbandoned = 3,
+    kMaxValue = kAbandoned
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabDraggingDestination)
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(TabDragPinnedness)
+  enum class TabDragPinnedness {
+    kAllUnpinned = 0,
+    kAllPinned = 1,
+    kMixed = 2,
+    kMaxValue = kMixed
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabDragPinnedness)
+
   // Overridden from views::WidgetObserver:
   void OnWidgetBoundsChanged(views::Widget* widget,
                              const gfx::Rect& new_bounds) override;
@@ -299,8 +331,6 @@ class TabDragController : public views::WidgetObserver,
   // canonical reference if we were dragging that tab.
   void OnActiveStripWebContentsReplaced(content::WebContents* previous,
                                         content::WebContents* next);
-
-  void UpdateDockInfo(const gfx::Point& point_in_screen);
 
   // Saves focus in the window that the drag initiated from. Focus will be
   // restored appropriately if the drag ends within this same window.
@@ -443,10 +473,6 @@ class TabDragController : public views::WidgetObserver,
   // Maximizes the attached window.
   void MaximizeAttachedWindow();
 
-  // Hides the frame for the window that contains the TabDragContext
-  // the current drag session was initiated from.
-  void HideFrame();
-
   void BringWindowUnderPointToFront(const gfx::Point& point_in_screen);
 
   [[nodiscard]] Liveness SetCapture(TabDragContext* context);
@@ -544,10 +570,13 @@ class TabDragController : public views::WidgetObserver,
 #endif  // defined(USE_AURA)
 
   // Updates the current drag target, and fires relevant handler events.
-  void UpdateDragTarget(TabDragTarget* new_target);
+  void UpdateDragTarget(TabDragTarget* new_target,
+                        const gfx::Point& point_in_screen);
   void ResetDragTarget();
 
   static void SetTabDragPointResolver(TabDragPointResolver& resolver);
+
+  const char* GetTabStripMode() const;
 
   DragState current_state_ = DragState::kNotStarted;
 
@@ -573,10 +602,9 @@ class TabDragController : public views::WidgetObserver,
   // DraggedTabView is constructed.
   gfx::Point start_point_in_screen_;
 
-  // Ratio of the x and y coordinates of the `source_view_offset` to the
-  // width and height of the source view.
-  float offset_to_width_ratio_ = 0;
-  float offset_to_height_ratio_ = 0;
+  // The restored bounds size of the source window at the start of the drag
+  // session. Used to calculate the dragged window size.
+  gfx::Size initial_window_size_;
 
   // Used to track the view that had focus in the window containing
   // `source_view_`. This is saved so that focus can be restored properly when
@@ -610,6 +638,11 @@ class TabDragController : public views::WidgetObserver,
 
   // Last location used in screen coordinates.
   gfx::Point last_point_in_screen_ = gfx::Point();
+
+#if BUILDFLAG(IS_MAC)
+  // The ID of the display the window was last sized for during a drag.
+  int64_t last_sized_display_id_ = display::kInvalidDisplayId;
+#endif
 
   // The following are needed when detaching into a browser
   // (`detach_into_browser_` is true).
@@ -689,6 +722,9 @@ class TabDragController : public views::WidgetObserver,
   // or not they destroy `this` might depend on platform behavior or other
   // external factors. Destruction while this is true will DCHECK.
   bool expect_stay_alive_ = false;
+
+  // Duration of drag operation, used in metrics.
+  std::optional<base::TimeTicks> drag_start_time_;
 
   // The current candidate that may handle a tab drop.
   raw_ptr<TabDragTarget> current_drag_target_;

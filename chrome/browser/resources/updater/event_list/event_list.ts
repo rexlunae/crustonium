@@ -4,11 +4,10 @@
 
 import './event_list_item.js';
 import './filter_bar.js';
-import './raw_event_details.js';
 import '//resources/cr_elements/cr_button/cr_button.js';
 import '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 
-import {assert} from '//resources/js/assert.js';
+import {assert, assertNotReachedCase} from '//resources/js/assert.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
@@ -17,10 +16,12 @@ import {deduplicateEvents, mergeEvents, parseEvents, UpdaterProcessMap} from '..
 import type {HistoryEvent, MergedHistoryEvent, PolicySet} from '../event_history.js';
 import {loadTimeData} from '../i18n_setup.js';
 import {formatDateShort, formatRelativeDate} from '../tools.js';
+import {browserProxyFactory, HistoryFilter} from '../updater_ui.mojom-webui.js';
 
 import {getCss} from './event_list.css.js';
 import {getHtml} from './event_list.html.js';
 import type {EventListItemElement} from './event_list_item.js';
+import {FilterCategory} from './filter_bar.js';
 import {applyFilterSettings, createDefaultFilterSettings} from './filter_settings.js';
 import type {FilterSettings} from './filter_settings.js';
 
@@ -91,6 +92,7 @@ export class EventListElement extends CrLitElement {
       expandAllButtonLabel: {type: String},
       events: {type: Array},
       scrollTarget: {type: Object},
+      processMap: {type: Object},
     };
   }
 
@@ -102,10 +104,7 @@ export class EventListElement extends CrLitElement {
       loadTimeData.getString('expandAll');
   protected accessor events: EventEntry[] = [];
   protected accessor scrollTarget: HTMLElement = document.documentElement;
-
-  protected processMap: UpdaterProcessMap|undefined = undefined;
-  protected eventsWithParseErrors: Array<Record<string, unknown>> = [];
-  protected eventsWithoutDates: Array<HistoryEvent|MergedHistoryEvent> = [];
+  protected accessor processMap: UpdaterProcessMap|undefined = undefined;
   protected sortedEventsWithDates: Array<HistoryEvent|MergedHistoryEvent> = [];
 
   override willUpdate(changedProperties: PropertyValues<this>) {
@@ -119,19 +118,24 @@ export class EventListElement extends CrLitElement {
           processMap.sortEventsByDate(unpaired, paired);
 
       this.processMap = processMap;
-      this.eventsWithParseErrors = invalid;
-      this.eventsWithoutDates = unsortedEventsWithoutDates;
       this.sortedEventsWithDates = sortedEventsWithDates;
 
       const pluralStringProxy = PluralStringProxyImpl.getInstance();
 
-      pluralStringProxy
-          .getPluralString('undatedEvents', this.eventsWithoutDates.length)
-          .then(label => this.eventsWithoutDatesLabel = label);
-      pluralStringProxy
-          .getPluralString(
-              'parseErrorEvents', this.eventsWithParseErrors.length)
-          .then(label => this.eventsWithParseErrorsLabel = label);
+      if (unsortedEventsWithoutDates.length === 0) {
+        this.eventsWithoutDatesLabel = '';
+      } else {
+        pluralStringProxy
+            .getPluralString('undatedEvents', unsortedEventsWithoutDates.length)
+            .then(label => this.eventsWithoutDatesLabel = label);
+      }
+
+      if (invalid.length === 0) {
+        this.eventsWithParseErrorsLabel = '';
+      } else {
+        pluralStringProxy.getPluralString('parseErrorEvents', invalid.length)
+            .then(label => this.eventsWithParseErrorsLabel = label);
+      }
     }
 
     if (changedProperties.has('messages') ||
@@ -152,7 +156,7 @@ export class EventListElement extends CrLitElement {
     });
   }
 
-  protected get anyExpanded(): boolean {
+  protected isAnyExpanded(): boolean {
     return this.eventListItems.some(item => item.expanded);
   }
 
@@ -167,16 +171,42 @@ export class EventListElement extends CrLitElement {
         this.processMap, filteredEvents, this.sortedEventsWithDates);
   }
 
-  protected onFiltersChanged() {
+  protected onFiltersChanged(e: CustomEvent<FilterCategory|'all'>) {
     // Subfields of the filter settings have changed, however this does not
     // trigger a new render cycle with an updated filterSettings property.
     // Compute the new `events` array explicitly, which will trigger a new
     // render cycle.
     this.updateEventEntries();
+
+    const category = e.detail;
+    let mojoCategory: HistoryFilter;
+    switch (category) {
+      case FilterCategory.APP:
+        mojoCategory = HistoryFilter.kApp;
+        break;
+      case FilterCategory.EVENT:
+        mojoCategory = HistoryFilter.kEvent;
+        break;
+      case FilterCategory.OUTCOME:
+        mojoCategory = HistoryFilter.kOutcome;
+        break;
+      case FilterCategory.DATE:
+        mojoCategory = HistoryFilter.kDate;
+        break;
+      case FilterCategory.SCOPE:
+        mojoCategory = HistoryFilter.kScope;
+        break;
+      case 'all':
+        mojoCategory = HistoryFilter.kAll;
+        break;
+      default:
+        assertNotReachedCase(category);
+    }
+    browserProxyFactory.getInstance().handler.recordFilterChange(mojoCategory);
   }
 
   protected onExpandCollapseAllClick() {
-    if (this.anyExpanded) {
+    if (this.isAnyExpanded()) {
       this.collapseAll();
     } else {
       this.expandAll();
@@ -184,11 +214,11 @@ export class EventListElement extends CrLitElement {
   }
 
   protected onEventItemExpandedChanged() {
-    this.expandAllButtonLabel =
-        loadTimeData.getString(this.anyExpanded ? 'collapseAll' : 'expandAll');
+    this.expandAllButtonLabel = loadTimeData.getString(
+        this.isAnyExpanded() ? 'collapseAll' : 'expandAll');
   }
 
-  protected get numDisplayedEventsLabel(): string {
+  protected getNumDisplayedEventsLabel(): string {
     return loadTimeData.getStringF(
         'displayedEventsCount', this.events.length,
         this.sortedEventsWithDates.length);

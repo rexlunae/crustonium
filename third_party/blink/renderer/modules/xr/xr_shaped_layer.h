@@ -16,7 +16,8 @@ class XRSpace;
 
 class XRShapedLayer : public XRCompositionLayer {
  public:
-  XRShapedLayer(const XRLayerInit* init,
+  XRShapedLayer(XRSession* session,
+                const XRLayerInit* init,
                 V8XRLayerLayout::Enum final_layout,
                 XRGraphicsBinding* binding,
                 XRLayerDrawingContext* drawing_context);
@@ -31,7 +32,6 @@ class XRShapedLayer : public XRCompositionLayer {
 
   // xr layer init parameters
   bool isStatic() const override;
-  bool clearOnAccess() const { return clear_on_access_; }
 
   void Trace(Visitor*) const override;
 
@@ -46,7 +46,6 @@ class XRShapedLayer : public XRCompositionLayer {
   uint16_t texture_width_;
   uint16_t texture_height_;
   bool is_static_;
-  bool clear_on_access_;
 };
 
 }  //  namespace blink

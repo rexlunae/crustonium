@@ -35,7 +35,7 @@ def CommonChecks(input_api, output_api, *, is_upload):
       input_api.canned_checks.GetPylint(
           input_api,
           output_api,
-          pylintrc='pylintrc',
+          pylintrc='pylintrc-3.2',
           files_to_skip=[
               r'.*_pb2\.py'
           ] + build_pys,
@@ -53,7 +53,7 @@ def CommonChecks(input_api, output_api, *, is_upload):
               J('..', '..', 'third_party', 'depot_tools'),
               J('..', '..', 'third_party', 'colorama', 'src'),
           ],
-          version='2.7'))
+          version='3.2'))
   tests.extend(
       input_api.canned_checks.GetPylint(
           input_api,
@@ -97,6 +97,7 @@ def CommonChecks(input_api, output_api, *, is_upload):
       J('gyp', 'java_cpp_features_tests.py'),
       J('gyp', 'java_cpp_strings_tests.py'),
       J('gyp', 'java_google_api_keys_tests.py'),
+      J('gyp', 'util', 'java_cpp_utils_test.py'),
       J('gyp', 'util', 'manifest_utils_test.py'),
       J('gyp', 'util', 'md5_check_test.py'),
       J('gyp', 'util', 'resource_utils_test.py'),
@@ -109,6 +110,7 @@ def CommonChecks(input_api, output_api, *, is_upload):
       J('pylib', 'local', 'device',
         'local_device_instrumentation_test_run_test.py'),
       J('pylib', 'local', 'device', 'local_device_test_run_test.py'),
+      J('pylib', 'local', 'emulator', 'avd_test.py'),
       J('pylib', 'local', 'emulator', 'ini_test.py'),
       J('pylib', 'local', 'machine', 'local_machine_junit_test_run_test.py'),
       J('pylib', 'output', 'local_output_manager_test.py'),
@@ -117,7 +119,6 @@ def CommonChecks(input_api, output_api, *, is_upload):
       J('pylib', 'results', 'flakiness_dashboard',
         'json_results_generator_unittest.py'),
       J('pylib', 'results', 'json_results_test.py'),
-      J('pylib', 'utils', 'chrome_proxy_utils_test.py'),
       J('pylib', 'utils', 'code_coverage_utils_test.py'),
       J('pylib', 'utils', 'device_dependencies_test.py'),
       J('pylib', 'utils', 'dexdump_test.py'),
@@ -134,8 +135,6 @@ def CommonChecks(input_api, output_api, *, is_upload):
                                            output_api,
                                            unit_tests=pytests,
                                            env=pylib_test_env))
-  # Run AyeAye analyzers.
-  tests.extend(input_api.canned_checks.CheckAyeAye(input_api, output_api))
 
   return input_api.RunTests(tests)
 

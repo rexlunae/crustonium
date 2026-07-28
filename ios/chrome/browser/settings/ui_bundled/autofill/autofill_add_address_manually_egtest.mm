@@ -4,6 +4,7 @@
 
 #import "base/strings/sys_string_conversions.h"
 #import "components/autofill/core/browser/field_types.h"
+#import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/ios/common/features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
@@ -92,8 +93,17 @@ id<GREYMatcher> EditProfileBottomSheet() {
 // Helper to open the address settings page.
 void OpenAddressSettings() {
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI
-      tapSettingsMenuButton:chrome_test_util::AddressesAndMoreButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::AddressesAndMoreButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:chrome_test_util::AddressesAndMoreButton()];
+  }
 }
 
 // Gets the top presented view controller, in this case the bottom sheet view
@@ -115,6 +125,13 @@ UIViewController* TopPresentedViewController() {
 @end
 
 @implementation AutofillAddAddressManuallyTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config;
+  config.features_disabled.push_back(
+      autofill::features::kAutofillAiWithDataSchema);
+  return config;
+}
 
 - (void)setUp {
   [super setUp];

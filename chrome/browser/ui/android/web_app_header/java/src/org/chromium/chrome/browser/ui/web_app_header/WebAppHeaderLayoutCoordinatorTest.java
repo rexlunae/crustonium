@@ -46,7 +46,6 @@ import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
@@ -54,7 +53,6 @@ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntent
 import org.chromium.chrome.browser.browserservices.intents.WebappExtras;
 import org.chromium.chrome.browser.browserservices.intents.WebappIcon;
 import org.chromium.chrome.browser.flags.ActivityType;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
@@ -556,7 +554,6 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WEB_APP_MENU_BUTTON)
     public void testMinUiMinimizeWindow_ControlsDoNotFit_HideControls_MenuButtonVisible() {
         when(mIntentDataProvider.getActivityType()).thenReturn(ActivityType.TRUSTED_WEB_ACTIVITY);
         setupDesktopWindowing(/* isInDesktopWindow= */ true);
@@ -582,7 +579,6 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WEB_APP_MENU_BUTTON)
     public void testMinUiMaximizeWindow_ControlsFit_ShowControls_MenuButtonVisible() {
         when(mIntentDataProvider.getActivityType()).thenReturn(ActivityType.TRUSTED_WEB_ACTIVITY);
         // Emulate minimized window with added Menu button.
@@ -611,7 +607,6 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_WEB_APP_MENU_BUTTON)
     public void testMinUiWindow_ShowControls_MenuButtonVisible() {
         when(mIntentDataProvider.getActivityType()).thenReturn(ActivityType.TRUSTED_WEB_ACTIVITY);
         setupDesktopWindowing(/* isInDesktopWindow= */ true);
@@ -633,7 +628,6 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_TWA_ORIGIN_DISPLAY)
     public void testStandaloneMaximizeWindow_ControlsFit_ShowControls_MenuButtonVisible() {
         when(mIntentDataProvider.getActivityType()).thenReturn(ActivityType.TRUSTED_WEB_ACTIVITY);
         // Emulate minimized window with added Menu button.
@@ -661,7 +655,6 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_TWA_ORIGIN_DISPLAY)
     public void testStandaloneWindow_ShowControls_MenuButtonVisible() {
         when(mIntentDataProvider.getActivityType()).thenReturn(ActivityType.TRUSTED_WEB_ACTIVITY);
         setupDesktopWindowing(/* isInDesktopWindow= */ true);
@@ -748,8 +741,8 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    public void testDisplayModeBorderlessUMA() {
-        testDisplayModeUMA(DisplayMode.BORDERLESS);
+    public void testDisplayModeUnframedUMA() {
+        testDisplayModeUMA(DisplayMode.UNFRAMED);
     }
 
     @Test
@@ -758,7 +751,6 @@ public class WebAppHeaderLayoutCoordinatorTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_TWA_ORIGIN_DISPLAY)
     public void testOriginTextViewShowsCorrectDomain() {
         setupDesktopWindowing(/* isInDesktopWindow= */ true);
         setupDisplayMode(DisplayMode.MINIMAL_UI);

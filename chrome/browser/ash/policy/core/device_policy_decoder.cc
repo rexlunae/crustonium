@@ -682,6 +682,18 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
                   POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
                   POLICY_SOURCE_CLOUD, base::Value(std::move(list)), nullptr);
   }
+
+  if (policy.has_deviceonlinepasswordmismatchbehavior()) {
+    const em::IntegerPolicyProto& container(
+        policy.deviceonlinepasswordmismatchbehavior());
+    if (container.has_value()) {
+      if (auto value = DecodeIntegerValue(container.value())) {
+        policies->Set(key::kDeviceOnlinePasswordMismatchBehavior,
+                      POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                      POLICY_SOURCE_CLOUD, std::move(*value), nullptr);
+      }
+    }
+  }
 }
 
 base::DictValue DecodeDeviceLocalAccountInfoProto(
@@ -910,17 +922,6 @@ void DecodeNetworkPolicies(const em::ChromeDeviceSettingsProto& policy,
                     POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
                     POLICY_SOURCE_CLOUD, base::Value(container.value()),
                     /*external_data_fetcher=*/nullptr);
-    }
-  }
-
-  if (policy.has_devicepostquantumkeyagreementenabled()) {
-    const em::BooleanPolicyProto& container(
-        policy.devicepostquantumkeyagreementenabled());
-    if (container.has_value()) {
-      policies->Set(key::kDevicePostQuantumKeyAgreementEnabled,
-                    POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
-                    POLICY_SOURCE_CLOUD, base::Value(container.value()),
-                    nullptr);
     }
   }
 
@@ -1660,6 +1661,7 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
                     base::Value(container.metrics_enabled()), nullptr);
     }
   }
+
 
   if (policy.has_device_login_screen_geolocation_access_level() &&
       policy.device_login_screen_geolocation_access_level()
@@ -2427,6 +2429,17 @@ void DecodeKioskPolicies(const em::ChromeDeviceSettingsProto& policy,
     if (container.has_value()) {
       SetJsonDevicePolicy(key::kDeviceWeeklyScheduledSuspend, container.value(),
                           policies);
+    }
+  }
+  if (policy.has_deviceweeklyscheduledresuspenddelayms()) {
+    const em::IntegerPolicyProto& container(
+        policy.deviceweeklyscheduledresuspenddelayms());
+    if (container.has_value()) {
+      if (auto value = DecodeIntegerValue(container.value())) {
+        policies->Set(key::kDeviceWeeklyScheduledResuspendDelayMs,
+                      POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                      POLICY_SOURCE_CLOUD, std::move(*value), nullptr);
+      }
     }
   }
 }

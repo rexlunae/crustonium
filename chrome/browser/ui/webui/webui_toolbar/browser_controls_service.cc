@@ -4,189 +4,277 @@
 
 #include "chrome/browser/ui/webui/webui_toolbar/browser_controls_service.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/check.h"
 #include "base/functional/bind.h"
-#include "base/memory/weak_ptr.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
-#include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/command_updater.h"
-#include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter.h"
-#include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter_service.h"
-#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "base/types/expected_macros.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/waap/waap_ui_metrics_service.h"
 #include "components/browser_apis/browser_controls/browser_controls_api.mojom.h"
-#include "content/public/browser/context_menu_params.h"
-#include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/render_frame_host.h"
+#include "mojo/public/mojom/base/error.mojom.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/events/event_constants.h"
 
 namespace {
-// Measurement marks.
-constexpr char kChangeVisibleModeToLoadingStartMark[] =
-    "BrowserControls.ChangeVisibleModeToLoading.Start";
-constexpr char kChangeVisibleModeToNotLoadingStartMark[] =
-    "BrowserControls.ChangeVisibleModeToNotLoading.Start";
-constexpr char kInputMouseReleaseStartMark[] =
-    "ReloadButton.Input.MouseRelease.Start";
 
-// Histogram names.
-constexpr char kInputToReloadMouseReleaseHistogram[] =
-    "InitialWebUI.ReloadButton.InputToReload.MouseRelease";
-constexpr char kInputToStopMouseReleaseHistogram[] =
-    "InitialWebUI.ReloadButton.InputToStop.MouseRelease";
+using Code = mojo_base::mojom::Code;
+using Error = mojo_base::mojom::Error;
 
-int ToUIEventFlags(
-    const std::vector<browser_controls_api::mojom::ClickDispositionFlag>&
+}  // namespace
+
+namespace browser_controls_api {
+
+// static
+base::expected<ui::EventFlags, mojo_base::mojom::ErrorPtr>
+BrowserControlsService::ToUiEventFlags(
+    const std::vector<browser_controls_api::mojom::EventDispositionFlag>&
         flags) {
-  using browser_controls_api::mojom::ClickDispositionFlag;
-  int event_flags = 0;
+  using browser_controls_api::mojom::EventDispositionFlag;
+  ui::EventFlags event_flags = 0;
   for (auto& flag : flags) {
     switch (flag) {
-      case ClickDispositionFlag::kMiddleMouseButton: {
+      case EventDispositionFlag::kMiddleMouseButton: {
         event_flags |= ui::EF_MIDDLE_MOUSE_BUTTON;
         break;
       }
-      case ClickDispositionFlag::kAltKeyDown: {
+      case EventDispositionFlag::kAltKeyDown: {
         event_flags |= ui::EF_ALT_DOWN;
         break;
       }
-      case ClickDispositionFlag::kMetaKeyDown: {
+      case EventDispositionFlag::kMetaKeyDown: {
         event_flags |= ui::EF_COMMAND_DOWN;
         break;
       }
-      case ClickDispositionFlag::kUnspecified:
-        NOTREACHED() << "Unexpected ClickDispositionFlag::kUnspecified.";
+      case EventDispositionFlag::kShiftKeyDown: {
+        event_flags |= ui::EF_SHIFT_DOWN;
+        break;
+      }
+      case EventDispositionFlag::kControlKeyDown: {
+        event_flags |= ui::EF_CONTROL_DOWN;
+        break;
+      }
+      case EventDispositionFlag::kAltGrKeyDown: {
+        event_flags |= ui::EF_ALTGR_DOWN;
+        break;
+      }
+      case EventDispositionFlag::kUnspecified:
+        return base::unexpected(Error::New(
+            Code::kInvalidArgument, "invalid event disposition flag received"));
     }
   }
   return event_flags;
 }
 
-}  // namespace
-
 BrowserControlsService::BrowserControlsService(
-    mojo::PendingReceiver<browser_controls_api::mojom::BrowserControlsService>
-        service,
-    mojo::PendingRemote<browser_controls_api::mojom::BrowserControlsObserver>
-        observer,
-    content::WebContents* web_contents,
-    CommandUpdater* command_updater,
-    BrowserControlsServiceDelegate* delegate)
-    : service_(this, std::move(service)),
-      observer_(std::move(observer)),
-      web_contents_(web_contents),
-      command_updater_(command_updater),
-      delegate_(delegate) {
-  CHECK(web_contents_);
-  CHECK(command_updater_);
+    mojo::PendingReceiver<mojom::BrowserControlsService> service,
+    std::unique_ptr<BrowserControlsAdapter> browser_adapter,
+    BrowserControlsServiceDelegate* delegate,
+    content::RenderFrameHost* toolbar_rfh)
+    : service_(&bridge_, std::move(service)),
+      browser_adapter_(std::move(browser_adapter)),
+      delegate_(delegate),
+      toolbar_rfh_(toolbar_rfh) {
+  CHECK(browser_adapter_);
 }
 
 BrowserControlsService::~BrowserControlsService() = default;
 
-MetricsReporter* BrowserControlsService::GetMetricsReporter() {
-  MetricsReporterService* service =
-      MetricsReporterService::GetFromWebContents(web_contents_);
-  return service ? service->metrics_reporter() : nullptr;
-}
-
-void BrowserControlsService::ReloadFromClick(
+BrowserControlsService::ReloadFromClickResult
+BrowserControlsService::ReloadFromClick(
     bool bypass_cache,
-    const std::vector<browser_controls_api::mojom::ClickDispositionFlag>&
+    const std::vector<browser_controls_api::mojom::EventDispositionFlag>&
+        click_flags,
+    mojom::ReloadInteractionMetadataPtr metadata) {
+  const base::TimeTicks now = base::TimeTicks::Now();
+
+  base::TimeTicks reconstructed_ticks;
+  bool validation_succeeded = false;
+
+  if (metadata) {
+    auto result = ReconstructAndValidateInteractionTime(*metadata, now);
+    if (!result.has_value()) {
+      VLOG(1) << "Interaction time validation failed: "
+              << result.error()->message;
+    } else {
+      reconstructed_ticks = *result;
+      validation_succeeded = true;
+    }
+  }
+
+  // This is called in order to signal that external protocol dialogs are
+  // allowed to show due to a user action, which are likely to happen on the
+  // next page load after the reload button is clicked.
+  // Ideally, the browser UI's event system would notify ExternalProtocolHandler
+  // that a user action occurred and we are OK to open the dialog, but for some
+  // reason that isn't happening every time the reload button is clicked. See
+  // http://crbug.com/40180927
+  if (delegate_) {
+    delegate_->PermitLaunchUrl();
+  }
+
+  ASSIGN_OR_RETURN(auto converted, ToUiEventFlags(click_flags));
+
+  browser_adapter_->Reload(bypass_cache,
+                           ui::DispositionFromEventFlags(converted));
+
+  if (metadata && validation_succeeded) {
+    MaybeRecordInteractionToReloadMetric(reconstructed_ticks,
+                                         metadata->input_type);
+  }
+  return std::monostate();
+}
+
+BrowserControlsService::StopLoadResult BrowserControlsService::StopLoad() {
+  browser_adapter_->Stop();
+  return std::monostate();
+}
+
+BrowserControlsService::BackResult BrowserControlsService::Back(
+    const std::vector<browser_controls_api::mojom::EventDispositionFlag>&
+        flags) {
+  ASSIGN_OR_RETURN(auto converted, ToUiEventFlags(flags));
+  browser_adapter_->Back(ui::DispositionFromEventFlags(converted));
+  return std::monostate();
+}
+
+BrowserControlsService::ForwardResult BrowserControlsService::Forward(
+    const std::vector<browser_controls_api::mojom::EventDispositionFlag>&
+        flags) {
+  ASSIGN_OR_RETURN(auto converted, ToUiEventFlags(flags));
+  browser_adapter_->Forward(ui::DispositionFromEventFlags(converted));
+  return std::monostate();
+}
+
+BrowserControlsService::BackButtonHoveredResult
+BrowserControlsService::BackButtonHovered() {
+  browser_adapter_->BackButtonHovered();
+
+  return std::monostate();
+}
+
+BrowserControlsService::SplitActiveTabResult
+BrowserControlsService::SplitActiveTab() {
+  // TODO: need to check IsActiveTabInSplit() first.
+  browser_adapter_->CreateNewSplitTab();
+  return std::monostate();
+}
+
+BrowserControlsService::NavigateHomeResult BrowserControlsService::NavigateHome(
+    const std::vector<browser_controls_api::mojom::EventDispositionFlag>&
         click_flags) {
-  command_updater_->ExecuteCommandWithDisposition(
-      bypass_cache ? IDC_RELOAD_BYPASSING_CACHE : IDC_RELOAD,
-      ui::DispositionFromEventFlags(ToUIEventFlags(click_flags)));
+  ASSIGN_OR_RETURN(auto converted, ToUiEventFlags(click_flags));
+  browser_adapter_->NavigateHome(ui::DispositionFromEventFlags(converted));
+  return std::monostate();
+}
 
-  // Gets the current time immediately after executing the command.
-  const base::TimeTicks now = base::TimeTicks::Now();
+BrowserControlsService::NavigateResult BrowserControlsService::Navigate(
+    const GURL& url) {
+  browser_adapter_->Navigate(url);
+  return std::monostate();
+}
 
-  auto* metrics_reporter = GetMetricsReporter();
-  if (!metrics_reporter) {
+BrowserControlsService::NavigateTextResult BrowserControlsService::NavigateText(
+    const std::string& text) {
+  browser_adapter_->NavigateText(text);
+  return std::monostate();
+}
+
+void BrowserControlsService::SetDelegate(
+    BrowserControlsServiceDelegate* delegate) {
+  delegate_ = delegate;
+}
+
+
+base::expected<base::TimeTicks, mojo_base::mojom::ErrorPtr>
+BrowserControlsService::ReconstructAndValidateInteractionTime(
+    const mojom::ReloadInteractionMetadata& metadata,
+    base::TimeTicks evaluation_time) {
+  // 1. Monotonicity check: Time delta offset must be positive.
+  if (metadata.interaction_time_offset.is_negative()) {
+    return base::unexpected(
+        Error::New(Code::kInvalidArgument, "negative offset"));
+  }
+
+  // 2. User intent check: Enforce that the user actually interacted with the
+  // page to prevent a compromised renderer from sending programmatic clicks.
+  if (!toolbar_rfh_->HasTransientUserActivation()) {
+    return base::unexpected(
+        Error::New(Code::kFailedPrecondition, "no transient activation"));
+  }
+
+  // 3. Baseline check: Query the delegate on-demand. This retrieves the
+  // shared document-scoped navigation start ticks from the active WebUI
+  // controller.
+  base::TimeTicks navigation_start_ticks = delegate_->GetNavigationStartTicks();
+  if (navigation_start_ticks.is_null()) {
+    return base::unexpected(
+        Error::New(Code::kFailedPrecondition, "no navigation start ticks"));
+  }
+
+  base::TimeTicks reconstructed_ticks =
+      navigation_start_ticks + metadata.interaction_time_offset;
+
+  // 4. Future check: The interaction cannot happen in the future (allowing
+  // 1ms for clock drift / scheduling jitter).
+  if (reconstructed_ticks > evaluation_time + base::Milliseconds(1)) {
+    return base::unexpected(
+        Error::New(Code::kFailedPrecondition, "future interaction"));
+  }
+
+  // 5. Staleness check: Reject old telemetry to prevent stale data from
+  // polluting metrics or replay of old events. A 10-second threshold is chosen
+  // to avoid discarding valid metrics during heavy jank, aligning with the
+  // downstream UMA histogram's maximum range of 10s.
+  if (evaluation_time - reconstructed_ticks > base::Seconds(10)) {
+    return base::unexpected(
+        Error::New(Code::kFailedPrecondition, "stale interaction"));
+  }
+
+  // 6. Monotonicity / Replay check: Enforce that interaction ticks strictly
+  // increase to prevent replay of duplicate telemetry events.
+  if (reconstructed_ticks <= last_processed_interaction_ticks_) {
+    return base::unexpected(
+        Error::New(Code::kFailedPrecondition, "duplicate interaction"));
+  }
+
+  last_processed_interaction_ticks_ = reconstructed_ticks;
+  return reconstructed_ticks;
+}
+
+void BrowserControlsService::MaybeRecordInteractionToReloadMetric(
+    base::TimeTicks interaction_ticks,
+    mojom::ReloadInputType input_type) const {
+  auto* profile =
+      Profile::FromBrowserContext(toolbar_rfh_->GetBrowserContext());
+  auto* metrics_service = WaapUIMetricsService::Get(profile);
+  if (!metrics_service) {
     return;
   }
-
-  // MouseRelease
-  metrics_reporter->Measure(
-      kInputMouseReleaseStartMark, now,
-      base::BindOnce(&BrowserControlsService::OnMeasureResultAndClearMark,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     kInputToReloadMouseReleaseHistogram,
-                     kInputMouseReleaseStartMark));
-  // TODO(crbug.com/448794588): Handle KeyPress events.
-}
-
-void BrowserControlsService::StopLoad() {
-  command_updater_->ExecuteCommandWithDisposition(
-      IDC_STOP, WindowOpenDisposition::CURRENT_TAB);
-  // Gets the current time immediately after executing the command.
-  const base::TimeTicks now = base::TimeTicks::Now();
-
-  auto* metrics_reporter = GetMetricsReporter();
-  if (!metrics_reporter) {
-    return;
+  std::optional<WaapUIMetricsRecorder::ReloadButtonInputType> target_input_type;
+  switch (input_type) {
+    case mojom::ReloadInputType::kUnspecified:
+      break;
+    case mojom::ReloadInputType::kMouseRelease:
+      target_input_type =
+          WaapUIMetricsRecorder::ReloadButtonInputType::kMouseRelease;
+      break;
+    case mojom::ReloadInputType::kKeyPress:
+      target_input_type =
+          WaapUIMetricsRecorder::ReloadButtonInputType::kKeyPress;
+      break;
   }
 
-  // MouseRelease
-  metrics_reporter->Measure(
-      kInputMouseReleaseStartMark, now,
-      base::BindOnce(&BrowserControlsService::OnMeasureResultAndClearMark,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     kInputToStopMouseReleaseHistogram,
-                     kInputMouseReleaseStartMark));
-  // TODO(crbug.com/448794588): Handle KeyPress events.
-}
-
-void BrowserControlsService::ShowContextMenu(
-    browser_controls_api::mojom::ContextMenuType menu_type,
-    const gfx::Point& viewport_coordinate_css_pixels,
-    ui::mojom::MenuSourceType source) {
-  if (delegate_) {
-    delegate_->HandleContextMenu(menu_type, viewport_coordinate_css_pixels,
-                                 source);
+  if (target_input_type) {
+    metrics_service->RecordReloadButtonInteractionToReload(
+        interaction_ticks, base::TimeTicks::Now(), *target_input_type);
   }
 }
 
-void BrowserControlsService::OnPageInitialized() {
-  if (delegate_) {
-    delegate_->OnPageInitialized();
-  }
-}
-
-void BrowserControlsService::OnDevToolsStatusChanged(
-    browser_controls_api::mojom::DevToolsState state) {
-  if (observer_) {
-    observer_->OnDevToolsStatusChanged(state);
-  }
-}
-
-void BrowserControlsService::OnNavigationStatusChanged(
-    browser_controls_api::mojom::NavigationState state) {
-  if (auto* metrics_reporter = GetMetricsReporter()) {
-    auto* mark = state == browser_controls_api::mojom::NavigationState::kLoading
-                     ? kChangeVisibleModeToLoadingStartMark
-                     : kChangeVisibleModeToNotLoadingStartMark;
-    metrics_reporter->Mark(mark);
-  }
-
-  if (observer_) {
-    observer_->OnNavigationStatusChanged(state);
-  }
-}
-
-void BrowserControlsService::OnMeasureResultAndClearMark(
-    const std::string& histogram_name,
-    const std::string& start_mark,
-    base::TimeDelta duration) {
-  base::UmaHistogramCustomTimes(histogram_name, duration, base::Milliseconds(1),
-                                base::Minutes(3), 100);
-  if (auto* metrics_reporter = GetMetricsReporter()) {
-    metrics_reporter->ClearMark(start_mark);
-  }
-}
+}  // namespace browser_controls_api

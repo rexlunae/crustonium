@@ -22,6 +22,11 @@ class ClickToolRequest : public PageToolRequest {
                    const PageTarget& target,
                    mojom::ClickType type,
                    mojom::ClickCount count);
+  ClickToolRequest(tabs::TabHandle tab_handle,
+                   const PageTarget& target,
+                   mojom::ClickType type,
+                   mojom::ClickCount count,
+                   bool requires_opening_web_contents);
   ~ClickToolRequest() override;
 
   void Apply(ToolRequestVisitorFunctor& f) const override;
@@ -31,6 +36,7 @@ class ClickToolRequest : public PageToolRequest {
 
   // ToolRequest
   std::string_view Name() const override;
+  bool RequiresOpeningWebContents() const override;
   ObservationDelayController::PageStabilityConfig
   GetObservationPageStabilityConfig() const override;
 
@@ -38,6 +44,8 @@ class ClickToolRequest : public PageToolRequest {
   mojom::ToolActionPtr ToMojoToolAction(
       content::RenderFrameHost& frame) const override;
   std::unique_ptr<PageToolRequest> Clone() const override;
+  bool RequiresTargetInLastApc() const override;
+  bool IsSubframeTargetingAllowed() const override;
 
   void WillSendToRenderer(
       content::RenderWidgetHost* render_widget_host) override;
@@ -45,6 +53,7 @@ class ClickToolRequest : public PageToolRequest {
  private:
   mojom::ClickType click_type_;
   mojom::ClickCount click_count_;
+  bool requires_opening_web_contents_ = false;
 };
 
 }  // namespace actor

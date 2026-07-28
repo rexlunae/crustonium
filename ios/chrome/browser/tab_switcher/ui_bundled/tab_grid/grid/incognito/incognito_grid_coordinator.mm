@@ -98,15 +98,6 @@
   return _mediator;
 }
 
-#pragma mark - Superclass overrides
-
-- (LegacyGridTransitionLayout*)legacyTransitionLayout {
-  if (self.tabGroupCoordinator) {
-    return [self.tabGroupCoordinator.viewController
-                .gridViewController legacyTransitionLayout];
-  }
-  return [self.gridViewController legacyTransitionLayout];
-}
 
 - (TabGridTransitionLayout*)transitionLayout {
   if (self.tabGroupCoordinator) {
@@ -130,7 +121,7 @@
   _mediator =
       [[IncognitoGridMediator alloc] initWithModeHolder:self.modeHolder];
   _mediator.incognitoDelegate = self;
-  _mediator.reauthSceneAgent = _reauthAgent;
+  _mediator.incognitoState = self.sceneState.incognitoState;
   _mediator.tracker = tracker;
 
   GridContainerViewController* container =
@@ -149,8 +140,8 @@
     container.containedViewController = self.disabledViewController;
   }
 
-  _incognitoAuthMediator =
-      [[IncognitoReauthMediator alloc] initWithReauthAgent:_reauthAgent];
+  _incognitoAuthMediator = [[IncognitoReauthMediator alloc]
+      initWithIncognitoState:self.sceneState.incognitoState];
   _incognitoAuthMediator.consumer = self.gridViewController;
 
   [super start];
@@ -245,7 +236,7 @@
       [[TabGridEmptyStateView alloc] initWithPage:TabGridPageIncognitoTabs];
   gridViewController.emptyStateView.accessibilityIdentifier =
       kTabGridIncognitoTabsEmptyStateIdentifier;
-  gridViewController.theme = GridThemeDark;
+  gridViewController.theme = GridTheme::kDark;
 
   _mediator.consumer = gridViewController;
 

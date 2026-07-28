@@ -8,10 +8,12 @@
 #include <stdint.h>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -20,13 +22,19 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/api/declarative_webrequest/request_stage.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/web_request/web_request_filter.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/url_pattern_set.h"
 #include "net/base/completion_once_callback.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_database.mojom.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -43,16 +51,9 @@ class HttpResponseHeaders;
 
 namespace extensions {
 
-enum class WebRequestResourceType : uint8_t;
 class WebRequestRulesRegistry;
 class WebRequestEventDetails;
 struct WebRequestInfo;
-
-inline constexpr int kWebRequestFilterValidSchemes =
-    URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS |
-    URLPattern::SCHEME_FTP | URLPattern::SCHEME_FILE |
-    URLPattern::SCHEME_EXTENSION | URLPattern::SCHEME_WS |
-    URLPattern::SCHEME_WSS | URLPattern::SCHEME_UUID_IN_PACKAGE;
 
 class WebRequestEventRouter : public KeyedService {
  public:
@@ -72,10 +73,6 @@ class WebRequestEventRouter : public KeyedService {
     kOnCompleted = 1 << 8,
   };
 
-  // Key to the extension preference that stores serialized lazy webRequest
-  // listeners.
-  static const char kFilteredLazyListeners[];
-
   explicit WebRequestEventRouter(content::BrowserContext* browser_context);
   ~WebRequestEventRouter() override;
   WebRequestEventRouter(const WebRequestEventRouter&) = delete;
@@ -91,28 +88,9 @@ class WebRequestEventRouter : public KeyedService {
 
   // Internal representation of the webRequest.RequestFilter type, used to
   // filter what network events an extension cares about.
-  struct RequestFilter {
-    RequestFilter();
-    ~RequestFilter();
-
-    RequestFilter(const RequestFilter&) = delete;
-    RequestFilter& operator=(const RequestFilter&) = delete;
-
-    RequestFilter(RequestFilter&& other);
-    RequestFilter& operator=(RequestFilter&& other);
-
-    // Returns false if there was an error initializing. If it is a user error,
-    // an error message is provided, otherwise the error is internal (and
-    // unexpected).
-    bool InitFromValue(const base::DictValue& value, std::string* error);
-
+  struct RequestFilter : public WebRequestParsedFilter {
     // Serializes the filter to a dictionary value suitable for persistence.
     base::DictValue ToValue() const;
-
-    extensions::URLPatternSet urls;
-    std::vector<WebRequestResourceType> types;
-    int tab_id;
-    int window_id;
   };
 
   // Contains an extension's response to a blocking event.
@@ -145,7 +123,7 @@ class WebRequestEventRouter : public KeyedService {
 
   // AuthRequiredResponse indicates how an OnAuthRequired call is handled.
   enum class AuthRequiredResponse {
-    // No credenitals were provided.
+    // No credentials were provided.
     AUTH_REQUIRED_RESPONSE_NO_ACTION,
     // AuthCredentials is filled in with a username and password, which should
     // be used in a response to the provided auth challenge.
@@ -264,7 +242,7 @@ class WebRequestEventRouter : public KeyedService {
   // Notificaties when `request` is no longer being processed, regardless of
   // whether it has gone to completion or merely been cancelled. This is
   // guaranteed to be called eventually for any request observed by this object,
-  // and |*request| will be immintently destroyed after this returns.
+  // and |*request| will be imminently destroyed after this returns.
   void OnRequestWillBeDestroyed(content::BrowserContext* browser_context,
                                 const WebRequestInfo* request);
 
@@ -280,6 +258,35 @@ class WebRequestEventRouter : public KeyedService {
                       int64_t service_worker_version_id,
                       std::unique_ptr<EventResponse> response);
 
+  // Called when a blocking listener for a given target context and
+  // parent event name (not a sub-event name) responds to a dispatched event.
+  // It does NOT resolve the target: resolution is signaled separately by
+  // `OnEventHandlingDone()`, because the context may have multiple listeners
+  // for the same parent event name. `extra_info_spec` holds the options the
+  // responding listener was registered with.
+  void OnEventHandledForTarget(content::BrowserContext* browser_context,
+                               const ExtensionId& extension_id,
+                               const std::string& event_name,
+                               uint64_t request_id,
+                               content::ChildProcessId render_process_id,
+                               int web_view_instance_id,
+                               int worker_thread_id,
+                               int64_t service_worker_version_id,
+                               int extra_info_spec,
+                               std::unique_ptr<EventResponse> response);
+
+  // Called when a renderer context has finished handling a blocking event
+  // for `request_id`, after all of its matching listeners have settled.
+  // Resolves the pending dispatch target identified by the context.
+  void OnEventHandlingDone(content::BrowserContext* browser_context,
+                           const ExtensionId& extension_id,
+                           const std::string& event_name,
+                           uint64_t request_id,
+                           content::ChildProcessId render_process_id,
+                           int web_view_instance_id,
+                           int worker_thread_id,
+                           int64_t service_worker_version_id);
+
   // Adds a listener to the given event. `event_name` specifies the event being
   // listened to. `sub_event_name` is an internal event uniquely generated in
   // the extension process to correspond to the given filter and
@@ -294,11 +301,12 @@ class WebRequestEventRouter : public KeyedService {
                         int render_process_id,
                         int web_view_instance_id,
                         int worker_thread_id,
-                        int64_t service_worker_version_id);
+                        int64_t service_worker_version_id,
+                        bool is_lazy);
 
   // Removes the listeners for a given <webview>.
   void RemoveWebViewEventListeners(content::BrowserContext* browser_context,
-                                   int render_process_id,
+                                   content::ChildProcessId render_process_id,
                                    int web_view_instance_id);
 
   // Called when an incognito browser_context is created or destroyed. When
@@ -339,25 +347,32 @@ class WebRequestEventRouter : public KeyedService {
   // Called when a BrowserContext is being destroyed.
   void OnBrowserContextShutdown(content::BrowserContext* browser_context);
 
-  // Loads persisted lazy listeners for the given extension into the given
-  // browser context. Called when the extension is loaded.
-  // NOTE: loads all listeners or none at all. If the persisted listeners
-  // were invalid, it clears the corresponding pref.
-  void LoadPersistedLazyListeners(content::BrowserContext* browser_context,
-                                  const ExtensionId& extension_id);
-
   // Get the number of listeners - for testing only.
   size_t GetListenerCountForTesting(content::BrowserContext* browser_context,
                                     const std::string& event_name);
-  size_t GetInactiveListenerCountForTesting(
+
+  size_t GetInactiveListenerCount(content::BrowserContext* browser_context,
+                                  const std::string& event_name);
+
+  // Get details of an inactive listener given event name - for testing only.
+  bool GetInactiveListenerDetailsForTesting(
       content::BrowserContext* browser_context,
-      const std::string& event_name);
+      const ExtensionId& extension_id,
+      const std::string& event_name,
+      RequestFilter** filter,
+      int* extra_info_spec);
 
   bool HasAnyExtraHeadersListenerForTesting(
       content::BrowserContext* browser_context) {
     return HasAnyExtraHeadersListenerImpl(browser_context);
   }
+  bool HasAnySecurityInfoListenerForTesting(
+      content::BrowserContext* browser_context) {
+    return HasAnySecurityInfoListenerImpl(browser_context);
+  }
 
+  // Updates active listeners in tests that do not need process-specific
+  // matching.
   void UpdateActiveListenerForTesting(content::BrowserContext* browser_context,
                                       ListenerUpdateType update_type,
                                       const ExtensionId& extension_id,
@@ -365,8 +380,41 @@ class WebRequestEventRouter : public KeyedService {
                                       int worker_thread_id,
                                       int64_t service_worker_version_id) {
     UpdateActiveListener(browser_context, update_type, extension_id,
-                         sub_event_name, worker_thread_id,
+                         sub_event_name, std::nullopt, worker_thread_id,
                          service_worker_version_id);
+  }
+
+  // Updates only the active listener in tests whose render process matches
+  // `render_process_id`. `filter`, `extra_info_spec`, and
+  // `web_view_instance_id` narrow the update for per-context (parent event
+  // named) registrations.
+  void UpdateActiveListenerForTesting(
+      content::BrowserContext* browser_context,
+      ListenerUpdateType update_type,
+      const ExtensionId& extension_id,
+      const std::string& sub_event_name,
+      content::ChildProcessId render_process_id,
+      int worker_thread_id,
+      int64_t service_worker_version_id,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt,
+      std::optional<int> web_view_instance_id = std::nullopt) {
+    UpdateActiveListener(browser_context, update_type, extension_id,
+                         sub_event_name, render_process_id, worker_thread_id,
+                         service_worker_version_id, filter, extra_info_spec,
+                         web_view_instance_id);
+  }
+
+  // Removes a lazy or worker listener in tests. `filter` and
+  // `extra_info_spec` narrow the removal for per-context registrations.
+  void RemoveLazyListenerForTesting(
+      content::BrowserContext* original_context,
+      const ExtensionId& extension_id,
+      const std::string& sub_event_name,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt) {
+    RemoveLazyListener(original_context, extension_id, sub_event_name, filter,
+                       extra_info_spec);
   }
 
  private:
@@ -374,7 +422,7 @@ class WebRequestEventRouter : public KeyedService {
 
   // Identifier for a `BrowserContext` to scope the lifetime for references.
   // `BrowserContextID` is derived from `BrowserContext*`, used in comparison
-  // only, and are never deferenced.
+  // only, and are never dereferenced.
   using BrowserContextID = std::uintptr_t;
 
   static BrowserContextID GetBrowserContextID(
@@ -390,7 +438,7 @@ class WebRequestEventRouter : public KeyedService {
       ID(content::BrowserContext* browser_context,
          const ExtensionId& extension_id,
          const std::string& sub_event_name,
-         int render_process_id,
+         content::ChildProcessId render_process_id,
          int web_view_instance_id,
          int worker_thread_id,
          int64_t service_worker_version_id);
@@ -404,7 +452,7 @@ class WebRequestEventRouter : public KeyedService {
       ExtensionId extension_id;
       std::string sub_event_name;
       // In the case of a webview, this is the process ID of the embedder.
-      int render_process_id;
+      content::ChildProcessId render_process_id;
       int web_view_instance_id;
       // The worker_thread_id and service_worker_version_id members are only
       // meaningful for event listeners for ServiceWorker events. Otherwise,
@@ -419,17 +467,6 @@ class WebRequestEventRouter : public KeyedService {
     EventListener& operator=(const EventListener&) = delete;
 
     ~EventListener();
-
-    // Deserializes a listener from a persisted dictionary value into its
-    // inactive (lazy) state. Returns nullptr on failure and sets `error`.
-    static std::unique_ptr<EventListener> InitFromInactiveListenerValue(
-        const base::DictValue& value,
-        const ExtensionId& extension_id,
-        content::BrowserContext* context,
-        std::string* error);
-
-    // Serializes a listener for persistence.
-    base::DictValue ToInactiveListenerValue() const;
 
     bool HasExtraHeaders() const {
       using extension_web_request_api_helpers::ExtraInfoSpec;
@@ -452,7 +489,7 @@ class WebRequestEventRouter : public KeyedService {
     events::HistogramValue histogram_value = events::UNKNOWN;
     RequestFilter filter;
     int extra_info_spec = 0;
-    std::unordered_set<uint64_t> blocked_requests;
+    absl::flat_hash_set<uint64_t> blocked_requests;
   };
 
   using RawListeners = std::vector<EventListener*>;
@@ -460,6 +497,68 @@ class WebRequestEventRouter : public KeyedService {
   using Listeners = std::vector<std::unique_ptr<EventListener>>;
   using ListenerMap = std::map<std::string, Listeners>;
   using BlockedRequestMap = std::map<uint64_t, BlockedRequest>;
+
+  // Identifies a renderer-side dispatch target for per-context event dispatch.
+  //
+  // Because stopped lazy contexts lack assigned process or worker IDs, a
+  // logical target can use two keys during a request:
+  // - A placeholder lazy key (`IsLazy()`) for event dispatch and startup.
+  // - A concrete key with actual renderer IDs for actions like responding or
+  //   unregistering.
+  struct DispatchTargetKey {
+    // Returns the key of the dispatch target that `listener` belongs to. For
+    // a stopped lazy context's registration this is the target's lazy key.
+    static DispatchTargetKey ForListener(const EventListener& listener);
+
+    // Constructs a key from a renderer response's routing IDs. The returned key
+    // is always concrete (non-lazy) because event responses originate from
+    // active renderer contexts.
+    static DispatchTargetKey ForResponse(
+        content::BrowserContext& browser_context,
+        const ExtensionId& extension_id,
+        content::ChildProcessId render_process_id,
+        int web_view_instance_id,
+        int worker_thread_id,
+        int64_t service_worker_version_id);
+
+    BrowserContextID listener_context_id = 0;
+    ExtensionId extension_id;
+    content::ChildProcessId render_process_id;
+    int worker_thread_id = kMainThreadId;
+    int64_t service_worker_version_id =
+        blink::mojom::kInvalidServiceWorkerVersionId;
+    int web_view_instance_id = 0;
+
+    bool IsLazy() const { return render_process_id.is_null(); }
+
+    friend auto operator<=>(const DispatchTargetKey&,
+                            const DispatchTargetKey&) = default;
+  };
+
+  // Map of pending targets that still owe the browser a completion signal
+  // (`OnEventHandlingDone`) for a single stage of a blocked request.
+  // Entries are keyed by the target's initial dispatch identity, and the mapped
+  // integer stores the union of the matched blocking listeners'
+  // `extra_info_spec`. Lazy keys remain fixed throughout the request's lifetime
+  // even when the underlying context starts up and acquires a concrete
+  // identity.
+  using PendingTargetMap = base::flat_map<DispatchTargetKey, int>;
+
+  // A matched pending target for a renderer event response. `key` is the
+  // matched map key; note that for a woken lazy context it remains lazy,
+  // differing from the responding context's concrete identity.
+  // `blocking_union_spec` is the union of the target's matched blocking
+  // listeners' `extra_info_spec`.
+  struct RespondingTarget {
+    raw_ptr<BlockedRequest> blocked_request;
+    DispatchTargetKey key;
+    int blocking_union_spec;
+  };
+
+  enum class ListenerCountUpdate {
+    kIncrement,
+    kAlreadyCounted,
+  };
 
   class SignaledRequestIDTracker {
    public:
@@ -532,39 +631,71 @@ class WebRequestEventRouter : public KeyedService {
 
   using DataMap = std::map<BrowserContextID, BrowserContextData>;
 
-  // Returns the EventListener with the given `id`, or nullptr.
-  EventListener* FindEventListener(const EventListener::ID& id);
+  // Returns the active EventListener with the given `id`, or nullptr. See
+  // `FindEventListenerInContainer()` for the role of `filter` and
+  // `extra_info_spec`.
+  EventListener* FindEventListener(
+      const EventListener::ID& id,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt);
 
-  // Returns the EventListener with the given `id` from `listeners`.
-  EventListener* FindEventListenerInContainer(const EventListener::ID& id,
-                                              const Listeners& listeners);
+  // Returns the active EventListener corresponding to the provided
+  // `browser_context_id`, `extension_id`, `event_name`, and `sub_event_name`,
+  // or nullptr if not found. See `FindEventListenerInContainer()` for the role
+  // of `filter` and `extra_info_spec`.
+  EventListener* FindEventListenerBySubEventName(
+      BrowserContextID browser_context_id,
+      const ExtensionId& extension_id,
+      const std::string& event_name,
+      const std::string& sub_event_name,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt);
+
+  // Returns the EventListener with the given `id` from `listeners`. For
+  // per-context registrations (whose sub-event name equals the event name and
+  // is shared by all of an extension's listeners), `filter` and
+  // `extra_info_spec` narrow the lookup to a single registration.
+  // TODO(crbug.com/494684626): Consider folding the registration identity
+  // (filter, extra_info_spec) into `EventListener::ID` so that an ID alone
+  // uniquely identifies a listener again.
+  EventListener* FindEventListenerInContainer(
+      const EventListener::ID& id,
+      const Listeners& listeners,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt);
 
   // Updates the active listener registration indicated by the given criteria.
   // `update_type` indicates whether the listener is fully removed or if it's
-  // a lazy listener that had its context shut down.
-  void UpdateActiveListener(content::BrowserContext* browser_context,
-                            ListenerUpdateType update_type,
-                            const ExtensionId& extension_id,
-                            const std::string& sub_event_name,
-                            int worker_thread_id,
-                            int64_t service_worker_version_id);
+  // a lazy listener that had its context shut down. For per-context
+  // registrations (whose sub-event name equals the event name and is shared
+  // by all of an extension's listeners), `filter`, `extra_info_spec`, and
+  // `web_view_instance_id` narrow the update to a single registration.
+  void UpdateActiveListener(
+      content::BrowserContext* browser_context,
+      ListenerUpdateType update_type,
+      const ExtensionId& extension_id,
+      const std::string& sub_event_name,
+      std::optional<content::ChildProcessId> render_process_id,
+      int worker_thread_id,
+      int64_t service_worker_version_id,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt,
+      std::optional<int> web_view_instance_id = std::nullopt);
+
+  // Adds `listener` to `listeners` and updates listener counts if needed.
+  void AddListenerToList(content::BrowserContext* browser_context,
+                         Listeners& listeners,
+                         std::unique_ptr<EventListener> listener,
+                         ListenerCountUpdate count_update);
 
   // Removes a lazy listener registration. This affects both the provided
-  // `original_context` and any incognito context associated with it.
+  // `original_context` and any incognito context associated with it. See
+  // `UpdateActiveListener()` for the role of `filter` and `extra_info_spec`.
   void RemoveLazyListener(content::BrowserContext* original_context,
                           const ExtensionId& extension_id,
-                          const std::string& sub_event_name);
-
-  // Adds a listener to the persisted lazy listeners for the given extension.
-  void AddPersistedLazyListener(content::BrowserContext* browser_context,
-                                const ExtensionId& extension_id,
-                                const EventListener& listener);
-
-  // Removes a listener from the persisted lazy listeners for the given
-  // extension.
-  void RemovePersistedLazyListener(content::BrowserContext* browser_context,
-                                   const ExtensionId& extension_id,
-                                   const std::string& sub_event_name);
+                          const std::string& sub_event_name,
+                          const RequestFilter* filter = nullptr,
+                          std::optional<int> extra_info_spec = std::nullopt);
 
   // Removes all listeners from `listeners` that matches the given criteria.
   // Optional criteria are ignored if not provided. Removes the matching
@@ -573,13 +704,25 @@ class WebRequestEventRouter : public KeyedService {
       Listeners& listeners,
       const ExtensionId& extension_id,
       const std::string& sub_event_name,
+      std::optional<content::ChildProcessId> render_process_id,
       std::optional<int> worker_thread_id,
       std::optional<int64_t> service_worker_version_id,
-      BrowserContextID browser_context_id);
+      BrowserContextID browser_context_id,
+      const RequestFilter* filter = nullptr,
+      std::optional<int> extra_info_spec = std::nullopt,
+      std::optional<int> web_view_instance_id = std::nullopt);
+
+  // Replaces inactive listeners for the same extension id and sub-event name.
+  // Returns the number of exact registration matches preserved.
+  size_t ReplaceInactiveListeners(Listeners& inactive_listeners,
+                                  const ExtensionId& extension_id,
+                                  const std::string& sub_event_name,
+                                  BrowserContextID browser_context_id,
+                                  EventListener& replacement_listener);
 
   // Cleans up for a listener being removed, unblocking any requests and
   // updating counts as appropriate.
-  void CleanUpForListener(const EventListener& listener,
+  void CleanUpForListener(EventListener& listener,
                           ListenerUpdateType removal_type);
 
   // Ensures that future callbacks for `request` are ignored so that it can be
@@ -597,6 +740,73 @@ class WebRequestEventRouter : public KeyedService {
       std::unique_ptr<ListenerIDs> listener_ids,
       uint64_t request_id,
       std::unique_ptr<WebRequestEventDetails> event_details);
+
+  // Dispatches one event per dispatch target to the per-context
+  // (parent-event named) `listeners`, recording a pending target for each
+  // target that contains blocking listeners. Returns the number of blocking
+  // targets recorded.
+  int DispatchEventToTargets(content::BrowserContext* browser_context,
+                             const WebRequestInfo* request,
+                             const RawListeners& listeners,
+                             const WebRequestEventDetails& event_details);
+
+  // Groups the matched `listeners` by their renderer dispatch target,
+  // producing exactly one entry per context.
+  //
+  // Static member rather than anonymous namespace helper because the signature
+  // names private nested types (`RawListeners`, `DispatchTargetKey`).
+  static std::map<DispatchTargetKey, RawListeners>
+  GroupListenersByDispatchTarget(const RawListeners& listeners);
+
+  // Finds the pending target in `blocked_request` matching `key`, returning
+  // std::nullopt if not found. If an exact match fails, falls back to
+  // searching for a lazy entry with the same logical identity (extension ID,
+  // browser context, and webview ID) to account for lazy contexts that woke up
+  // under a concrete identity.
+  std::optional<RespondingTarget> FindPendingTarget(
+      BlockedRequest& blocked_request,
+      const DispatchTargetKey& key);
+
+  // Finds the pending target addressed by a renderer response matching the
+  // given request, event stage, extension, and routing IDs. Returns
+  // std::nullopt if no matching target exists.
+  std::optional<RespondingTarget> FindTargetForResponse(
+      content::BrowserContext& browser_context,
+      const ExtensionId& extension_id,
+      const std::string& event_name,
+      uint64_t request_id,
+      content::ChildProcessId render_process_id,
+      int web_view_instance_id,
+      int worker_thread_id,
+      int64_t service_worker_version_id);
+
+  // Resolves the pending target matching `dispatch_key` for `request_id`
+  // without applying response deltas. Bound as an event's
+  // `cannot_dispatch_callback` to unblock requests when a target is unreachable
+  // at dispatch time (e.g., worker start failure).
+  void OnTargetCannotDispatch(content::BrowserContext* browser_context,
+                              const std::string& event_name,
+                              uint64_t request_id,
+                              const DispatchTargetKey& dispatch_key);
+
+  // Resolves a pending target by erasing it from `blocked_request` and
+  // decrementing the blocking count (which resumes the request if no blocking
+  // sources remain). Does nothing if no such target remains.
+  void ResolvePendingTarget(content::BrowserContext* browser_context,
+                            BlockedRequest& blocked_request,
+                            const DispatchTargetKey& target_key,
+                            const std::string& event_name,
+                            uint64_t request_id);
+
+  // Converts `response` into an EventResponseDelta clamped by the permissions
+  // in `extra_info_spec`, logs the API usage to the activity monitor, and
+  // appends the delta to `blocked_request`.
+  void AppendResponseDelta(content::BrowserContext* browser_context,
+                           BlockedRequest& blocked_request,
+                           const ExtensionId& extension_id,
+                           const std::string& event_name,
+                           EventResponse& response,
+                           int extra_info_spec);
 
   // Returns a list of event listeners that care about the given event, based
   // on their filter parameters. `extra_info_spec` will contain the combined
@@ -752,6 +962,13 @@ class WebRequestEventRouter : public KeyedService {
   // with `id`. The entry is not created if it doesn't exist.
   BlockedRequest* GetBlockedRequest(content::BrowserContext* browser_context,
                                     uint64_t id);
+
+  // Returns the blocked request identified by `request_id` if it is currently
+  // waiting on the stage named `event_name`, or nullptr otherwise.
+  BlockedRequest* GetBlockedRequestForEvent(
+      content::BrowserContext* browser_context,
+      uint64_t request_id,
+      const std::string& event_name);
 
   // A map of data associated with given BrowserContexts.
   DataMap data_;

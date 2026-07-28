@@ -110,7 +110,11 @@ class PasswordSuggestionGenerator {
   // Returns a `kWebauthnSignInWithAnotherDevice` suggestion if it should be
   // shown for the current context.
   std::optional<autofill::Suggestion>
-  GetWebauthnSignInWithAnotherDeviceSuggestion() const;
+  GetWebauthnSignInWithAnotherDeviceSuggestion(
+      bool is_manual_fallback = false) const;
+  // Returns a `kWebauthnPasskeyQrCode` suggestion if it should be shown on the
+  // official Chrome Sign-in page guarded by a feature flag.
+  std::optional<autofill::Suggestion> GetWebauthnInlineQrCodeSuggestion() const;
 
  private:
   // If there are any fillable suggestions already in the list, append a "Manage
@@ -118,6 +122,7 @@ class PasswordSuggestionGenerator {
   // may assist with the focused field, adds the entry point to the hybrid
   // passkey flow.
   void AppendOptionalFooterSection(
+      bool is_manual_fallback,
       std::vector<autofill::Suggestion>* suggestions) const;
 
   const raw_ptr<PasswordManagerDriver> password_manager_driver_;

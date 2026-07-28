@@ -13,6 +13,9 @@ namespace features {
 #if BUILDFLAG(IS_ANDROID)
 // Enables or disables usage of Window Management Web API.
 BASE_FEATURE(kAndroidWindowManagementWebApi, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Shows or hides the cancel button in the ItemChooserDialog.
+BASE_FEATURE(kAndroidItemChooserCancelButton, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // Enables or disables whether pages with pending permission requests will
@@ -33,16 +36,17 @@ BASE_FEATURE(kPermissionHeuristicAutoGrant, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPermissionPredictionsV2, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kPermissionsAIv3, base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kPermissionsAIv4, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kPermissionsAIP92, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPermissionsAIP92, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPermissionOnDeviceNotificationPredictions,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPermissionOnDeviceGeolocationPredictions,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPermissionPromiseLifetimeModulationAndroid,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls whether to trigger showing a HaTS survey, with the given
@@ -80,20 +84,11 @@ BASE_FEATURE(kRecordChooserPermissionLastVisitedTimestamps,
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
-// When enabled, site settings pages use radio button groups other than toggles.
-// In the meanwhile, CPSS if exist will be a separate radio button group.
-BASE_FEATURE(kPermissionSiteSettingsRadioButton,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // When enabled, blocks condition to exclude auto granted permissions for
 // storage access exceptions. This will allow RWS permission grants to be
 // visible in the Embedded content settings page.
 BASE_FEATURE(kShowRelatedWebsiteSetsPermissionGrants,
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-// When enabled, Quiet prompts triggered by CPSS will have "Get Notifications?"
-// as the the chip text instead of the usual "Notifications Blocked".
-BASE_FEATURE(kCpssQuietChipTextUpdate, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCpssUseTfliteSignatureRunner, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -121,6 +116,14 @@ BASE_FEATURE(kPermissionPredictionsGeolocationAccuracy,
 // are not accompanied by a user gesture will be shown as quiet prompts.
 BASE_FEATURE(kPermissionsGestureGatedPrompts,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+// When enabled, a notification entry in page info will be displayed
+// persistently (until the tab is navigated away) if a document requests
+// notification permission.
+BASE_FEATURE(kPermanentNotificationSubscribeInPageInfo,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace features
 
@@ -310,6 +313,11 @@ const base::FeatureParam<bool> kPermissionsGestureGatedPromptsMuteNotifications{
 const base::FeatureParam<bool> kPermissionsGestureGatedPromptsMuteGeolocation{
     &permissions::features::kPermissionsGestureGatedPrompts, "mute_geolocation",
     false};
+
+const base::FeatureParam<bool>
+    kPermissionsGestureGatedPromptsExcludeSameOriginNavigations{
+        &permissions::features::kPermissionsGestureGatedPrompts,
+        "exclude_same_origin_navigations", false};
 
 #if !BUILDFLAG(IS_ANDROID)
 const base::FeatureParam<bool> kKeyboardLockPromptUIStyle{

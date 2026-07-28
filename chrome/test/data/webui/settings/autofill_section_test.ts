@@ -6,12 +6,13 @@
 import 'chrome://settings/settings.js';
 
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import type {CrInputElement, CrTextareaElement} from 'chrome://settings/lazy_load.js';
+import type {CrActionMenuElement} from 'chrome://settings/settings.js';
+import type { CrInputElement, CrTextareaElement, SettingsAutofillSectionElement, SettingsSimpleConfirmationDialogElement } from 'chrome://settings/lazy_load.js';
 import {AutofillAddressOptInChange, AutofillManagerImpl, CountryDetailManagerProxyImpl} from 'chrome://settings/lazy_load.js';
 import {assertEquals, assertFalse, assertGT, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
 import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
-import type {CrLinkRowElement} from 'chrome://settings/settings.js';
+import type {SettingsToggleButtonElement} from 'chrome://settings/settings.js';
 import {loadTimeData, OpenWindowProxyImpl} from 'chrome://settings/settings.js';
 import {eventToPromise, whenAttributeIs, isVisible} from 'chrome://webui-test/test_util.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
@@ -141,10 +142,26 @@ const ADDRESS_COMPONENTS_IL = {
 };
 
 suite('AutofillSectionUiTest', function() {
+  setup(function() {
+    loadTimeData.overrideValues({
+      emailVerificationProtocolEnabled: false,
+      autofillGmailOtpFillingEnabled: false,
+    });
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+  });
+
   test('AutofillExtensionIndicator', function() {
     // Initializing with fake prefs
     const section = document.createElement('settings-autofill-section');
-    section.prefs = {autofill: {profile_enabled: {}}};
+    section.prefs = {
+      autofill: {
+        profile_enabled: {},
+        email_verification_state: {
+          type: chrome.settingsPrivate.PrefType.DICTIONARY,
+          value: {},
+        },
+      },
+    };
     document.body.appendChild(section);
 
     assertFalse(
@@ -154,8 +171,110 @@ suite('AutofillSectionUiTest', function() {
 
     assertTrue(
         !!section.shadowRoot!.querySelector('#autofillExtensionIndicator'));
+  });
 
-    document.body.removeChild(section);
+  test('EmailVerificationToggle', async function() {
+    loadTimeData.overrideValues({emailVerificationProtocolEnabled: true});
+
+    const section = await createAutofillSection([], {
+      profile_enabled: {value: true},
+      email_verification_enabled: {value: true},
+    });
+    const toggle =
+        section.shadowRoot!.querySelector('#autofillEmailVerificationToggle');
+    assertTrue(!!toggle);
+
+    const noEmailsLabel = section.shadowRoot!.querySelector('#noEmailsLabel');
+    assertTrue(!!noEmailsLabel);
+    assertFalse((noEmailsLabel as HTMLElement).hidden);
+  });
+
+  test('EmailVerificationList', async function() {
+    loadTimeData.overrideValues({emailVerificationProtocolEnabled: true});
+
+    const emailState = {
+      'test1@example.com': {allowed: true, issuer_site: 'https://google.com'},
+      'test2@example.com': {allowed: false, issuer_site: 'https://yahoo.com'},
+    };
+
+    const section = await createAutofillSection([], {
+      profile_enabled: {value: true},
+      email_verification_enabled: {value: true},
+      email_verification_state: {
+        type: chrome.settingsPrivate.PrefType.DICTIONARY,
+        value: emailState,
+      },
+    });
+
+    flush();
+
+    const menuButtons =
+        section.shadowRoot!.querySelectorAll<HTMLElement>('.email-menu');
+    assertEquals(2, menuButtons.length);
+
+    const button0 = menuButtons[0]!;
+    const button1 = menuButtons[1]!;
+
+    const item0 = button0.parentElement;
+    const item1 = button1.parentElement;
+    assertTrue(!!item0);
+    assertTrue(!!item1);
+
+    const start0 = item0.querySelector('.start');
+    assertTrue(!!start0);
+    assertEquals('test1@example.com', start0.textContent.trim());
+    const favicon0 = item0.querySelector('site-favicon');
+    assertTrue(!!favicon0);
+    assertEquals('https://google.com', favicon0.url);
+
+    const start1 = item1.querySelector('.start');
+    assertTrue(!!start1);
+    assertEquals('test2@example.com', start1.textContent.trim());
+    const favicon1 = item1.querySelector('site-favicon');
+    assertTrue(!!favicon1);
+    assertEquals('https://yahoo.com', favicon1.url);
+
+    // Click menu on first item.
+    button0.click();
+    await flushTasks();
+
+    const actionMenu = section.shadowRoot!.querySelector<CrActionMenuElement>(
+        '#emailSharedMenu')!;
+    assertTrue(actionMenu.open);
+
+    // Click remove.
+    const removeButton =
+        actionMenu.querySelector<HTMLElement>('#menuRemoveEmail');
+    assertTrue(!!removeButton);
+    removeButton.click();
+    await flushTasks();
+
+    const dialog = section.shadowRoot!
+                       .querySelector<SettingsSimpleConfirmationDialogElement>(
+                           '#emailRemoveConfirmationDialog');
+    assertTrue(!!dialog);
+    dialog.$.confirm.click();
+
+    await eventToPromise('close', dialog.$.dialog);
+    await flushTasks();
+
+    // Verify pref was updated.
+    const updatedPrefs = section
+                             .getPref<Record<string, unknown>>(
+                                 'autofill.email_verification_state')
+                             .value;
+    assertFalse('test1@example.com' in updatedPrefs);
+    assertTrue('test2@example.com' in updatedPrefs);
+
+    // Verify UI updated.
+    const newMenuButtons = section.shadowRoot!.querySelectorAll('.email-menu');
+    assertEquals(1, newMenuButtons.length);
+    const newButton0 = newMenuButtons[0]!;
+    const newItem0 = newButton0.parentElement!;
+    assertTrue(!!newItem0);
+    const newStart0 = newItem0.querySelector('.start');
+    assertTrue(!!newStart0);
+    assertEquals('test2@example.com', newStart0.textContent.trim());
   });
 
   test('verifyAddressDeleteRecordTypeNotice', async () => {
@@ -250,8 +369,6 @@ suite('AutofillSectionUiTest', function() {
       // Make sure closing clean-ups are finished.
       await eventToPromise('close', dialog.$.dialog);
     }
-
-    document.body.removeChild(section);
   });
 
   test('verifyAddressDeleteHomeAddressNotice', async () => {
@@ -285,8 +402,6 @@ suite('AutofillSectionUiTest', function() {
       // Make sure closing clean-ups are finished.
       await eventToPromise('close', dialog.$.dialog);
     }
-
-    document.body.removeChild(section);
   });
 
   test('verifyAddressDeleteWorkAddressNotice', async () => {
@@ -320,8 +435,6 @@ suite('AutofillSectionUiTest', function() {
       // Make sure closing clean-ups are finished.
       await eventToPromise('close', dialog.$.dialog);
     }
-
-    document.body.removeChild(section);
   });
 
   test('verifyAddressDeleteNameEmailAddressNotice', async () => {
@@ -372,8 +485,6 @@ suite('AutofillSectionUiTest', function() {
       // Make sure closing clean-ups are finished.
       await eventToPromise('close', dialog.$.dialog);
     }
-
-    document.body.removeChild(section);
   });
 
   test('verifyAddressEditRecordTypeNotice', async () => {
@@ -413,8 +524,92 @@ suite('AutofillSectionUiTest', function() {
       // Make sure closing clean-ups are finished.
       await eventToPromise('close', dialog.$.dialog);
     }
+  });
 
-    document.body.removeChild(section);
+  interface GmailOtpFillingOptions {
+    profileEnabled?: boolean;
+    gmailOtpFilling?: boolean;
+    accountInfo?: chrome.autofillPrivate.AccountInfo|null;
+  }
+
+  interface AutofillSectionElementWithToggle {
+    section: SettingsAutofillSectionElement;
+    toggle: SettingsToggleButtonElement|null;
+  }
+
+  async function createAutofillSectionForGmailOtpFilling({
+    profileEnabled = true,
+    gmailOtpFilling = false,
+    accountInfo,
+  }: GmailOtpFillingOptions = {}): Promise<AutofillSectionElementWithToggle> {
+    const section = await createAutofillSection(
+        [], {
+          profile_enabled: {
+            type: chrome.settingsPrivate.PrefType.BOOLEAN,
+            value: profileEnabled,
+          },
+          gmail_otp_filling: {
+            enabled: {
+              type: chrome.settingsPrivate.PrefType.BOOLEAN,
+              value: gmailOtpFilling,
+            },
+          },
+        },
+        accountInfo);
+    await flushTasks();
+    const toggle =
+        section.shadowRoot!.querySelector<SettingsToggleButtonElement>(
+            '#autofillOtpFillingToggle');
+    return {section, toggle};
+  }
+
+  test('OtpFillingToggleShown', async function() {
+    loadTimeData.overrideValues({autofillGmailOtpFillingEnabled: true});
+    const {toggle} = await createAutofillSectionForGmailOtpFilling();
+
+    assertTrue(!!toggle);
+  });
+
+  test('OtpFillingToggleHiddenWhenSignedOut', async function() {
+    loadTimeData.overrideValues({autofillGmailOtpFillingEnabled: true});
+    const {toggle} =
+        await createAutofillSectionForGmailOtpFilling({accountInfo: null});
+
+    assertFalse(!!toggle);
+  });
+
+  test('OtpFillingToggleHiddenWhenFlagDisabled', async function() {
+    loadTimeData.overrideValues({autofillGmailOtpFillingEnabled: false});
+    const {toggle} = await createAutofillSectionForGmailOtpFilling();
+
+    assertFalse(!!toggle);
+  });
+
+  test('OtpFillingToggleDisabledThenToggledAndEnabled', async function() {
+    const metricsTracker = fakeMetricsPrivate();
+    loadTimeData.overrideValues({autofillGmailOtpFillingEnabled: true});
+    const {section, toggle} = await createAutofillSectionForGmailOtpFilling();
+    assertTrue(!!toggle);
+
+    assertTrue(isVisible(toggle));
+    assertFalse(toggle.checked);
+    assertFalse(
+        section.getPref<boolean>('autofill.gmail_otp_filling.enabled').value);
+
+    toggle.click();
+
+    assertTrue(isVisible(toggle));
+    assertTrue(toggle.checked);
+    assertTrue(
+        section.getPref<boolean>('autofill.gmail_otp_filling.enabled').value);
+    assertEquals(
+        1, metricsTracker.count('Autofill.GmailOtpOptIn.SettingsChange', true));
+
+    toggle.click();
+    assertFalse(toggle.checked);
+    assertEquals(
+        1,
+        metricsTracker.count('Autofill.GmailOtpOptIn.SettingsChange', false));
   });
 });
 
@@ -688,28 +883,24 @@ suite('AutofillSectionAddressTests', function() {
         url, loadTimeData.getString('googleAccountNameEmailAddressEditUrl'));
   });
 
-  test('verifyAddAddressDialog', function() {
+  test('verifyAddAddressDialog', async function() {
     const address = createEmptyAddressEntry();
-    return createAddressDialog(address).then(function(dialog) {
-      const title = dialog.shadowRoot!.querySelector('[slot=title]')!;
-      assertEquals(
-          loadTimeData.getString('addAddressTitle'), title.textContent);
-      // A country is preselected.
-      const countrySelect = dialog.$.country;
-      assertTrue(!!countrySelect);
-      assertTrue(!!countrySelect.value);
-    });
+    const dialog = await createAddressDialog(address);
+    const title = dialog.shadowRoot!.querySelector('[slot=title]')!;
+    assertEquals(loadTimeData.getString('addAddressTitle'), title.textContent);
+    // A country is preselected.
+    const countrySelect = dialog.$.country;
+    assertTrue(!!countrySelect);
+    assertTrue(!!countrySelect.value);
   });
 
-  test('verifyEditAddressDialog', function() {
-    return createAddressDialog(createAddressEntry()).then(function(dialog) {
-      const title = dialog.shadowRoot!.querySelector('[slot=title]')!;
-      assertEquals(
-          loadTimeData.getString('editAddressTitle'), title.textContent);
-      // Should be possible to save when editing because fields are
-      // populated.
-      assertFalse(dialog.$.saveButton.disabled);
-    });
+  test('verifyEditAddressDialog', async function() {
+    const dialog = await createAddressDialog(createAddressEntry());
+    const title = dialog.shadowRoot!.querySelector('[slot=title]')!;
+    assertEquals(loadTimeData.getString('editAddressTitle'), title.textContent);
+    // Should be possible to save when editing because fields are
+    // populated.
+    assertFalse(dialog.$.saveButton.disabled);
   });
 
   // The first editable element should be focused by default.
@@ -806,41 +997,37 @@ suite('AutofillSectionAddressTests', function() {
     autofillManager.assertExpectations(expected);
   });
 
-  test('verifyCountryIsSaved', function() {
+  test('verifyCountryIsSaved', async function() {
     const address = createEmptyAddressEntry();
-    return createAddressDialog(address).then(function(dialog) {
-      const countrySelect = dialog.$.country;
-      assertTrue(!!countrySelect);
-      // The country should be pre-selected.
-      assertEquals('US', countrySelect.value);
-      countrySelect.value = 'GB';
-      countrySelect.dispatchEvent(new CustomEvent('change'));
-      flush();
-      assertEquals('GB', countrySelect.value);
-    });
+    const dialog = await createAddressDialog(address);
+    const countrySelect = dialog.$.country;
+    assertTrue(!!countrySelect);
+    // The country should be pre-selected.
+    assertEquals('US', countrySelect.value);
+    countrySelect.value = 'GB';
+    countrySelect.dispatchEvent(new CustomEvent('change'));
+    flush();
+    assertEquals('GB', countrySelect.value);
   });
 
-  test('verifyLanguageCodeIsSaved', function() {
+  test('verifyLanguageCodeIsSaved', async function() {
     const address = createEmptyAddressEntry();
     // TODO(crbug.com/403312087): Don't nest promise callbacks (here and
     // everywhere else in this file). Use async/await instead. Check this
     // comment for more info: crrev.com/c/6348920/comment/25b26a8a_d69cf940/
-    return createAddressDialog(address).then(function(dialog) {
-      const countrySelect = dialog.$.country;
-      assertTrue(!!countrySelect);
-      // The first country is pre-selected.
-      assertEquals('US', countrySelect.value);
-      assertEquals('en', address.languageCode);
-      countrySelect.value = 'IL';
-      countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_IL);
-      countrySelect.dispatchEvent(new CustomEvent('change'));
-      flush();
-      return eventToPromise('on-update-address-wrapper', dialog)
-          .then(function() {
-            assertEquals('IL', countrySelect.value);
-            assertEquals('iw', address.languageCode);
-          });
-    });
+    const dialog = await createAddressDialog(address);
+    const countrySelect = dialog.$.country;
+    assertTrue(!!countrySelect);
+    // The first country is pre-selected.
+    assertEquals('US', countrySelect.value);
+    assertEquals('en', address.languageCode);
+    countrySelect.value = 'IL';
+    countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_IL);
+    countrySelect.dispatchEvent(new CustomEvent('change'));
+    flush();
+    await eventToPromise('on-update-address-wrapper', dialog);
+    assertEquals('IL', countrySelect.value);
+    assertEquals('iw', address.languageCode);
   });
 
   test('verifyPhoneAndEmailAreSaved', async () => {
@@ -884,7 +1071,7 @@ suite('AutofillSectionAddressTests', function() {
         emailAddress, getAddressFieldValue(address, FieldType.EMAIL_ADDRESS));
   });
 
-  test('verifyPhoneAndEmailAreRemoved', function() {
+  test('verifyPhoneAndEmailAreRemoved', async function() {
     const address = createEmptyAddressEntry();
 
     const phoneNumber = '(555) 555-5555';
@@ -900,41 +1087,39 @@ suite('AutofillSectionAddressTests', function() {
     });
     address.fields.push({type: FieldType.EMAIL_ADDRESS, value: emailAddress});
 
-    return createAddressDialog(address).then(async function(dialog) {
-      const rows = dialog.$.dialog.querySelectorAll('.address-row');
-      assertGT(rows.length, 0, 'dialog should contain address rows');
+    const dialog = await createAddressDialog(address);
+    const rows = dialog.$.dialog.querySelectorAll('.address-row');
+    assertGT(rows.length, 0, 'dialog should contain address rows');
 
-      const lastRow = rows[rows.length - 1]!;
-      const phoneInput =
-          lastRow.querySelector<CrInputElement>('cr-input:nth-of-type(1)');
-      const emailInput =
-          lastRow.querySelector<CrInputElement>('cr-input:nth-of-type(2)');
+    const lastRow = rows[rows.length - 1]!;
+    const phoneInput =
+        lastRow.querySelector<CrInputElement>('cr-input:nth-of-type(1)');
+    const emailInput =
+        lastRow.querySelector<CrInputElement>('cr-input:nth-of-type(2)');
 
-      assertTrue(!!phoneInput, 'phone element should be the first cr-input');
-      assertTrue(!!emailInput, 'email element should be the second cr-input');
+    assertTrue(!!phoneInput, 'phone element should be the first cr-input');
+    assertTrue(!!emailInput, 'email element should be the second cr-input');
 
-      assertEquals(
-          phoneNumber, phoneInput.value,
-          'The input should have the corresponding address field value.');
-      assertEquals(
-          emailAddress, emailInput.value,
-          'The input should have the corresponding address field value.');
+    assertEquals(
+        phoneNumber, phoneInput.value,
+        'The input should have the corresponding address field value.');
+    assertEquals(
+        emailAddress, emailInput.value,
+        'The input should have the corresponding address field value.');
 
-      phoneInput.value = '';
-      emailInput.value = '';
-      await flushTasks();
+    phoneInput.value = '';
+    emailInput.value = '';
+    await flushTasks();
 
-      return expectEvent(dialog, 'save-address', function() {
-               dialog.$.saveButton.click();
-             }).then(function() {
-        assertFalse(
-            !!getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
-            'The phone field should be empty.');
-        assertFalse(
-            !!getAddressFieldValue(address, FieldType.EMAIL_ADDRESS),
-            'The email field should be empty.');
-      });
+    await expectEvent(dialog, 'save-address', function() {
+      dialog.$.saveButton.click();
     });
+    assertFalse(
+        !!getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
+        'The phone field should be empty.');
+    assertFalse(
+        !!getAddressFieldValue(address, FieldType.EMAIL_ADDRESS),
+        'The email field should be empty.');
   });
 
   // Test will set a value of 'foo' in each text field and verify that the
@@ -999,68 +1184,65 @@ suite('AutofillSectionAddressTests', function() {
   });
 
   // Test will timeout if save-address event is not fired.
-  test('verifyDefaultCountryIsAppliedWhenSaving', function() {
+  test('verifyDefaultCountryIsAppliedWhenSaving', async function() {
     const address = createEmptyAddressEntry();
     address.fields.push({type: FieldType.NAME_FULL, value: 'Name'});
-    return createAddressDialog(address).then(function(dialog) {
-      return expectEvent(dialog, 'save-address', function() {
-               // Verify |countryCode| is not set.
-               assertEquals(
-                   undefined,
-                   getAddressFieldValue(
-                       address, FieldType.ADDRESS_HOME_COUNTRY));
-               dialog.$.saveButton.click();
-             }).then(function(_event) {
-        // 'US' is the default country for these tests.
-        const countrySelect = dialog.$.country;
-        assertTrue(!!countrySelect);
-        assertEquals('US', countrySelect.value);
-      });
+    const dialog = await createAddressDialog(address);
+    await expectEvent(dialog, 'save-address', function() {
+      // Verify |countryCode| is not set.
+      assertEquals(
+          undefined,
+          getAddressFieldValue(address, FieldType.ADDRESS_HOME_COUNTRY));
+      dialog.$.saveButton.click();
     });
+    // 'US' is the default country for these tests.
+    const countrySelect = dialog.$.country;
+    assertTrue(!!countrySelect);
+    assertEquals('US', countrySelect.value);
   });
 
   test(
       'verifyNoSaveAddressEventWhenEditDialogCancelButtonIsClicked',
-      function(done) {
-        createAddressDialog(createAddressEntry()).then(function(dialog) {
-          eventToPromise('save-address', dialog).then(function() {
-            // Fail the test because the save event should not be fired when
-            // the cancel is clicked.
-            assertTrue(true);
-          });
+      async function() {
+        const dialog = await createAddressDialog(createAddressEntry());
 
-          eventToPromise('cancel', dialog).then(function() {
-            // Test is |done| in a timeout in order to ensure that
-            // 'save-address' is NOT fired after this test.
-            assertEquals(
-                1,
-                metricsTracker.count('Autofill.Settings.EditAddress', false));
-            window.setTimeout(done, 100);
-          });
-
-          dialog.$.cancelButton.click();
+        let saveFired = false;
+        eventToPromise('save-address', dialog).then(() => {
+          saveFired = true;
         });
+
+        const cancelPromise = eventToPromise('cancel', dialog);
+        dialog.$.cancelButton.click();
+        await cancelPromise;
+
+        assertEquals(
+            1, metricsTracker.count('Autofill.Settings.EditAddress', false));
+
+        // Wait a bit to ensure save-address isn't fired.
+        await new Promise(resolve => window.setTimeout(resolve, 100));
+        assertFalse(saveFired);
       });
 
-  test('verifyNoCancelEventWhenEditDialogSaveButtonIsClicked', function(done) {
-    createAddressDialog(createAddressEntry()).then(function(dialog) {
-      eventToPromise('cancel', dialog).then(function() {
-        // Fail the test because the cancel event should not be fired when
-        // the save is clicked.
-        assertTrue(false);
-      });
+  test(
+      'verifyNoCancelEventWhenEditDialogSaveButtonIsClicked', async function() {
+        const dialog = await createAddressDialog(createAddressEntry());
 
-      eventToPromise('save-address', dialog).then(function() {
-        // Test is |done| in a timeout in order to ensure that
-        // 'save-address' is NOT fired after this test.
+        let cancelFired = false;
+        eventToPromise('cancel', dialog).then(() => {
+          cancelFired = true;
+        });
+
+        const savePromise = eventToPromise('save-address', dialog);
+        dialog.$.saveButton.click();
+        await savePromise;
+
         assertEquals(
             1, metricsTracker.count('Autofill.Settings.EditAddress', true));
-        window.setTimeout(done, 100);
-      });
 
-      dialog.$.saveButton.click();
-    });
-  });
+        // Wait a bit to ensure cancel isn't fired.
+        await new Promise(resolve => window.setTimeout(resolve, 100));
+        assertFalse(cancelFired);
+      });
 
   test('verifySyncRecordTypeNoticeForNewAddress', async () => {
     const section = await createAutofillSection([], {}, {
@@ -1100,127 +1282,6 @@ suite('AutofillSectionAddressTests', function() {
 
     document.body.removeChild(section);
   });
-
-  // TODO(crbug.com/40943238): Remove when toggle becomes available on the Sync
-  // page for non-syncing users.
-  test('verifyAutofillSyncToggleAvailability', async () => {
-    const autofillManager = new TestAutofillManager();
-    autofillManager.data.accountInfo = {
-      ...STUB_USER_ACCOUNT_INFO,
-      isAutofillSyncToggleAvailable: false,
-    };
-    AutofillManagerImpl.setInstance(autofillManager);
-
-    const section = document.createElement('settings-autofill-section');
-    document.body.appendChild(section);
-    await autofillManager.whenCalled('getAddressList');
-    await flushTasks();
-
-    assertFalse(
-        isVisible(section.$.autofillSyncToggle),
-        'The toggle should not be visible because of ' +
-            'accountInfo.isAutofillSyncToggleAvailable == false');
-    const changeListener =
-        autofillManager.lastCallback.setPersonalDataManagerListener;
-    assertTrue(
-        !!changeListener,
-        'PersonalDataChangedListener should be set in the section element');
-
-    // Imitate native code `PersonalDataChangedListener` triggering.
-    changeListener([], [], [], [], {
-      ...STUB_USER_ACCOUNT_INFO,
-      isAutofillSyncToggleAvailable: true,
-      isAutofillSyncToggleEnabled: false,
-    });
-
-    await flushTasks();
-    assertTrue(
-        isVisible(section.$.autofillSyncToggle),
-        'The toggle should be visible because of ' +
-            'accountInfo.isAutofillSyncToggleAvailable == true');
-    assertFalse(
-        section.$.autofillSyncToggle.checked,
-        'The toggle should not be checked because of ' +
-            'accountInfo.isAutofillSyncToggleEnabled == false');
-
-    // Imitate native code `PersonalDataChangedListener` triggering.
-    changeListener([], [], [], [], {
-      ...STUB_USER_ACCOUNT_INFO,
-      isAutofillSyncToggleAvailable: true,
-      isAutofillSyncToggleEnabled: true,
-    });
-
-    await flushTasks();
-    assertTrue(
-        isVisible(section.$.autofillSyncToggle),
-        'The toggle should be visible because of ' +
-            'accountInfo.isAutofillSyncToggleAvailable == true');
-    assertTrue(
-        section.$.autofillSyncToggle.checked,
-        'The toggle should be checked because of ' +
-            'accountInfo.isAutofillSyncToggleEnabled == true');
-  });
-
-  // TODO(crbug.com/40943238): Remove as part of the cleanup work for the ticket.
-  test('verifyAutofillSyncToggleChanges', async () => {
-    const autofillManager = new TestAutofillManager();
-    autofillManager.data.accountInfo = {
-      ...STUB_USER_ACCOUNT_INFO,
-      isAutofillSyncToggleAvailable: true,
-      isAutofillSyncToggleEnabled: false,
-    };
-    AutofillManagerImpl.setInstance(autofillManager);
-
-    const section = document.createElement('settings-autofill-section');
-    document.body.appendChild(section);
-    await autofillManager.whenCalled('getAddressList');
-    await flushTasks();
-
-    const changeListener =
-        autofillManager.lastCallback.setPersonalDataManagerListener;
-    assertTrue(
-        !!changeListener,
-        'PersonalDataChangedListener should be set in the section element');
-
-    assertFalse(
-        section.$.autofillSyncToggle.checked,
-        'The toggle should not be checked because of initial ' +
-            'accountInfo.isAutofillSyncToggleEnabled == false');
-
-    section.$.autofillSyncToggle.click();
-    await section.$.autofillSyncToggle.updateComplete;
-
-    assertTrue(
-        section.$.autofillSyncToggle.checked,
-        'The toggle should be checked after the click.');
-    assertEquals(
-        autofillManager.getCallCount('setAutofillSyncToggleEnabled'), 1);
-
-    section.$.autofillSyncToggle.click();
-    await section.$.autofillSyncToggle.updateComplete;
-
-    assertFalse(
-        section.$.autofillSyncToggle.checked,
-        'The toggle should not be checked after another click.');
-    assertEquals(
-        autofillManager.getCallCount('setAutofillSyncToggleEnabled'), 2);
-
-    // Imitate native code `PersonalDataChangedListener` triggering. Notice
-    // that it was unchecked after the second click, but the listener was
-    // given `true`, the following assert checks it an covers the case when
-    // the toggle was not updated in the native code for some reason.
-    changeListener([], [], [], [], {
-      ...STUB_USER_ACCOUNT_INFO,
-      isAutofillSyncToggleAvailable: true,
-      isAutofillSyncToggleEnabled: true,
-    });
-    await flushTasks();
-
-    assertTrue(
-        section.$.autofillSyncToggle.checked,
-        'The toggle should be checked because of ' +
-            'accountInfo.isAutofillSyncToggleEnabled == true');
-  });
 });
 
 suite('AutofillSectionAddressLocaleTests', function() {
@@ -1241,7 +1302,7 @@ suite('AutofillSectionAddressLocaleTests', function() {
   });
 
   // US address has 3 fields on the same line.
-  test('verifyEditingUSAddress', function() {
+  test('verifyEditingUSAddress', async function() {
     const address = createEmptyAddressEntry();
 
     address.fields = [
@@ -1254,61 +1315,58 @@ suite('AutofillSectionAddressLocaleTests', function() {
       {type: FieldType.EMAIL_ADDRESS, value: 'Email'},
     ];
 
-    return createAddressDialog(address).then(function(dialog) {
-      const rows = dialog.$.dialog.querySelectorAll('.address-row');
-      assertEquals(
-          4, rows.length,
-          'There should be 4 rows: Country, Name, City + State + Zip, ' +
-              'Phone + Email');
+    const dialog = await createAddressDialog(address);
+    const rows = dialog.$.dialog.querySelectorAll('.address-row');
+    assertEquals(
+        4, rows.length,
+        'There should be 4 rows: Country, Name, City + State + Zip, ' +
+            'Phone + Email');
 
-      let index = 0;
-      // Country
-      let row = rows[index]!;
-      const countrySelect = row.querySelector('select');
-      assertTrue(!!countrySelect);
-      assertEquals(
-          'United States',
-          countrySelect.selectedOptions[0]!.textContent.trim());
-      index++;
-      // Name
-      row = rows[index]!;
-      let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.NAME_FULL), cols[0]!.value);
-      index++;
-      // City, State, ZIP code
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(3, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
-          cols[0]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_STATE),
-          cols[1]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
-          cols[2]!.value);
-      index++;
-      // Phone, Email
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(2, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
-          cols[0]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.EMAIL_ADDRESS),
-          cols[1]!.value);
-    });
+    let index = 0;
+    // Country
+    let row = rows[index]!;
+    const countrySelect = row.querySelector('select');
+    assertTrue(!!countrySelect);
+    assertEquals(
+        'United States', countrySelect.selectedOptions[0]!.textContent.trim());
+    index++;
+    // Name
+    row = rows[index]!;
+    let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.NAME_FULL), cols[0]!.value);
+    index++;
+    // City, State, ZIP code
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(3, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
+        cols[0]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_STATE),
+        cols[1]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
+        cols[2]!.value);
+    index++;
+    // Phone, Email
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(2, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
+        cols[0]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.EMAIL_ADDRESS), cols[1]!.value);
   });
 
   // GB address has 1 field per line for all lines that change.
-  test('verifyEditingGBAddress', function() {
+  test('verifyEditingGBAddress', async function() {
     const address = createEmptyAddressEntry();
 
     address.fields = [
@@ -1322,74 +1380,71 @@ suite('AutofillSectionAddressLocaleTests', function() {
     ];
 
     countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_GB);
-    return createAddressDialog(address).then(function(dialog) {
-      const rows = dialog.$.dialog.querySelectorAll('.address-row');
-      assertEquals(
-          6, rows.length,
-          'There should be 6 rows: Country, Name, City, Zip, State, ' +
-              'Phone + Email');
+    const dialog = await createAddressDialog(address);
+    const rows = dialog.$.dialog.querySelectorAll('.address-row');
+    assertEquals(
+        6, rows.length,
+        'There should be 6 rows: Country, Name, City, Zip, State, ' +
+            'Phone + Email');
 
-      let index = 0;
-      // Country
-      let row = rows[index]!;
-      const countrySelect = row.querySelector('select');
-      assertTrue(!!countrySelect);
-      assertEquals(
-          'United Kingdom',
-          countrySelect.selectedOptions[0]!.textContent.trim());
-      index++;
-      // Name
-      row = rows[index]!;
-      let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.NAME_FULL), cols[0]!.value);
-      index++;
-      // Post Town
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
-          cols[0]!.value);
-      index++;
-      // Postal code
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
-          cols[0]!.value);
-      index++;
-      // County
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_STATE),
-          cols[0]!.value);
-      index++;
-      // Phone, Email
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(2, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
-          cols[0]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.EMAIL_ADDRESS),
-          cols[1]!.value);
-    });
+    let index = 0;
+    // Country
+    let row = rows[index]!;
+    const countrySelect = row.querySelector('select');
+    assertTrue(!!countrySelect);
+    assertEquals(
+        'United Kingdom', countrySelect.selectedOptions[0]!.textContent.trim());
+    index++;
+    // Name
+    row = rows[index]!;
+    let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.NAME_FULL), cols[0]!.value);
+    index++;
+    // Post Town
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
+        cols[0]!.value);
+    index++;
+    // Postal code
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
+        cols[0]!.value);
+    index++;
+    // County
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_STATE),
+        cols[0]!.value);
+    index++;
+    // Phone, Email
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(2, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
+        cols[0]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.EMAIL_ADDRESS), cols[1]!.value);
   });
 
   // IL address has 2 fields on the same line and is an RTL locale.
   // RTL locale shouldn't affect this test.
-  test('verifyEditingILAddress', function() {
+  test('verifyEditingILAddress', async function() {
     const address = createEmptyAddressEntry();
     address.fields = [
       {type: FieldType.ADDRESS_HOME_COUNTRY, value: 'IL'},
@@ -1401,58 +1456,56 @@ suite('AutofillSectionAddressLocaleTests', function() {
     ];
 
     countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_IL);
-    return createAddressDialog(address).then(function(dialog) {
-      const rows = dialog.$.dialog.querySelectorAll('.address-row');
-      assertEquals(
-          4, rows.length,
-          'There should be 4 rows: Country, Name, City + Zip, Phone + Email');
+    const dialog = await createAddressDialog(address);
+    const rows = dialog.$.dialog.querySelectorAll('.address-row');
+    assertEquals(
+        4, rows.length,
+        'There should be 4 rows: Country, Name, City + Zip, Phone + Email');
 
-      let index = 0;
-      // Country
-      let row = rows[index]!;
-      const countrySelect = row.querySelector('select');
-      assertTrue(!!countrySelect);
-      assertEquals(
-          'Israel', countrySelect.selectedOptions[0]!.textContent.trim());
-      index++;
-      // Name
-      row = rows[index]!;
-      let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.NAME_FULL)!, cols[0]!.value);
-      index++;
-      // City, Postal code
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(2, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
-          cols[0]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
-          cols[1]!.value);
-      index++;
-      // Phone, Email
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(2, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
-          cols[0]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.EMAIL_ADDRESS),
-          cols[1]!.value);
-    });
+    let index = 0;
+    // Country
+    let row = rows[index]!;
+    const countrySelect = row.querySelector('select');
+    assertTrue(!!countrySelect);
+    assertEquals(
+        'Israel', countrySelect.selectedOptions[0]!.textContent.trim());
+    index++;
+    // Name
+    row = rows[index]!;
+    let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.NAME_FULL)!, cols[0]!.value);
+    index++;
+    // City, Postal code
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(2, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
+        cols[0]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
+        cols[1]!.value);
+    index++;
+    // Phone, Email
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(2, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
+        cols[0]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.EMAIL_ADDRESS), cols[1]!.value);
   });
 
   // Testing address edit dialog in an RTL layout by setting the document
   // direction to 'rtl'. The phone number input should have direction=ltr and
   // text-align=end.
-  test('verifyEditingILAddressWithRtlLayout', function() {
+  test('verifyEditingILAddressWithRtlLayout', async function() {
     document.documentElement.dir = 'rtl';
     const address = createEmptyAddressEntry();
     address.fields = [
@@ -1465,205 +1518,130 @@ suite('AutofillSectionAddressLocaleTests', function() {
     ];
 
     countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_IL);
-    return createAddressDialog(address).then(function(dialog) {
-      const rows = dialog.$.dialog.querySelectorAll('.address-row');
-      // There should be 4 rows: Country, Name, City + Zip, Phone + Email
-      assertEquals(4, rows.length);
+    const dialog = await createAddressDialog(address);
+    const rows = dialog.$.dialog.querySelectorAll('.address-row');
+    // There should be 4 rows: Country, Name, City + Zip, Phone + Email
+    assertEquals(4, rows.length);
 
-      let index = 0;
-      // Country
-      let row = rows[index]!;
-      const countrySelect = row.querySelector('select');
-      assertTrue(!!countrySelect);
-      assertEquals(
-          'Israel', countrySelect.selectedOptions[0]!.textContent.trim());
-      index++;
-      // Name
-      row = rows[index]!;
-      let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(1, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.NAME_FULL)!, cols[0]!.value);
-      index++;
-      // City, Postal code
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(2, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
-          cols[0]!.value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
-          cols[1]!.value);
-      index++;
-      // Phone, Email
-      row = rows[index]!;
-      cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-          '.address-column');
-      assertEquals(2, cols.length);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
-          cols[0]!.value);
-      assertTrue(cols[0]!.classList.contains('phone-number-input'));
-      const phoneInput = (cols[0]! as CrInputElement).inputElement;
-      assertEquals(
-          'ltr',
-          (phoneInput.computedStyleMap().get('direction') as CSSUnitValue)
-              .value);
-      assertEquals(
-          'end',
-          (phoneInput.computedStyleMap().get('text-align') as CSSUnitValue)
-              .value);
-      assertEquals(
-          getAddressFieldValue(address, FieldType.EMAIL_ADDRESS),
-          cols[1]!.value);
-    });
+    let index = 0;
+    // Country
+    let row = rows[index]!;
+    const countrySelect = row.querySelector('select');
+    assertTrue(!!countrySelect);
+    assertEquals(
+        'Israel', countrySelect.selectedOptions[0]!.textContent.trim());
+    index++;
+    // Name
+    row = rows[index]!;
+    let cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(1, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.NAME_FULL)!, cols[0]!.value);
+    index++;
+    // City, Postal code
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(2, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_CITY),
+        cols[0]!.value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.ADDRESS_HOME_ZIP),
+        cols[1]!.value);
+    index++;
+    // Phone, Email
+    row = rows[index]!;
+    cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(2, cols.length);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.PHONE_HOME_WHOLE_NUMBER),
+        cols[0]!.value);
+    assertTrue(cols[0]!.classList.contains('phone-number-input'));
+    const phoneInput = (cols[0]! as CrInputElement).inputElement;
+    assertEquals(
+        'ltr',
+        (phoneInput.computedStyleMap().get('direction') as CSSUnitValue).value);
+    assertEquals(
+        'end',
+        (phoneInput.computedStyleMap().get('text-align') as CSSUnitValue)
+            .value);
+    assertEquals(
+        getAddressFieldValue(address, FieldType.EMAIL_ADDRESS), cols[1]!.value);
   });
 
   // US has an extra field 'State'. Validate that this field is
   // persisted when switching to IL then back to US.
-  test('verifyAddressPersistanceWhenSwitchingCountries', function() {
+  test('verifyAddressPersistanceWhenSwitchingCountries', async function() {
     const address = createEmptyAddressEntry();
     address.fields.push({type: FieldType.ADDRESS_HOME_COUNTRY, value: 'US'});
 
-    return createAddressDialog(address).then(function(dialog) {
-      const city = 'Los Angeles';
-      const state = 'CA';
-      const zip = '90291';
-      const countrySelect = dialog.$.country;
-      assertTrue(!!countrySelect);
+    const dialog = await createAddressDialog(address);
+    const city = 'Los Angeles';
+    const state = 'CA';
+    const zip = '90291';
+    const countrySelect = dialog.$.country;
+    assertTrue(!!countrySelect);
 
-      return expectEvent(
-                 dialog, 'on-update-address-wrapper',
-                 function() {
-                   // US:
-                   const rows =
-                       dialog.$.dialog.querySelectorAll('.address-row');
-                   assertEquals(
-                       4, rows.length,
-                       'There should be 4 rows: Country, Name, City + State ' +
-                           '+ Zip, Phone + Email');
+    await expectEvent(dialog, 'on-update-address-wrapper', function() {
+      // US:
+      const rows = dialog.$.dialog.querySelectorAll('.address-row');
+      assertEquals(
+          4, rows.length,
+          'There should be 4 rows: Country, Name, City + State ' +
+              '+ Zip, Phone + Email');
 
-                   // City, State, ZIP code
-                   const row = rows[2]!;
-                   const cols =
-                       row.querySelectorAll<CrTextareaElement|CrInputElement>(
-                           '.address-column');
-                   assertEquals(3, cols.length);
-                   cols[0]!.value = city;
-                   cols[1]!.value = state;
-                   cols[2]!.value = zip;
+      // City, State, ZIP code
+      const row = rows[2]!;
+      const cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+          '.address-column');
+      assertEquals(3, cols.length);
+      cols[0]!.value = city;
+      cols[1]!.value = state;
+      cols[2]!.value = zip;
 
-                   countryDetailManager.setGetAddressFormatRepsonse(
-                       ADDRESS_COMPONENTS_IL);
-                   countrySelect.value = 'IL';
-                   countrySelect.dispatchEvent(new CustomEvent('change'));
-                 })
-          .then(function() {
-            return expectEvent(dialog, 'on-update-address-wrapper', function() {
-              // IL:
-              const rows = dialog.$.dialog.querySelectorAll('.address-row');
-              assertEquals(
-                  4, rows.length,
-                  'There should be 4 rows: Country, Name, City + Zip, ' +
-                      'Phone + Email');
-
-              // City, Postal code
-              const row = rows[2]!;
-              const cols =
-                  row.querySelectorAll<CrTextareaElement|CrInputElement>(
-                      '.address-column');
-              assertEquals(2, cols.length);
-              assertEquals(city, cols[0]!.value);
-              assertEquals(zip, cols[1]!.value);
-
-              countryDetailManager.setGetAddressFormatRepsonse(
-                  ADDRESS_COMPONENTS_US);
-              countrySelect.value = 'US';
-              countrySelect.dispatchEvent(new CustomEvent('change'));
-            });
-          })
-          .then(function() {
-            // US:
-            const rows = dialog.$.dialog.querySelectorAll('.address-row');
-            assertEquals(
-                4, rows.length,
-                'There should be 4 rows: Country, Name, City + State + Zip, ' +
-                    'Phone + Email');
-
-            // City, State, ZIP code
-            const row = rows[2]!;
-            const cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
-                '.address-column');
-            assertEquals(3, cols.length);
-            assertEquals(city, cols[0]!.value);
-            assertEquals(state, cols[1]!.value);
-            assertEquals(zip, cols[2]!.value);
-          });
+      countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_IL);
+      countrySelect.value = 'IL';
+      countrySelect.dispatchEvent(new CustomEvent('change'));
     });
-  });
-});
 
-suite('PlusAddressesTest', function() {
-  const fakeUrl = 'https://foo.bar';
-  let metrics: MetricsTracker;
-  let openWindowProxy: TestOpenWindowProxy;
+    await expectEvent(dialog, 'on-update-address-wrapper', function() {
+      // IL:
+      const rows = dialog.$.dialog.querySelectorAll('.address-row');
+      assertEquals(
+          4, rows.length,
+          'There should be 4 rows: Country, Name, City + Zip, ' +
+              'Phone + Email');
 
-  setup(function() {
-    metrics = fakeMetricsPrivate();
-    openWindowProxy = new TestOpenWindowProxy();
-    OpenWindowProxyImpl.setInstance(openWindowProxy);
-    loadTimeData.overrideValues({
-      // Required to show the plus address management entry.
-      plusAddressEnabled: true,
-      plusAddressManagementUrl: fakeUrl,
+      // City, Postal code
+      const row = rows[2]!;
+      const cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+          '.address-column');
+      assertEquals(2, cols.length);
+      assertEquals(city, cols[0]!.value);
+      assertEquals(zip, cols[1]!.value);
+
+      countryDetailManager.setGetAddressFormatRepsonse(ADDRESS_COMPONENTS_US);
+      countrySelect.value = 'US';
+      countrySelect.dispatchEvent(new CustomEvent('change'));
     });
+
+    // US:
+    const rows = dialog.$.dialog.querySelectorAll('.address-row');
+    assertEquals(
+        4, rows.length,
+        'There should be 4 rows: Country, Name, City + State + Zip, ' +
+            'Phone + Email');
+
+    // City, State, ZIP code
+    const row = rows[2]!;
+    const cols = row.querySelectorAll<CrTextareaElement|CrInputElement>(
+        '.address-column');
+    assertEquals(3, cols.length);
+    assertEquals(city, cols[0]!.value);
+    assertEquals(state, cols[1]!.value);
+    assertEquals(zip, cols[2]!.value);
   });
-
-  test('verifyPlusAddressManagementEntryExistence', async function() {
-    const autofillSection = await createAutofillSection([], {});
-
-    const plusAddressButton =
-        autofillSection.shadowRoot!.querySelector<CrLinkRowElement>(
-            '#plusAddressSettingsButton');
-    assertTrue(!!plusAddressButton);
-
-    autofillSection.remove();
-  });
-
-  test(
-      'verifyPlusAddressManagementEntryExistenceWhenNotEnabled',
-      async function() {
-        loadTimeData.overrideValues({
-          plusAddressEnabled: false,
-        });
-        const autofillSection = await createAutofillSection([], {});
-
-        const plusAddressButton =
-            autofillSection.shadowRoot!.querySelector<CrLinkRowElement>(
-                '#plusAddressSettingsButton');
-        assertFalse(!!plusAddressButton);
-
-        autofillSection.remove();
-      });
-
-  test(
-      'verifyClickingPlusAddressManagementEntryOpensWebsite', async function() {
-        const autofillSection = await createAutofillSection([], {});
-
-        const plusAddressButton =
-            autofillSection.shadowRoot!.querySelector<CrLinkRowElement>(
-                '#plusAddressSettingsButton');
-        assertTrue(!!plusAddressButton);
-        // Validate that, when present, the button results in opening the URL
-        // passed in via the `loadTimeData` override.
-        plusAddressButton.click();
-        const url = await openWindowProxy.whenCalled('openUrl');
-        assertEquals(url, fakeUrl);
-        assertEquals(
-            1, metrics.count('Settings.ManageOptionOnSettingsSelected'));
-        autofillSection.remove();
-      });
 });

@@ -16,7 +16,6 @@
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -25,6 +24,11 @@
 #include "chrome/browser/ui/autofill/autofill_popup_view.h"
 #include "chrome/browser/ui/autofill/mock_autofill_popup_controller.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_at_memory_ai_disclosure_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_bnpl_footnote_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_interactive_row_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_loading_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_personal_context_notice_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_content_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_search_bar_view.h"
@@ -33,13 +37,16 @@
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_views_test_api.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_warning_view.h"
+#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
+#include "components/autofill/core/browser/ui/tabbed_pane_enums.h"
 #include "components/autofill/core/common/aliases.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/strings/grit/components_strings.h"
@@ -71,9 +78,11 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_border_arrow_utils.h"
+#include "ui/views/controls/tabbed_pane/tabbed_pane.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_utils.h"
 
@@ -101,7 +110,6 @@ const std::vector<SuggestionType> kClickableSuggestionTypes{
     SuggestionType::kManageAddress,
     SuggestionType::kManageCreditCard,
     SuggestionType::kManageIban,
-    SuggestionType::kManagePlusAddress,
     SuggestionType::kDatalistEntry,
     SuggestionType::kScanCreditCard,
     SuggestionType::kAllSavedPasswordsEntry,
@@ -112,6 +120,7 @@ const std::vector<SuggestionType> kUnclickableSuggestionTypes{
     SuggestionType::kInsecureContextPaymentDisabledMessage,
     SuggestionType::kTitle,
     SuggestionType::kSeparator,
+    SuggestionType::kLoadingThrobber,
 };
 
 bool IsClickable(SuggestionType id) {
@@ -147,6 +156,16 @@ class TestPopupViewViews : public PopupViewViews {
         std::move(callback);
   }
 
+  void NotifyAXSelection(views::View& view) override {
+    if (destroy_on_notify_ax_selection_) {
+      GetWidget()->CloseNow();
+    } else {
+      PopupViewViews::NotifyAXSelection(view);
+    }
+  }
+
+  void DestroyOnNotifyAxSelection() { destroy_on_notify_ax_selection_ = true; }
+
  protected:
   gfx::Rect GetOptimalPositionAndPlaceArrowOnPopup(
       const gfx::Rect& element_bounds,
@@ -166,6 +185,7 @@ class TestPopupViewViews : public PopupViewViews {
  private:
   GetOptimalPositionAndPlaceArrowOnPopupOverride
       get_optimal_position_and_place_arrow_on_popup_override_;
+  bool destroy_on_notify_ax_selection_ = false;
 };
 
 class PopupViewViewsTest : public ChromeViewsTestBase {
@@ -202,8 +222,14 @@ class PopupViewViewsTest : public ChromeViewsTestBase {
         .WillByDefault(Return(autofill_popup_sub_controller_.GetWeakPtr()));
     ON_CALL(autofill_popup_controller_, GetMainFillingProduct)
         .WillByDefault([&controller = autofill_popup_controller_]() {
-          return GetFillingProductFromSuggestionType(
-              controller.GetSuggestionAt(0).type);
+          if (controller.GetAutofillSuggestionTriggerSource() ==
+              AutofillSuggestionTriggerSource::kAtMemoryTriggerString) {
+            return FillingProduct::kAtMemory;
+          }
+          return controller.GetLineCount() > 0
+                     ? GetFillingProductFromSuggestionType(
+                           controller.GetSuggestionAt(0).type)
+                     : FillingProduct::kNone;
         });
   }
 
@@ -229,6 +255,10 @@ class PopupViewViewsTest : public ChromeViewsTestBase {
   void CreateView(
       std::optional<views::Widget::InitParams> widget_params = std::nullopt,
       std::optional<AutofillPopupView::SearchBarConfig> search_bar_config =
+          std::nullopt,
+      std::optional<AutofillPopupView::TabbedPaneConfig> tabbed_pane_config =
+          std::nullopt,
+      std::optional<AutofillPopupView::SubPopupConfig> sub_popup_config =
           std::nullopt) {
     view_ = nullptr;
     generator_.reset();
@@ -246,15 +276,21 @@ class PopupViewViewsTest : public ChromeViewsTestBase {
     widget_ = CreateTestWidget(std::move(params));
     generator_ = std::make_unique<ui::test::EventGenerator>(
         GetRootWindow(widget_.get()));
-    view_ = new TestPopupViewViews(controller().GetWeakPtr(),
-                                   std::move(search_bar_config));
+    view_ = new TestPopupViewViews(
+        controller().GetWeakPtr(), std::move(search_bar_config),
+        std::move(tabbed_pane_config), std::move(sub_popup_config));
   }
 
   void CreateAndShowView(
       std::optional<views::Widget::InitParams> widget_params = std::nullopt,
       std::optional<AutofillPopupView::SearchBarConfig> search_bar_config =
+          std::nullopt,
+      std::optional<AutofillPopupView::TabbedPaneConfig> tabbed_pane_config =
+          std::nullopt,
+      std::optional<AutofillPopupView::SubPopupConfig> sub_popup_config =
           std::nullopt) {
-    CreateView(std::move(widget_params), std::move(search_bar_config));
+    CreateView(std::move(widget_params), std::move(search_bar_config),
+               std::move(tabbed_pane_config), std::move(sub_popup_config));
     ShowView(view_, *widget_);
   }
 
@@ -262,9 +298,15 @@ class PopupViewViewsTest : public ChromeViewsTestBase {
       const std::vector<SuggestionType>& ids,
       std::optional<views::Widget::InitParams> widget_params = std::nullopt,
       std::optional<AutofillPopupView::SearchBarConfig> search_bar_config =
+          std::nullopt,
+      std::optional<AutofillPopupView::TabbedPaneConfig> tabbed_pane_config =
+          std::nullopt,
+      std::optional<AutofillPopupView::SubPopupConfig> sub_popup_config =
           std::nullopt) {
     controller().set_suggestions(ids);
-    CreateAndShowView(std::move(widget_params), std::move(search_bar_config));
+    CreateAndShowView(std::move(widget_params), std::move(search_bar_config),
+                      std::move(tabbed_pane_config),
+                      std::move(sub_popup_config));
   }
 
   void UpdateSuggestions(const std::vector<SuggestionType>& ids,
@@ -411,6 +453,10 @@ class PopupViewViewsTestWithClickableSuggestionType
   SuggestionType type() const {
     DCHECK(IsClickable(GetParam()));
     return GetParam();
+  }
+
+  bool BypassesInitialHoverClickSuppression() const {
+    return type() == SuggestionType::kDatalistEntry;
   }
 };
 
@@ -819,7 +865,7 @@ TEST_F(PopupViewViewsTest, ShowsWidePopup_ElementAtRightEdge) {
   EXPECT_TRUE(dropdown_shown);
 }
 
-// This is a regression test for crbug.com/1113255.
+// This is a regression test for crbug.com/40710172.
 TEST_F(PopupViewViewsTest, ShowViewWithOnlyFooterItemsShouldNotCrash) {
   // Set suggestions to have only a footer item.
   std::vector<SuggestionType> suggestion_ids = {SuggestionType::kUndoOrClear};
@@ -848,10 +894,10 @@ TEST_F(PopupViewViewsTest, AccessibilitySelectedEvent) {
   GetPopupRowViewAt(0).SetSelectedCell(PopupRowView::CellType::kContent);
   EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
 
-  // Checks that a new selection event is not sent when a selected view becomes
+  // Checks that a selection event is sent when a selected view becomes
   // unselected.
   GetPopupRowViewAt(0).SetSelectedCell(std::nullopt);
-  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
+  EXPECT_EQ(2, ax_counter.GetCount(ax::mojom::Event::kSelection));
 }
 
 TEST_F(PopupViewViewsTest, AccessibilityTest) {
@@ -944,7 +990,7 @@ TEST_F(PopupViewViewsTest, SelectionOnTouchAndUnselectionOnCancel) {
 #endif  // !BUILDFLAG(IS_MAC)
 
 TEST_F(PopupViewViewsTest, ClickDisabledEntry) {
-  Suggestion opt_int_suggestion("dummy_main_text", "",
+  Suggestion opt_int_suggestion(u"dummy_main_text", u"",
                                 Suggestion::Icon::kNoIcon,
                                 SuggestionType::kWebauthnCredential);
   opt_int_suggestion.is_loading = Suggestion::IsLoading(true);
@@ -1122,8 +1168,9 @@ TEST_F(PopupViewViewsTest, OverflowWithNonSelectableCells) {
 TEST_F(PopupViewViewsTest, SelectingSuggestionWithNoControlResetsToContent) {
   controller().set_suggestions(
       {CreateSuggestionWithChildren(
-           SuggestionType::kAddressEntry,
-           {Suggestion(u"Child suggestion", SuggestionType::kAddressEntry)}),
+           SuggestionType::kPasswordEntry,
+           {Suggestion(u"Child suggestion",
+                       SuggestionType::kPasswordFieldByFieldFilling)}),
        Suggestion(u"Suggestion without control",
                   SuggestionType::kAddressEntry)});
   CreateAndShowView();
@@ -1144,8 +1191,9 @@ TEST_F(PopupViewViewsTest, SelectingSuggestionWithNoControlResetsToContent) {
 TEST_F(PopupViewViewsTest, LeftAndRightKeyEventsAreHandled) {
   // The control cell is present in suggestions with children.
   controller().set_suggestions({CreateSuggestionWithChildren(
-      SuggestionType::kAddressEntry,
-      {Suggestion(u"Child #1", SuggestionType::kAddressEntry)})});
+      SuggestionType::kPasswordEntry,
+      {Suggestion(u"Child #1",
+                  SuggestionType::kPasswordFieldByFieldFilling)})});
   CreateAndShowView();
   view().SetSelectedCell(CellIndex{0, CellType::kContent},
                          PopupCellSelectionSource::kNonUserInput);
@@ -1169,8 +1217,9 @@ TEST_F(PopupViewViewsTest, LeftAndRightKeyEventsAreHandledForRTL) {
 
   // The control cell is present in suggestions with children.
   controller().set_suggestions({CreateSuggestionWithChildren(
-      SuggestionType::kAddressEntry,
-      {Suggestion(u"Child #1", SuggestionType::kAddressEntry)})});
+      SuggestionType::kPasswordEntry,
+      {Suggestion(u"Child #1",
+                  SuggestionType::kPasswordFieldByFieldFilling)})});
   CreateAndShowView();
   view().SetSelectedCell(CellIndex{0, CellType::kControl},
                          PopupCellSelectionSource::kNonUserInput);
@@ -1250,6 +1299,111 @@ TEST_F(PopupViewViewsTest, PageUpDownForSelectableCells) {
             std::make_optional<CellIndex>(3u, CellType::kContent));
 }
 
+TEST_F(PopupViewViewsTest, Show_A11yAnnouncesCurrentTab) {
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  controller().set_suggestions({SuggestionType::kCreditCardEntry});
+  CreateView(/*widget_params=*/std::nullopt, /*search_bar_config=*/std::nullopt,
+             std::move(tabbed_pane_config));
+
+  base::MockCallback<base::RepeatingCallback<void(const std::u16string&, bool)>>
+      announcement;
+  test_api(view()).SetA11yAnnouncer(announcement.Get());
+
+  EXPECT_CALL(
+      announcement,
+      Run(l10n_util::GetStringFUTF16(
+              IDS_AUTOFILL_PAY_NOW_PAY_LATER_TAB_ACCESSIBILITY_ANNOUNCEMENT,
+              u"Pay Now Test", u"1", u"2"),
+          true));
+
+  ShowView(&view(), widget());
+}
+
+TEST_F(PopupViewViewsTest, TabbedPane_A11yAnnouncesCurrentTabOnSwitch) {
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  controller().set_suggestions({SuggestionType::kCreditCardEntry});
+  CreateView(/*widget_params=*/std::nullopt, /*search_bar_config=*/std::nullopt,
+             std::move(tabbed_pane_config));
+
+  base::MockCallback<base::RepeatingCallback<void(const std::u16string&, bool)>>
+      announcement;
+  test_api(view()).SetA11yAnnouncer(announcement.Get());
+
+  EXPECT_CALL(
+      announcement,
+      Run(l10n_util::GetStringFUTF16(
+              IDS_AUTOFILL_PAY_NOW_PAY_LATER_TAB_ACCESSIBILITY_ANNOUNCEMENT,
+              u"Pay Now Test", u"1", u"2"),
+          true));
+
+  ShowView(&view(), widget());
+
+  EXPECT_CALL(controller(), OnTabSelected(1, TabbedPaneTabType::kPayLater));
+  EXPECT_CALL(
+      announcement,
+      Run(l10n_util::GetStringFUTF16(
+              IDS_AUTOFILL_PAY_NOW_PAY_LATER_TAB_ACCESSIBILITY_ANNOUNCEMENT,
+              u"Pay Later Test", u"2", u"2"),
+          true));
+  SimulateKeyPress(ui::VKEY_RIGHT);
+}
+
+TEST_F(PopupViewViewsTest, TabbedPane_HorizontalKeyEventsSwitchTabs) {
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  CreateAndShowView({SuggestionType::kCreditCardEntry},
+                    /*widget_params=*/std::nullopt,
+                    /*search_bar_config=*/std::nullopt,
+                    std::move(tabbed_pane_config));
+
+  // Pressing right should navigate to the next tab.
+  EXPECT_CALL(controller(), OnTabSelected(1, TabbedPaneTabType::kPayLater));
+  SimulateKeyPress(ui::VKEY_RIGHT);
+
+  // Pressing right again should do nothing because we are at the last tab.
+  EXPECT_CALL(controller(), SetFilter).Times(0);
+  SimulateKeyPress(ui::VKEY_RIGHT);
+
+  // Pressing left should navigate back to the previous tab.
+  EXPECT_CALL(controller(), OnTabSelected(0, TabbedPaneTabType::kPayNow));
+  SimulateKeyPress(ui::VKEY_LEFT);
+}
+
+TEST_F(PopupViewViewsTest, TabbedPane_HorizontalKeyEventsSwitchTabs_RTL) {
+  base::i18n::SetRTLForTesting(true);
+
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  CreateAndShowView({SuggestionType::kCreditCardEntry},
+                    /*widget_params=*/std::nullopt,
+                    /*search_bar_config=*/std::nullopt,
+                    std::move(tabbed_pane_config));
+
+  // In RTL, pressing left should navigate to the next tab.
+  EXPECT_CALL(controller(), OnTabSelected(1, TabbedPaneTabType::kPayLater));
+  SimulateKeyPress(ui::VKEY_LEFT);
+
+  // Pressing left again should do nothing because we are at the last tab.
+  EXPECT_CALL(controller(), SetFilter).Times(0);
+  SimulateKeyPress(ui::VKEY_LEFT);
+
+  // In RTL, pressing right should navigate to the previous tab.
+  EXPECT_CALL(controller(), OnTabSelected(0, TabbedPaneTabType::kPayNow));
+  SimulateKeyPress(ui::VKEY_RIGHT);
+
+  base::i18n::SetRTLForTesting(false);
+}
+
 TEST_F(PopupViewViewsTest, MovingSelectionSkipsSeparator) {
   CreateAndShowView({SuggestionType::kAddressEntry, SuggestionType::kSeparator,
                      SuggestionType::kManageAddress});
@@ -1294,9 +1448,10 @@ TEST_F(PopupViewViewsTest, MovingSelectionSkipsInsecureFormWarning) {
 TEST_F(PopupViewViewsTest, EscClosesSubPopup) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
 
@@ -1355,7 +1510,109 @@ TEST_F(PopupViewViewsTestKeyboard, NoFillOnTabPressedWithModifiers) {
                    /*non_shift_modifier_pressed=*/true);
 }
 
-// Verify that pressing the tab key while the "Manage addresses..." entry is
+TEST_F(PopupViewViewsTestKeyboard, TabFocusesFootnoteLink) {
+  controller().set_suggestions(
+      {Suggestion(u"BNPL Footnote", SuggestionType::kBnplFootnote)});
+  CreateAndShowView();
+
+  PopupBnplFootnoteView* bnpl_footnote = test_api(view()).GetBnplFootnoteView();
+  ASSERT_TRUE(bnpl_footnote);
+
+  ASSERT_FALSE(bnpl_footnote->IsSettingsLinkFocused());
+
+  SimulateKeyPress(ui::VKEY_TAB);
+
+  EXPECT_TRUE(bnpl_footnote->IsSettingsLinkFocused());
+
+  ui::AXNodeData node_data;
+  bnpl_footnote->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_TRUE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
+}
+
+TEST_F(PopupViewViewsTestKeyboard, EnterHandledByFootnoteWhenLinkIsFocused) {
+  controller().set_suggestions(
+      {Suggestion(u"BNPL Footnote", SuggestionType::kBnplFootnote)});
+  CreateAndShowView();
+
+  PopupBnplFootnoteView* bnpl_footnote = test_api(view()).GetBnplFootnoteView();
+  ASSERT_TRUE(bnpl_footnote);
+
+  ASSERT_FALSE(SimulateKeyPress(ui::VKEY_RETURN));
+
+  SimulateKeyPress(ui::VKEY_TAB);
+  ASSERT_TRUE(bnpl_footnote->IsSettingsLinkFocused());
+
+  // Forces `PopupBnplFootnoteView::ActivateSettingsLink` to return early, since
+  // `chrome::ShowSettingsSubPageForProfile` crashes in this test environment.
+  ON_CALL(controller(), GetWebContents())
+      .WillByDefault(testing::Return(nullptr));
+
+  EXPECT_TRUE(SimulateKeyPress(ui::VKEY_RETURN));
+}
+
+TEST_F(PopupViewViewsTestKeyboard, UnfocusFootnoteLinkOnSuggestionSelection) {
+  controller().set_suggestions(
+      {Suggestion(u"Credit Card", SuggestionType::kCreditCardEntry),
+       Suggestion(u"BNPL Footnote", SuggestionType::kBnplFootnote)});
+  CreateAndShowView();
+
+  PopupBnplFootnoteView* bnpl_footnote = test_api(view()).GetBnplFootnoteView();
+  ASSERT_TRUE(bnpl_footnote);
+
+  SimulateKeyPress(ui::VKEY_TAB);
+
+  ui::AXNodeData node_data;
+  bnpl_footnote->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  ASSERT_TRUE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
+  ASSERT_TRUE(bnpl_footnote->IsSettingsLinkFocused());
+
+  view().SetSelectedCell(CellIndex{0u, CellType::kContent},
+                         PopupCellSelectionSource::kKeyboard);
+
+  bnpl_footnote->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
+  EXPECT_FALSE(bnpl_footnote->IsSettingsLinkFocused());
+}
+
+// Tests that accepting a suggestion with the TAB key is blocked for 500 ms
+// (AutofillSuggestionController::kIgnoreEarlyClicksOnSuggestionsDuration)
+// (crbug.com/501770542).
+TEST_F(PopupViewViewsTest, TabAcceptsSuggestionOnlyWhenRowVisibleLongEnough) {
+  MockFunction<void(std::string_view)> check;
+  {
+    InSequence s;
+    EXPECT_CALL(check, Call("No time passed."));
+    EXPECT_CALL(controller(),
+                AcceptSuggestion(
+                    0, AutofillMetrics::SuggestionAcceptedMethod::kKeyboard))
+        .Times(0);
+    EXPECT_CALL(check, Call("Insufficient time passed."));
+    EXPECT_CALL(controller(),
+                AcceptSuggestion(
+                    0, AutofillMetrics::SuggestionAcceptedMethod::kKeyboard))
+        .Times(0);
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kAutofillPopupDontAcceptNonVisibleEnoughSuggestion);
+  ON_CALL(controller(), IsViewVisibilityAcceptingThresholdEnabled())
+      .WillByDefault(Return(true));
+
+  CreateAndShowView({SuggestionType::kAddressEntry});
+  view().SetSelectedCell(CellIndex{0u, CellType::kContent},
+                         PopupCellSelectionSource::kNonUserInput);
+  ASSERT_EQ(view().GetSelectedCell(),
+            std::make_optional<CellIndex>(0u, CellType::kContent));
+
+  check.Call("No time passed.");
+  SimulateKeyPress(ui::VKEY_TAB);
+  task_environment()->FastForwardBy(base::Milliseconds(499));
+  check.Call("Insufficient time passed.");
+  SimulateKeyPress(ui::VKEY_TAB);
+}
+
+// Verifies that pressing the tab key while the "Manage addresses..." entry is
 // selected does not trigger "accepting" the entry (which would mean opening
 // a tab with the autofill settings).
 TEST_F(PopupViewViewsTest, NoAutofillOptionsTriggeredOnTabPressed) {
@@ -1373,8 +1630,8 @@ TEST_F(PopupViewViewsTest, NoAutofillOptionsTriggeredOnTabPressed) {
   SimulateKeyPress(ui::VKEY_TAB);
 }
 
-// This is a regression test for crbug.com/1309431 to ensure that we don't crash
-// when we press tab before a line is selected.
+// This is a regression test for crbug.com/40829763 to ensure that we don't
+// crash when we press tab before a line is selected.
 TEST_F(PopupViewViewsTest, TabBeforeSelectingALine) {
   CreateAndShowView({SuggestionType::kAddressEntry, SuggestionType::kSeparator,
                      SuggestionType::kManageAddress});
@@ -1636,25 +1893,25 @@ TEST_F(PopupViewViewsTest, VoiceOverTest) {
 
 TEST_F(PopupViewViewsTest, ExpandableSuggestionA11yMessageTest) {
   // Set up the popup with suggestions.
-  std::u16string address_line = u"Address line #1";
-  Suggestion suggestion(address_line, SuggestionType::kAddressEntry);
+  std::u16string main_text = u"Password";
+  Suggestion suggestion(main_text, SuggestionType::kPasswordEntry);
   suggestion.children = {
-      Suggestion(SuggestionType::kAddressFieldByFieldFilling),
-      Suggestion(SuggestionType::kAddressFieldByFieldFilling)};
+      Suggestion(SuggestionType::kPasswordFieldByFieldFilling),
+      Suggestion(SuggestionType::kPasswordFieldByFieldFilling)};
   controller().set_suggestions({suggestion});
   CreateAndShowView();
 
   // Verify that the accessibility layer gets the right string to read out.
   ui::AXNodeData node_data;
   GetPopupRowViewAt(0).GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  std::u16string expected_a11y_name = base::JoinString(
+      {main_text, l10n_util::GetStringFUTF16(
+                      IDS_AUTOFILL_EXPANDABLE_SUGGESTION_SUBMENU_HINT,
+                      l10n_util::GetStringUTF16(
+                          IDS_AUTOFILL_EXPANDABLE_SUGGESTION_EXPAND_SHORTCUT))},
+      u". ");
   EXPECT_EQ(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
-            base::JoinString(
-                {address_line,
-                 l10n_util::GetStringFUTF16(
-                     IDS_AUTOFILL_EXPANDABLE_SUGGESTION_SUBMENU_HINT,
-                     l10n_util::GetStringUTF16(
-                         IDS_AUTOFILL_EXPANDABLE_SUGGESTION_EXPAND_SHORTCUT))},
-                u". "));
+            expected_a11y_name);
 
   ui::AXNodeData content_node_data;
   GetPopupRowViewAt(0)
@@ -1663,15 +1920,72 @@ TEST_F(PopupViewViewsTest, ExpandableSuggestionA11yMessageTest) {
       .GetAccessibleNodeData(&content_node_data);
   EXPECT_EQ(
       content_node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
-      base::JoinString(
-          {address_line,
-           l10n_util::GetStringUTF16(
-               IDS_AUTOFILL_EXPANDABLE_SUGGESTION_FILL_ADDRESS_A11Y_ADDON),
-           l10n_util::GetStringFUTF16(
-               IDS_AUTOFILL_EXPANDABLE_SUGGESTION_SUBMENU_HINT,
-               l10n_util::GetStringUTF16(
-                   IDS_AUTOFILL_EXPANDABLE_SUGGESTION_EXPAND_SHORTCUT))},
-          u". "));
+      expected_a11y_name);
+}
+
+// Tests that Personal Context Notice view is created with valid accessibility
+// names.
+TEST_F(PopupViewViewsTest, PersonalContextNoticeViewCreated) {
+  controller().set_suggestions(
+      {Suggestion(SuggestionType::kPersonalContextNotice)});
+  CreateAndShowView();
+
+  PopupInteractiveRowView* notice_view =
+      std::get<PopupInteractiveRowView*>(test_api(view()).rows()[0]);
+  ASSERT_TRUE(notice_view);
+
+  ui::AXNodeData node_data;
+  // TODO(crbug.com/515651588): Check accessibility names once they are ready.
+  notice_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName)
+                   .empty());
+}
+
+// Tests that `PopupAtMemoryAiDisclosureView` is created when the suggestion
+// type is `SuggestionType::kAtMemoryAiDisclosure` and sets a non-empty
+// accessible name.
+TEST_F(PopupViewViewsTest, AtMemoryAiDisclosureViewCreated) {
+  controller().set_suggestions(
+      {Suggestion(SuggestionType::kAtMemoryAiDisclosure)});
+  CreateAndShowView();
+
+  PopupAtMemoryAiDisclosureView* disclosure_view =
+      static_cast<PopupAtMemoryAiDisclosureView*>(
+          std::get<PopupInteractiveRowView*>(test_api(view()).rows()[0]));
+  ASSERT_TRUE(disclosure_view);
+
+  ui::AXNodeData node_data;
+  disclosure_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName)
+                   .empty());
+}
+
+// Tests that the AI disclosure footer can be navigated to and selected using
+// Up/Down keyboard arrow keys.
+TEST_F(PopupViewViewsTest, AtMemoryAiDisclosureKeyboardNavigation) {
+  controller().set_suggestions(
+      {Suggestion(SuggestionType::kAddressEntry),
+       Suggestion(SuggestionType::kAtMemoryAiDisclosure)});
+  CreateAndShowView();
+
+  ASSERT_EQ(view().GetSelectedCell(), std::nullopt);
+
+  SimulateKeyPress(ui::VKEY_DOWN);
+  EXPECT_EQ(view().GetSelectedCell(),
+            std::make_optional<PopupViewViews::CellIndex>(
+                0, PopupRowView::CellType::kContent));
+
+  SimulateKeyPress(ui::VKEY_DOWN);
+  EXPECT_EQ(view().GetSelectedCell(),
+            std::make_optional<PopupViewViews::CellIndex>(
+                1, PopupInteractiveRowView::CellType::kContent));
+
+  PopupAtMemoryAiDisclosureView* disclosure_view =
+      static_cast<PopupAtMemoryAiDisclosureView*>(
+          std::get<PopupInteractiveRowView*>(test_api(view()).rows()[1]));
+  ASSERT_TRUE(disclosure_view);
+  EXPECT_EQ(disclosure_view->GetSelectedCell(),
+            PopupInteractiveRowView::CellType::kContent);
 }
 
 TEST_F(PopupViewViewsTest, UpdateSuggestionsNoCrash) {
@@ -1766,9 +2080,10 @@ TEST_F(PopupViewViewsTest, SubViewIsClosedWithParent) {
 TEST_F(PopupViewViewsTest, CellOpensClosesSubPopupWithDelay) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
 
@@ -1791,9 +2106,10 @@ TEST_F(PopupViewViewsTest, CellOpensClosesSubPopupWithDelay) {
 TEST_F(PopupViewViewsTest, CellSubPopupResetAfterSuggestionsUpdates) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
 
@@ -1803,7 +2119,7 @@ TEST_F(PopupViewViewsTest, CellSubPopupResetAfterSuggestionsUpdates) {
   EXPECT_NE(test_api(view()).GetOpenSubPopupRow(), std::nullopt)
       << "Openning a sub-popup should happen.";
 
-  UpdateSuggestions({SuggestionType::kAddressEntry});
+  UpdateSuggestions({SuggestionType::kPasswordEntry});
   EXPECT_EQ(test_api(view()).GetOpenSubPopupRow(), std::nullopt)
       << "The cell's sub-popup should be closed.";
 }
@@ -1815,7 +2131,12 @@ TEST_F(PopupViewViewsTest, CellSubPopupResetAfterSuggestionsUpdates) {
 // environment (namely creates a `TestingProfile`) that fails to be created in
 // the sub-process (see `EXPECT_CHECK_DEATH_WITH` doc for details). This fail
 // hides the real death reason to be tested.
-using PopupViewViewsDeathTest = ChromeViewsTestBase;
+class PopupViewViewsDeathTest
+    : public chrome_test_utils::TestingBrowserProcessDeathTestMixin,
+      public ChromeViewsTestBase {
+  using ChromeViewsTestBase::ChromeViewsTestBase;
+};
+
 TEST_F(PopupViewViewsDeathTest, OpenSubPopupWithNoChildrenCheckCrash) {
   NiceMock<MockAutofillPopupController> controller;
   controller.set_suggestions({
@@ -1850,9 +2171,10 @@ TEST_F(PopupViewViewsTest, SubPopupHidingOnNoSelection) {
                             ui::EF_IS_SYNTHESIZED, 0);
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
   CellIndex cell{0, CellType::kControl};
@@ -1862,10 +2184,10 @@ TEST_F(PopupViewViewsTest, SubPopupHidingOnNoSelection) {
   ASSERT_EQ(test_api(view()).GetOpenSubPopupRow(), cell.first);
 
   auto [sub_controller, sub_view] = OpenSubView(
-      view(),
-      {CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Sub Child #1", SuggestionType::kAddressEntry)})});
+      view(), {CreateSuggestionWithChildren(
+                  SuggestionType::kPasswordEntry,
+                  {Suggestion(u"Sub Child #1",
+                              SuggestionType::kPasswordFieldByFieldFilling)})});
   view().SetSelectedCell(std::nullopt, PopupCellSelectionSource::kNonUserInput);
   sub_view->SetSelectedCell(cell, PopupCellSelectionSource::kNonUserInput);
   task_environment()->FastForwardBy(PopupViewViews::kNonMouseOpenSubPopupDelay);
@@ -1874,8 +2196,9 @@ TEST_F(PopupViewViewsTest, SubPopupHidingOnNoSelection) {
   auto [sub_sub_controller, sub_sub_view] = OpenSubView(
       *sub_view,
       {CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Sub Sub Child #1", SuggestionType::kAddressEntry)})});
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Sub Sub Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)})});
   sub_view->SetSelectedCell(std::nullopt,
                             PopupCellSelectionSource::kNonUserInput);
   sub_sub_view->SetSelectedCell(cell, PopupCellSelectionSource::kNonUserInput);
@@ -1890,12 +2213,54 @@ TEST_F(PopupViewViewsTest, SubPopupHidingOnNoSelection) {
   EXPECT_EQ(test_api(*sub_view).GetOpenSubPopupRow(), std::nullopt);
 }
 
+TEST_F(PopupViewViewsTest, SubPopupHidingOnNoSelectionCustomDelay) {
+  ui::MouseEvent fake_event(ui::EventType::kMouseMoved, gfx::Point(),
+                            gfx::Point(), ui::EventTimeForNow(),
+                            ui::EF_IS_SYNTHESIZED, 0);
+  controller().set_suggestions({
+      CreateSuggestionWithChildren(
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
+  });
+  CreateAndShowView(
+      /*widget_params=*/std::nullopt,
+      /*search_bar_config=*/std::nullopt,
+      /*tabbed_pane_config=*/std::nullopt,
+      /*sub_popup_config=*/
+      AutofillPopupView::SubPopupConfig{.no_selection_hide_delay =
+                                            base::Seconds(1)});
+  CellIndex cell{0, CellType::kControl};
+
+  view().SetSelectedCell(cell, PopupCellSelectionSource::kNonUserInput);
+  task_environment()->FastForwardBy(PopupViewViews::kNonMouseOpenSubPopupDelay);
+  ASSERT_EQ(test_api(view()).GetOpenSubPopupRow(), cell.first);
+
+  auto [sub_controller, sub_view] = OpenSubView(
+      view(), {CreateSuggestionWithChildren(
+                  SuggestionType::kPasswordEntry,
+                  {Suggestion(u"Sub Child #1",
+                              SuggestionType::kPasswordFieldByFieldFilling)})});
+  view().SetSelectedCell(std::nullopt, PopupCellSelectionSource::kNonUserInput);
+  sub_view->OnMouseExited(fake_event);
+
+  // After 500ms, sub-popup should still be open (delay is 1 second).
+  task_environment()->FastForwardBy(base::Milliseconds(500));
+  EXPECT_NE(test_api(view()).GetOpenSubPopupRow(), std::nullopt);
+
+  // After another 500ms (total 1000ms), sub-popup should be closed.
+  task_environment()->FastForwardBy(base::Milliseconds(500));
+  EXPECT_EQ(test_api(view()).GetOpenSubPopupRow(), std::nullopt);
+}
+
 TEST_F(PopupViewViewsTest, SubPopupHidingIsCanceledOnSelection) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
   CellIndex cell{0, CellType::kControl};
@@ -1904,10 +2269,10 @@ TEST_F(PopupViewViewsTest, SubPopupHidingIsCanceledOnSelection) {
   ASSERT_EQ(test_api(view()).GetOpenSubPopupRow(), cell.first);
 
   auto [sub_controller, sub_view] = OpenSubView(
-      view(),
-      {CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Sub Child #1", SuggestionType::kAddressEntry)})});
+      view(), {CreateSuggestionWithChildren(
+                  SuggestionType::kPasswordEntry,
+                  {Suggestion(u"Sub Child #1",
+                              SuggestionType::kPasswordFieldByFieldFilling)})});
   view().SetSelectedCell(std::nullopt, PopupCellSelectionSource::kNonUserInput);
 
   // This triggers the no-selection hiding timer.
@@ -1925,9 +2290,10 @@ TEST_F(PopupViewViewsTest, SubPopupHidingIsCanceledOnSelection) {
 TEST_F(PopupViewViewsTest, SubPopupHidingIsCanceledOnParentHiding) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
   CellIndex cell{0, CellType::kControl};
@@ -1947,9 +2313,10 @@ TEST_F(PopupViewViewsTest, SubPopupOwnSelectionPreventsHiding) {
                             ui::EF_IS_SYNTHESIZED, 0);
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
-      Suggestion(u"Suggestion #2", SuggestionType::kAddressEntry),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
+      Suggestion(u"Suggestion #2", SuggestionType::kPasswordEntry),
   });
   CreateAndShowView();
   CellIndex cell{0, CellType::kControl};
@@ -1959,10 +2326,10 @@ TEST_F(PopupViewViewsTest, SubPopupOwnSelectionPreventsHiding) {
   ASSERT_EQ(test_api(view()).GetOpenSubPopupRow(), cell.first);
 
   auto [sub_controller, sub_view] = OpenSubView(
-      view(),
-      {CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Sub Child #1", SuggestionType::kAddressEntry)})});
+      view(), {CreateSuggestionWithChildren(
+                  SuggestionType::kPasswordEntry,
+                  {Suggestion(u"Sub Child #1",
+                              SuggestionType::kPasswordFieldByFieldFilling)})});
   view().SetSelectedCell(std::nullopt, PopupCellSelectionSource::kNonUserInput);
   sub_view->SetSelectedCell(cell, PopupCellSelectionSource::kNonUserInput);
   task_environment()->FastForwardBy(PopupViewViews::kNonMouseOpenSubPopupDelay);
@@ -1971,8 +2338,9 @@ TEST_F(PopupViewViewsTest, SubPopupOwnSelectionPreventsHiding) {
   auto [sub_sub_controller, sub_sub_view] = OpenSubView(
       *sub_view,
       {CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Sub Sub Child #1", SuggestionType::kAddressEntry)})});
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Sub Sub Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)})});
   sub_view->SetSelectedCell(std::nullopt,
                             PopupCellSelectionSource::kNonUserInput);
   sub_sub_view->SetSelectedCell(cell, PopupCellSelectionSource::kNonUserInput);
@@ -1995,8 +2363,9 @@ TEST_F(PopupViewViewsTest, SubPopupOwnSelectionPreventsHiding) {
 TEST_F(PopupViewViewsTest, SubPopupOpensWithNoAutoselectByMouse) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
   });
   CreateAndShowView();
 
@@ -2011,8 +2380,9 @@ TEST_F(PopupViewViewsTest, SubPopupOpensWithNoAutoselectByMouse) {
 TEST_F(PopupViewViewsTest, SubPopupOpensWithAutoselectByRightKey) {
   controller().set_suggestions({
       CreateSuggestionWithChildren(
-          SuggestionType::kAddressEntry,
-          {Suggestion(u"Child #1", SuggestionType::kAddressEntry)}),
+          SuggestionType::kPasswordEntry,
+          {Suggestion(u"Child #1",
+                      SuggestionType::kPasswordFieldByFieldFilling)}),
   });
   CreateAndShowView();
 
@@ -2026,8 +2396,8 @@ TEST_F(PopupViewViewsTest, SubPopupOpensWithAutoselectByRightKey) {
 
 TEST_F(PopupViewViewsTest, SubPopupOpensForNonSelectableContentSelection) {
   Suggestion suggestion = CreateSuggestionWithChildren(
-      SuggestionType::kAddressEntry,
-      {Suggestion(u"Child", SuggestionType::kAddressEntry)});
+      SuggestionType::kPasswordEntry,
+      {Suggestion(u"Child", SuggestionType::kPasswordFieldByFieldFilling)});
   suggestion.acceptability = Suggestion::Acceptability::kUnacceptable;
   controller().set_suggestions({suggestion});
   CreateAndShowView();
@@ -2041,8 +2411,8 @@ TEST_F(PopupViewViewsTest, SubPopupOpensForNonSelectableContentSelection) {
 
 TEST_F(PopupViewViewsTest, SubPopupNotOpenForSelectableContentSelection) {
   Suggestion suggestion = CreateSuggestionWithChildren(
-      SuggestionType::kAddressEntry,
-      {Suggestion(u"Child", SuggestionType::kAddressEntry)});
+      SuggestionType::kPasswordEntry,
+      {Suggestion(u"Child", SuggestionType::kPasswordFieldByFieldFilling)});
   suggestion.acceptability = Suggestion::Acceptability::kAcceptable;
   controller().set_suggestions({suggestion});
   CreateAndShowView();
@@ -2057,8 +2427,8 @@ TEST_F(PopupViewViewsTest, SubPopupNotOpenForSelectableContentSelection) {
 TEST_F(PopupViewViewsTest,
        SubPopupNotOpenForMerchantOptedOutVcnContentSelection) {
   Suggestion suggestion = CreateSuggestionWithChildren(
-      SuggestionType::kAddressEntry,
-      {Suggestion(u"Child", SuggestionType::kAddressEntry)});
+      SuggestionType::kPasswordEntry,
+      {Suggestion(u"Child", SuggestionType::kPasswordFieldByFieldFilling)});
   suggestion.acceptability =
       Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle;
   controller().set_suggestions({suggestion});
@@ -2296,7 +2666,8 @@ TEST_P(PopupViewViewsTestWithClickableSuggestionType,
 TEST_P(PopupViewViewsTestWithClickableSuggestionType,
        IgnoreClickIfFocusedAtPaintWithoutExit) {
   CreateAndShowView({type()});
-  EXPECT_CALL(controller(), AcceptSuggestion).Times(0);
+  EXPECT_CALL(controller(), AcceptSuggestion)
+      .Times(BypassesInitialHoverClickSuppression() ? 1 : 0);
   generator().MoveMouseTo(GetCenterOfSuggestion(0));
   ASSERT_TRUE(view().IsMouseHovered());
   Paint();
@@ -2309,7 +2680,8 @@ TEST_P(PopupViewViewsTestWithClickableSuggestionType,
 TEST_P(PopupViewViewsTestWithClickableSuggestionType,
        IgnoreClickIfFocusedAtPaintWithSlightMouseMovement) {
   CreateAndShowView({type()});
-  EXPECT_CALL(controller(), AcceptSuggestion).Times(0);
+  EXPECT_CALL(controller(), AcceptSuggestion)
+      .Times(BypassesInitialHoverClickSuppression() ? 1 : 0);
   int width = GetRowViewAt(0).width();
   int height = GetRowViewAt(0).height();
   for (int x : {-width / 3, width / 3}) {
@@ -2403,12 +2775,14 @@ TEST_F(PopupViewViewsTest, SearchBar_QueryIsSetAsFilterToController) {
     InSequence s;
     EXPECT_CALL(
         controller(),
-        SetFilter(std::optional(
-            AutofillPopupController::SuggestionFilter(u"search input"))));
+        SetFilter(std::optional(AutofillPopupController::SuggestionFilter(
+                      AutofillPopupController::StringFilter(u"search input"))),
+                  AutofillPopupController::FilterSource::kInputChanged));
     EXPECT_CALL(check, Call);
     EXPECT_CALL(
         controller(),
-        SetFilter(std::optional<AutofillPopupController::SuggestionFilter>()));
+        SetFilter(std::optional<AutofillPopupController::SuggestionFilter>(),
+                  AutofillPopupController::FilterSource::kInputChanged));
   }
 
   test_api(view()).SetSearchQuery(u"search input");
@@ -2429,9 +2803,71 @@ TEST_F(PopupViewViewsTest, SearchBar_PressedKeysPassedToController) {
 
   EXPECT_CALL(controller(),
               HandleKeyPressEvent(Field(&input::NativeWebKeyboardEvent::dom_key,
-                                        ui::DomKey::Key::ARROW_DOWN)));
+                                        ui::DomKey::ARROW_DOWN)));
 
   generator().PressAndReleaseKey(ui::VKEY_DOWN);
+}
+
+TEST_F(PopupViewViewsTest, TabbedPane_ConfigPassedThroughAndRendered) {
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  CreateAndShowView({SuggestionType::kCreditCardEntry},
+                    /*widget_params=*/std::nullopt,
+                    /*search_bar_config=*/std::nullopt,
+                    std::move(tabbed_pane_config));
+
+  views::TabbedPane* tabbed_pane = nullptr;
+  for (views::View* child : view().children()) {
+    if (views::IsViewClass<views::TabbedPane>(child)) {
+      tabbed_pane = views::AsViewClass<views::TabbedPane>(child);
+      break;
+    }
+  }
+
+  ASSERT_NE(tabbed_pane, nullptr);
+  ASSERT_EQ(tabbed_pane->GetTabCount(), 2u);
+  EXPECT_EQ(tabbed_pane->GetTabAt(0)->GetTitleText(), u"Pay Now Test");
+  EXPECT_EQ(tabbed_pane->GetTabAt(1)->GetTitleText(), u"Pay Later Test");
+}
+
+TEST_F(PopupViewViewsTest, TabbedPane_SuggestionFilteredForInitialShow) {
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  EXPECT_CALL(controller(),
+              SetFilter(Eq(AutofillPopupController::SuggestionFilter(
+                            kDefaultSuggestionTabIndex)),
+                        AutofillPopupController::FilterSource::kTabSelected));
+
+  CreateAndShowView({SuggestionType::kCreditCardEntry},
+                    /*widget_params=*/std::nullopt,
+                    /*search_bar_config=*/std::nullopt,
+                    std::move(tabbed_pane_config));
+}
+
+TEST_F(PopupViewViewsTest, TabbedPane_InitialWidthMaintainedWhenSwitchingTabs) {
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later"}});
+
+  CreateAndShowView({SuggestionType::kCreditCardEntry},
+                    /*widget_params=*/std::nullopt,
+                    /*search_bar_config=*/std::nullopt,
+                    std::move(tabbed_pane_config));
+
+  int initial_width = widget().GetWindowBoundsInScreen().width();
+  EXPECT_LE(initial_width, TestPopupViewViews::kAutofillPopupMaxWidth);
+
+  // Simulate tab switch by manually changing suggestions.
+  Suggestion bnpl_footnote(SuggestionType::kBnplFootnote);
+  controller().set_suggestions({bnpl_footnote});
+  static_cast<AutofillPopupView&>(view()).OnSuggestionsChanged(
+      /*prefer_prev_arrow_side=*/false);
+
+  EXPECT_EQ(widget().GetWindowBoundsInScreen().width(), initial_width);
 }
 
 TEST_F(PopupViewViewsTest, WarningOnShowA11yFocus) {
@@ -2444,6 +2880,15 @@ TEST_F(PopupViewViewsTest, WarningOnShowA11yFocus) {
   ASSERT_TRUE(row_view);
 
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kFocus, *row_view));
+}
+
+TEST_F(PopupViewViewsTest, WarningOnShow_DestroyOnA11yFocus) {
+  CreateView();
+  controller().set_suggestions({SuggestionType::kMixedFormMessage});
+  view().DestroyOnNotifyAxSelection();
+
+  // This should not crash!
+  ShowView(&view(), widget());
 }
 
 TEST_F(PopupViewViewsTest, Show_A11yAnnouncesPasswordRecovery) {
@@ -2511,6 +2956,208 @@ TEST_F(PopupViewViewsTest,
   EXPECT_CALL(announcement, Run).Times(0);
   controller().set_suggestions(suggestions);
   static_cast<AutofillPopupView&>(view()).OnSuggestionsChanged(false);
+}
+
+TEST_F(PopupViewViewsTest, Show_A11yAnnouncesLoadingState) {
+  controller().set_suggestions({SuggestionType::kLoadingThrobber});
+  CreateView();
+  base::MockCallback<base::RepeatingCallback<void(const std::u16string&, bool)>>
+      announcement;
+  test_api(view()).SetA11yAnnouncer(announcement.Get());
+
+  EXPECT_CALL(announcement,
+              Run(l10n_util::GetStringUTF16(
+                      IDS_AUTOFILL_BNPL_PROGRESS_DIALOG_LOADING_MESSAGE),
+                  true));
+  ShowView(&view(), widget());
+}
+
+TEST_F(PopupViewViewsTest, Show_A11yDoesNotAnnounceLoadingStateForOtherTypes) {
+  controller().set_suggestions({SuggestionType::kCreditCardEntry});
+  CreateView();
+  base::MockCallback<base::RepeatingCallback<void(const std::u16string&, bool)>>
+      announcement;
+  test_api(view()).SetA11yAnnouncer(announcement.Get());
+
+  EXPECT_CALL(announcement, Run).Times(0);
+  ShowView(&view(), widget());
+}
+
+TEST_F(PopupViewViewsTest, OnSuggestionsChanged_A11yAnnouncesLoadingState) {
+  controller().set_suggestions({SuggestionType::kCreditCardEntry});
+  CreateAndShowView();
+  base::MockCallback<base::RepeatingCallback<void(const std::u16string&, bool)>>
+      announcement;
+  test_api(view()).SetA11yAnnouncer(announcement.Get());
+
+  EXPECT_CALL(announcement,
+              Run(l10n_util::GetStringUTF16(
+                      IDS_AUTOFILL_BNPL_PROGRESS_DIALOG_LOADING_MESSAGE),
+                  true));
+  controller().set_suggestions({SuggestionType::kLoadingThrobber});
+  static_cast<AutofillPopupView&>(view()).OnSuggestionsChanged(false);
+}
+
+TEST_F(PopupViewViewsTest, TabSelected_A11yAnnouncesBnplFootnote) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kAutofillEnablePayNowPayLaterTabs);
+
+  AutofillPopupView::TabbedPaneConfig tabbed_pane_config(
+      {{TabbedPaneTabType::kPayNow, u"Pay Now Test"},
+       {TabbedPaneTabType::kPayLater, u"Pay Later Test"}});
+
+  Suggestion bnpl_footnote(SuggestionType::kBnplFootnote);
+  bnpl_footnote.tab_index = SuggestionTabIndex(1);
+  controller().set_suggestions(
+      {Suggestion(SuggestionType::kCreditCardEntry), std::move(bnpl_footnote)});
+
+  CreateAndShowView(/*widget_params=*/std::nullopt,
+                    /*search_bar_config=*/std::nullopt,
+                    std::move(tabbed_pane_config));
+
+  base::MockCallback<base::RepeatingCallback<void(const std::u16string&, bool)>>
+      announcement;
+  test_api(view()).SetA11yAnnouncer(announcement.Get());
+
+  EXPECT_CALL(controller(), OnTabSelected(1, TabbedPaneTabType::kPayLater));
+
+  std::u16string tab_announcement = l10n_util::GetStringFUTF16(
+      IDS_AUTOFILL_PAY_NOW_PAY_LATER_TAB_ACCESSIBILITY_ANNOUNCEMENT,
+      u"Pay Later Test", u"2", u"2");
+
+  std::u16string footnote_announcement = l10n_util::GetStringFUTF16(
+      IDS_AUTOFILL_CARD_BNPL_PAY_LATER_OPTIONS_AI_FOOTNOTE,
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_CARD_BNPL_SELECT_PROVIDER_FOOTNOTE_HIDE_OPTION_PAYMENT_SETTINGS_LINK_TEXT));
+
+  EXPECT_CALL(announcement,
+              Run(l10n_util::GetStringFUTF16(
+                      IDS_AUTOFILL_A11Y_ANNOUNCEMENT_CONCATENATE_TWO_STRINGS,
+                      tab_announcement, footnote_announcement),
+                  true));
+  SimulateKeyPress(ui::VKEY_RIGHT);
+}
+
+TEST_F(PopupViewViewsTest, SearchBar_RemainVisibleEvenWithNoSuggestions) {
+  ON_CALL(controller(), GetAutofillSuggestionTriggerSource)
+      .WillByDefault(
+          Return(AutofillSuggestionTriggerSource::kAtMemoryTriggerString));
+  CreateAndShowView(/*ids=*/{}, CreateParamsForTestWidget(),
+                    AutofillPopupView::SearchBarConfig{
+                        .placeholder = u"Recall from memory",
+                        .no_results_message = u""});
+
+  // The popup should not be hidden due to no suggestions.
+  EXPECT_CALL(controller(), Hide(SuggestionHidingReason::kNoSuggestions))
+      .Times(0);
+  // It may be hidden when the search bar loses focus (e.g. on destruction).
+  EXPECT_CALL(controller(), Hide(SuggestionHidingReason::kSearchBarFocusLost))
+      .Times(testing::AnyNumber());
+
+  static_cast<AutofillPopupView&>(view()).OnSuggestionsChanged(false);
+
+  EXPECT_TRUE(widget().IsVisible());
+}
+
+TEST_F(PopupViewViewsTest, AtMemory_KeyboardNavigation) {
+  ON_CALL(controller(), GetAutofillSuggestionTriggerSource)
+      .WillByDefault(
+          Return(AutofillSuggestionTriggerSource::kAtMemoryTriggerString));
+  input::NativeWebKeyboardEvent event(
+      blink::WebKeyboardEvent::Type::kRawKeyDown,
+      blink::WebInputEvent::kNoModifiers, ui::EventTimeForNow());
+  CreateAndShowView({SuggestionType::kAtMemorySearchResult},
+                    CreateParamsForTestWidget(),
+                    AutofillPopupView::SearchBarConfig{
+                        .placeholder = u"Recall from memory",
+                        .no_results_message = u""});
+
+  // After `DoUpdateBoundsAndRedrawPopup()` is called,
+  // the popup view width is clamped to `kAtMemoryPopupWidth`.
+  EXPECT_EQ(view().size().width(), PopupViewViews::kAtMemoryPopupWidth);
+
+  // Allow Hide(kSearchBarFocusLost) which happens during teardown.
+  Mock::VerifyAndClearExpectations(&controller());
+  EXPECT_CALL(controller(), Hide(SuggestionHidingReason::kSearchBarFocusLost))
+      .Times(testing::AnyNumber());
+
+  // RETURN triggers filter update when no suggestion is selected.
+  EXPECT_CALL(controller(),
+              SetFilter(Eq(AutofillPopupController::SuggestionFilter(
+                            AutofillPopupController::StringFilter(u"query"))),
+                        AutofillPopupController::FilterSource::kInputChanged));
+  EXPECT_CALL(
+      controller(),
+      SetFilter(Eq(AutofillPopupController::SuggestionFilter(
+                    AutofillPopupController::StringFilter(u"query"))),
+                AutofillPopupController::FilterSource::kSearchSubmitted));
+  test_api(view()).SetSearchQuery(u"query");
+  task_environment()->RunUntilIdle();
+  event.windows_key_code = ui::VKEY_RETURN;
+  EXPECT_TRUE(test_api(view()).HandleKeyPressEvent(event));
+
+  // DOWN selects the first suggestion if nothing is selected.
+  EXPECT_EQ(view().GetSelectedCell(), std::nullopt);
+  event.windows_key_code = ui::VKEY_DOWN;
+  EXPECT_TRUE(test_api(view()).HandleKeyPressEvent(event));
+  EXPECT_EQ(view().GetSelectedCell(),
+            std::make_optional<CellIndex>(0, CellType::kContent));
+
+  // RETURN key accepts selected suggestion.
+  EXPECT_CALL(controller(), AcceptSuggestion(0, _));
+  event.windows_key_code = ui::VKEY_RETURN;
+  EXPECT_TRUE(test_api(view()).HandleKeyPressEvent(event));
+
+  // ESCAPE hides popup.
+  EXPECT_CALL(controller(), Hide(SuggestionHidingReason::kUserAborted));
+  event.windows_key_code = ui::VKEY_ESCAPE;
+  EXPECT_TRUE(test_api(view()).HandleKeyPressEvent(event));
+}
+
+// Tests that arrow keys can be used to navigate between parent and sub-popup
+// back and forth.
+TEST_F(PopupViewViewsTest, AtMemory_KeyboardArrowsNavigationBetweenPopups) {
+  ON_CALL(controller(), GetAutofillSuggestionTriggerSource)
+      .WillByDefault(
+          Return(AutofillSuggestionTriggerSource::kAtMemoryTriggerString));
+
+  controller().set_suggestions({
+      CreateSuggestionWithChildren(
+          SuggestionType::kAtMemorySearchResult,
+          {Suggestion(u"Child #1", SuggestionType::kAtMemorySearchResult)}),
+  });
+  CreateAndShowView();
+
+  // Select first row content.
+  view().SetSelectedCell(CellIndex{0, CellType::kContent},
+                         PopupCellSelectionSource::kNonUserInput);
+
+  // Press Right arrow to open the flyout menu.
+  EXPECT_CALL(controller(), OpenSubPopup(_, _, _));
+  SimulateKeyPress(ui::VKEY_RIGHT);
+  task_environment()->FastForwardBy(PopupViewViews::kNonMouseOpenSubPopupDelay);
+
+  auto [sub_controller, sub_view] = OpenSubView(
+      view(), {Suggestion(u"Child #1", SuggestionType::kAtMemorySearchResult)});
+
+  ON_CALL(*sub_controller, GetMainFillingProduct())
+      .WillByDefault(Return(FillingProduct::kAtMemory));
+
+  // Select a cell in the sub-view to give it focus.
+  sub_view->SetSelectedCell(CellIndex{0, CellType::kContent},
+                            PopupCellSelectionSource::kNonUserInput);
+
+  // Verify that left arrow in the sub-view closes it.
+  input::NativeWebKeyboardEvent event(
+      blink::WebKeyboardEvent::Type::kRawKeyDown,
+      blink::WebInputEvent::kNoModifiers, ui::EventTimeForNow());
+  event.windows_key_code = ui::VKEY_LEFT;
+
+  EXPECT_FALSE(test_api(*sub_view).HandleKeyPressEvent(event));
+  EXPECT_TRUE(test_api(view()).HandleKeyPressEvent(event));
+
+  EXPECT_EQ(test_api(view()).GetOpenSubPopupRow(), std::nullopt);
 }
 
 }  // namespace

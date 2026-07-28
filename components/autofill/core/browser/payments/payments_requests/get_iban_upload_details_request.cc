@@ -4,9 +4,20 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_iban_upload_details_request.h"
 
+#include <stdint.h>
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "components/autofill/core/browser/payments/client_behavior_constants.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -18,6 +29,7 @@ const char kGetIbanUploadDetailsRequestPath[] =
 GetIbanUploadDetailsRequest::GetIbanUploadDetailsRequest(
     const bool full_sync_enabled,
     const std::string& app_locale,
+    const std::vector<ClientBehaviorConstants>& client_behavior_signals,
     int64_t billing_customer_number,
     const std::string& country_code,
     base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
@@ -26,6 +38,7 @@ GetIbanUploadDetailsRequest::GetIbanUploadDetailsRequest(
                             std::unique_ptr<base::DictValue>)> callback)
     : full_sync_enabled_(full_sync_enabled),
       app_locale_(app_locale),
+      client_behavior_signals_(client_behavior_signals),
       billing_customer_number_(billing_customer_number),
       country_code_(country_code),
       callback_(std::move(callback)) {}
@@ -44,16 +57,16 @@ std::string GetIbanUploadDetailsRequest::GetRequestContent() {
   base::DictValue request_dict;
   base::DictValue context;
   context.Set("language_code", app_locale_);
-  context.Set("billable_service",
-              payments::kUploadPaymentMethodBillableServiceNumber);
+  context.Set("billable_service", kUploadPaymentMethodBillableServiceNumber);
   if (billing_customer_number_ != 0) {
     context.Set("customer_context",
                 BuildCustomerContextDictionary(billing_customer_number_));
   }
   request_dict.Set("context", std::move(context));
-  base::DictValue chrome_user_context;
-  chrome_user_context.Set("full_sync_enabled", full_sync_enabled_);
-  request_dict.Set("chrome_user_context", std::move(chrome_user_context));
+  request_dict.Set(
+      "chrome_user_context",
+      BuildChromeUserContext(client_behavior_signals_, full_sync_enabled_));
+
   base::DictValue iban_info;
   iban_info.Set("iban_region_code", country_code_);
   request_dict.Set("iban_info", std::move(iban_info));

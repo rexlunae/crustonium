@@ -27,6 +27,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
+#include "base/test/with_feature_override.h"
 #include "base/time/clock.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -35,6 +36,7 @@
 #include "components/content_settings/core/browser/content_settings_observer.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
@@ -142,12 +144,11 @@ class TestGeolocationPermissionContextDelegate
 
 // GeolocationPermissionContextTests ------------------------------------------
 
-class GeolocationPermissionContextTests
+class GeolocationPermissionContextTestsBase
     : public content::RenderViewHostTestHarness,
-      public permissions::Observer,
-      public testing::WithParamInterface<bool> {
+      public permissions::Observer {
  public:
-  GeolocationPermissionContextTests();
+  GeolocationPermissionContextTestsBase();
 
  protected:
   // RenderViewHostTestHarness:
@@ -162,7 +163,9 @@ class GeolocationPermissionContextTests
       const PermissionRequestID& id,
       const GURL& requesting_frame,
       bool user_gesture,
-      bool embedded_permission_element_initiated = false);
+      bool embedded_permission_element_initiated = false,
+      blink::mojom::PermissionName permission_name =
+          blink::mojom::PermissionName::GEOLOCATION);
 
   blink::mojom::PermissionStatus GetPermissionStatus(
       const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
@@ -188,13 +191,6 @@ class GeolocationPermissionContextTests
   void OnPermissionChanged(const ContentSettingsPattern& primary_pattern,
                            const ContentSettingsPattern& secondary_pattern,
                            ContentSettingsTypeSet content_type_set) override;
-
-  ContentSettingsType GetGeolocationContentSettingsType() {
-    return base::FeatureList::IsEnabled(
-               content_settings::features::kApproximateGeolocationPermission)
-               ? ContentSettingsType::GEOLOCATION_WITH_OPTIONS
-               : ContentSettingsType::GEOLOCATION;
-  }
 
 #if BUILDFLAG(IS_ANDROID)
   bool RequestPermissionIsLSDShown(const GURL& origin);
@@ -247,23 +243,37 @@ class GeolocationPermissionContextTests
   base::test::ScopedFeatureList feature_list_;
 };
 
-GeolocationPermissionContextTests::GeolocationPermissionContextTests() {
+GeolocationPermissionContextTestsBase::GeolocationPermissionContextTestsBase() {
   feature_list_.InitWithFeatureStates({
 #if BUILDFLAG(IS_WIN)
       {::features::kWinSystemLocationPermission, true},
 #endif  // BUILDFLAG(IS_WIN)
-      {content_settings::features::kApproximateGeolocationPermission,
-       GetParam()}});
+  });
 }
 
-PermissionRequestID GeolocationPermissionContextTests::RequestID(
+class GeolocationPermissionContextTests
+    : public base::test::WithFeatureOverride,
+      public GeolocationPermissionContextTestsBase {
+ public:
+  GeolocationPermissionContextTests()
+      : base::test::WithFeatureOverride(
+            content_settings::features::kApproximateGeolocationPermission) {}
+};
+
+class ApproximateOnlyGeolocationPermissionContextTests
+    : public GeolocationPermissionContextTestsBase {
+  base::test::ScopedFeatureList enable_approx_location_{
+      content_settings::features::kApproximateGeolocationPermission};
+};
+
+PermissionRequestID GeolocationPermissionContextTestsBase::RequestID(
     int request_id) {
   return PermissionRequestID(
       web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
       PermissionRequestID::RequestLocalId(request_id));
 }
 
-PermissionRequestID GeolocationPermissionContextTests::RequestIDForTab(
+PermissionRequestID GeolocationPermissionContextTestsBase::RequestIDForTab(
     int tab,
     int request_id) {
   return PermissionRequestID(
@@ -271,35 +281,38 @@ PermissionRequestID GeolocationPermissionContextTests::RequestIDForTab(
       PermissionRequestID::RequestLocalId(request_id));
 }
 
-void GeolocationPermissionContextTests::RequestGeolocationPermission(
+void GeolocationPermissionContextTestsBase::RequestGeolocationPermission(
     const PermissionRequestID& id,
     const GURL& requesting_frame,
     bool user_gesture,
-    bool embedded_permission_element_initiated) {
-  std::unique_ptr<PermissionResolver> resolver =
-      base::FeatureList::IsEnabled(
-          content_settings::features::kApproximateGeolocationPermission)
-          ? std::unique_ptr<PermissionResolver>(
-                std::make_unique<GeolocationPermissionResolver>(
-                    blink::mojom::PermissionDescriptor(
-                        blink::mojom::PermissionName::GEOLOCATION, nullptr)))
-          : std::make_unique<ContentSettingPermissionResolver>(
-                ContentSettingsType::GEOLOCATION);
+    bool embedded_permission_element_initiated,
+    blink::mojom::PermissionName permission_name) {
   auto request_data = std::make_unique<permissions::PermissionRequestData>(
-      std::move(resolver), id, user_gesture, requesting_frame);
+      blink::mojom::PermissionDescriptor::New(permission_name,
+                                              /*extension=*/nullptr),
+      id, user_gesture, requesting_frame);
+
   if (embedded_permission_element_initiated) {
     request_data->embedded_permission_request_descriptor =
         blink::mojom::EmbeddedPermissionRequestDescriptor::New();
+    if (permission_name ==
+            blink::mojom::PermissionName::GEOLOCATION_APPROXIMATE ||
+        permission_name == blink::mojom::PermissionName::GEOLOCATION) {
+      request_data->embedded_permission_request_descriptor->detail = blink::
+          mojom::EmbeddedPermissionControlDescriptorExtension::NewGeolocation(
+              blink::mojom::GeolocationEmbeddedPermissionRequestDescriptor::New(
+                  /*autolocate=*/false));
+    }
   }
   geolocation_permission_context_->RequestPermission(
       std::move(request_data),
-      base::BindOnce(&GeolocationPermissionContextTests::PermissionResponse,
+      base::BindOnce(&GeolocationPermissionContextTestsBase::PermissionResponse,
                      base::Unretained(this), id));
   content::RunAllTasksUntilIdle();
 }
 
 blink::mojom::PermissionStatus
-GeolocationPermissionContextTests::GetPermissionStatus(
+GeolocationPermissionContextTestsBase::GetPermissionStatus(
     const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
     const GURL& requesting_origin) {
   return browser_context()
@@ -310,7 +323,7 @@ GeolocationPermissionContextTests::GetPermissionStatus(
 }
 
 blink::mojom::PermissionStatus
-GeolocationPermissionContextTests::GetPermissionStatus(
+GeolocationPermissionContextTestsBase::GetPermissionStatus(
     blink::PermissionType permission,
     const GURL& requesting_origin) {
   return GetPermissionStatus(
@@ -319,10 +332,10 @@ GeolocationPermissionContextTests::GetPermissionStatus(
       requesting_origin);
 }
 
-void GeolocationPermissionContextTests::PermissionResponse(
+void GeolocationPermissionContextTestsBase::PermissionResponse(
     const PermissionRequestID& id,
     content::PermissionResult permission_result) {
-  LOG(ERROR) << "GeolocationPermissionContextTests::PermissionResponse "
+  LOG(ERROR) << "GeolocationPermissionContextTestsBase::PermissionResponse "
              << id.ToString() << " " << permission_result.status;
   responses_[id.global_render_frame_host_id().child_id] =
       std::make_pair(id.request_local_id_for_testing(),
@@ -330,7 +343,7 @@ void GeolocationPermissionContextTests::PermissionResponse(
   events_.push_back("PermissionResponse");
 }
 
-void GeolocationPermissionContextTests::OnPermissionChanged(
+void GeolocationPermissionContextTestsBase::OnPermissionChanged(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsTypeSet content_type_set) {
@@ -338,18 +351,19 @@ void GeolocationPermissionContextTests::OnPermissionChanged(
   EXPECT_TRUE(secondary_pattern.IsValid());
   EXPECT_EQ(*expected_primary_pattern_, primary_pattern);
   EXPECT_EQ(*expected_secondary_pattern_, secondary_pattern);
-  EXPECT_EQ(content_type_set.GetType(), GetGeolocationContentSettingsType());
+  EXPECT_EQ(content_type_set.GetType(),
+            content_settings::GeolocationContentSettingsType());
   num_permission_updates_++;
   events_.push_back("OnPermissionChanged");
 }
 
-void GeolocationPermissionContextTests::CheckPermissionMessageSent(
+void GeolocationPermissionContextTestsBase::CheckPermissionMessageSent(
     int request_id,
     bool allowed) {
   CheckPermissionMessageSentInternal(process(), request_id, allowed);
 }
 
-void GeolocationPermissionContextTests::CheckPermissionMessageSentForTab(
+void GeolocationPermissionContextTestsBase::CheckPermissionMessageSentForTab(
     int tab,
     int request_id,
     bool allowed) {
@@ -359,7 +373,7 @@ void GeolocationPermissionContextTests::CheckPermissionMessageSentForTab(
       request_id, allowed);
 }
 
-void GeolocationPermissionContextTests::CheckPermissionMessageSentInternal(
+void GeolocationPermissionContextTestsBase::CheckPermissionMessageSentInternal(
     MockRenderProcessHost* process,
     int request_id,
     bool allowed) {
@@ -370,7 +384,7 @@ void GeolocationPermissionContextTests::CheckPermissionMessageSentInternal(
   responses_.erase(process->GetID());
 }
 
-void GeolocationPermissionContextTests::AddNewTab(const GURL& url) {
+void GeolocationPermissionContextTestsBase::AddNewTab(const GURL& url) {
   std::unique_ptr<content::WebContents> new_tab = CreateTestWebContents();
   content::NavigationSimulator::NavigateAndCommitFromBrowser(new_tab.get(),
                                                              url);
@@ -379,7 +393,7 @@ void GeolocationPermissionContextTests::AddNewTab(const GURL& url) {
   extra_tabs_.push_back(std::move(new_tab));
 }
 
-void GeolocationPermissionContextTests::CheckTabContentsState(
+void GeolocationPermissionContextTestsBase::CheckTabContentsState(
     const GURL& requesting_frame,
     ContentSetting expected_content_setting) {
   auto* content_settings =
@@ -387,13 +401,13 @@ void GeolocationPermissionContextTests::CheckTabContentsState(
           web_contents()->GetPrimaryMainFrame());
   EXPECT_TRUE(expected_content_setting == CONTENT_SETTING_BLOCK
                   ? content_settings->IsContentBlocked(
-                        GetGeolocationContentSettingsType())
+                        content_settings::GeolocationContentSettingsType())
                   : content_settings->IsContentAllowed(
-                        GetGeolocationContentSettingsType()));
+                        content_settings::GeolocationContentSettingsType()));
 }
 
 std::unique_ptr<content::BrowserContext>
-GeolocationPermissionContextTests::CreateBrowserContext() {
+GeolocationPermissionContextTestsBase::CreateBrowserContext() {
   std::unique_ptr<content::TestBrowserContext> test_browser_contest =
       std::make_unique<content::TestBrowserContext>();
   test_browser_contest->SetPermissionControllerDelegate(
@@ -401,7 +415,7 @@ GeolocationPermissionContextTests::CreateBrowserContext() {
   return test_browser_contest;
 }
 
-void GeolocationPermissionContextTests::SetUp() {
+void GeolocationPermissionContextTestsBase::SetUp() {
   RenderViewHostTestHarness::SetUp();
 
   content_settings::PageSpecificContentSettings::CreateForWebContents(
@@ -448,19 +462,18 @@ void GeolocationPermissionContextTests::SetUp() {
 
   PermissionManager* permission_manager = static_cast<PermissionManager*>(
       browser_context()->GetPermissionControllerDelegate());
-  permission_manager
-      ->PermissionContextsForTesting()[GetGeolocationContentSettingsType()] =
-      std::move(context);
+  permission_manager->PermissionContextsForTesting()
+      [content_settings::GeolocationContentSettingsType()] = std::move(context);
 }
 
-void GeolocationPermissionContextTests::TearDown() {
+void GeolocationPermissionContextTestsBase::TearDown() {
   mock_permission_prompt_factories_.clear();
   extra_tabs_.clear();
   DeleteContents();
   RenderViewHostTestHarness::TearDown();
 }
 
-void GeolocationPermissionContextTests::SetupRequestManager(
+void GeolocationPermissionContextTestsBase::SetupRequestManager(
     content::WebContents* web_contents) {
   // Create PermissionRequestManager.
   PermissionRequestManager::CreateForWebContents(web_contents);
@@ -475,7 +488,7 @@ void GeolocationPermissionContextTests::SetupRequestManager(
 
 #if BUILDFLAG(IS_ANDROID)
 
-bool GeolocationPermissionContextTests::RequestPermissionIsLSDShown(
+bool GeolocationPermissionContextTestsBase::RequestPermissionIsLSDShown(
     const GURL& origin) {
   NavigateAndCommit(origin);
   RequestManagerDocumentLoadCompleted();
@@ -485,7 +498,7 @@ bool GeolocationPermissionContextTests::RequestPermissionIsLSDShown(
   return MockLocationSettings::HasShownLocationSettingsDialog();
 }
 
-bool GeolocationPermissionContextTests::
+bool GeolocationPermissionContextTestsBase::
     RequestPermissionIsLSDShownWithPermissionPrompt(const GURL& origin) {
   NavigateAndCommit(origin);
   RequestManagerDocumentLoadCompleted();
@@ -498,30 +511,32 @@ bool GeolocationPermissionContextTests::
   return MockLocationSettings::HasShownLocationSettingsDialog();
 }
 
-void GeolocationPermissionContextTests::AddDayOffsetForTesting(int days) {
+void GeolocationPermissionContextTestsBase::AddDayOffsetForTesting(int days) {
   GeolocationPermissionContextAndroid::AddDayOffsetForTesting(days);
 }
 #endif
 
-void GeolocationPermissionContextTests::RequestManagerDocumentLoadCompleted() {
-  GeolocationPermissionContextTests::RequestManagerDocumentLoadCompleted(
+void GeolocationPermissionContextTestsBase::
+    RequestManagerDocumentLoadCompleted() {
+  GeolocationPermissionContextTestsBase::RequestManagerDocumentLoadCompleted(
       web_contents());
 }
 
-void GeolocationPermissionContextTests::RequestManagerDocumentLoadCompleted(
+void GeolocationPermissionContextTestsBase::RequestManagerDocumentLoadCompleted(
     content::WebContents* web_contents) {
   PermissionRequestManager::FromWebContents(web_contents)
       ->DocumentOnLoadCompletedInPrimaryMainFrame();
 }
 
-void GeolocationPermissionContextTests::ExpectGeolocationPermissionSettingAsk(
-    const GURL& frame_0,
-    const GURL& frame_1) {
+void GeolocationPermissionContextTestsBase::
+    ExpectGeolocationPermissionSettingAsk(const GURL& frame_0,
+                                          const GURL& frame_1) {
   PermissionSetting permission_setting =
       PermissionsClient::Get()
           ->GetSettingsMap(browser_context())
-          ->GetPermissionSetting(frame_0, frame_1,
-                                 GetGeolocationContentSettingsType());
+          ->GetPermissionSetting(
+              frame_0, frame_1,
+              content_settings::GeolocationContentSettingsType());
   if (auto* content_setting =
           std::get_if<ContentSetting>(&permission_setting)) {
     EXPECT_EQ(CONTENT_SETTING_ASK, *content_setting);
@@ -535,45 +550,42 @@ void GeolocationPermissionContextTests::ExpectGeolocationPermissionSettingAsk(
   }
 }
 
-void GeolocationPermissionContextTests::SetGeolocationContentSetting(
+void GeolocationPermissionContextTestsBase::SetGeolocationContentSetting(
     const GURL& frame_0,
     const GURL& frame_1,
     ContentSetting content_setting) {
-  PermissionSetting permission_setting = content_setting;
-  if (GetGeolocationContentSettingsType() ==
-      ContentSettingsType::GEOLOCATION_WITH_OPTIONS) {
-    permission_setting = GeolocationSetting{
-        .approximate = content_settings::ToPermissionOption(content_setting),
-        .precise = content_settings::ToPermissionOption(content_setting),
-    };
-  }
+  PermissionSetting permission_setting =
+      content_settings::PermissionSettingsRegistry::GetInstance()
+          ->Get(content_settings::GeolocationContentSettingsType())
+          ->delegate()
+          .ToPermissionSetting(content_setting);
   return PermissionsClient::Get()
       ->GetSettingsMap(browser_context())
-      ->SetPermissionSettingDefaultScope(frame_0, frame_1,
-                                         GetGeolocationContentSettingsType(),
-                                         permission_setting);
+      ->SetPermissionSettingDefaultScope(
+          frame_0, frame_1, content_settings::GeolocationContentSettingsType(),
+          permission_setting);
 }
 
-bool GeolocationPermissionContextTests::HasActivePrompt() {
+bool GeolocationPermissionContextTestsBase::HasActivePrompt() {
   return HasActivePrompt(web_contents());
 }
 
-bool GeolocationPermissionContextTests::HasActivePrompt(
+bool GeolocationPermissionContextTestsBase::HasActivePrompt(
     content::WebContents* web_contents) {
   PermissionRequestManager* manager =
       PermissionRequestManager::FromWebContents(web_contents);
   return manager->IsRequestInProgress();
 }
 
-void GeolocationPermissionContextTests::AcceptPrompt() {
+void GeolocationPermissionContextTestsBase::AcceptPrompt() {
   return AcceptPrompt(web_contents());
 }
 
-void GeolocationPermissionContextTests::AcceptPrompt(
+void GeolocationPermissionContextTestsBase::AcceptPrompt(
     content::WebContents* web_contents) {
   PermissionRequestManager* manager =
       PermissionRequestManager::FromWebContents(web_contents);
-  manager->Accept(GetGeolocationContentSettingsType() ==
+  manager->Accept(content_settings::GeolocationContentSettingsType() ==
                           ContentSettingsType::GEOLOCATION_WITH_OPTIONS
                       ? PromptOptions(GeolocationPromptOptions{
                             .selected_accuracy = GeolocationAccuracy::kPrecise})
@@ -581,11 +593,11 @@ void GeolocationPermissionContextTests::AcceptPrompt(
   base::RunLoop().RunUntilIdle();
 }
 
-void GeolocationPermissionContextTests::AcceptPromptThisTime() {
+void GeolocationPermissionContextTestsBase::AcceptPromptThisTime() {
   PermissionRequestManager* manager =
       PermissionRequestManager::FromWebContents(web_contents());
   manager->AcceptThisTime(
-      GetGeolocationContentSettingsType() ==
+      content_settings::GeolocationContentSettingsType() ==
               ContentSettingsType::GEOLOCATION_WITH_OPTIONS
           ? PromptOptions(GeolocationPromptOptions{
                 .selected_accuracy = GeolocationAccuracy::kPrecise})
@@ -593,21 +605,21 @@ void GeolocationPermissionContextTests::AcceptPromptThisTime() {
   base::RunLoop().RunUntilIdle();
 }
 
-void GeolocationPermissionContextTests::DenyPrompt() {
+void GeolocationPermissionContextTestsBase::DenyPrompt() {
   PermissionRequestManager* manager =
       PermissionRequestManager::FromWebContents(web_contents());
   manager->Deny(/*prompt_options=*/std::monostate());
   base::RunLoop().RunUntilIdle();
 }
 
-void GeolocationPermissionContextTests::ClosePrompt() {
+void GeolocationPermissionContextTestsBase::ClosePrompt() {
   PermissionRequestManager* manager =
       PermissionRequestManager::FromWebContents(web_contents());
   manager->Dismiss(/*prompt_options=*/std::monostate());
   base::RunLoop().RunUntilIdle();
 }
 
-std::u16string GeolocationPermissionContextTests::GetPromptText() {
+std::u16string GeolocationPermissionContextTestsBase::GetPromptText() {
   PermissionRequestManager* manager =
       PermissionRequestManager::FromWebContents(web_contents());
   auto& request = manager->Requests().front();
@@ -632,6 +644,59 @@ TEST_P(GeolocationPermissionContextTests, SinglePermissionPrompt) {
   EXPECT_FALSE(HasActivePrompt());
   RequestGeolocationPermission(RequestID(0), requesting_frame, true);
   ASSERT_TRUE(HasActivePrompt());
+}
+
+TEST_P(GeolocationPermissionContextTests, ApproximatePermissionPropagated) {
+  GURL requesting_frame("https://www.example.com/geolocation");
+  NavigateAndCommit(requesting_frame);
+  RequestManagerDocumentLoadCompleted();
+
+  EXPECT_FALSE(HasActivePrompt());
+
+  // Request approximate location.
+  RequestGeolocationPermission(
+      RequestID(0), requesting_frame, /*user_gesture=*/true,
+      /*embedded_permission_element_initiated=*/false,
+      blink::mojom::PermissionName::GEOLOCATION_APPROXIMATE);
+
+  ASSERT_TRUE(HasActivePrompt());
+
+  PermissionRequestManager* manager =
+      PermissionRequestManager::FromWebContents(web_contents());
+  manager->Accept(
+      content_settings::GeolocationContentSettingsType() ==
+              ContentSettingsType::GEOLOCATION_WITH_OPTIONS
+          ? PromptOptions(GeolocationPromptOptions{
+                .selected_accuracy = GeolocationAccuracy::kApproximate})
+          : std::monostate());
+  EXPECT_FALSE(HasActivePrompt());
+
+  // On Android, if approximate location was requested, it should be granted
+  // for GEOLOCATION_APPROXIMATE.
+  CheckPermissionMessageSent(0, true);
+  EXPECT_EQ(PermissionStatus::GRANTED,
+            GetPermissionStatus(blink::PermissionType::GEOLOCATION_APPROXIMATE,
+                                requesting_frame));
+}
+
+TEST_F(ApproximateOnlyGeolocationPermissionContextTests,
+       ApproximateGeolocationPromptText) {
+  GURL requesting_frame("https://www.example.com/geolocation");
+  NavigateAndCommit(requesting_frame);
+  RequestManagerDocumentLoadCompleted();
+
+  EXPECT_FALSE(HasActivePrompt());
+  RequestGeolocationPermission(
+      RequestID(0), requesting_frame, true,
+      /*embedded_permission_element_initiated=*/true,
+      blink::mojom::PermissionName::GEOLOCATION_APPROXIMATE);
+  ASSERT_TRUE(HasActivePrompt());
+
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, the prompt text should change.
+  std::u16string text = GetPromptText();
+  EXPECT_NE(std::u16string::npos, text.find(u"approximate location"));
+#endif
 }
 
 TEST_P(GeolocationPermissionContextTests,
@@ -1447,8 +1512,6 @@ TEST_P(GeolocationPermissionContextTests, DecisionEventOrder) {
   EXPECT_EQ("PermissionResponse", events_[1]);
 }
 
-INSTANTIATE_TEST_SUITE_P(ApproximateGeolocation,
-                         GeolocationPermissionContextTests,
-                         testing::Values(true, false));
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(GeolocationPermissionContextTests);
 
 }  // namespace permissions

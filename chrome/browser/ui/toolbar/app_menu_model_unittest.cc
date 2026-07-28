@@ -5,21 +5,27 @@
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 #include "base/command_line.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/browser_features.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/sharing_hub/sharing_hub_features.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/global_error/global_error.h"
@@ -30,24 +36,28 @@
 #include "chrome/browser/ui/safety_hub/password_status_check_service_factory.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_test_util.h"
 #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
-#include "chrome/browser/ui/tabs/organization/tab_organization_utils.h"
 #include "chrome/browser/ui/tabs/recent_tabs_sub_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_icon_controller.h"
+#include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/menu_model_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/search/ntp_features.h"
+#include "components/send_tab_to_self/features.h"
+#include "components/send_tab_to_self/stub_send_tab_to_self_sync_service.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/features.h"
 #include "components/sync/test/test_sync_service.h"
@@ -59,6 +69,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -109,9 +120,10 @@ class AppMenuModelTest : public BrowserWithTestWindowTest,
 
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    safety_hub_test_util::CreateRevokedPermissionsService(browser()->profile());
+    safety_hub_test_util::CreateRevokedPermissionsService(
+        browser()->GetProfile());
     safety_hub_test_util::CreateNotificationPermissionsReviewService(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   AppMenuModelTest(const AppMenuModelTest&) = delete;
@@ -183,7 +195,7 @@ TEST_F(AppMenuModelTest, Basics) {
   EXPECT_TRUE(detector->notify_upgrade());
 
   FakeIconDelegate fake_delegate;
-  AppMenuIconController app_menu_icon_controller(browser()->profile(),
+  AppMenuIconController app_menu_icon_controller(browser()->GetProfile(),
                                                  &fake_delegate);
   TestAppMenuModel model(this, browser(), &app_menu_icon_controller);
   model.Init();
@@ -221,7 +233,8 @@ TEST_F(AppMenuModelTest, Basics) {
   // Choose something from the bookmark submenu and make sure it makes it back
   // to the delegate as well.
   size_t bookmarks_model_index =
-      model.GetIndexOfCommandId(IDC_BOOKMARKS_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kBookmarksMenuPlaceholder)
+          .value();
 
   EXPECT_GT(bookmarks_model_index, 0u);
   ui::MenuModel* bookmarks_model =
@@ -242,7 +255,7 @@ TEST_F(AppMenuModelTest, Basics) {
 TEST_F(AppMenuModelTest, GlobalError) {
   // Make sure services required for tests are initialized.
   GlobalErrorService* service =
-      GlobalErrorServiceFactory::GetForProfile(browser()->profile());
+      GlobalErrorServiceFactory::GetForProfile(browser()->GetProfile());
   const int command1 = 1234567;
   MenuError* error1 = new MenuError(command1);
   service->AddGlobalError(base::WrapUnique(error1));
@@ -272,7 +285,7 @@ TEST_F(AppMenuModelTest, GlobalError) {
 TEST_F(AppMenuModelTest, DefaultBrowserPrompt) {
   DefaultBrowserPromptManager::GetInstance()->MaybeShowPrompt();
   FakeIconDelegate fake_delegate;
-  AppMenuIconController app_menu_icon_controller(browser()->profile(),
+  AppMenuIconController app_menu_icon_controller(browser()->GetProfile(),
                                                  &fake_delegate);
   TestAppMenuModel model(this, browser(), &app_menu_icon_controller);
   model.Init();
@@ -315,50 +328,18 @@ TEST_F(AppMenuModelTest, CustomizeChromeLogMetrics) {
   EXPECT_EQ(1, model.log_metrics_count_);
 }
 
-TEST_F(AppMenuModelTest, OrganizeTabsItem) {
-  feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      {features::kTabOrganization, features::kTabOrganizationAppMenuItem}, {});
-
-  TabOrganizationUtils::GetInstance()->SetIgnoreOptGuideForTesting(true);
-  AppMenuModel model(this, browser());
-  model.Init();
-  ToolsMenuModel toolModel(&model, browser());
-  size_t organize_tabs_index =
-      toolModel.GetIndexOfCommandId(IDC_ORGANIZE_TABS).value();
-  EXPECT_TRUE(toolModel.IsEnabledAt(organize_tabs_index));
-}
-
-TEST_F(AppMenuModelTest, DeclutterTabsItem) {
-  feature_list_.Reset();
-  feature_list_.InitAndEnableFeature(features::kTabstripDeclutter);
-  TabOrganizationUtils::GetInstance()->SetIgnoreOptGuideForTesting(true);
-  TestLogMetricsAppMenuModel model(this, browser());
-  model.Init();
-  ToolsMenuModel toolModel(&model, browser());
-  size_t declutter_tabs_index =
-      toolModel.GetIndexOfCommandId(IDC_DECLUTTER_TABS).value();
-  EXPECT_TRUE(toolModel.IsEnabledAt(declutter_tabs_index));
-  model.ExecuteCommand(IDC_DECLUTTER_TABS, 0);
-  EXPECT_EQ(1, model.log_metrics_count_);
-}
-
-#if BUILDFLAG(ENABLE_GLIC)
 TEST_F(AppMenuModelTest, GlicItem) {
   feature_list_.Reset();
-  feature_list_.InitWithFeatures(
-      {features::kGlic, features::kGlicRollout, features::kTabstripComboButton},
-      {});
+  feature_list_.InitWithFeatures({features::kGlic, features::kGlicRollout}, {});
 
   TestLogMetricsAppMenuModel model(this, browser());
   model.Init();
   model.ExecuteCommand(IDC_OPEN_GLIC, 0);
   EXPECT_EQ(1, model.log_metrics_count_);
 }
-#endif
 
 TEST_F(AppMenuModelTest, DoNotShowShareSubMenuItem) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 #if !BUILDFLAG(IS_CHROMEOS)
   prefs->SetBoolean(prefs::kDesktopSharingHubEnabled, false);
 #endif
@@ -367,19 +348,24 @@ TEST_F(AppMenuModelTest, DoNotShowShareSubMenuItem) {
   AppMenuModel model(this, browser());
   model.Init();
 
-  ASSERT_TRUE(model.GetIndexOfCommandId(IDC_SAVE_AND_SHARE_MENU));
+  ASSERT_TRUE(
+      model.GetIndexOfCommandId(AppMenuModel::kSaveAndShareMenuPlaceholder));
   ui::MenuModel* submenu = model.GetSubmenuModelAt(
-      model.GetIndexOfCommandId(IDC_SAVE_AND_SHARE_MENU).value());
+      model.GetIndexOfCommandId(AppMenuModel::kSaveAndShareMenuPlaceholder)
+          .value());
   ASSERT_NE(submenu, nullptr);
 
   size_t expected_item_count = 7;
-  if (!sharing_hub::SharingIsDisabledByPolicy(browser()->profile()) ||
-      sharing_hub::DesktopScreenshotsFeatureEnabled(browser()->profile())) {
+  if (!sharing_hub::SharingIsDisabledByPolicy(browser()->GetProfile()) ||
+      sharing_hub::DesktopScreenshotsFeatureEnabled(browser()->GetProfile())) {
     expected_item_count += 2;
-    if (!sharing_hub::SharingIsDisabledByPolicy(browser()->profile())) {
+    if (!sharing_hub::SharingIsDisabledByPolicy(browser()->GetProfile())) {
+      // Copy URL, Send Tab to Self, and QR code generator items are always
+      // included when sharing is enabled by policy.
       expected_item_count += 3;
     }
-    if (sharing_hub::DesktopScreenshotsFeatureEnabled(browser()->profile())) {
+    if (sharing_hub::DesktopScreenshotsFeatureEnabled(
+            browser()->GetProfile())) {
       expected_item_count += 1;
     }
   }
@@ -390,7 +376,7 @@ TEST_F(AppMenuModelTest, ModelHasIcons) {
   // Skip the items that are either not supposed to have an icon, or are not
   // ready to be tested. Remove items once they're ready for testing.
   static const std::vector<int> skip_commands = {
-      IDC_RECENT_TABS_NO_DEVICE_TABS, IDC_ABOUT,
+      kRecentTabsNoDeviceTabsId, IDC_ABOUT,
       RecentTabsSubMenuModel::GetDisabledRecentlyClosedHeaderCommandId(),
       IDC_EXTENSIONS_SUBMENU_VISIT_CHROME_WEB_STORE, IDC_TAKE_SCREENSHOT};
   AppMenuModel model(this, browser());
@@ -471,9 +457,11 @@ TEST_P(ExtensionsMenuModelTest, ExtensionsMenu) {
     ASSERT_TRUE(index.has_value());
     EXPECT_EQ(nullptr, model.GetSubmenuModelAt(*index));
   } else {
-    ASSERT_TRUE(model.GetIndexOfCommandId(IDC_EXTENSIONS_SUBMENU));
+    ASSERT_TRUE(
+        model.GetIndexOfCommandId(AppMenuModel::kExtensionsSubmenuPlaceholder));
     ui::MenuModel* extensions_submenu = model.GetSubmenuModelAt(
-        model.GetIndexOfCommandId(IDC_EXTENSIONS_SUBMENU).value());
+        model.GetIndexOfCommandId(AppMenuModel::kExtensionsSubmenuPlaceholder)
+            .value());
     ASSERT_NE(extensions_submenu, nullptr);
     ASSERT_EQ(2ul, extensions_submenu->GetItemCount());
     EXPECT_EQ(IDC_EXTENSIONS_SUBMENU_MANAGE_EXTENSIONS,
@@ -529,7 +517,10 @@ TEST_F(AppMenuModelTest, YourSavedInfoSubmenusShown) {
   model.Init();
 
   const size_t your_saved_info_menu_index =
-      model.GetIndexOfCommandId(IDC_PASSWORDS_AND_AUTOFILL_MENU).value();
+      model
+          .GetIndexOfCommandId(
+              AppMenuModel::kPasswordsAndAutofillMenuPlaceholder)
+          .value();
   ui::SimpleMenuModel* your_saved_info_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(your_saved_info_menu_index));
 
@@ -548,7 +539,10 @@ TEST_F(AppMenuModelTest, YourSavedInfoSubmenusDisabled) {
   model.Init();
 
   const size_t your_saved_info_menu_index =
-      model.GetIndexOfCommandId(IDC_PASSWORDS_AND_AUTOFILL_MENU).value();
+      model
+          .GetIndexOfCommandId(
+              AppMenuModel::kPasswordsAndAutofillMenuPlaceholder)
+          .value();
   ui::SimpleMenuModel* your_saved_info_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(your_saved_info_menu_index));
 
@@ -562,14 +556,14 @@ TEST_F(AppMenuModelTest, YourSavedInfoSubmenusDisabled) {
 
 TEST_F(AppMenuModelTest, ProfileSyncOnTest) {
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                       signin::ConsentLevel::kSync);
   signin::SetRefreshTokenForPrimaryAccount(identity_manager);
   AppMenuModel model(this, browser());
   model.Init();
   const size_t profile_menu_index =
-      model.GetIndexOfCommandId(IDC_PROFILE_MENU_IN_APP_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kProfileMenuPlaceholder).value();
   ui::SimpleMenuModel* profile_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(profile_menu_index));
   const size_t sync_settings_index =
@@ -577,36 +571,127 @@ TEST_F(AppMenuModelTest, ProfileSyncOnTest) {
   EXPECT_TRUE(profile_menu->IsEnabledAt(sync_settings_index));
 }
 
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+bool DoesHelpMenuHaveCommand(const AppMenuModel& model, int command_id) {
+  const size_t help_menu_index =
+      model.GetIndexOfCommandId(AppMenuModel::kHelpMenuPlaceholder).value();
+  ui::SimpleMenuModel* help_menu = static_cast<ui::SimpleMenuModel*>(
+      model.GetSubmenuModelAt(help_menu_index));
+  return help_menu->GetIndexOfCommandId(command_id).has_value();
+}
+
+TEST_F(AppMenuModelTest, Feedback_UserFeedbackAllowedPolicy) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_TRUE(DoesHelpMenuHaveCommand(model, IDC_FEEDBACK));
+  }
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  false);
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_FALSE(DoesHelpMenuHaveCommand(model, IDC_FEEDBACK));
+  }
+}
+
+class AppMenuReportUnsafeSiteTest : public base::test::WithFeatureOverride,
+                                    public AppMenuModelTest {
+ public:
+  AppMenuReportUnsafeSiteTest()
+      : WithFeatureOverride(features::kReportUnsafeSite) {}
+  ~AppMenuReportUnsafeSiteTest() override = default;
+};
+
+TEST_P(AppMenuReportUnsafeSiteTest,
+       ReportUnsafeSite_UserFeedbackAllowedPolicy) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_EQ(IsParamFeatureEnabled(),
+              DoesHelpMenuHaveCommand(model, IDC_REPORT_UNSAFE_SITE));
+  }
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  false);
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_FALSE(DoesHelpMenuHaveCommand(model, IDC_REPORT_UNSAFE_SITE));
+  }
+}
+
+TEST_P(AppMenuReportUnsafeSiteTest, ReportUnsafeSite_SafeBrowsingDisabled) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                  true);
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_EQ(IsParamFeatureEnabled(),
+              DoesHelpMenuHaveCommand(model, IDC_REPORT_UNSAFE_SITE));
+  }
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                  false);
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_FALSE(DoesHelpMenuHaveCommand(model, IDC_REPORT_UNSAFE_SITE));
+  }
+}
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(AppMenuReportUnsafeSiteTest);
+
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
 class AppMenuModelSigninPromoTest : public base::test::WithFeatureOverride,
                                     public AppMenuModelTest {
  public:
   AppMenuModelSigninPromoTest()
-      : WithFeatureOverride(syncer::kReplaceSyncPromosWithSignInPromos) {}
+      : WithFeatureOverride(syncer::kReplaceSyncPromosWithSignInPromos) {
+    scoped_feature_list_.InitWithFeatureState(
+        syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
+        IsParamFeatureEnabled());
+  }
   ~AppMenuModelSigninPromoTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_P(AppMenuModelSigninPromoTest, SignedIn) {
+  base::HistogramTester histogram_tester;
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                       signin::ConsentLevel::kSignin);
   AppMenuModel model(this, browser());
   model.Init();
   const size_t profile_menu_index =
-      model.GetIndexOfCommandId(IDC_PROFILE_MENU_IN_APP_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kProfileMenuPlaceholder).value();
   ui::SimpleMenuModel* profile_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(profile_menu_index));
 
   EXPECT_EQ(!IsParamFeatureEnabled(),
             profile_menu->GetIndexOfCommandId(IDC_TURN_ON_SYNC).has_value());
   EXPECT_FALSE(profile_menu->GetIndexOfCommandId(IDC_SHOW_SIGNIN).has_value());
+
+  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
 }
 
 TEST_P(AppMenuModelSigninPromoTest, SignedOut) {
+  base::HistogramTester histogram_tester;
   AppMenuModel model(this, browser());
   model.Init();
   const size_t profile_menu_index =
-      model.GetIndexOfCommandId(IDC_PROFILE_MENU_IN_APP_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kProfileMenuPlaceholder).value();
   ui::SimpleMenuModel* profile_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(profile_menu_index));
 
@@ -614,6 +699,18 @@ TEST_P(AppMenuModelSigninPromoTest, SignedOut) {
             profile_menu->GetIndexOfCommandId(IDC_TURN_ON_SYNC).has_value());
   EXPECT_EQ(IsParamFeatureEnabled(),
             profile_menu->GetIndexOfCommandId(IDC_SHOW_SIGNIN).has_value());
+
+  if (IsParamFeatureEnabled()) {
+    histogram_tester.ExpectUniqueSample("Signin.SignIn.Offered",
+                                        signin_metrics::AccessPoint::kMenu, 1);
+    histogram_tester.ExpectUniqueSample(
+        "Signin.SignIn.Offered.NewAccountNoExistingAccount",
+        signin_metrics::AccessPoint::kMenu, 1);
+  } else {
+    histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
+    histogram_tester.ExpectTotalCount(
+        "Signin.SignIn.Offered.NewAccountNoExistingAccount", 0);
+  }
 }
 
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(AppMenuModelSigninPromoTest);
@@ -624,7 +721,7 @@ TEST_F(AppMenuModelTest,
   syncer::TestSyncService* test_sync_service =
       static_cast<syncer::TestSyncService*>(
           SyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-              browser()->profile(),
+              browser()->GetProfile(),
               base::BindRepeating([](content::BrowserContext* context)
                                       -> std::unique_ptr<KeyedService> {
                 return std::make_unique<syncer::TestSyncService>();
@@ -632,14 +729,14 @@ TEST_F(AppMenuModelTest,
   test_sync_service->SetBookmarksLimitExceeded(true);
 
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                       signin::ConsentLevel::kSync);
 
   AppMenuModel model(this, browser());
   model.Init();
   const size_t profile_menu_index =
-      model.GetIndexOfCommandId(IDC_PROFILE_MENU_IN_APP_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kProfileMenuPlaceholder).value();
   ui::SimpleMenuModel* profile_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(profile_menu_index));
 
@@ -662,7 +759,7 @@ TEST_F(AppMenuModelTest,
   syncer::TestSyncService* test_sync_service =
       static_cast<syncer::TestSyncService*>(
           SyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-              browser()->profile(),
+              browser()->GetProfile(),
               base::BindRepeating([](content::BrowserContext* context)
                                       -> std::unique_ptr<KeyedService> {
                 return std::make_unique<syncer::TestSyncService>();
@@ -670,14 +767,14 @@ TEST_F(AppMenuModelTest,
   test_sync_service->SetBookmarksLimitExceeded(true);
 
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                       signin::ConsentLevel::kSignin);
 
   AppMenuModel model(this, browser());
   model.Init();
   const size_t profile_menu_index =
-      model.GetIndexOfCommandId(IDC_PROFILE_MENU_IN_APP_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kProfileMenuPlaceholder).value();
   ui::SimpleMenuModel* profile_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(profile_menu_index));
 
@@ -703,7 +800,7 @@ TEST_F(AppMenuModelTest, DisableSettingsItem) {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   const size_t help_menu_index =
-      model.GetIndexOfCommandId(IDC_HELP_MENU).value();
+      model.GetIndexOfCommandId(AppMenuModel::kHelpMenuPlaceholder).value();
   ui::SimpleMenuModel* help_menu = static_cast<ui::SimpleMenuModel*>(
       model.GetSubmenuModelAt(help_menu_index));
   const size_t about_index = help_menu->GetIndexOfCommandId(IDC_ABOUT).value();
@@ -746,6 +843,15 @@ TEST_F(AppMenuModelTest, DisableSettingsItem) {
 
 class TestAppMenuModelSafetyHubTest : public AppMenuModelTest {
  public:
+  TestAppMenuModelSafetyHubTest() {
+    // Disruptive notification revocation disables the notification review
+    // module.
+    // TODO(https://crbug.com/496616827): Clean up this test when removing the
+    // notification review module logic.
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kSafetyHubDisruptiveNotificationRevocation);
+  }
+
   void SetUp() override {
     AppMenuModelTest::SetUp();
     password_store_ = CreateAndUseTestPasswordStore(profile());
@@ -760,6 +866,9 @@ class TestAppMenuModelSafetyHubTest : public AppMenuModelTest {
 
  protected:
   scoped_refptr<password_manager::TestPasswordStore> password_store_;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(TestAppMenuModelSafetyHubTest, SafetyHubMenuNotification) {
@@ -785,19 +894,44 @@ TEST_F(TestAppMenuModelSafetyHubTest, SafetyHubMenuNotification) {
 
 class TabSearchMenuModelTest : public AppMenuModelTest {
  public:
-  TabSearchMenuModelTest() = default;
+  TabSearchMenuModelTest() {
+    glic_enabled_feature_list_.InitWithFeatures(
+        {
+#if BUILDFLAG(IS_CHROMEOS)
+            chromeos::features::kFeatureManagementGlic
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        },
+        /*disabled_features=*/{features::kGlicLocaleFiltering,
+                               features::kGlicCountryFiltering});
+  }
+
   ~TabSearchMenuModelTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/
-        {{features::kTabstripComboButton,
-          {{"tab_search_toolbar_button", "true"}}}},
+    // The kFeatureManagementGlic flag is needed at startup for a cached
+    // ChromeOS check. The rest of the flags are set at runtime to avoid needing
+    // to initialize the rest of Glic.
+    scoped_feature_list_.InitWithFeatures(
+        {
+#if BUILDFLAG(IS_CHROMEOS)
+            chromeos::features::kFeatureManagementGlic
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        },
         /*disabled_features=*/{});
     AppMenuModelTest::SetUp();
+    // This is necessary because this isn't a browser test, and the
+    // global features that GlicEnabling depends on are not initialized
+    // correctly.
+    glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+  }
+
+  void TearDown() override {
+    glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
+    AppMenuModelTest::TearDown();
   }
 
  private:
+  base::test::ScopedFeatureList glic_enabled_feature_list_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -805,7 +939,215 @@ TEST_F(TabSearchMenuModelTest, TabSearchItem) {
   AppMenuModel model(this, browser());
   model.Init();
   ToolsMenuModel toolModel(&model, browser());
-  size_t tab_search_index =
-      toolModel.GetIndexOfCommandId(IDC_TAB_SEARCH).value();
-  EXPECT_TRUE(toolModel.IsEnabledAt(tab_search_index));
+  std::optional<size_t> tab_search_index =
+      toolModel.GetIndexOfCommandId(IDC_TAB_SEARCH);
+  EXPECT_TRUE(tab_search_index.has_value());
+  EXPECT_TRUE(toolModel.IsEnabledAt(tab_search_index.value()));
 }
+
+class AppMenuModelBookmarkBarTest : public AppMenuModelTest,
+                                    public testing::WithParamInterface<bool> {
+ public:
+  AppMenuModelBookmarkBarTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          ntp_features::kNtpSimplificationBookmarkBar);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          ntp_features::kNtpSimplificationBookmarkBar);
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_P(AppMenuModelBookmarkBarTest, BookmarkBarSubmenu) {
+  AppMenuModel model(this, browser());
+  model.Init();
+  BookmarkSubMenuModel bookmark_sub_model(&model, browser());
+
+  if (GetParam()) {
+    // Feature enabled: should have a submenu for Bookmarks Bar.
+    EXPECT_TRUE(bookmark_sub_model.GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU)
+                    .has_value());
+    EXPECT_FALSE(bookmark_sub_model.GetIndexOfCommandId(IDC_SHOW_BOOKMARK_BAR)
+                     .has_value());
+
+    // Check items inside the submenu model.
+    auto index =
+        bookmark_sub_model.GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU);
+    ASSERT_TRUE(index.has_value());
+    ui::SimpleMenuModel* sub_model = static_cast<ui::SimpleMenuModel*>(
+        bookmark_sub_model.GetSubmenuModelAt(index.value()));
+    ASSERT_TRUE(sub_model);
+
+    EXPECT_TRUE(
+        sub_model->GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW)
+            .has_value());
+    EXPECT_TRUE(
+        sub_model->GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE)
+            .has_value());
+    EXPECT_TRUE(
+        sub_model->GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP)
+            .has_value());
+  } else {
+    // Feature disabled: should have a single toggle item for Bookmarks Bar.
+    EXPECT_FALSE(
+        bookmark_sub_model.GetIndexOfCommandId(IDC_BOOKMARK_BAR_SUBMENU)
+            .has_value());
+    EXPECT_TRUE(bookmark_sub_model.GetIndexOfCommandId(IDC_SHOW_BOOKMARK_BAR)
+                    .has_value());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(All, AppMenuModelBookmarkBarTest, testing::Bool());
+
+class AppMenuModelEnterpriseReleaseNotesTest
+    : public base::test::WithFeatureOverride,
+      public AppMenuModelTest {
+ public:
+  AppMenuModelEnterpriseReleaseNotesTest()
+      : WithFeatureOverride(features::kEnterpriseReleaseNotes) {}
+  ~AppMenuModelEnterpriseReleaseNotesTest() override = default;
+};
+
+TEST_P(AppMenuModelEnterpriseReleaseNotesTest, MenuVisibility) {
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+    EXPECT_FALSE(model.GetIndexOfCommandId(IDC_CHROME_ENTERPRISE_RELEASE_NOTES)
+                     .has_value());
+  }
+
+  policy::ScopedManagementServiceOverrideForTesting profile_management(
+      policy::ManagementServiceFactory::GetForProfile(profile()),
+      policy::EnterpriseManagementAuthority::CLOUD_DOMAIN);
+
+  {
+    AppMenuModel model(this, browser());
+    model.Init();
+#if BUILDFLAG(IS_LINUX)
+    EXPECT_EQ(IsParamFeatureEnabled(),
+              model.GetIndexOfCommandId(IDC_CHROME_ENTERPRISE_RELEASE_NOTES)
+                  .has_value());
+#else
+    EXPECT_FALSE(model.GetIndexOfCommandId(IDC_CHROME_ENTERPRISE_RELEASE_NOTES)
+                     .has_value());
+#endif
+  }
+}
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(AppMenuModelEnterpriseReleaseNotesTest);
+
+namespace {
+
+using send_tab_to_self::EntryPointDisplayReason;
+using send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2;
+using send_tab_to_self::StubSendTabToSelfSyncService;
+
+class AppMenuModelSendTabToSelfTest : public AppMenuModelTest {
+ public:
+  AppMenuModelSendTabToSelfTest() = default;
+  ~AppMenuModelSendTabToSelfTest() override = default;
+
+  TestingProfile::TestingFactories GetTestingFactories() override {
+    return {TestingProfile::TestingFactory{
+        SendTabToSelfSyncServiceFactory::GetInstance(),
+        base::BindRepeating([](content::BrowserContext* context)
+                                -> std::unique_ptr<KeyedService> {
+          return std::make_unique<StubSendTabToSelfSyncService>();
+        })}};
+  }
+};
+
+// Tests that when kSendTabToSelfEnhancedDesktopUIv2 feature is enabled, the
+// "Send to Your Devices" item in the Save and Share submenu is a submenu model.
+TEST_F(AppMenuModelSendTabToSelfTest, SendTabToSelfSaveAndShareSubmenuEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kSendTabToSelfEnhancedDesktopUIv2);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(
+      EntryPointDisplayReason::kOfferFeature);
+
+  AddTab(browser(), GURL("https://example.com"));
+
+  AppMenuModel model(this, browser());
+  model.Init();
+
+  const size_t save_and_share_index =
+      model.GetIndexOfCommandId(AppMenuModel::kSaveAndShareMenuPlaceholder)
+          .value();
+  ui::SimpleMenuModel* save_and_share_menu = static_cast<ui::SimpleMenuModel*>(
+      model.GetSubmenuModelAt(save_and_share_index));
+
+  const size_t send_tab_index =
+      save_and_share_menu->GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF).value();
+  EXPECT_EQ(ui::MenuModel::TYPE_SUBMENU,
+            save_and_share_menu->GetTypeAt(send_tab_index));
+  EXPECT_NE(nullptr, save_and_share_menu->GetSubmenuModelAt(send_tab_index));
+}
+
+// Tests that when kSendTabToSelfEnhancedDesktopUIv2 feature is disabled, the
+// "Send to Your Devices" item in the Save and Share submenu remains a simple
+// command.
+TEST_F(AppMenuModelSendTabToSelfTest,
+       SendTabToSelfSaveAndShareSubmenuDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(kSendTabToSelfEnhancedDesktopUIv2);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(
+      EntryPointDisplayReason::kOfferFeature);
+
+  AddTab(browser(), GURL("https://example.com"));
+
+  AppMenuModel model(this, browser());
+  model.Init();
+
+  const size_t save_and_share_index =
+      model.GetIndexOfCommandId(AppMenuModel::kSaveAndShareMenuPlaceholder)
+          .value();
+  ui::SimpleMenuModel* save_and_share_menu = static_cast<ui::SimpleMenuModel*>(
+      model.GetSubmenuModelAt(save_and_share_index));
+
+  const size_t send_tab_index =
+      save_and_share_menu->GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF).value();
+  EXPECT_EQ(ui::MenuModel::TYPE_COMMAND,
+            save_and_share_menu->GetTypeAt(send_tab_index));
+}
+
+// Tests that when Send Tab to Self is not offered for the active page,
+// the item is still present in the Save and Share submenu as a fallback command
+// item.
+TEST_F(AppMenuModelSendTabToSelfTest, SendTabToSelfSaveAndShareNotOffered) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kSendTabToSelfEnhancedDesktopUIv2);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(std::nullopt);
+
+  AddTab(browser(), GURL("https://example.com"));
+
+  AppMenuModel model(this, browser());
+  model.Init();
+
+  const size_t save_and_share_index =
+      model.GetIndexOfCommandId(AppMenuModel::kSaveAndShareMenuPlaceholder)
+          .value();
+  ui::SimpleMenuModel* save_and_share_menu = static_cast<ui::SimpleMenuModel*>(
+      model.GetSubmenuModelAt(save_and_share_index));
+
+  const std::optional<size_t> send_tab_index =
+      save_and_share_menu->GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
+  ASSERT_TRUE(send_tab_index.has_value());
+  EXPECT_EQ(ui::MenuModel::TYPE_COMMAND,
+            save_and_share_menu->GetTypeAt(send_tab_index.value()));
+  EXPECT_FALSE(save_and_share_menu->IsEnabledAt(send_tab_index.value()));
+}
+
+}  // namespace

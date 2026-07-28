@@ -9,7 +9,7 @@
 #include "build/build_config.h"
 #include "third_party/blink/renderer/core/dom/column_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_field.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
 #include "third_party/blink/renderer/core/dom/transition_pseudo_element_data.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -17,7 +17,7 @@
 namespace blink {
 
 class PseudoElementData final : public GarbageCollected<PseudoElementData>,
-                                public ElementRareDataField {
+                                public NodeRareDataField {
  public:
   PseudoElementData() = default;
   PseudoElementData(const PseudoElementData&) = delete;
@@ -72,8 +72,9 @@ class PseudoElementData final : public GarbageCollected<PseudoElementData>,
     visitor->Trace(generated_check_);
     visitor->Trace(generated_before_);
     visitor->Trace(generated_after_);
+    visitor->Trace(generated_expand_icon_);
     visitor->Trace(generated_picker_icon_);
-    visitor->Trace(generated_interest_hint_);
+    visitor->Trace(generated_interest_button_);
     visitor->Trace(generated_marker_);
     visitor->Trace(generated_first_letter_);
     visitor->Trace(generated_overscroll_area_parent_);
@@ -85,17 +86,20 @@ class PseudoElementData final : public GarbageCollected<PseudoElementData>,
     visitor->Trace(generated_scroll_button_inline_end_);
     visitor->Trace(generated_scroll_button_block_end_);
     visitor->Trace(backdrop_);
+    visitor->Trace(overscroll_backdrop_);
+    visitor->Trace(skeleton_);
     visitor->Trace(transition_data_);
     visitor->Trace(column_pseudo_elements_);
-    ElementRareDataField::Trace(visitor);
+    NodeRareDataField::Trace(visitor);
   }
 
  private:
   Member<PseudoElement> generated_check_;
   Member<PseudoElement> generated_before_;
   Member<PseudoElement> generated_after_;
+  Member<PseudoElement> generated_expand_icon_;
   Member<PseudoElement> generated_picker_icon_;
-  Member<PseudoElement> generated_interest_hint_;
+  Member<PseudoElement> generated_interest_button_;
   Member<PseudoElement> generated_marker_;
   Member<PseudoElement> generated_first_letter_;
   Member<PseudoElement> generated_overscroll_area_parent_;
@@ -107,6 +111,8 @@ class PseudoElementData final : public GarbageCollected<PseudoElementData>,
   Member<PseudoElement> generated_scroll_button_inline_end_;
   Member<PseudoElement> generated_scroll_button_block_end_;
   Member<PseudoElement> backdrop_;
+  Member<PseudoElement> overscroll_backdrop_;
+  Member<PseudoElement> skeleton_;
 
   Member<TransitionPseudoElementData> transition_data_;
 
@@ -119,8 +125,9 @@ class PseudoElementData final : public GarbageCollected<PseudoElementData>,
 
 inline bool PseudoElementData::HasPseudoElements() const {
   return generated_check_ || generated_before_ || generated_after_ ||
-         generated_picker_icon_ || generated_interest_hint_ ||
-         generated_marker_ || backdrop_ || generated_first_letter_ ||
+         generated_expand_icon_ || generated_picker_icon_ ||
+         generated_interest_button_ || generated_marker_ || backdrop_ ||
+         overscroll_backdrop_ || skeleton_ || generated_first_letter_ ||
          transition_data_ || generated_overscroll_area_parent_ ||
          generated_scroll_marker_group_before_ ||
          generated_scroll_marker_group_after_ || generated_scroll_marker_ ||
@@ -135,10 +142,12 @@ inline void PseudoElementData::ClearPseudoElements() {
   SetPseudoElement(kPseudoIdCheckMark, nullptr);
   SetPseudoElement(kPseudoIdBefore, nullptr);
   SetPseudoElement(kPseudoIdAfter, nullptr);
+  SetPseudoElement(kPseudoIdExpandIcon, nullptr);
   SetPseudoElement(kPseudoIdPickerIcon, nullptr);
-  SetPseudoElement(kPseudoIdInterestHint, nullptr);
+  SetPseudoElement(kPseudoIdInterestButton, nullptr);
   SetPseudoElement(kPseudoIdMarker, nullptr);
   SetPseudoElement(kPseudoIdBackdrop, nullptr);
+  SetPseudoElement(kPseudoIdOverscrollBackdrop, nullptr);
   SetPseudoElement(kPseudoIdFirstLetter, nullptr);
   SetPseudoElement(kPseudoIdScrollMarkerGroupBefore, nullptr);
   SetPseudoElement(kPseudoIdScrollMarkerGroupAfter, nullptr);
@@ -178,13 +187,17 @@ inline void PseudoElementData::SetPseudoElement(
       previous_element = generated_after_;
       generated_after_ = element;
       break;
+    case kPseudoIdExpandIcon:
+      previous_element = generated_expand_icon_;
+      generated_expand_icon_ = element;
+      break;
     case kPseudoIdPickerIcon:
       previous_element = generated_picker_icon_;
       generated_picker_icon_ = element;
       break;
-    case kPseudoIdInterestHint:
-      previous_element = generated_interest_hint_;
-      generated_interest_hint_ = element;
+    case kPseudoIdInterestButton:
+      previous_element = generated_interest_button_;
+      generated_interest_button_ = element;
       break;
     case kPseudoIdMarker:
       previous_element = generated_marker_;
@@ -226,6 +239,14 @@ inline void PseudoElementData::SetPseudoElement(
       previous_element = backdrop_;
       backdrop_ = element;
       break;
+    case kPseudoIdOverscrollBackdrop:
+      previous_element = overscroll_backdrop_;
+      overscroll_backdrop_ = element;
+      break;
+    case kPseudoIdSkeleton:
+      previous_element = skeleton_;
+      skeleton_ = element;
+      break;
     case kPseudoIdFirstLetter:
       previous_element = generated_first_letter_;
       generated_first_letter_ = element;
@@ -262,16 +283,22 @@ inline PseudoElement* PseudoElementData::GetPseudoElement(
     return generated_before_.Get();
   if (kPseudoIdAfter == pseudo_id)
     return generated_after_.Get();
+  if (kPseudoIdExpandIcon == pseudo_id) {
+    return generated_expand_icon_.Get();
+  }
   if (kPseudoIdPickerIcon == pseudo_id) {
     return generated_picker_icon_.Get();
   }
-  if (kPseudoIdInterestHint == pseudo_id) {
-    return generated_interest_hint_.Get();
+  if (kPseudoIdInterestButton == pseudo_id) {
+    return generated_interest_button_.Get();
   }
   if (kPseudoIdMarker == pseudo_id)
     return generated_marker_.Get();
   if (kPseudoIdOverscrollAreaParent == pseudo_id) {
     return generated_overscroll_area_parent_.Get();
+  }
+  if (kPseudoIdSkeleton == pseudo_id) {
+    return skeleton_.Get();
   }
   if (kPseudoIdScrollMarkerGroupBefore == pseudo_id) {
     return generated_scroll_marker_group_before_.Get();
@@ -299,10 +326,18 @@ inline PseudoElement* PseudoElementData::GetPseudoElement(
 #if defined(ARCH_CPU_ARMEL)
   __asm__ volatile("");
 #endif
-  if (kPseudoIdBackdrop == pseudo_id)
+  if (kPseudoIdBackdrop == pseudo_id) {
     return backdrop_.Get();
-  if (kPseudoIdFirstLetter == pseudo_id)
+  }
+  if (kPseudoIdOverscrollBackdrop == pseudo_id) {
+    return overscroll_backdrop_.Get();
+  }
+  if (kPseudoIdSkeleton == pseudo_id) {
+    return backdrop_.Get();
+  }
+  if (kPseudoIdFirstLetter == pseudo_id) {
     return generated_first_letter_.Get();
+  }
   if (IsTransitionPseudoElement(pseudo_id)) {
     return transition_data_
                ? transition_data_->GetPseudoElement(pseudo_id, pseudo_argument)
@@ -335,8 +370,8 @@ PseudoElementData::GetPseudoElements() const {
   if (generated_picker_icon_) {
     result.push_back(generated_picker_icon_);
   }
-  if (generated_interest_hint_) {
-    result.push_back(generated_interest_hint_);
+  if (generated_interest_button_) {
+    result.push_back(generated_interest_button_);
   }
   if (generated_marker_)
     result.push_back(generated_marker_);
@@ -344,6 +379,12 @@ PseudoElementData::GetPseudoElements() const {
     result.push_back(generated_first_letter_);
   if (backdrop_)
     result.push_back(backdrop_);
+  if (overscroll_backdrop_) {
+    result.push_back(overscroll_backdrop_);
+  }
+  if (skeleton_) {
+    result.push_back(skeleton_);
+  }
   if (transition_data_)
     transition_data_->AddPseudoElements(&result);
   if (generated_scroll_marker_group_before_) {
@@ -368,7 +409,7 @@ PseudoElementData::GetPseudoElements() const {
     result.push_back(generated_scroll_button_block_end_);
   }
   if (column_pseudo_elements_) {
-    result.AppendVector(*column_pseudo_elements_);
+    result.append_range(*column_pseudo_elements_);
   }
   return result;
 }

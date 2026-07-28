@@ -9,7 +9,6 @@
 
 #include "base/feature_list.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_metrics.h"
@@ -179,7 +178,11 @@ DiceAccountReconcilorDelegate::GetInconsistencyReason(
   return InconsistencyReason::kNone;
 }
 
-gaia::GaiaSource DiceAccountReconcilorDelegate::GetGaiaApiSource() const {
+gaia::GaiaSource DiceAccountReconcilorDelegate::GetGaiaApiSource(
+    bool is_cookie_upgrade) const {
+  if (is_cookie_upgrade) {
+    return gaia::GaiaSource::kAccountReconcilorDiceCookieUpgrade;
+  }
   return gaia::GaiaSource::kAccountReconcilorDice;
 }
 

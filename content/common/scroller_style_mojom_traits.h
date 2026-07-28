@@ -23,15 +23,14 @@ struct EnumTraits<content::mojom::ScrollerStyle, blink::ScrollerStyle> {
     NOTREACHED();
   }
 
-  static bool FromMojom(content::mojom::ScrollerStyle in,
-                        blink::ScrollerStyle* out) {
+  static blink::ScrollerStyle FromMojom(content::mojom::ScrollerStyle in) {
     switch (in) {
       case content::mojom::ScrollerStyle::kScrollerStyleLegacy:
         return blink::ScrollerStyle::kScrollerStyleLegacy;
       case content::mojom::ScrollerStyle::kScrollerStyleOverlay:
         return blink::ScrollerStyle::kScrollerStyleOverlay;
     }
-    return false;
+    NOTREACHED();
   }
 };
 

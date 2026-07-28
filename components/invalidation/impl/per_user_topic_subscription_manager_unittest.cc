@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/barrier_callback.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
@@ -125,7 +126,7 @@ network::URLLoaderCompletionStatus CreateStatusForTest(
     int status,
     const std::string& response_body) {
   network::URLLoaderCompletionStatus response_status(status);
-  response_status.decoded_body_length = response_body.size();
+  response_status.decoded_body_length = base::ByteSize(response_body.size());
   return response_status;
 }
 
@@ -522,7 +523,7 @@ TEST_F(PerUserTopicSubscriptionManagerTest,
   per_user_topic_subscription_manager->UpdateSubscribedTopics(
       topics, kFakeInstanceIdToken);
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
   testing::Mock::VerifyAndClearExpectations(&identity_observer);
 
   // Initial backoff is 2 seconds with 20% jitter, so the minimum possible delay

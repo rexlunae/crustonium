@@ -225,7 +225,7 @@ TEST_F(PrefProviderTest, DiscardObsoletePreferences) {
 }
 
 // Test for regression in which the PrefProvider modified the user pref store
-// of the OTR unintentionally: http://crbug.com/74466.
+// of the OTR unintentionally: http://crbug.com/41332768.
 TEST_F(PrefProviderTest, Incognito) {
   PersistentPrefStore* user_prefs = new TestingPrefStore();
   OverlayUserPrefStore* otr_user_prefs = new OverlayUserPrefStore(user_prefs);
@@ -1114,7 +1114,7 @@ TEST_F(PrefProviderTest, LastVisitedTimeStoredOnDisk) {
 
   RuleMetaData metadata_from_disk;
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            TestUtils::GetContentSetting(&provider, primary_url, primary_url,
+            TestUtils::GetContentSetting(&provider2, primary_url, primary_url,
                                          ContentSettingsType::GEOLOCATION,
                                          false, &metadata_from_disk));
   EXPECT_EQ(metadata.last_visited(), metadata_from_disk.last_visited());
@@ -1158,14 +1158,79 @@ TEST_F(PrefProviderTest, LastVisitedTimeUpdating) {
   EXPECT_GE(metadata.last_visited(), clock.Now() - base::Days(7));
   EXPECT_LE(metadata.last_visited(), clock.Now());
 
-  // Test resetting the last_visited time.
-  provider.ResetLastVisitTime(primary_pattern, primary_pattern,
-                              ContentSettingsType::GEOLOCATION);
+  provider.ShutdownOnUIThread();
+}
+
+TEST_F(PrefProviderTest, AutorevocationBypassedByUserStoredOnDisk) {
+  TestingProfile testing_profile;
+  PrefProvider provider(testing_profile.GetPrefs(), /*off_the_record=*/false,
+                        /*store_last_modified=*/true,
+                        /*restore_session=*/false);
+  GURL primary_url("http://example.com/");
+  ContentSettingsPattern primary_pattern =
+      ContentSettingsPattern::FromString("[*.]example.com");
+  ContentSettingConstraints constraints;
+
+  provider.SetWebsiteSetting(primary_pattern, primary_pattern,
+                             ContentSettingsType::GEOLOCATION,
+                             base::Value(CONTENT_SETTING_ALLOW), constraints);
+  provider.SetAutorevocationBypassedByUser(primary_pattern, primary_pattern,
+                                           ContentSettingsType::GEOLOCATION);
+  RuleMetaData metadata;
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             TestUtils::GetContentSetting(&provider, primary_url, primary_url,
                                          ContentSettingsType::GEOLOCATION,
                                          false, &metadata));
-  EXPECT_EQ(metadata.last_visited(), base::Time());
+  EXPECT_TRUE(metadata.autorevocation_bypassed_by_user());
+
+  // Shutdown our provider and we should still have a setting present.
+  provider.ShutdownOnUIThread();
+  PrefProvider provider2(testing_profile.GetPrefs(), /*off_the_record=*/false,
+                         /*store_last_modified=*/true,
+                         /*restore_session=*/false);
+
+  RuleMetaData metadata_from_disk;
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            TestUtils::GetContentSetting(&provider2, primary_url, primary_url,
+                                         ContentSettingsType::GEOLOCATION,
+                                         false, &metadata_from_disk));
+  EXPECT_TRUE(metadata_from_disk.autorevocation_bypassed_by_user());
+
+  provider2.ShutdownOnUIThread();
+}
+
+TEST_F(PrefProviderTest, AutorevocationBypassedByUserUpdated) {
+  TestingProfile testing_profile;
+  PrefProvider provider(testing_profile.GetPrefs(), /*off_the_record=*/false,
+                        /*store_last_modified=*/true,
+                        /*restore_session=*/false);
+  base::SimpleTestClock clock;
+  clock.SetNow(base::Time::Now());
+  provider.SetClockForTesting(&clock);
+
+  GURL primary_url("http://example.com/");
+  ContentSettingsPattern primary_pattern =
+      ContentSettingsPattern::FromString("[*.]example.com");
+  ContentSettingConstraints constraints;
+
+  provider.SetWebsiteSetting(primary_pattern, primary_pattern,
+                             ContentSettingsType::GEOLOCATION,
+                             base::Value(CONTENT_SETTING_ALLOW), constraints);
+  RuleMetaData metadata;
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            TestUtils::GetContentSetting(&provider, primary_url, primary_url,
+                                         ContentSettingsType::GEOLOCATION,
+                                         false, &metadata));
+  EXPECT_FALSE(metadata.autorevocation_bypassed_by_user());
+
+  provider.SetAutorevocationBypassedByUser(primary_pattern, primary_pattern,
+                                           ContentSettingsType::GEOLOCATION);
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            TestUtils::GetContentSetting(&provider, primary_url, primary_url,
+                                         ContentSettingsType::GEOLOCATION,
+                                         false, &metadata));
+  EXPECT_TRUE(metadata.autorevocation_bypassed_by_user());
+
   provider.ShutdownOnUIThread();
 }
 
@@ -1267,8 +1332,7 @@ TEST_F(PrefProviderTest, MigrateLocalNetworkAccessOnFeatureEnabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       /*enabled_features=*/{network::features::kLocalNetworkAccessChecks},
-      /*disabled_features=*/{
-          network::features::kLocalNetworkAccessChecksSplitPermissions});
+      /*disabled_features=*/{});
 
   TestingProfile profile;
   PrefService* prefs = profile.GetPrefs();
@@ -1293,14 +1357,12 @@ TEST_F(PrefProviderTest, MigrateLocalNetworkAccessOnFeatureEnabled) {
     provider.ShutdownOnUIThread();
   }
 
-  // Test migration forward.
-  feature_list.Reset();
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{network::features::kLocalNetworkAccessChecks,
-                            network::features::
-                                kLocalNetworkAccessChecksSplitPermissions},
-      /*disabled_features=*/{});
+  // Clear the migration pref to force the migration
+  static char kLocalNetworkAccessMigrateExceptionsPref[] =
+      "profile.content_settings.exceptions.has_migrated_local_network_access";
+  prefs->SetBoolean(kLocalNetworkAccessMigrateExceptionsPref, false);
 
+  // Test migration forward.
   {
     PrefProvider new_provider(prefs, /*off_the_record=*/false,
                               /*store_last_modified=*/true,
@@ -1317,40 +1379,6 @@ TEST_F(PrefProviderTest, MigrateLocalNetworkAccessOnFeatureEnabled) {
                                          /*include_incognito=*/false));
     // CONTENT_SETTING_BLOCK is only migrated to LOCAL_NETWORK
     EXPECT_EQ(CONTENT_SETTING_BLOCK,
-              TestUtils::GetContentSetting(&new_provider, block_url, block_url,
-                                           ContentSettingsType::LOCAL_NETWORK,
-                                           /*include_incognito=*/false));
-    EXPECT_EQ(
-        CONTENT_SETTING_DEFAULT,
-        TestUtils::GetContentSetting(&new_provider, block_url, block_url,
-                                     ContentSettingsType::LOOPBACK_NETWORK,
-                                     /*include_incognito=*/false));
-    new_provider.ShutdownOnUIThread();
-  }
-
-  // Then migrate back.
-  feature_list.Reset();
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{network::features::kLocalNetworkAccessChecks},
-      /*disabled_features=*/{
-          network::features::kLocalNetworkAccessChecksSplitPermissions});
-
-  {
-    PrefProvider new_provider(prefs, /*off_the_record=*/false,
-                              /*store_last_modified=*/true,
-                              /*restore_session=*/false);
-
-    // Both LOCAL_NETWORK and LOOPBACK_NETWORK exceptions should be cleared.
-    EXPECT_EQ(CONTENT_SETTING_DEFAULT,
-              TestUtils::GetContentSetting(&new_provider, allow_url, allow_url,
-                                           ContentSettingsType::LOCAL_NETWORK,
-                                           /*include_incognito=*/false));
-    EXPECT_EQ(
-        CONTENT_SETTING_DEFAULT,
-        TestUtils::GetContentSetting(&new_provider, allow_url, allow_url,
-                                     ContentSettingsType::LOOPBACK_NETWORK,
-                                     /*include_incognito=*/false));
-    EXPECT_EQ(CONTENT_SETTING_DEFAULT,
               TestUtils::GetContentSetting(&new_provider, block_url, block_url,
                                            ContentSettingsType::LOCAL_NETWORK,
                                            /*include_incognito=*/false));

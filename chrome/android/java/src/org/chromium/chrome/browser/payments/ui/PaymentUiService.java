@@ -71,6 +71,7 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.payments.mojom.AddressErrors;
 import org.chromium.payments.mojom.PayerDetail;
 import org.chromium.payments.mojom.PayerErrors;
+import org.chromium.payments.mojom.PaymentAddress;
 import org.chromium.payments.mojom.PaymentComplete;
 import org.chromium.payments.mojom.PaymentCurrencyAmount;
 import org.chromium.payments.mojom.PaymentDetails;
@@ -218,13 +219,15 @@ public class PaymentUiService
 
         /**
          * Called when the shipping address has changed by the user.
+         *
          * @param address The changed shipping address.
          */
-        void onShippingAddressChange(org.chromium.payments.mojom.PaymentAddress address);
+        void onShippingAddressChange(PaymentAddress address);
 
         /**
          * Called when the Payment UI service quits with an error. The observer should stop
          * referencing the Payment UI service.
+         *
          * @param error The diagnostic message that's exposed to developers.
          */
         void onUiServiceError(String error);
@@ -890,14 +893,15 @@ public class PaymentUiService
     public @Nullable WebContents showPaymentHandlerUi(GURL url) {
         if (mPaymentHandlerUi != null) return null;
         PaymentHandlerCoordinator paymentHandlerUi = new PaymentHandlerCoordinator();
+        mPaymentHandlerUi = paymentHandlerUi;
         WebContents paymentHandlerWebContents =
                 paymentHandlerUi.show(
                         /* paymentRequestWebContents= */ mWebContents, url, /* uiObserver= */ this);
         if (paymentHandlerWebContents == null) {
             paymentHandlerUi.hide();
+            mPaymentHandlerUi = null;
             return null;
         }
-        mPaymentHandlerUi = paymentHandlerUi;
 
         return paymentHandlerWebContents;
     }
@@ -1151,7 +1155,7 @@ public class PaymentUiService
         mObservedTabModelSelector = tabModelSelector;
         mObservedTabModelSelector
                 .getCurrentTabModelSupplier()
-                .addObserver(mCurrentTabModelObserver);
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
         if (mObservedTabModel != null) {
             mObservedTabModel.removeObserver(mTabModelObserver);
         }
@@ -1165,7 +1169,7 @@ public class PaymentUiService
             if (mLayoutStateProvider != null) {
                 mLayoutStateProvider.removeObserver(this);
             }
-            if (layoutStateProvider.isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+            if (layoutStateProvider.isLayoutVisible(LayoutType.HUB)) {
                 return ErrorStrings.TAB_OVERVIEW_MODE;
             }
             mLayoutStateProvider = layoutStateProvider;
@@ -1204,6 +1208,7 @@ public class PaymentUiService
                 Profile.fromWebContents(mWebContents),
                 mWebContents.getLastCommittedUrl(),
                 activity.getResources().getDimensionPixelSize(R.dimen.payments_favicon_size),
+                /* fallbackToHost= */ true,
                 (bitmap, iconUrl) -> {
                     if (bitmap == null) {
                         mDelegate.onPaymentRequestUiFaviconNotAvailable();
@@ -1472,10 +1477,10 @@ public class PaymentUiService
 
         mHandler.post(
                 () -> {
-                    if (mPaymentRequestUi != null
-                            && mPaymentInformationCallback
-                                    != null // Verify callback not canceled before post.
-                    ) providePaymentInformationToPaymentRequestUi();
+                    if (mPaymentRequestUi != null && mPaymentInformationCallback != null) {
+                        // Verify callback not canceled before post.
+                        providePaymentInformationToPaymentRequestUi();
+                    }
                 });
     }
 

@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -105,13 +106,13 @@ class BufferStrategy {
 };
 
 // -----------------------------------------------------------------------------
-// GpuMemoryBufferStrategy:
+// MappableSharedImageStrategy:
 
 // Defines a concrete implementation of `BufferStrategy` which creates a
-// `GpuMemoryBuffer` and implements all the operations on it.
-class GpuMemoryBufferStrategy : public BufferStrategy {
+// `MappableSharedImage` and implements all the operations on it.
+class MappableSharedImageStrategy : public BufferStrategy {
  public:
-  explicit GpuMemoryBufferStrategy(const gfx::Size& frame_size)
+  explicit MappableSharedImageStrategy(const gfx::Size& frame_size)
       : client_si_(CreateSharedImage(frame_size)) {
     CHECK(client_si_);
   }
@@ -207,9 +208,9 @@ class FakeCameraDevice::Buffer {
             buffer_id, buffer_type, frame_size,
             std::make_unique<SharedMemoryBufferStrategy>(frame_size)));
       case media::VideoCaptureBufferType::kGpuMemoryBuffer:
-        return base::WrapUnique(
-            new Buffer(buffer_id, buffer_type, frame_size,
-                       std::make_unique<GpuMemoryBufferStrategy>(frame_size)));
+        return base::WrapUnique(new Buffer(
+            buffer_id, buffer_type, frame_size,
+            std::make_unique<MappableSharedImageStrategy>(frame_size)));
       default:
         NOTREACHED();
     }
@@ -504,6 +505,7 @@ void FakeCameraDevice::OnNextFrame() {
     info->pixel_format = media::PIXEL_FORMAT_ARGB;
     info->coded_size = current_settings_->requested_format.frame_size;
     info->visible_rect = gfx::Rect(info->coded_size);
+    info->natural_size = info->coded_size;
     info->is_premapped = false;
 
     subscription->OnFrameReadyInBuffer(

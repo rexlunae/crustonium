@@ -11,18 +11,22 @@ import android.os.Handler;
 import android.os.PersistableBundle;
 import android.view.View;
 
+import org.chromium.base.Log;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ActivityTabProvider;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.layouts.LayoutManager;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
 import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.ExclusiveAccessManager;
+import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxFocusReason;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 
 /**
@@ -31,6 +35,7 @@ import org.chromium.ui.KeyboardVisibilityDelegate;
  */
 @NullMarked
 public class ActivityRecreationController {
+    public static final String TAG_PERSIST_ACROSS_REBOOTS = "PersistAcrossReboots";
     public static final String URL_BAR_EDIT_TEXT = "URL_BAR_EDIT_TEXT";
     public static final String IS_TAB_SWITCHER_SHOWN = "IS_TAB_SWITCHER_SHOWN";
 
@@ -84,7 +89,7 @@ public class ActivityRecreationController {
 
         var layoutManager = mLayoutManagerSupplier.get();
         if (layoutManager != null) {
-            if (layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+            if (layoutManager.isLayoutVisible(LayoutType.HUB)) {
                 mRetainedUiState.mIsTabSwitcherShown = true;
             }
         }
@@ -146,14 +151,21 @@ public class ActivityRecreationController {
         LayoutManager layoutManager = mLayoutManagerSupplier.get();
         if (outPersistentState == null || layoutManager == null) return;
 
-        restoreTabSwitcherState(
-                outPersistentState.getBoolean(IS_TAB_SWITCHER_SHOWN, false),
-                mLayoutManagerSupplier.get());
+        boolean isTabSwitcherShown = outPersistentState.getBoolean(IS_TAB_SWITCHER_SHOWN, false);
+        if (isTabSwitcherShown) {
+            restoreTabSwitcherState(true, assertNonNull(mLayoutManagerSupplier.get()));
+            if (ChromeFeatureList.sPersistAcrossRebootsDebugLogs.isEnabled()) {
+                Log.i(TAG_PERSIST_ACROSS_REBOOTS, "Restored persistent tab switcher state");
+            }
+        }
 
         String urlBarEditText = outPersistentState.getString(URL_BAR_EDIT_TEXT, "");
         ToolbarManager toolbarManager = assertNonNull(mToolbarManagerSupplier.get());
         if (!urlBarEditText.isEmpty() && toolbarManager != null) {
             restoreOmniboxState(toolbarManager, layoutManager, mLayoutStateHandler, urlBarEditText);
+            if (ChromeFeatureList.sPersistAcrossRebootsDebugLogs.isEnabled()) {
+                Log.i(TAG_PERSIST_ACROSS_REBOOTS, "Restored persistent url text.");
+            }
         }
     }
 
@@ -211,7 +223,7 @@ public class ActivityRecreationController {
             LayoutManager layoutManager,
             Handler layoutStateHandler,
             Runnable onLayoutFinishedShowing) {
-        /* TODO (crbug/1395495): Restore the UI state directly if the invocation of {@code
+        /* TODO (crbug.com/40249125): Restore the UI state directly if the invocation of {@code
          * StaticLayout#requestFocus(Tab)} in {@code StaticLayout#doneShowing()} is removed. We
          * should restore the desired UI state after the {@link StaticLayout} is done showing to
          * persist the state. If the layout is visible and done showing, it is safe to execute the
@@ -268,7 +280,7 @@ public class ActivityRecreationController {
     private static void restoreTabSwitcherState(
             boolean isTabSwitcherShown, LayoutManager layoutManager) {
         if (!isTabSwitcherShown) return;
-        layoutManager.showLayout(LayoutType.TAB_SWITCHER, false);
+        layoutManager.showLayout(LayoutType.HUB, false);
     }
 
     private static void restoreExclusiveAccessState(
@@ -302,8 +314,12 @@ public class ActivityRecreationController {
 
     private static void setUrlBarFocusAndText(
             ToolbarManager toolbarManager, @Nullable String urlBarText) {
-        toolbarManager.setUrlBarFocusAndText(
-                true, OmniboxFocusReason.ACTIVITY_RECREATION_RESTORATION, urlBarText);
+        AutocompleteInput input =
+                new AutocompleteInput(OmniboxFocusReason.ACTIVITY_RECREATION_RESTORATION)
+                        .setUserText(urlBarText)
+                        .setSelection(TextSelection.SELECT_ALL);
+        // TODO(b/509988739): use proper session suspend/resume once we have this available.
+        toolbarManager.beginFuseboxInput(input);
     }
 
     private static void showSoftInput(ActivityTabProvider activityTabProvider) {

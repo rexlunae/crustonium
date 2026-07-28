@@ -7,6 +7,8 @@ package org.chromium.components.browser_ui.site_settings;
 import android.app.Activity;
 import android.graphics.drawable.Drawable;
 
+import androidx.annotation.StringRes;
+
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -76,11 +78,6 @@ public interface SiteSettingsDelegate {
     boolean isPermissionDedicatedCpssSettingAndroidFeatureEnabled();
 
     /**
-     * @return true if the PermissionSiteSettingsRadioButtonFeatureEnabled Feature is enabled.
-     */
-    boolean isPermissionSiteSettingsRadioButtonFeatureEnabled();
-
-    /**
      * Get the id of the notification channel associated with the given origin.
      *
      * @param callback Callback to be invoked with the Id of the channel.
@@ -110,6 +107,13 @@ public interface SiteSettingsDelegate {
      * @return true if Help and Feedback links and menu items should be shown to the user.
      */
     boolean isHelpAndFeedbackEnabled();
+
+    /**
+     * @return The resource ID of the help string that is valid for the current policy.
+     */
+    default @StringRes int getHelpMenuStringRes() {
+        return R.string.menu_help;
+    }
 
     /**
      * Launches a support page relevant to settings UI pages.

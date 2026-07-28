@@ -11,6 +11,9 @@ const char kReaderModeStateHistogram[] = "IOS.ReaderMode.State";
 const char kReaderModeDeactivationReasonHistogram[] =
     "IOS.ReaderMode.DeactivationReason";
 
+const char kReaderModeTranslationStateHistogram[] =
+    "IOS.ReaderMode.TranslationState";
+
 const char kReaderModeHeuristicResultHistogram[] =
     "IOS.ReaderMode.Heuristic.Result";
 
@@ -34,6 +37,8 @@ const char kReaderModeFontFamilyCustomizationHistogram[] =
 const char kReaderModeFontScaleCustomizationHistogram[] =
     "IOS.ReaderMode.FontScale";
 
+const char kReaderModeLinksEnabledHistogram[] = "IOS.ReaderMode.LinksEnabled";
+
 const char kReaderModeCustomizationHistogram[] = "IOS.ReaderMode.Customization";
 
 const char kReaderModeTimeSpentHistogram[] = "IOS.ReaderMode.TimeSpent";
@@ -45,14 +50,6 @@ const char kReaderModeAccessPointWithModeHistogram[] =
 
 const char kReaderModeRecentlyUsedTimestampsPref[] =
     "reader_mode.recently_used_timestamps";
-
-NSString* GetReaderModeSymbolName() {
-  if (@available(iOS 18, *)) {
-    return kReaderModeSymbolPostIOS18;
-  } else {
-    return kReaderModeSymbolPreIOS18;
-  }
-}
 
 std::vector<double> ReaderModeFontScaleMultipliers() {
   return {0.5, 0.75, 1.0, 1.25, 1.5, 2.0};

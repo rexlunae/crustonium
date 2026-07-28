@@ -32,9 +32,8 @@ class ExtensionsContainer {
   // Hides the actively showing popup, if any.
   virtual void HideActivePopup() = 0;
 
-  // Closes the overflow menu, if it was open. Returns whether or not the
-  // overflow menu was closed.
-  virtual bool CloseOverflowMenuIfOpen() = 0;
+  // Closes the overflow menu if it was open.
+  virtual void CloseExtensionsMenuIfOpen() = 0;
 
   // Shows the popup for the action with `id` as the result of an API call,
   // returning true if a popup is shown and invoking `callback` upon completion.
@@ -46,6 +45,12 @@ class ExtensionsContainer {
 
   // Whether there are any Extensions registered with the ExtensionsContainer.
   virtual bool HasAnyExtensions() const = 0;
+
+  // Triggers the manage extensions IPH.
+  virtual void ShowManageExtensionsIPH() {}
+
+  // Triggers the pinned by default IPH.
+  virtual void ShowPinnedByDefaultIPH(const std::string& extension_id) {}
 };
 
 #endif  // CHROME_BROWSER_UI_EXTENSIONS_EXTENSIONS_CONTAINER_H_

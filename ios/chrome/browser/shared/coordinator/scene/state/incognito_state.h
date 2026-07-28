@@ -9,6 +9,10 @@
 
 #include "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 
+enum class IncognitoLockState;
+@class IncognitoReauthSceneAgent;
+
+// Protocol to observe updates from the IncognitoState.
 @protocol IncognitoStateObserver <NSObject>
 
 @optional
@@ -19,22 +23,46 @@
 // Called right before exiting incognito.
 - (void)willExitIncognitoForState:(IncognitoState*)incognitoState;
 
+// Called when the authentication requirement in a given scene might have
+// changed.
+// TODO(crbug.com/374073829): Remove after launching Soft Lock.
+- (void)didUpdateAuthenticationRequirementForState:
+    (IncognitoState*)incognitoState;
+
+// Called when the incognito lock state in a given scene might have changed.
+- (void)didUpdateIncognitoLockStateForState:(IncognitoState*)incognitoState;
+
 @end
 
+// Represents the incognito state for a scene.
 @interface IncognitoState : NSObject
 
+// Indicates whether the incognito content is currently visible.
 @property(nonatomic, assign) BOOL incognitoContentVisible;
 
+// Returns whether incognito tabs are hidden behind a reauthentication screen,
+// soft lock screen or are not hidden at all.
+@property(nonatomic, assign) IncognitoLockState lockState;
+
+// The scene state associated with this incognito state.
 @property(nonatomic, weak, readonly) SceneState* sceneState;
 
-- (instancetype)initWithSceneState:(SceneState*)sceneState;
+// Returns YES when the authentication is currently required.
+@property(nonatomic, assign, readonly, getter=isAuthenticationRequired)
+    BOOL authenticationRequired;
 
+// Initializes with the given scene state.
+- (instancetype)initWithSceneState:(SceneState*)sceneState
+    NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
-// Adds observer.
+// Adds `observer`.
 - (void)addObserver:(id<IncognitoStateObserver>)observer;
-// Removes observer.
+// Removes `observer`.
 - (void)removeObserver:(id<IncognitoStateObserver>)observer;
+
+// Invoked when the preferences have been loaded.
+- (void)preferencesDidLoad;
 
 @end
 

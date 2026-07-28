@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
-#include "chrome/browser/tab_contents/tab_util.h"
 #include "components/favicon/core/large_icon_service.h"
 #include "components/google/core/common/google_util.h"
 #include "components/history/content/browser/history_context_helper.h"
@@ -35,6 +35,7 @@
 #include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "components/supervised_user/core/browser/web_content_handler.h"
+#include "components/supervised_user/core/common/features.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -102,8 +103,15 @@ SupervisedUserNavigationObserver::SupervisedUserNavigationObserver(
       receivers_(web_contents, this) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  supervised_user_service_observation_.Observe(
-      SupervisedUserServiceFactory::GetForProfile(profile));
+
+  if (base::FeatureList::IsEnabled(
+          supervised_user::kSupervisedUserUseUrlFilteringService)) {
+    url_filtering_service_observation_.Observe(
+        supervised_user_url_filtering_service());
+  } else {
+    supervised_user_service_observation_.Observe(
+        supervised_user::SupervisedUserServiceFactory::GetForProfile(profile));
+  }
 
 #if BUILDFLAG(IS_ANDROID)
   pref_change_registrar_.Init(profile->GetPrefs());
@@ -254,6 +262,10 @@ void SupervisedUserNavigationObserver::RecordPageLoadUKM(
 }
 
 void SupervisedUserNavigationObserver::OnURLFilterChanged() {
+  OnUrlFilteringServiceChanged();
+}
+
+void SupervisedUserNavigationObserver::OnUrlFilteringServiceChanged() {
   auto* main_frame = web_contents()->GetPrimaryMainFrame();
   int main_frame_process_id = main_frame->GetProcess()->GetDeprecatedID();
   int routing_id = main_frame->GetRoutingID();
@@ -454,28 +466,40 @@ void SupervisedUserNavigationObserver::FilterRenderFrame(
       kWebFilterMetricsOptionsForNavigationObserver);
 }
 
-void SupervisedUserNavigationObserver::GoBack() {
-  // Request can come only from the main frame.
-  if (!receivers_.GetCurrentTargetFrame()->IsInPrimaryMainFrame()) {
-    return;
-  }
+supervised_user::SupervisedUserInterstitial*
+SupervisedUserNavigationObserver::GetInterstitialForFrame() {
+  content::RenderFrameHost& target_frame = receivers_.CurrentTargetFrame();
+  content::FrameTreeNodeId frame_id = target_frame.GetFrameTreeNodeId();
 
-  content::FrameTreeNodeId frame_id = frame_tree_node_id();
-  if (supervised_user_interstitials_.contains(frame_id)) {
-    supervised_user_interstitials_[frame_id]->GoBack();
+  if (auto it = supervised_user_interstitials_.find(frame_id);
+      it != supervised_user_interstitials_.end()) {
+    return it->second.get();
   }
+  return nullptr;
 }
 
-void SupervisedUserNavigationObserver::RequestUrlAccessRemote(
-    RequestUrlAccessRemoteCallback callback) {
-  content::FrameTreeNodeId frame_id = frame_tree_node_id();
-  if (!supervised_user_interstitials_.contains(frame_id)) {
-    DLOG(WARNING) << "Interstitial with id not found: " << frame_id;
+void SupervisedUserNavigationObserver::GoBack() {
+  // Do not allow back navigation for subframes.
+  if (!receivers_.CurrentTargetFrame().IsInPrimaryMainFrame()) {
     return;
   }
 
   supervised_user::SupervisedUserInterstitial* interstitial =
-      supervised_user_interstitials_[frame_id].get();
+      GetInterstitialForFrame();
+  if (!interstitial) {
+    return;
+  }
+  interstitial->GoBack();
+}
+
+void SupervisedUserNavigationObserver::RequestUrlAccessRemote(
+    RequestUrlAccessRemoteCallback callback) {
+  supervised_user::SupervisedUserInterstitial* interstitial =
+      GetInterstitialForFrame();
+  if (!interstitial) {
+    std::move(callback).Run(/*request_issued=*/false);
+    return;
+  }
   interstitial->RequestUrlAccessRemote(
       base::BindOnce(&SupervisedUserNavigationObserver::RequestCreated,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback),
@@ -484,32 +508,22 @@ void SupervisedUserNavigationObserver::RequestUrlAccessRemote(
 
 void SupervisedUserNavigationObserver::RequestUrlAccessLocal(
     RequestUrlAccessLocalCallback callback) {
-  content::FrameTreeNodeId frame_id = frame_tree_node_id();
-  if (!supervised_user_interstitials_.contains(frame_id)) {
-    DLOG(WARNING) << "Interstitial with id not found: " << frame_id;
+  supervised_user::SupervisedUserInterstitial* interstitial =
+      GetInterstitialForFrame();
+  if (!interstitial) {
+    std::move(callback).Run(/*request_issued=*/false);
     return;
   }
-
-  supervised_user::SupervisedUserInterstitial* interstitial =
-      supervised_user_interstitials_[frame_id].get();
   interstitial->RequestUrlAccessLocal(std::move(callback));
 }
 
 #if BUILDFLAG(IS_ANDROID)
 void SupervisedUserNavigationObserver::LearnMore(LearnMoreCallback callback) {
-  // Learn more can come only from the main frame.
-  if (!receivers_.GetCurrentTargetFrame()->IsInPrimaryMainFrame()) {
-    return;
-  }
-
-  content::FrameTreeNodeId frame_id = frame_tree_node_id();
-  if (!supervised_user_interstitials_.contains(frame_id)) {
-    DLOG(WARNING) << "Interstitial with id not found: " << frame_id;
-    return;
-  }
-
   supervised_user::SupervisedUserInterstitial* interstitial =
-      supervised_user_interstitials_[frame_id].get();
+      GetInterstitialForFrame();
+  if (!interstitial) {
+    return;
+  }
   interstitial->LearnMore(std::move(callback));
 }
 #endif
@@ -538,14 +552,9 @@ void SupervisedUserNavigationObserver::MaybeUpdateRequestedHosts() {
   }
 }
 
-content::FrameTreeNodeId
-SupervisedUserNavigationObserver::frame_tree_node_id() {
-  return receivers_.GetCurrentTargetFrame()->GetFrameTreeNodeId();
-}
-
 supervised_user::SupervisedUserService*
 SupervisedUserNavigationObserver::supervised_user_service() const {
-  return SupervisedUserServiceFactory::GetForProfile(
+  return supervised_user::SupervisedUserServiceFactory::GetForProfile(
       Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
 }
 

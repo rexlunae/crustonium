@@ -22,7 +22,7 @@ using ChromeWebUIControllerFactoryBrowserTest = InProcessBrowserTest;
 // wrong WebUI object.
 IN_PROC_BROWSER_TEST_F(ChromeWebUIControllerFactoryBrowserTest,
                        ChromeUntrustedSameHost) {
-  content::AddUntrustedDataSource(browser()->profile(),
+  content::AddUntrustedDataSource(browser()->GetProfile(),
                                   chrome::kChromeUIVersionHost);
   EXPECT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
@@ -48,7 +48,7 @@ IN_PROC_BROWSER_TEST_F(ChromeWebUIControllerFactoryBrowserTest,
       incognito_browser->tab_strip_model()->GetActiveWebContents();
 
   EXPECT_TRUE(ui_test_utils::NavigateToURL(
-      incognito_browser, GURL(chrome::kChromeUINewTabPageURL)));
+      incognito_browser, chrome::ChromeUINewTabPageURLAsGURL()));
   EXPECT_FALSE(web_contents->GetWebUI());
 
   EXPECT_TRUE(ui_test_utils::NavigateToURL(
@@ -61,7 +61,7 @@ IN_PROC_BROWSER_TEST_F(ChromeWebUIControllerFactoryBrowserTest,
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
 
   EXPECT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), GURL(chrome::kChromeUINewTabPageURL)));
+      browser(), chrome::ChromeUINewTabPageURLAsGURL()));
   EXPECT_TRUE(web_contents->GetWebUI());
 
   EXPECT_TRUE(ui_test_utils::NavigateToURL(

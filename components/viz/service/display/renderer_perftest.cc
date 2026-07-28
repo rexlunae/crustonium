@@ -83,7 +83,7 @@ class WaitForSwapDisplayClient : public DisplayClient {
       AggregatedRenderPassList* render_passes) override {}
   void DisplayDidDrawAndSwap() override {}
   void DisplayDidReceiveCALayerParams(
-      const gfx::CALayerParams& ca_layer_params) override {}
+      gfx::CALayerParams ca_layer_params) override {}
   void DisplayDidCompleteSwapWithSize(const gfx::Size& pixel_size) override {
     DCHECK(loop_);
     loop_->Quit();
@@ -314,8 +314,9 @@ class RendererPerfTest : public VizPerfTest {
                                 .Build();
     support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
                                     std::move(frame));
-    ASSERT_TRUE(display_->DrawAndSwap(
-        {base::TimeTicks::Now(), base::TimeTicks::Now()}));
+    DrawAndSwapParams params;
+    params.expected_display_time = base::TimeTicks::Now();
+    ASSERT_TRUE(display_->DrawAndSwap(params));
   }
 
   ResourceId MapResourceId(base::flat_map<ResourceId, ResourceId>* resource_map,

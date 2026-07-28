@@ -185,6 +185,11 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNodeAuraLinux
   void OnFocused();
   void OnWindowActivated();
   void OnWindowDeactivated();
+
+  // Event handlers called from NotifyAccessibilityEvent and
+  // BrowserAccessibilityManagerAuraLinux. These handle AT-SPI readiness checks.
+  void HandleWindowActivatedEvent();
+  void HandleWindowDeactivatedEvent();
   void OnMenuPopupStart();
   void OnMenuPopupEnd();
   void OnAllMenusEnded();
@@ -240,7 +245,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNodeAuraLinux
   // relationship between a toplevel frame and its embedded document.
   void SetDocumentParent(AtkObject* new_document_parent);
 
-  int GetCaretOffset();
+  int GetCaretOffset() override;
   bool SetCaretOffset(int offset);
   bool SetTextSelectionForAtkText(int start_offset, int end_offset);
   bool HasSelection();

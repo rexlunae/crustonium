@@ -4,29 +4,35 @@
 
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_labels.h"
 
+#include <stddef.h>
+
 #include <algorithm>
+#include <array>
 #include <functional>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include "base/containers/extend.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/strings/string_util.h"
+#include "base/types/optional_ref.h"
 #include "base/types/zip.h"
-#include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/data_model/data_model_utils.h"
-#include "components/autofill/core/browser/field_type_utils.h"
-#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/field_filling_util.h"
-#include "components/autofill/core/browser/form_structure.h"
+#include "components/autofill/core/browser/geo/autofill_country.h"
+#include "components/autofill/core/browser/proto/server.pb.h"
+#include "components/autofill/core/common/dense_set.h"
 
 namespace autofill {
 
@@ -141,15 +147,19 @@ GetOrderedAttributeTypesForDisambiguation(
     if (!attribute_type.is_disambiguation_type()) {
       return false;
     }
-    std::vector<std::u16string> values;
-    for (const EntityInstance* entity : entities) {
-      auto [value, types_used] = GetValueAndTypesForLabel(
-          *entity, attribute_type, obfuscate_sensitive_types, app_locale);
-      values.push_back(std::move(value));
-    }
+    std::vector<std::u16string> values =
+        base::ToVector(entities, [&](const EntityInstance* entity) {
+          return normalization::NormalizeForComparison(
+              GetValueAndTypesForLabel(*entity, attribute_type,
+                                       obfuscate_sensitive_types, app_locale)
+                  .first,
+              normalization::WhitespaceSpec::kRetain,
+              AddressCountryCode(
+                  AutofillCountry::CountryCodeForLocale(app_locale)));
+        });
     return values.size() == 1
                ? !values.back().empty()
-               : base::MakeFlatSet<std::u16string>(values).size() > 1;
+               : base::flat_set<std::u16string>(std::move(values)).size() > 1;
   };
 
   std::vector<AttributeType> types = base::ToVector(entity_type.attributes());

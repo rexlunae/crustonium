@@ -16,8 +16,7 @@
 // corising@ for any additional guidance.
 class ContentsLayoutManager : public views::LayoutManagerBase {
  public:
-  ContentsLayoutManager(views::View* contents_view,
-                        views::View* lens_overlay_view);
+  explicit ContentsLayoutManager(views::View* contents_view);
 
   ContentsLayoutManager(const ContentsLayoutManager&) = delete;
   ContentsLayoutManager& operator=(const ContentsLayoutManager&) = delete;
@@ -31,7 +30,6 @@ class ContentsLayoutManager : public views::LayoutManagerBase {
 
  private:
   const raw_ptr<views::View> contents_view_;
-  const raw_ptr<views::View> lens_overlay_view_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CONTENTS_LAYOUT_MANAGER_H_

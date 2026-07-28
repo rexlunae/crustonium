@@ -85,7 +85,7 @@
   width: 12px;
 }
 
-#time-accessed {
+#timeAccessed {
   color: var(--history-item-time-color);
   font-size: 12px;
   margin-inline-start: 6px;
@@ -101,7 +101,7 @@
   white-space: nowrap;
 }
 
-#menu-button {
+#menuButton {
   --cr-icon-button-margin-end: 20px;
   --cr-icon-button-margin-start: 12px;
   --cr-icon-button-icon-size: 16px;
@@ -112,6 +112,27 @@
   --cr-icon-size: 20px;
   --paper-tooltip-min-width: 0;
   padding-inline-start: 12px;
+}
+
+#title-and-domain #actor-icon {
+  --cr-icon-color: var(--color-sys-on-tonal-container,
+      var(--cr-fallback-color-on-tonal-container));
+  --cr-icon-size: 12px;
+  align-items: center;
+  background-color: var(--color-sys-surface1,
+      var(--cr-fallback-color-surface1));
+  border-radius: 50%;
+  color: var(--color-sys-on-tonal-container,
+      var(--cr-fallback-color-on-tonal-container));
+  display: flex;
+  flex: none;
+  height: 16px;
+  justify-content: center;
+  margin-inline-start: -10px;
+  padding-inline-start: 0;
+  position: relative;
+  width: 16px;
+  z-index: 1;
 }
 
 #bookmark-star {

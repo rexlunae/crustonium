@@ -34,7 +34,7 @@ perfetto::StaticString FrameNodeVisibilityToString(
     case FrameNode::Visibility::kVisible:
       return "Visible";
     case FrameNode::Visibility::kNotVisible:
-      return "Not Visible";
+      return nullptr;
   }
   NOTREACHED();
 }
@@ -60,6 +60,7 @@ FrameNodeImpl::FrameNodeImpl(
     FrameNodeImpl* outer_document_for_inner_frame_root,
     int render_frame_id,
     const blink::LocalFrameToken& frame_token,
+    const perfetto::Track& tracing_track,
     content::BrowsingInstanceId browsing_instance_id,
     content::SiteInstanceGroupId site_instance_group_id,
     bool is_current,
@@ -75,22 +76,18 @@ FrameNodeImpl::FrameNodeImpl(
       render_frame_host_proxy_(content::GlobalRenderFrameHostId(
           process_node->GetRenderProcessHostId().value(),
           render_frame_id)),
-      tracing_track_(blink::GetLocalFrameTracingTrack(
-          frame_token,
-          /*is_main_frame=*/parent_frame_node_ == nullptr,
-          process_node_->tracing_track())),
+      tracing_track_(tracing_track),
       is_current_(is_current),
       is_active_(is_active),
       priority_and_reason_(PriorityAndReason(base::Process::Priority::kMinValue,
                                              kDefaultPriorityReason),
-                           perfetto::NamedTrack("Priority", 0, *tracing_track_),
+                           perfetto::StateTrack("Priority", 0, tracing_track_),
                            PriorityAndReasonToString),
       is_audible_(false,
-                  perfetto::NamedTrack("IsAudible", 0, *tracing_track_),
+                  perfetto::StateTrack("IsAudible", 0, tracing_track_),
                   YesNoStateToString),
-      // Visibility is emitted to the frame track directly.
       visibility_(Visibility::kUnknown,
-                  *tracing_track_,
+                  perfetto::StateTrack("Visibility", 0, tracing_track_),
                   FrameNodeVisibilityToString) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(process_node);
@@ -364,10 +361,11 @@ void FrameNodeImpl::OnTraceSessionStart() {
 }
 
 void FrameNodeImpl::TraceEdges() {
-  TRACE_EVENT_INSTANT("performance_manager.graph", "AttachPage",
-                      perfetto::NamedTrack("Edges", 0, *tracing_track_),
-                      perfetto::Flow::FromPointer(this));
   page_node_->TraceFrame(base::PassKey<FrameNodeImpl>(), this);
+  TRACE_EVENT_BEGIN("performance_manager.graph", "AttachedPage",
+                    perfetto::NamedTrack("Page", 0, tracing_track_),
+                    perfetto::Flow::Global(
+                        base::UnguessableTokenHash()(frame_token_.value())));
 }
 
 FrameNodeImpl* FrameNodeImpl::parent_frame_node() const {
@@ -405,11 +403,6 @@ ProcessNodeImpl* FrameNodeImpl::process_node() const {
 int FrameNodeImpl::render_frame_id() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return render_frame_id_;
-}
-
-perfetto::Track FrameNodeImpl::tracing_track() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return *tracing_track_;
 }
 
 FrameNode::NodeSetView<FrameNodeImpl*> FrameNodeImpl::child_frame_nodes()
@@ -853,6 +846,8 @@ void FrameNodeImpl::OnUninitializingEdges() {
 
   // Leave the page.
   DCHECK(graph()->NodeInGraph(page_node_));
+  TRACE_EVENT_END("performance_manager.graph",
+                  perfetto::NamedTrack("Page", 0, tracing_track_));
   page_node_->RemoveFrame(base::PassKey<FrameNodeImpl>(), this);
 
   // Leave the frame hierarchy.

@@ -5,17 +5,20 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_IBAN_SAVE_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_IBAN_SAVE_MANAGER_H_
 
+#include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
-#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 #include "components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/autofill/core/common/signatures.h"
 
 namespace autofill {
 
@@ -77,57 +80,9 @@ class IbanSaveManager {
   // the save prompt manually.
   [[nodiscard]] bool AttemptToOfferSave(Iban& import_candidate);
 
-  // TODO(b/352643261): Add TestApi for below ForTesting methods.
-  void OnUserDidDecideOnLocalSaveForTesting(
-      const Iban& import_candidate,
-      payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
-      std::u16string_view nickname = u"") {
-    OnUserDidDecideOnLocalSave(import_candidate, user_decision, nickname);
-  }
-
-  void OnUserDidDecideOnUploadSaveForTesting(
-      const Iban& import_candidate,
-      bool show_save_prompt,
-      payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
-      std::u16string_view nickname = u"") {
-    OnUserDidDecideOnUploadSave(import_candidate, show_save_prompt,
-                                user_decision, nickname);
-  }
-
-  // Returns the IbanSaveStrikeDatabase for `client_`.
-  IbanSaveStrikeDatabase* GetIbanSaveStrikeDatabaseForTesting() {
-    return GetIbanSaveStrikeDatabase();
-  }
-
-  void SetEventObserverForTesting(ObserverForTest* observer) {
-    observer_for_testing_ = observer;
-  }
-
-  // TODO(crbug.com/b/40937065): Iban needs to be immutable reference
-  // and pass it by value in this case.
-  bool AttemptToOfferLocalSaveForTesting(Iban& iban) {
-    return AttemptToOfferLocalSave(iban);
-  }
-
-  bool AttemptToOfferUploadSaveForTesting(Iban& iban) {
-    return AttemptToOfferUploadSave(iban);
-  }
-
-  TypeOfOfferToSave DetermineHowToSaveIbanForTesting(
-      const Iban& import_candidate) {
-    return DetermineHowToSaveIban(import_candidate);
-  }
-
-  void OnDidUploadIbanForTesting(
-      const Iban& import_candidate,
-      bool show_save_prompt,
-      payments::PaymentsAutofillClient::PaymentsRpcResult result) {
-    OnDidUploadIban(import_candidate, show_save_prompt, result);
-  }
-
-  bool HasContextTokenForTesting() const { return !context_token_.empty(); }
-
  private:
+  friend class IbanSaveManagerTestApi;
+
   // Sets the `record_type` of this given `import_candidate`.
   void UpdateRecordType(Iban& import_candidate);
 

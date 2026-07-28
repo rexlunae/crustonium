@@ -245,7 +245,7 @@ public class PendingTabClosureManager {
         }
     }
 
-    /** Thread checks to root cause crbug.com/1465745. */
+    /** Thread checks to root cause crbug.com/40276103. */
     private final ThreadChecker mThreadChecker = new ThreadChecker();
 
     private boolean mIsCommittingAllTabClosures;
@@ -348,6 +348,11 @@ public class PendingTabClosureManager {
      */
     public boolean isClosurePending(int tabId) {
         return mRewoundList.getPendingRewindTab(tabId) != null;
+    }
+
+    /** Returns whether there are any pending closures in the rewound list. */
+    public boolean hasPendingClosures() {
+        return mRewoundList.hasPendingClosures();
     }
 
     /**

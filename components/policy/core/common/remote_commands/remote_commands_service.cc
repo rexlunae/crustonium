@@ -74,6 +74,10 @@ RemoteCommandsService::MetricReceivedRemoteCommand RemoteCommandMetricFromType(
       return Metric::kFetchCrdAvailabilityInfo;
     case em::RemoteCommand_Type_FETCH_SUPPORT_PACKET:
       return Metric::kFetchSupportPacket;
+    case em::RemoteCommand_Type_QUERY_GEOLOCATION:
+      return Metric::kQueryGeolocation;
+    case em::RemoteCommand_Type_BROWSER_EXTENSION_UPDATE_CHECK:
+      return Metric::kBrowserExtensionUpdateCheck;
   }
 
   // None of possible types matched. May indicate that there is new unhandled
@@ -119,6 +123,10 @@ const char* RemoteCommandTypeToString(em::RemoteCommand_Type type) {
       return "FetchCrdAvailabilityInfo";
     case em::RemoteCommand_Type_FETCH_SUPPORT_PACKET:
       return "FetchSupportPacket";
+    case em::RemoteCommand_Type_QUERY_GEOLOCATION:
+      return "QueryGeolocation";
+    case em::RemoteCommand_Type_BROWSER_EXTENSION_UPDATE_CHECK:
+      return "BrowserExtensionUpdateCheck";
   }
 
   NOTREACHED() << "Unknown command type: " << type;

@@ -22,11 +22,15 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.DimenRes;
 import androidx.annotation.IntDef;
 import androidx.annotation.StringRes;
 import androidx.appcompat.widget.TooltipCompat;
 
 import org.chromium.base.TimeUtils;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -91,6 +95,10 @@ public class StatusView extends LinearLayout {
     private int mShowBrowserControlsToken = TokenHolder.INVALID_TOKEN;
     private int mStatusIconSize;
     private @Nullable Integer mIconAnimationDurationForTests;
+    private final SettableMonotonicObservableSupplier<Boolean> mIsVisibleSupplier =
+            ObservableSuppliers.createMonotonic(null);
+    private final RoundedCornerOutlineProvider mIconCornerRadiusProvider =
+            new RoundedCornerOutlineProvider(/* radius= */ 0);
 
     public StatusView(Context context, AttributeSet attributes) {
         super(context, attributes);
@@ -136,17 +144,23 @@ public class StatusView extends LinearLayout {
         mStatusIconSize =
                 getResources()
                         .getDimensionPixelSize(R.dimen.omnibox_search_engine_logo_composed_size);
-
-        // Configure icon rounding.
-        mIconView.setOutlineProvider(
-                new RoundedCornerOutlineProvider(
-                        getResources()
-                                        .getDimensionPixelSize(
-                                                R.dimen.omnibox_search_engine_logo_composed_size)
-                                / 2));
+        setCornerRadiusRes(R.dimen.omnibox_search_engine_logo_composed_half_size);
         mIconView.setClipToOutline(true);
 
         configureAccessibilityDescriptions();
+    }
+
+    @Override
+    protected void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
+        if (changedView == this) {
+            mIsVisibleSupplier.set(visibility == VISIBLE);
+        }
+    }
+
+    /** Returns a supplier that is updated whenever the visibility of this view changes. */
+    public MonotonicObservableSupplier<Boolean> getIsVisibleSupplier() {
+        return mIsVisibleSupplier;
     }
 
     /**
@@ -265,7 +279,7 @@ public class StatusView extends LinearLayout {
             // While this looks nice in some cases (navigating to insecure sites),
             // it has a side-effect of briefly showing padlock (phase-out) when navigating
             // back and forth between secure and insecure sites, which seems like a glitch.
-            // See bug: crbug.com/919449
+            // See bug: crbug.com/41434187
             mIconView
                     .animate()
                     .setDuration(mAnimationsEnabled ? getIconAnimationDuration() : 0)
@@ -326,7 +340,7 @@ public class StatusView extends LinearLayout {
                     updateAnimationStartTime();
                     mIsAnimatingStatusIconChange = true;
                     keepControlsShownForAnimation();
-                    mIconView.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
+                    mIconView.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
                     mIconView
                             .animate()
                             .setDuration(ICON_ROTATION_DURATION_MS)
@@ -343,6 +357,8 @@ public class StatusView extends LinearLayout {
                                         mIsAnimatingStatusIconChange = false;
                                         allowBrowserControlsHide();
                                         mIconView.setRotation(0);
+                                        mIconView.setAccessibilityLiveRegion(
+                                                ACCESSIBILITY_LIVE_REGION_NONE);
                                         // Only update status icon if it is still the current icon.
                                         if (mStatusIconDrawable == targetIcon) {
                                             mIconView.setImageDrawable(targetIcon);
@@ -424,6 +440,11 @@ public class StatusView extends LinearLayout {
                 });
     }
 
+    /** Specify the corner radius of the icon outline provider. */
+    void setCornerRadiusRes(@DimenRes int radiusRes) {
+        mIconCornerRadiusProvider.setRadius(getResources().getDimensionPixelSize(radiusRes));
+    }
+
     /** Toggle use of animations. */
     void setAnimationsEnabled(boolean enabled) {
         mAnimationsEnabled = enabled;
@@ -445,12 +466,6 @@ public class StatusView extends LinearLayout {
         animateStatusIcon(transitionType, animationFinishedCallback);
     }
 
-    /** Specify the status icon alpha. */
-    void setStatusIconAlpha(float alpha) {
-        if (mIconView == null) return;
-        mIconView.setAlpha(alpha);
-    }
-
     /** Specify the status icon visibility. */
     public void setStatusIconShown(boolean showIcon) {
         if (mStatusIconView == null) return;
@@ -469,7 +484,7 @@ public class StatusView extends LinearLayout {
 
         // If the icon's visibility changes while layout is pending, we can end up in a bad state
         // due to a stale measurement cache. Post a task to request layout to force this visibility
-        // change (crbug.com/1345552).
+        // change (crbug.com/40853631).
         if (wasLayoutPreviouslyRequested && getHandler() != null) {
             getHandler()
                     .post(
@@ -499,6 +514,9 @@ public class StatusView extends LinearLayout {
         }
         mIconView.setContentDescription(description);
         setImportantForAccessibility(importantForAccessibility);
+        setFocusable(descriptionRes != 0);
+        setClickable(descriptionRes != 0);
+        setLongClickable(descriptionRes != 0);
     }
 
     /** Select color of Separator view. */
@@ -555,8 +573,8 @@ public class StatusView extends LinearLayout {
 
     /**
      * Create a touch delegate to expand the clickable area for the padlock icon (see
-     * crbug.com/970031 for motivation/info). This method will be called when the icon is animating
-     * in and when layout changes. It's called on these intervals because
+     * crbug.com/40630473 for motivation/info). This method will be called when the icon is
+     * animating in and when layout changes. It's called on these intervals because
      *
      * <ul>
      *   <li>the layout could change and
@@ -591,7 +609,7 @@ public class StatusView extends LinearLayout {
         touchDelegateBounds.left -= isRtl ? mTouchDelegateEndOffset : mTouchDelegateStartOffset;
         touchDelegateBounds.right += isRtl ? mTouchDelegateStartOffset : mTouchDelegateEndOffset;
         // Increase the delegate area height for tablets to satisfy minimum size requirements.
-        // Ideally, we want to address crbug.com/1320384 to satisfy minimum size requirements.
+        // Ideally, we want to address crbug.com/40836741 to satisfy minimum size requirements.
         if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext())) {
             touchDelegateBounds.top -=
                     getResources()

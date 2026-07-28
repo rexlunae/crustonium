@@ -4,9 +4,11 @@
 
 #include <optional>
 
+#include "base/callback_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -15,7 +17,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
@@ -59,25 +60,21 @@ class ThumbnailObserver : public ui::test::StateObserver<bool> {
   base::WeakPtrFactory<ThumbnailObserver> weak_ptr_factory_{this};
 };
 
-class BrowserRemovedObserver : public ui::test::StateObserver<bool>,
-                               public BrowserListObserver {
+class BrowserRemovedObserver : public ui::test::StateObserver<bool> {
  public:
-  explicit BrowserRemovedObserver(Browser* browser) : browser_(browser) {
-    BrowserList::AddObserver(this);
+  explicit BrowserRemovedObserver(BrowserWindowInterface* browser) {
+    browser_did_close_subscription_ = browser->RegisterBrowserDidClose(
+        base::BindRepeating(&BrowserRemovedObserver::OnBrowserDidClose,
+                            base::Unretained(this)));
   }
   ~BrowserRemovedObserver() override = default;
 
- protected:
-  void OnBrowserRemoved(Browser* browser) override {
-    if (browser_ == browser) {
-      OnStateObserverStateChanged(true);
-      browser_ = nullptr;
-      BrowserList::RemoveObserver(this);
-    }
+ private:
+  void OnBrowserDidClose(BrowserWindowInterface* browser) {
+    OnStateObserverStateChanged(true);
   }
 
- private:
-  raw_ptr<Browser> browser_;
+  base::CallbackListSubscription browser_did_close_subscription_;
 };
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kFirstTab);
@@ -188,7 +185,7 @@ class ThumbnailTabHelperUpdatedInteractiveTest
 IN_PROC_BROWSER_TEST_F(ThumbnailTabHelperUpdatedInteractiveTest,
                        TabLoadTriggersScreenshot) {
   RunTestSequence(
-      AddInstrumentedTab(kFirstTab, GURL(chrome::kChromeUINewTabURL), 0),
+      AddInstrumentedTab(kFirstTab, chrome::ChromeUINewTabURLAsGURL(), 0),
       WaitForWebContentsReady(kFirstTab), CheckTabHasThumbnailData(0, false),
       SelectTab(kTabStripElementId, 1),
       CheckResult([this]() { return GetTabCount(); }, 2,
@@ -199,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(ThumbnailTabHelperUpdatedInteractiveTest,
 IN_PROC_BROWSER_TEST_F(ThumbnailTabHelperUpdatedInteractiveTest,
                        TabDiscardPreservesScreenshot) {
   RunTestSequence(
-      AddInstrumentedTab(kFirstTab, GURL(chrome::kChromeUINewTabURL), 0),
+      AddInstrumentedTab(kFirstTab, chrome::ChromeUINewTabURLAsGURL(), 0),
       WaitForWebContentsReady(kFirstTab), CheckTabHasThumbnailData(0, false),
       SelectTab(kTabStripElementId, 1), WaitForAndVerifyThumbnail(0),
       CheckTabHasThumbnailData(0, true), TryDiscardTab(0),
@@ -214,7 +211,7 @@ IN_PROC_BROWSER_TEST_F(ThumbnailTabHelperUpdatedInteractiveTest,
   // triggering shutdown.
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
       WindowOpenDisposition::NEW_WINDOW,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_BROWSER);
   set_target_browser(browser_created_observer.Wait());
@@ -222,22 +219,19 @@ IN_PROC_BROWSER_TEST_F(ThumbnailTabHelperUpdatedInteractiveTest,
   RunTestSequence(
       InContext(
           BrowserElements::From(target_browser())->GetContext(),
-          AddInstrumentedTab(kFirstTab, GURL(chrome::kChromeUINewTabURL), 1),
+          AddInstrumentedTab(kFirstTab, chrome::ChromeUINewTabURLAsGURL(), 1),
           WaitForWebContentsReady(kFirstTab),
-          AddInstrumentedTab(kSecondTab, GURL(chrome::kChromeUINewTabURL), 2),
+          AddInstrumentedTab(kSecondTab, chrome::ChromeUINewTabURLAsGURL(), 2),
           WaitForWebContentsReady(kSecondTab),
-          AddInstrumentedTab(kThirdTab, GURL(chrome::kChromeUINewTabURL), 3),
+          AddInstrumentedTab(kThirdTab, chrome::ChromeUINewTabURLAsGURL(), 3),
           WaitForWebContentsReady(kThirdTab)),
       CheckTabCountInBrowser(4), CheckActiveTabInBrowser(3),
-      ObserveState(
-          kBrowserRemovedState,
-          [this]() { return target_browser()->GetBrowserForMigrationOnly(); }),
+      ObserveState(kBrowserRemovedState, [this]() { return target_browser(); }),
       // Can't close browser when WebContents is notifying observers.
       Do([this]() {
         // Override manual value set in MemorySaverInteractiveTestMixin to
         // prepare for tab strip being destroyed along with the browser.
-        resource_coordinator::GetTabLifecycleUnitSource()
-            ->SetFocusedTabStripModelForTesting(nullptr);
+        ClearFocusedTabStripModelForTesting();
         target_browser()->GetWindow()->Close();
         set_target_browser(nullptr);
       }),
@@ -252,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(ThumbnailTabHelperUpdatedInteractiveTest,
 
         // Restore recently closed window.
         ui_test_utils::BrowserCreatedObserver browser_created_observer;
-        chrome::OpenWindowWithRestoredTabs(browser()->profile());
+        chrome::OpenWindowWithRestoredTabs(browser()->GetProfile());
         set_target_browser(browser_created_observer.Wait());
       }),
       CheckTabCountInBrowser(4), CheckActiveTabInBrowser(3),

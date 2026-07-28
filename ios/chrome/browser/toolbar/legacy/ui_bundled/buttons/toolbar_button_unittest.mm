@@ -34,10 +34,10 @@ class ToolbarButtonTest : public PlatformTest {
  public:
   void SetUp() override {
     image_loader_ = ^UIImage* {
-      return DefaultSymbolWithPointSize(kMenuSymbol, kSymbolToolbarPointSize);
+      return SymbolWithPointSize(SymbolMenu, kSymbolToolbarPointSize);
     };
     iph_highlighted_image_loader_ = ^UIImage* {
-      return DefaultSymbolWithPointSize(kBackSymbol, kSymbolToolbarPointSize);
+      return SymbolWithPointSize(SymbolBack, kSymbolToolbarPointSize);
     };
 
     ToolbarType type;
@@ -112,12 +112,27 @@ TEST_F(ToolbarButtonTest, ToolbarButtonBlueDot) {
   EXPECT_EQ(FindSubViewByID(toolbar_button_, kToolbarButtonBlueDotViewID), nil);
 }
 
+// Checks that setting blue dot property correctly updates accessibility value.
+TEST_F(ToolbarButtonTest, ToolbarButtonAccessibility) {
+  NSString* blue_dot_label = @"New";
+  toolbar_button_.blueDotAccessibilityLabel = blue_dot_label;
+  EXPECT_FALSE(toolbar_button_.hasBlueDot);
+  EXPECT_EQ(toolbar_button_.accessibilityValue, nil);
+
+  toolbar_button_.hasBlueDot = YES;
+  EXPECT_TRUE(
+      [toolbar_button_.accessibilityValue isEqualToString:blue_dot_label]);
+
+  toolbar_button_.hasBlueDot = NO;
+  EXPECT_EQ(toolbar_button_.accessibilityValue, nil);
+}
+
 // Checks that setting a new image loader block updates the image, when the
 // image was already loaded.
 TEST_F(ToolbarButtonTest, SetImageLoader_LoadedImage) {
   // Prepare the other image loader block.
   UIImage* other_image =
-      DefaultSymbolWithPointSize(kMailFillSymbol, kSymbolToolbarPointSize);
+      SymbolWithPointSize(SymbolMailFill, kSymbolToolbarPointSize);
   __block bool called = false;
   auto other_image_loader = ^UIImage* {
     called = true;
@@ -140,14 +155,13 @@ TEST_F(ToolbarButtonTest, SetImageLoader_LoadedImage) {
 // first, but loads correctly the new image when requested.
 TEST_F(ToolbarButtonTest, SetImageLoader_NotLoadedImage) {
   // Create a new button, whose image has not been loaded yet.
-  UIImage* image =
-      DefaultSymbolWithPointSize(kMenuSymbol, kSymbolToolbarPointSize);
+  UIImage* image = SymbolWithPointSize(SymbolMenu, kSymbolToolbarPointSize);
   toolbar_button_ = [[LegacyToolbarButton alloc] initWithImageLoader:^UIImage* {
     return image;
   }];
   // Prepare the other image loader block.
   UIImage* other_image =
-      DefaultSymbolWithPointSize(kMailFillSymbol, kSymbolToolbarPointSize);
+      SymbolWithPointSize(SymbolMailFill, kSymbolToolbarPointSize);
   __block bool called = false;
   auto other_image_loader = ^UIImage* {
     called = true;

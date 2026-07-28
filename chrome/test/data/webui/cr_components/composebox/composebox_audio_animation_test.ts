@@ -55,6 +55,10 @@ suite('Composebox audio wave animation', () => {
     await microtasksFinished();
   });
 
+  teardown(() => {
+    audioWaveElement.remove();
+  });
+
   test('svg elements are created and mapped', () => {
     // Check that the mapped audioWaveElements in the interface exist.
     assertTrue(!!audioWaveElement.$.mask);

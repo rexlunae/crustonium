@@ -32,14 +32,8 @@ struct AdaptiveRefreshRateInfo {
 };
 
 // The DisplayPrivate is used by privileged clients to talk to Display.
-[DirectReceiver]
 interface DisplayPrivate {
   SetDisplayVisible(bool visible);
-
-  // Attempts to immediately swap a frame with the current size if possible,
-  // then will no longer swap until Resize() is called with a non-empty size.
-  [EnableIf=is_win, Sync]
-  DisableSwapUntilResize() => ();
 
   // Resizes the display.
   Resize(gfx.mojom.Size size);

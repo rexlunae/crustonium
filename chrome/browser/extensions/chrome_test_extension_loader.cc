@@ -9,11 +9,12 @@
 #include "base/files/file_util.h"
 #include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
-#include "chrome/browser/extensions/crx_installer.h"
+#include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/load_error_waiter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/render_process_host.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_creator.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
@@ -96,7 +97,12 @@ ChromeTestExtensionLoader::ChromeTestExtensionLoader(
     : browser_context_(browser_context),
       extension_system_(ExtensionSystem::Get(browser_context)),
       extension_registrar_(ExtensionRegistrar::Get(browser_context)),
-      extension_registry_(ExtensionRegistry::Get(browser_context)) {}
+      extension_registry_(ExtensionRegistry::Get(browser_context)) {
+  DCHECK(browser_context_);
+  DCHECK(extension_system_);
+  DCHECK(extension_registrar_);
+  DCHECK(extension_registry_);
+}
 
 ChromeTestExtensionLoader::~ChromeTestExtensionLoader() {
   // If there was a temporary directory created for a CRX, we need to clean it

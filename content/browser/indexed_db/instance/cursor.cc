@@ -83,7 +83,7 @@ Cursor::Cursor(std::unique_ptr<BackingStore::Cursor> cursor,
                Type type,
                blink::mojom::IDBTaskType task_type,
                base::WeakPtr<Transaction> transaction)
-    : bucket_locator_(transaction->bucket_context()->bucket_locator()),
+    : bucket_locator_(transaction->bucket_context().bucket_locator()),
       type_(std::move(type)),
       task_type_(task_type),
       transaction_(std::move(transaction)),
@@ -107,7 +107,7 @@ void Cursor::Advance(uint32_t count,
     return;
   }
 
-  if (!transaction_) {
+  if (!transaction_ || !transaction_->IsAcceptingRequests()) {
     Close();
   }
   if (closed_) {
@@ -193,7 +193,7 @@ void Cursor::Continue(IndexedDBKey key,
     return;
   }
 
-  if (!transaction_) {
+  if (!transaction_ || !transaction_->IsAcceptingRequests()) {
     Close();
   }
   if (closed_) {
@@ -270,7 +270,7 @@ void Cursor::Prefetch(int number_to_fetch,
                       blink::mojom::IDBCursor::PrefetchCallback callback) {
   TRACE_EVENT0("IndexedDB", "Cursor::Prefetch");
 
-  if (!transaction_) {
+  if (!transaction_ || !transaction_->IsAcceptingRequests()) {
     Close();
   }
   if (closed_) {
@@ -391,8 +391,8 @@ void Cursor::PrefetchReset(int used_prefetches) {
     // The error is reported explicitly since this method is not part of the
     // transaction task queue. Resetting `cursor_` is not necessary because
     // `this` will be destroyed.
-    transaction_->bucket_context()->OnDatabaseError(
-        transaction_->connection()->database().get(), status, {});
+    transaction_->bucket_context().OnDatabaseError(
+        transaction_->connection().database().get(), status, {});
   };
 
   // First prefetched result is always used.
@@ -432,6 +432,7 @@ void Cursor::Close() {
   TRACE_EVENT_END("IndexedDB", perfetto::Track::FromPointer(this));
   TRACE_EVENT0("IndexedDB", "Cursor::Close");
   closed_ = true;
+  ptr_factory_.InvalidateWeakPtrs();
   cursor_.reset();
   if (transaction_) {
     transaction_->UnregisterOpenCursor(this);

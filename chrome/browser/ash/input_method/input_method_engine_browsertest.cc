@@ -281,7 +281,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, BasicScenarioTest) {
   IMEBridge::Get()->SetCandidateWindowHandler(nullptr);
 }
 
-// Test is flaky. https://crbug.com/1462135.
+// Test is flaky. https://crbug.com/40921761.
 IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, DISABLED_APIArgumentTest) {
   // Makes real end to end test without mocking the input context handler.
   // Ideally the test should mock the TextInputClient instance hooked up with
@@ -736,7 +736,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, DISABLED_APIArgumentTest) {
     ExtensionTestMessageListener button_listener(
         "undo button in undo window clicked");
 
-    aura::Window* window = browser()->window()->GetNativeWindow();
+    aura::Window* window = browser()->GetWindow()->GetNativeWindow();
     ui::test::EventGenerator event_generator(window->GetRootWindow());
     views::Button* undo_button = undo_window->GetUndoButtonForTesting();
     event_generator.MoveMouseTo(undo_button->GetBoundsInScreen().CenterPoint());
@@ -1256,7 +1256,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, DISABLED_APIArgumentTest) {
   }
   {
     SCOPED_TRACE("changeInputMethod with uncommited text test");
-    // For http://crbug.com/529999.
+    // For http://crbug.com/41200541.
 
     mock_input_context->Reset();
     mock_candidate_window->Reset();
@@ -1465,7 +1465,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, MojoInteractionTest) {
       kAPIArgumentIMEID, false /* show_message */);
 
   ui::InputMethod* im =
-      browser()->window()->GetNativeWindow()->GetHost()->GetInputMethod();
+      browser()->GetWindow()->GetNativeWindow()->GetHost()->GetInputMethod();
   TestTextInputClient tic(ui::TEXT_INPUT_TYPE_TEXT);
 
   {

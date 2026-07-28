@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
@@ -41,8 +41,8 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/bluetooth/bluetooth_chooser_context_factory.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_model_delegate.h"
-#include "chrome/browser/browsing_topics/browsing_topics_service_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/extensions/test_extension_system.h"
@@ -52,6 +52,9 @@
 #include "chrome/browser/hid/hid_chooser_context.h"
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
+#include "chrome/browser/infobars/infobar_spec.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/permissions/system/mock_platform_handle.h"
@@ -71,7 +74,10 @@
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
@@ -96,6 +102,7 @@
 #include "components/history/core/browser/history_service.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "components/permissions/contexts/bluetooth_chooser_context.h"
 #include "components/permissions/features.h"
 #include "components/permissions/object_permission_context_base.h"
@@ -115,6 +122,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "components/vector_icons/vector_icons.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -289,8 +297,8 @@ std::unique_ptr<net::CanonicalCookie> CreateCookieKey(
     std::optional<net::CookiePartitionKey> cookie_partition_key =
         std::nullopt) {
   return net::CanonicalCookie::CreateForTesting(
-      url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
-      cookie_partition_key);
+      url, cookie_line, base::Time::Now(), net::CookieSourceType::kOther,
+      std::nullopt /* server_time */, cookie_partition_key);
 }
 
 void RemoveModelEntries(
@@ -362,17 +370,6 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
     SetUpUserManager(profile_.get());
 #endif
 
-    browsing_topics::BrowsingTopicsServiceFactory::GetInstance()
-        ->SetTestingFactoryAndUse(
-            profile(),
-            base::BindLambdaForTesting([this](content::BrowserContext* context)
-                                           -> std::unique_ptr<KeyedService> {
-              auto mock_browsing_topics_service = std::make_unique<
-                  browsing_topics::MockBrowsingTopicsService>();
-              mock_browsing_topics_service_ =
-                  mock_browsing_topics_service.get();
-              return mock_browsing_topics_service;
-            }));
 
     mock_privacy_sandbox_service_ = static_cast<MockPrivacySandboxService*>(
         PrivacySandboxServiceFactory::GetInstance()->SetTestingFactoryAndUse(
@@ -1352,7 +1349,7 @@ TEST_F(SiteSettingsHandlerTest, GetEnforcedDefault) {
   ValidateDefault(CONTENT_SETTING_ALLOW, "policy", 1U);
 }
 
-// Flaky on CrOS and Linux. https://crbug.com/930481
+// Flaky on CrOS and Linux. https://crbug.com/41440409
 TEST_F(SiteSettingsHandlerTest, GetAllSites) {
   SetupModel();
 
@@ -3000,9 +2997,52 @@ TEST_F(SiteSettingsHandlerTest, TemporaryCookieExceptions) {
 class SiteSettingsHandlerIsolatedWebAppTest
     : public SiteSettingsHandlerBaseTest {
  protected:
+  static constexpr char kAppName[] = "IWA Name";
+  static constexpr char kSubAppName[] = "Sub App";
+
   void SetUpIsolatedWebApp() override {
     web_app::test::AwaitStartWebAppProviderAndSubsystems(profile());
-    iwa_url_info_ = InstallIsolatedWebApp("IWA Name");
+    iwa_url_info_ = InstallIsolatedWebApp(kAppName);
+  }
+
+  const base::ListValue& CallHandleGetOriginPermissions(
+      const std::string& url,
+      base::ListValue category_list) {
+    base::ListValue args;
+    args.Append(kCallbackId);
+    args.Append(url);
+    args.Append(std::move(category_list));
+    handler()->HandleGetOriginPermissions(args);
+
+    const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
+    EXPECT_EQ("cr.webUIResponse", data.function_name());
+    return data.arg3()->GetList();
+  }
+
+  const base::DictValue& CallHandleGetSubAppsPermissionExplanation(
+      const std::string& url) {
+    base::ListValue args;
+    args.Append(kCallbackId);
+    args.Append(url);
+    handler()->HandleGetSubAppsPermissionExplanation(args);
+
+    const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
+    EXPECT_EQ("cr.webUIResponse", data.function_name());
+    return data.arg3()->GetDict();
+  }
+
+  void InstallSubApp(const GURL& url, const std::string& name) {
+    auto sub_app =
+        web_app::test::CreateWebApp(url, web_app::WebAppManagement::kSubApp);
+    sub_app->SetName(name);
+    sub_app->SetParentAppId(iwa_url_info_->app_id());
+
+    auto* provider = web_app::WebAppProvider::GetForTest(profile());
+    {
+      web_app::ScopedRegistryUpdate update =
+          provider->sync_bridge_unsafe().BeginUpdate();
+      update->CreateApp(std::move(sub_app));
+    }
   }
 
  protected:
@@ -3029,6 +3069,62 @@ class SiteSettingsHandlerIsolatedWebAppTest
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 };
 
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest, GetOriginPermissionsSubApp) {
+  GURL sub_app_url = iwa_url_info_->origin().GetURL().Resolve("/sub-app/");
+  InstallSubApp(sub_app_url, std::string(kSubAppName));
+
+  base::ListValue category_list;
+  category_list.Append(site_settings::ContentSettingsTypeToGroupName(
+      ContentSettingsType::NOTIFICATIONS));
+
+  const base::ListValue& permissions = CallHandleGetOriginPermissions(
+      sub_app_url.spec(), std::move(category_list));
+  ASSERT_EQ(1U, permissions.size());
+
+  const base::DictValue& permission = permissions[0].GetDict();
+  // Append " (ID: <id>)" to the name as per HandleGetOriginPermissions
+  std::string expected_name = l10n_util::GetStringFUTF8(
+      IDS_SETTINGS_EXTENSION_OR_APP_DISPLAY_NAME,
+      base::UTF8ToUTF16(std::string_view(kSubAppName)),
+      base::UTF8ToUTF16(sub_app_url.host()));
+  EXPECT_EQ(expected_name, *permission.FindString("displayName"));
+}
+
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest,
+       GetSubAppsPermissionExplanation_NeitherParentNorSubApp) {
+  const base::DictValue& result = CallHandleGetSubAppsPermissionExplanation(
+      iwa_url_info_->origin().GetURL().spec());
+  EXPECT_FALSE(*result.FindBool("isSubApp"));
+  EXPECT_FALSE(*result.FindBool("hasSubApps"));
+}
+
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest,
+       GetSubAppsPermissionExplanation_SubApp) {
+  GURL sub_app_url = iwa_url_info_->origin().GetURL().Resolve("/sub-app/");
+  InstallSubApp(sub_app_url, std::string(kSubAppName));
+
+  const base::DictValue& result =
+      CallHandleGetSubAppsPermissionExplanation(sub_app_url.spec());
+  EXPECT_TRUE(*result.FindBool("isSubApp"));
+  EXPECT_FALSE(*result.FindBool("hasSubApps"));
+  EXPECT_EQ(kSubAppName, *result.FindString("appName"));
+  EXPECT_EQ(kAppName, *result.FindString("parentAppName"));
+  EXPECT_EQ(iwa_url_info_->origin().GetURL().spec(),
+            *result.FindString("parentAppOrigin"));
+}
+
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest,
+       GetSubAppsPermissionExplanation_ParentApp) {
+  GURL sub_app_url = iwa_url_info_->origin().GetURL().Resolve("/sub-app/");
+  InstallSubApp(sub_app_url, std::string(kSubAppName));
+
+  const base::DictValue& result = CallHandleGetSubAppsPermissionExplanation(
+      iwa_url_info_->origin().GetURL().spec());
+  EXPECT_FALSE(*result.FindBool("isSubApp"));
+  EXPECT_TRUE(*result.FindBool("hasSubApps"));
+  EXPECT_EQ(kAppName, *result.FindString("appName"));
+}
+
 TEST_F(SiteSettingsHandlerIsolatedWebAppTest, AllSitesDisplaysAppName) {
   GURL https_url("https://" + iwa_url_info_->origin().host());
   GURL iwa_origin_url = iwa_url_info_->origin().GetURL();
@@ -3052,7 +3148,7 @@ TEST_F(SiteSettingsHandlerIsolatedWebAppTest, AllSitesDisplaysAppName) {
   EXPECT_THAT(CHECK_DEREF(group1.FindString("groupingKey")),
               IsOrigin(iwa_origin_url));
   EXPECT_EQ(group1.FindString("etldPlus1"), nullptr);
-  EXPECT_EQ(CHECK_DEREF(group1.FindString("displayName")), "IWA Name");
+  EXPECT_EQ(CHECK_DEREF(group1.FindString("displayName")), kAppName);
   EXPECT_EQ(CHECK_DEREF(origin1.FindString("origin")), iwa_origin_url);
   EXPECT_EQ(origin1.FindDouble("usage").value(), 50.0);
 
@@ -3074,11 +3170,11 @@ TEST_F(SiteSettingsHandlerIsolatedWebAppTest, ZoomLevel) {
 
   std::string host_or_spec = iwa_url_info_->origin().Serialize();
   iwa_host_zoom_map->SetZoomLevelForHost(iwa_url_info_->origin().host(), 1.1);
-  ValidateZoom({{host_or_spec, "IWA Name", "122%"}}, 1U);
+  ValidateZoom({{host_or_spec, kAppName, "122%"}}, 1U);
 
   base::ListValue args;
   handler()->HandleFetchZoomLevels(args);
-  ValidateZoom({{host_or_spec, "IWA Name", "122%"}}, 2U);
+  ValidateZoom({{host_or_spec, kAppName, "122%"}}, 2U);
 
   args.Append(host_or_spec);
   handler()->HandleRemoveZoomLevel(args);
@@ -3111,13 +3207,15 @@ TEST_F(SiteSettingsHandlerIsolatedWebAppTest, ZoomLevelsSortedByAppName) {
   base::ListValue args;
   handler()->HandleFetchZoomLevels(args);
 
-  ValidateZoom({{iwa_url_info_->origin().Serialize(), "IWA Name", "122%"},
+  ValidateZoom({{iwa_url_info_->origin().Serialize(), kAppName, "122%"},
                 {iwa2_url_info.origin().Serialize(), "IWA Name 2", "122%"},
                 {iwa3_url_info.origin().Serialize(), "IWA Name 3", "122%"}},
                2U);
 }
 
-class SiteSettingsHandlerInfobarTest : public BrowserWithTestWindowTest {
+class SiteSettingsHandlerInfobarTest
+    : public BrowserWithTestWindowTest,
+      public testing::WithParamInterface<bool> {
  public:
   SiteSettingsHandlerInfobarTest() = default;
   SiteSettingsHandlerInfobarTest(const SiteSettingsHandlerInfobarTest&) =
@@ -3125,9 +3223,33 @@ class SiteSettingsHandlerInfobarTest : public BrowserWithTestWindowTest {
   SiteSettingsHandlerInfobarTest& operator=(
       const SiteSettingsHandlerInfobarTest&) = delete;
   void SetUp() override {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeatureWithParameters(
+          infobars::kCentralizedInfoBarFramework,
+          {{infobars::kMigratedPageInfo.name, "true"}});
+    } else {
+      feature_list_.InitAndDisableFeature(
+          infobars::kCentralizedInfoBarFramework);
+    }
+
     TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
         /*profile_manager=*/false);
     BrowserWithTestWindowTest::SetUp();
+
+    if (infobars::IsInfoBarMigrated(
+            infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)) {
+      auto* browser_infobar_manager =
+          infobars::BrowserInfoBarManager::From(g_browser_process);
+      if (browser_infobar_manager) {
+        auto spec = infobars::InfoBarSpec::Builder(
+                        infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)
+                        .SetMessageText(u"Test")
+                        .SetIcon(vector_icons::kSettingsIcon)
+                        .SetScope(infobars::InfoBarScope::kTab)
+                        .Build();
+        browser_infobar_manager->Register(std::move(spec));
+      }
+    }
 
     handler_ = std::make_unique<SiteSettingsHandler>(profile());
     handler()->set_web_ui(web_ui());
@@ -3210,13 +3332,14 @@ class SiteSettingsHandlerInfobarTest : public BrowserWithTestWindowTest {
           ContentSettingsType::NOTIFICATIONS);
 
  private:
+  base::test::ScopedFeatureList feature_list_;
   content::TestWebUI web_ui_;
   std::unique_ptr<SiteSettingsHandler> handler_;
   std::unique_ptr<Browser> browser2_;
   std::unique_ptr<Browser> browser3_;
 };
 
-TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
+TEST_P(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
   // Note all GURLs starting with 'origin' below belong to the same origin.
   //               _____  _______________  ________  ________  ___________
   //   Window 1:  / foo \' origin_anchor \' chrome \' origin \' extension \
@@ -3361,7 +3484,7 @@ TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
   EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
 }
 
-TEST_F(SiteSettingsHandlerInfobarTest,
+TEST_P(SiteSettingsHandlerInfobarTest,
        SettingPermissionsDoesNotTriggerInfobarOnDifferentProfile) {
   // Note all GURLs starting with 'origin' below belong to the same origin.
   //               _______________
@@ -3408,6 +3531,13 @@ TEST_F(SiteSettingsHandlerInfobarTest,
       0u, GetInfoBarManagerForTab(browser3(), 0, &tab_url)->infobars().size());
   EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SiteSettingsHandlerInfobarTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Migrated" : "Legacy";
+                         });
 
 TEST_F(SiteSettingsHandlerTest, BlockAutoplay_SendOnRequest) {
   base::ListValue args;

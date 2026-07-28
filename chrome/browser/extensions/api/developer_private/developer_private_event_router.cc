@@ -12,20 +12,23 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/api/developer_private/profile_info_generator.h"
 #include "chrome/browser/extensions/error_console/error_console.h"
-#include "chrome/browser/extensions/extension_allowlist.h"
+#include "chrome/browser/extensions/extension_allowlist_factory.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/sync/extension_sync_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/developer_private.h"
 #include "chrome/common/pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
+#include "components/sync/base/features.h"
 #include "content/public/browser/render_frame_host.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_allowlist.h"
 #include "extensions/browser/extension_error.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/service_worker/worker_id.h"
@@ -75,7 +78,8 @@ DeveloperPrivateEventRouter::DeveloperPrivateEventRouter(Profile* profile)
   permissions_manager_observation_.Observe(PermissionsManager::Get(profile));
   extension_management_observation_.Observe(
       ExtensionManagementFactory::GetForBrowserContext(profile));
-  extension_allowlist_observer_.Observe(ExtensionAllowlist::Get(profile));
+  extension_allowlist_observer_.Observe(
+      ExtensionAllowlistFactory::GetForBrowserContext(profile));
   command_service_observation_.Observe(CommandService::Get(profile));
   toolbar_actions_model_observation_.Observe(ToolbarActionsModel::Get(profile));
 #if BUILDFLAG(ENABLE_PLATFORM_APPS)
@@ -90,19 +94,18 @@ DeveloperPrivateEventRouter::DeveloperPrivateEventRouter(Profile* profile)
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
   pref_change_registrar_.Add(
-      kMV2DeprecationWarningAcknowledgedGloballyPref.name,
+      prefs::kExtensionsPinnedByDefault,
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
   pref_change_registrar_.Add(
-      kMV2DeprecationDisabledAcknowledgedGloballyPref.name,
-      base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
-                          base::Unretained(this)));
-  pref_change_registrar_.Add(
-      kMV2DeprecationUnsupportedAcknowledgedGloballyPref.name,
+      ManifestV2Handler::kMV2UnsupportedAcknowledgedGloballyPref.name,
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
 
-  if (switches::IsExtensionsExplicitBrowserSigninEnabled()) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos))
+#endif
+  {
     account_extension_tracker_observation_.Observe(
         AccountExtensionTracker::Get(profile));
   }

@@ -12,11 +12,10 @@ import {assert} from '//resources/js/assert.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserProxyImpl} from '../browser_proxy.js';
 import {localizeScope} from '../event_history.js';
-import type {PolicySet, Scope} from '../event_history.js';
+import type {Scope} from '../event_history.js';
 import {formatDateLong, formatRelativeDate} from '../tools.js';
-import {UpdaterScope} from '../updater_ui.mojom-webui.js';
+import {browserProxyFactory, ShowDirectoryTarget} from '../updater_ui.mojom-webui.js';
 
 import {getCss} from './updater_state_card.css.js';
 import {getHtml} from './updater_state_card.html.js';
@@ -36,13 +35,17 @@ export class UpdaterStateCardElement extends CrLitElement {
 
   static override get properties() {
     return {
-      scope: {type: Object},
+      scope: {type: String},
       version: {type: String},
       inactiveVersions: {type: Array},
       lastChecked: {type: Object},
       lastStarted: {type: Object},
       installPath: {type: String},
-      policies: {type: Object},
+      headingLabel: {type: String},
+      formattedLastChecked: {type: String},
+      formattedLastCheckedRelative: {type: String},
+      formattedLastStarted: {type: String},
+      formattedLastStartedRelative: {type: String},
     };
   }
 
@@ -52,13 +55,12 @@ export class UpdaterStateCardElement extends CrLitElement {
   accessor lastChecked: Date|null = null;
   accessor lastStarted: Date|null = null;
   accessor installPath: string|undefined = undefined;
-  accessor policies: PolicySet|undefined = undefined;
 
-  protected headingLabel: string = '';
-  protected formattedLastChecked: string = '';
-  protected formattedLastCheckedRelative: string = '';
-  protected formattedLastStarted: string = '';
-  protected formattedLastStartedRelative: string = '';
+  protected accessor headingLabel: string = '';
+  protected accessor formattedLastChecked: string = '';
+  protected accessor formattedLastCheckedRelative: string = '';
+  protected accessor formattedLastStarted: string = '';
+  protected accessor formattedLastStartedRelative: string = '';
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -98,8 +100,9 @@ export class UpdaterStateCardElement extends CrLitElement {
   }
 
   protected onInstallPathClick() {
-    BrowserProxyImpl.getInstance().handler.showUpdaterDirectory(
-        this.scope === 'SYSTEM' ? UpdaterScope.kSystem : UpdaterScope.kUser);
+    browserProxyFactory.getInstance().handler.showDirectory(
+        this.scope === 'SYSTEM' ? ShowDirectoryTarget.kSystemUpdater :
+                                  ShowDirectoryTarget.kUserUpdater);
   }
 }
 

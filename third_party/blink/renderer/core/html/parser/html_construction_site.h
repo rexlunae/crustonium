@@ -49,12 +49,10 @@ struct HTMLConstructionSiteTask {
     kInsertAlreadyParsedChild,  // Insert w/o calling begin/end parsing.
     kReparent,
     kTakeAllChildren,
-    kRemoveChildren,
-    kReplaceChild,
   };
 
   explicit HTMLConstructionSiteTask(Operation op)
-      : operation(op), self_closing(false), dom_parts_needed({}) {}
+      : operation(op), self_closing(false) {}
 
   void Trace(Visitor* visitor) const {
     visitor->Trace(parent);
@@ -74,7 +72,6 @@ struct HTMLConstructionSiteTask {
   Member<Node> next_child;
   Member<Node> child;
   bool self_closing;
-  DOMPartsNeeded dom_parts_needed;
 };
 
 }  // namespace blink
@@ -100,7 +97,7 @@ class Document;
 class Element;
 class HTMLFormElement;
 class HTMLParserReentryPermit;
-class PartRoot;
+class ParserRootInsertionPoint;
 class StreamingSanitizer;
 
 class HTMLConstructionSite final {
@@ -108,6 +105,7 @@ class HTMLConstructionSite final {
 
  public:
   static constexpr unsigned kMaximumHTMLParserDOMTreeDepth = 512;
+  static constexpr unsigned kObsoleteTextNodeLengthLimit = 1 << 16;
 
   HTMLConstructionSite(HTMLParserReentryPermit*,
                        Document&,
@@ -115,7 +113,8 @@ class HTMLConstructionSite final {
                        ContainerNode*,
                        Element*,
                        CustomElementRegistry*,
-                       StreamingSanitizer*);
+                       StreamingSanitizer*,
+                       ParserRootInsertionPoint*);
   HTMLConstructionSite(const HTMLConstructionSite&) = delete;
   HTMLConstructionSite& operator=(const HTMLConstructionSite&) = delete;
   ~HTMLConstructionSite();
@@ -151,6 +150,9 @@ class HTMLConstructionSite final {
   void FinishedParsing();
 
   void InsertDoctype(AtomicHTMLToken*);
+  void InsertProcessingInstruction(AtomicHTMLToken*);
+  void InsertProcessingInstructionOnDocument(AtomicHTMLToken*);
+  void InsertProcessingInstructionOnHTMLHtmlElement(AtomicHTMLToken*);
   void InsertComment(AtomicHTMLToken*);
   void InsertCommentOnDocument(AtomicHTMLToken*);
   void InsertCommentOnHTMLHtmlElement(AtomicHTMLToken*);
@@ -161,7 +163,9 @@ class HTMLConstructionSite final {
   void InsertFormattingElement(AtomicHTMLToken*);
   void InsertHTMLHeadElement(AtomicHTMLToken*);
   void InsertHTMLBodyElement(AtomicHTMLToken*);
-  void InsertHTMLFormElement(AtomicHTMLToken*, bool is_demoted = false);
+  void InsertHTMLFormElement(AtomicHTMLToken*,
+                             bool is_demoted,
+                             bool is_parsing_template_contents);
   void InsertScriptElement(AtomicHTMLToken*);
   void InsertTextNode(const StringView&,
                       WhitespaceMode = WhitespaceMode::kWhitespaceUnknown);
@@ -185,6 +189,7 @@ class HTMLConstructionSite final {
 
   bool ShouldFosterParent() const;
   void FosterParent(Node*);
+  void FosterParentAlreadyParsedChild(Node*);
 
   bool IndexOfFirstUnopenFormattingElement(
       unsigned& first_unopen_element_index) const;
@@ -210,11 +215,6 @@ class HTMLConstructionSite final {
   bool CurrentIsRootNode() {
     return open_elements_.TopNode() == open_elements_.RootNode();
   }
-  bool InParsePartsScope() { return open_elements_.InParsePartsScope(); }
-  void SetDOMPartsAllowedState(DOMPartsAllowed state) {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    open_elements_.SetDOMPartsAllowedState(state);
-  }
 
   Element* Head() const { return head_->GetElement(); }
   HTMLStackItem* HeadStackItem() const { return head_.Get(); }
@@ -226,7 +226,6 @@ class HTMLConstructionSite final {
     return parser_content_policy_;
   }
 
-  void FinishedTemplateElement(DocumentFragment* content_fragment);
   bool PreprocessInsertionTask(HTMLConstructionSiteTask&);
 
   static CustomElementDefinition* LookUpCustomElementDefinition(
@@ -259,6 +258,14 @@ class HTMLConstructionSite final {
   };
 
  private:
+  struct InsertionLocation {
+    STACK_ALLOCATED();
+
+   public:
+    ContainerNode* parent;
+    Node* next_child = nullptr;
+  };
+
   // In the common case, this queue will have only one task because most tokens
   // produce only one DOM mutation.
   typedef HeapVector<HTMLConstructionSiteTask, 1> TaskQueue;
@@ -268,10 +275,17 @@ class HTMLConstructionSite final {
                                        const String& public_id,
                                        const String& system_id);
 
+  void AttachLater(InsertionLocation location,
+                   Node* child,
+                   bool self_closing = false);
   void AttachLater(ContainerNode* parent,
                    Node* child,
-                   const DOMPartsNeeded& dom_parts_needed = {},
-                   bool self_closing = false);
+                   bool self_closing = false) {
+    AttachLater({parent, nullptr}, child, self_closing);
+  }
+
+  InsertionLocation CurrentInsertionLocation();
+  void AdjustInsertionLocation(HTMLConstructionSiteTask& task);
 
   void FindFosterSite(HTMLConstructionSiteTask&);
 
@@ -281,8 +295,7 @@ class HTMLConstructionSite final {
   void MergeAttributesFromTokenIntoElement(AtomicHTMLToken*, Element*);
 
   void ExecuteTask(HTMLConstructionSiteTask&);
-  void QueueTask(const HTMLConstructionSiteTask&, bool flush_pending_text);
-
+  void QueueTask(HTMLConstructionSiteTask&, bool flush_pending_text);
   void SetAttributes(Element* element, AtomicHTMLToken* token);
 
   Member<HTMLParserReentryPermit> reentry_permit_;
@@ -292,6 +305,8 @@ class HTMLConstructionSite final {
   // constructed nodes. It points to a DocumentFragment when parsing fragments
   // and a Document in all other cases.
   Member<ContainerNode> attachment_root_;
+
+  Member<ParserRootInsertionPoint> root_insertion_point_;
 
   // https://html.spec.whatwg.org/C/#head-element-pointer
   Member<HTMLStackItem> head_;
@@ -350,32 +365,6 @@ class HTMLConstructionSite final {
   };
 
   PendingText pending_text_;
-
-  class PendingDOMParts final : public GarbageCollected<PendingDOMParts> {
-   public:
-    explicit PendingDOMParts(ContainerNode* attachment_root);
-
-    void AddNodePart(Comment& node_part_comment, Vector<String> metadata);
-    void AddNodePart(Vector<String> metadata);
-    void AddChildNodePartStart(Node& previous_sibling, Vector<String> metadata);
-    void AddChildNodePartEnd(Node& next_sibling);
-    void MaybeConstructNodePart(Node& last_node);
-    void ConstructDOMPartsIfNeeded(Node& last_node,
-                                   const DOMPartsNeeded& dom_parts_needed);
-
-    PartRoot* CurrentPartRoot() const;
-    void PushPartRoot(PartRoot* root);
-    PartRoot* PopPartRoot();
-
-    void Trace(Visitor*) const;
-
-   private:
-    Vector<String> pending_node_part_metadata_;
-    HeapVector<Member<PartRoot>> part_root_stack_;
-  };
-
-  // Only non-nullptr if RuntimeEnabledFeatures::DOMPartsAPIEnabled().
-  Member<PendingDOMParts> pending_dom_parts_;
 
   const ParserContentPolicy parser_content_policy_;
   const bool is_scripting_content_allowed_;

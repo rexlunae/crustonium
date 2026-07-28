@@ -33,6 +33,7 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
@@ -80,7 +81,7 @@ public class EdgeToEdgeInstrumentationTest {
             new RenderTestRule.Builder()
                     .setBugComponent(Component.UI_BROWSER_MOBILE_EDGE_TO_EDGE)
                     .setCorpus(Corpus.ANDROID_RENDER_TESTS_PUBLIC)
-                    .setRevision(0)
+                    .setRevision(1)
                     .build();
 
     private static final String TEST_AUTO_PAGE =
@@ -98,8 +99,8 @@ public class EdgeToEdgeInstrumentationTest {
     // Declare the watcher before the app launches.
     HistogramWatcher mEligibleHistograms =
             HistogramWatcher.newBuilder()
-                    .expectBooleanRecord("Android.EdgeToEdge.Eligible", true)
-                    .expectNoRecords("Android.EdgeToEdge.IneligibilityReason")
+                    .expectBooleanRecord("Android.EdgeToEdge.Eligible2.OnCreateController", true)
+                    .expectNoRecords("Android.EdgeToEdge.IneligibilityReason2.OnCreateController")
                     .build();
 
     @Before
@@ -238,6 +239,7 @@ public class EdgeToEdgeInstrumentationTest {
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/455479243")
     public void testRotationToPortrait_WhileOptedIntoE2E() {
         activateFeatureToEdge();
         rotate(Configuration.ORIENTATION_LANDSCAPE);
@@ -305,6 +307,7 @@ public class EdgeToEdgeInstrumentationTest {
 
     @Test
     @MediumTest
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
     public void testNavigationBarColor() {
         optOutOfToEdge();
 
@@ -356,8 +359,33 @@ public class EdgeToEdgeInstrumentationTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @DisableFeatures(ChromeFeatureList.HOME_BUTTON_REMOVAL)
     @CommandLineFlags.Add(UiSwitches.ENABLE_EDGE_TO_EDGE_DEBUG_LAYERS)
     public void testPadWithEdgeToEdgeLayout() throws IOException {
+        testPadWithEdgeToEdgeLayoutImpl("e2e-everywhere-no-bottom-padding");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @DisableFeatures({ChromeFeatureList.ANDROID_BOTTOM_BAR})
+    @CommandLineFlags.Add(UiSwitches.ENABLE_EDGE_TO_EDGE_DEBUG_LAYERS)
+    public void testPadWithEdgeToEdgeLayout_NoBottomBar() throws IOException {
+        testPadWithEdgeToEdgeLayoutImpl("e2e-everywhere-no-bottom-padding-no-bottom-bar");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({ChromeFeatureList.HOME_BUTTON_REMOVAL + ":keep_home_button_on_ntp/true"})
+    @DisableFeatures({ChromeFeatureList.ANDROID_BOTTOM_BAR})
+    @CommandLineFlags.Add(UiSwitches.ENABLE_EDGE_TO_EDGE_DEBUG_LAYERS)
+    public void testPadWithEdgeToEdgeLayout_withHomeButtonRemovalKeepOnNtp() throws IOException {
+        testPadWithEdgeToEdgeLayoutImpl(
+                "e2e-everywhere-no-bottom-padding-with-home-button-removal");
+    }
+
+    private void testPadWithEdgeToEdgeLayoutImpl(String goldenId) throws IOException {
         goToEdge();
         assertDrawingToEdge();
 
@@ -370,8 +398,7 @@ public class EdgeToEdgeInstrumentationTest {
 
         // Padding is verified by the debug layer for e2e layout in render golden's result.
         // Expect to see a magenta color block on top of the toolbar.
-        renderTestRule.render(
-                mActivity.findViewById(android.R.id.content), "e2e-everywhere-no-bottom-padding");
+        renderTestRule.render(mActivity.findViewById(android.R.id.content), goldenId);
     }
 
     private void assertOptedIntoEdgeToEdge() {

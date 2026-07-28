@@ -82,15 +82,10 @@ COMPONENT_EXPORT(VIZ_SHARED_IMAGE_FORMAT)
 SharedImageFormat SkColorTypeToSinglePlaneSharedImageFormat(
     SkColorType color_type);
 
-// Returns whether `format`, which must be a single-planar format, can be used
-// with GpuMemoryBuffer texture storage.
+// Returns whether a native buffer-backed SharedImage can be created for
+// `format`.
 COMPONENT_EXPORT(VIZ_SHARED_IMAGE_FORMAT)
-bool CanCreateGpuMemoryBufferForSinglePlaneSharedImageFormat(
-    SharedImageFormat format);
-
-// Checks if there is an equivalent BufferFormat.
-COMPONENT_EXPORT(VIZ_SHARED_IMAGE_FORMAT)
-bool HasEquivalentBufferFormat(SharedImageFormat format);
+bool CanCreateNativeBufferForFormat(SharedImageFormat format);
 
 // Returns the shared memory offset for `plane_index` for a `format` of `size`.
 COMPONENT_EXPORT(VIZ_SHARED_IMAGE_FORMAT)
@@ -134,6 +129,7 @@ bool IsOddSizeMultiPlanarBuffersAllowed();
 // Returns a span containing all mappable SharedImageFormats.
 COMPONENT_EXPORT(VIZ_SHARED_IMAGE_FORMAT)
 base::span<const SharedImageFormat> GetMappableSharedImageFormatForTesting();
+
 }  // namespace viz
 
 #endif  // COMPONENTS_VIZ_COMMON_RESOURCES_SHARED_IMAGE_FORMAT_UTILS_H_

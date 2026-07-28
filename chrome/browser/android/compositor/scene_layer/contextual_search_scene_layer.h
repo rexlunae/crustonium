@@ -46,6 +46,8 @@ class ContextualSearchSceneLayer : public SceneLayer,
 
   ~ContextualSearchSceneLayer() override;
 
+  void Destroy(JNIEnv* env) override;
+
   void CreateContextualSearchLayer(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jresource_manager);
@@ -71,8 +73,9 @@ class ContextualSearchSceneLayer : public SceneLayer,
       float dp_to_px,
       float layout_width,
       float layout_height,
+      float layout_margin_x,
       float base_page_brightness,
-      float base_page_offset,
+      float base_page_offset_y,
       content::WebContents* web_contents,
       bool search_promo_visible,
       float search_promo_height,
@@ -102,7 +105,7 @@ class ContextualSearchSceneLayer : public SceneLayer,
       float search_bar_border_height,
       bool quick_action_icon_visible,
       bool thumbnail_visible,
-      std::string& thumbnail_url,
+      const std::string& thumbnail_url,
       float custom_image_visibility_percentage,
       int32_t bar_image_size,
       int32_t icon_color,

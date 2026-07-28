@@ -14,9 +14,12 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowBuild;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.ui.test.util.DeviceRestriction;
 
 @RunWith(BaseRobolectricTestRunner.class)
+@Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
 @Config(shadows = ShadowBuild.class)
 public class EdgeToEdgeFieldTrialUnitTest {
 
@@ -35,8 +38,10 @@ public class EdgeToEdgeFieldTrialUnitTest {
                         .isEnabledForManufacturerVersion());
     }
 
+    // Pinned to SDK 29 because the test expects the feature to be
+    // disabled below SDK 30.
+    @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
     @Test
-    @Config(sdk = 29)
     public void noOverrides_notMeetMinVersion() {
         assertFalse(
                 "Default manufacturer has min version override as 30.",
@@ -47,8 +52,7 @@ public class EdgeToEdgeFieldTrialUnitTest {
     @Test
     @Config(sdk = 30)
     public void overrides_notMeetMinVersion() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foo,bar");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("31,32");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foo,bar", "31,32");
         var instance = EdgeToEdgeFieldTrialImpl.getBottomChinOverrides();
         assertTrue(
                 "Default have no min version override.",
@@ -74,8 +78,7 @@ public class EdgeToEdgeFieldTrialUnitTest {
     @Test
     @Config(sdk = 31)
     public void overrides_someMeetMinVersion() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foo,bar");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("31,32");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foo,bar", "31,32");
         var instance = EdgeToEdgeFieldTrialImpl.getBottomChinOverrides();
         assertTrue(
                 "Default have no min version override.",
@@ -101,8 +104,7 @@ public class EdgeToEdgeFieldTrialUnitTest {
     @Test
     @Config(sdk = 32)
     public void overrides_meetMinVersion() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foo,bar");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("31,32");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foo,bar", "31,32");
         var instance = EdgeToEdgeFieldTrialImpl.getBottomChinOverrides();
         assertTrue(
                 "Default have no min version override.",
@@ -149,11 +151,11 @@ public class EdgeToEdgeFieldTrialUnitTest {
     @Test
     @Config(sdk = 31)
     public void override_e2eEverywhereAndBottomChin() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foo");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("32");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foo", "32");
 
         ChromeFeatureList.sEdgeToEdgeEverywhereOemList.setForTesting("foo");
         ChromeFeatureList.sEdgeToEdgeEverywhereOemMinVersions.setForTesting("30");
+
         var bottomChinOverride = EdgeToEdgeFieldTrialImpl.getBottomChinOverrides();
         var everywhereOverrides = EdgeToEdgeFieldTrialImpl.getEverywhereOverrides();
         assertTrue(
@@ -175,12 +177,12 @@ public class EdgeToEdgeFieldTrialUnitTest {
                 everywhereOverrides.isEnabledForManufacturerVersion());
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
+    // Pinned to SDK 29 because the test expects the feature to be
+    // disabled below SDK 30.
+    @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
     @Test
     public void testInvalidInputs_unevenLength() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foobar");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("1,2");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foobar", "1,2");
         ShadowBuild.setManufacturer("foobar");
         assertFalse(
                 "Invalid override is ignored.",
@@ -188,12 +190,12 @@ public class EdgeToEdgeFieldTrialUnitTest {
                         .isEnabledForManufacturerVersion());
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
+    // Pinned to SDK 29 because the test expects the feature to be
+    // disabled below SDK 30.
+    @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
     @Test
     public void testInvalidInputs_unevenLength_2() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foo,bar");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("1");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foo,bar", "1");
         ShadowBuild.setManufacturer("foo");
         assertFalse(
                 "Invalid override is ignored.",
@@ -201,12 +203,12 @@ public class EdgeToEdgeFieldTrialUnitTest {
                         .isEnabledForManufacturerVersion());
     }
 
-    // TODO(crbug.com/450954710): This test fails on SDK 36.
-    @Config(sdk = 29)
+    // Pinned to SDK 29 because the test expects the feature to be
+    // disabled below SDK 30.
+    @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
     @Test
     public void testInvalidInputs_versionInvalid() {
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemList.setForTesting("foo,bar");
-        ChromeFeatureList.sEdgeToEdgeBottomChinOemMinVersions.setForTesting("1,a");
+        EdgeToEdgeFieldTrialImpl.setBottomChinOverridesForTesting("foo,bar", "1,a");
         ShadowBuild.setManufacturer("foo");
         assertFalse(
                 "Invalid override is ignored.",

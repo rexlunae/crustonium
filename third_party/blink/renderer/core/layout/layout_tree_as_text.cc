@@ -227,39 +227,38 @@ void WriteLayoutObject(StringBuilder& ts,
     if (!o.IsBoxModelObject())
       return;
 
-    const auto& box = To<LayoutBoxModelObject>(o);
-    if (box.BorderTop() || box.BorderRight() || box.BorderBottom() ||
-        box.BorderLeft()) {
+    const PhysicalBoxStrut border = To<LayoutBoxModelObject>(o).BorderOutsets();
+    if (!border.IsZero()) {
       ts << " [border:";
 
-      if (!box.BorderTop()) {
+      if (!border.top) {
         ts << " none";
       } else {
-        ts << " (" << box.BorderTop() << "px ";
+        ts << " (" << border.top << "px ";
         PrintBorderStyle(ts, o.StyleRef().BorderTopStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderTopColor()) << ")";
       }
 
-      if (!box.BorderRight()) {
+      if (!border.right) {
         ts << " none";
       } else {
-        ts << " (" << box.BorderRight() << "px ";
+        ts << " (" << border.right << "px ";
         PrintBorderStyle(ts, o.StyleRef().BorderRightStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderRightColor()) << ")";
       }
 
-      if (!box.BorderBottom()) {
+      if (!border.bottom) {
         ts << " none";
       } else {
-        ts << " (" << box.BorderBottom() << "px ";
+        ts << " (" << border.bottom << "px ";
         PrintBorderStyle(ts, o.StyleRef().BorderBottomStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderBottomColor()) << ")";
       }
 
-      if (!box.BorderLeft()) {
+      if (!border.left) {
         ts << " none";
       } else {
-        ts << " (" << box.BorderLeft() << "px ";
+        ts << " (" << border.left << "px ";
         PrintBorderStyle(ts, o.StyleRef().BorderLeftStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderLeftColor()) << ")";
       }
@@ -320,9 +319,6 @@ void WriteLayoutObject(StringBuilder& ts,
     if (needs_layout)
       ts << ")";
   }
-
-  if (o.ChildLayoutBlockedByDisplayLock())
-    ts << " (display-locked)";
 }
 
 static void WriteTextFragment(StringBuilder& ts,
@@ -496,13 +492,13 @@ static void Write(StringBuilder& ts,
       ts << " scrollX " << scroll_position.x();
     if (scroll_position.y())
       ts << " scrollY " << scroll_position.y();
-    if (layer.GetLayoutBox() && layer.GetLayoutBox()->ClientWidth() !=
-                                    layer.GetLayoutBox()->ScrollWidth()) {
-      ts << " scrollWidth " << layer.GetLayoutBox()->ScrollWidth();
-    }
-    if (layer.GetLayoutBox() && layer.GetLayoutBox()->ClientHeight() !=
-                                    layer.GetLayoutBox()->ScrollHeight()) {
-      ts << " scrollHeight " << layer.GetLayoutBox()->ScrollHeight();
+    if (const auto* box = layer.GetLayoutBox()) {
+      if (box->HasScrollableOverflowX()) {
+        ts << " scrollWidth " << box->ScrollWidth();
+      }
+      if (box->HasScrollableOverflowY()) {
+        ts << " scrollHeight " << box->ScrollHeight();
+      }
     }
   }
 
@@ -654,7 +650,7 @@ static void WriteSelection(StringBuilder& ts, const LayoutObject* o) {
     return;
 
   const VisibleSelection& selection =
-      frame->Selection().ComputeVisibleSelectionInDOMTree();
+      frame->Selection().ComputeVisibleSelectionInDomTree();
   if (selection.IsCaret()) {
     ts << "caret: position " << selection.Start().ComputeEditingOffset()
        << " of " << NodePosition(selection.Start().AnchorNode());
@@ -700,7 +696,7 @@ String ExternalRepresentation(LocalFrame* frame,
   PrintContext* print_context = MakeGarbageCollected<PrintContext>(frame);
   bool is_text_printing_mode = !!(behavior & kLayoutAsTextPrintingMode);
   if (is_text_printing_mode) {
-    gfx::SizeF page_size(layout_box->ClientWidth(), layout_box->ClientHeight());
+    const gfx::SizeF page_size(layout_box->PhysicalPaddingBoxRect().size);
     print_context->BeginPrintMode(WebPrintParams(page_size));
 
     // The lifecycle needs to be run again after changing printing mode,
@@ -763,13 +759,17 @@ String CounterValueForElement(Element* element) {
   }
   if (LayoutObject* after = element->PseudoElementLayoutObject(kPseudoIdAfter))
     WriteCounterValuesFromChildren(stream, after, is_first_counter);
+  if (LayoutObject* expand_icon =
+          element->PseudoElementLayoutObject(kPseudoIdExpandIcon)) {
+    WriteCounterValuesFromChildren(stream, expand_icon, is_first_counter);
+  }
   if (LayoutObject* picker_icon =
           element->PseudoElementLayoutObject(kPseudoIdPickerIcon)) {
     WriteCounterValuesFromChildren(stream, picker_icon, is_first_counter);
   }
-  if (LayoutObject* interest_hint =
-          element->PseudoElementLayoutObject(kPseudoIdInterestHint)) {
-    WriteCounterValuesFromChildren(stream, interest_hint, is_first_counter);
+  if (LayoutObject* interest_button =
+          element->PseudoElementLayoutObject(kPseudoIdInterestButton)) {
+    WriteCounterValuesFromChildren(stream, interest_button, is_first_counter);
   }
   return stream.ReleaseString();
 }

@@ -33,6 +33,7 @@
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "components/signin/public/identity_manager/set_accounts_in_cookie_result.h"
 #include "google_apis/credentials_mode.h"
@@ -91,6 +92,8 @@ const net::BackoffEntry::Policy kBackoffPolicy = {
     // Don't use initial delay unless the last request was an error.
     false,
 };
+
+constexpr int kDelayBeforeNextListAccountsRequestAfterFailureSeconds = 3;
 
 // State of requests to Gaia logout endpoint. Used as entry for histogram
 // |Signin.GaiaCookieManager.Logout|.
@@ -375,8 +378,7 @@ void GaiaCookieManagerService::ExternalCcResultFetcher::OnURLLoadComplete(
 
   // A character may be encoded into a maximum of 4 characters.
   constexpr int kEncodedLength = kTruncatedLength * 4;
-  url::RawCanonOutputT<char, kEncodedLength> encoded_data;
-  url::EncodeURIComponent(data, &encoded_data);
+  url::UriComponentEncoder<kEncodedLength> encoded_data(data);
   results_[it->second] = std::string(encoded_data.view());
 
   // Clean up tracking of this fetcher.  The rest will be cleaned up after
@@ -517,6 +519,11 @@ signin::AccountsInCookieJarInfo GaiaCookieManagerService::ListAccounts() {
   return CreateAccountsInCookieJarInfo();
 }
 
+signin::AccountsInCookieJarInfo
+GaiaCookieManagerService::GetCachedListAccounts() {
+  return CreateAccountsInCookieJarInfo();
+}
+
 void GaiaCookieManagerService::TriggerListAccounts() {
   // Callers suspect that a check to Gaia needs to be done, don't rely on the
   // in progress request, conditions might have changed while the request is
@@ -533,6 +540,10 @@ void GaiaCookieManagerService::TriggerListAccounts() {
         base::BindOnce(&GaiaCookieManagerService::StartFetchingListAccounts,
                        weak_ptr_factory_.GetWeakPtr()));
   }
+}
+
+void GaiaCookieManagerService::TriggerListAccountsIfStale() {
+  ListAccounts();
 }
 
 void GaiaCookieManagerService::ForceOnCookieChangeProcessing() {
@@ -558,7 +569,7 @@ void GaiaCookieManagerService::LogOutAllAccounts(
   if (std::ranges::contains(requests_, GaiaCookieRequestType::LOG_OUT,
                             &GaiaCookieRequest::request_type)) {
     std::move(completion_callback)
-        .Run(GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+        .Run(GoogleServiceAuthError::CreateRequestCanceled());
     return;
   }
 
@@ -599,6 +610,9 @@ void GaiaCookieManagerService::CancelAll() {
   oauth_multilogin_helper_.reset();
   requests_.clear();
   fetcher_timer_.Stop();
+
+  // Invalidate weak pointers to cancel any outstanding callbacks.
+  weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -746,6 +760,30 @@ void GaiaCookieManagerService::OnListAccountsFailure(
         CreateAccountsInCookieJarInfo(), error);
   }
 
+  bool posted_trigger_list_accounts_stale_task = false;
+  if (base::FeatureList::IsEnabled(
+          switches::kAvoidAutoTriggerListAccountsOnStale)) {
+    // When kAvoidAutoTriggerListAccountsOnStale is enabled, client requests
+    // to list accounts no longer trigger an automatic list accounts call when
+    // the list accounts state is stale.Therefore, the GaiaCookieManagerService
+    // needs to poll for the list accounts when previous ferches fail.
+    //
+    // Note: It is ok to poll for list accounts after a fixed delay as the next
+    // list accounts requests will be subject to the backoff retries.
+    //
+    // TODO(crbug.com/524519852): Find a better way to retry list accounts that
+    // avoids using both a backoff retry logic and a post delayed task.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&GaiaCookieManagerService::TriggerListAccountsIfStale,
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::Seconds(kDelayBeforeNextListAccountsRequestAfterFailureSeconds));
+    posted_trigger_list_accounts_stale_task = true;
+  }
+  base::UmaHistogramBoolean(
+      "Signin.ListAccountsFailure.TriggerListAccountsIfStalePosted",
+      posted_trigger_list_accounts_stale_task);
+
   HandleNextRequest();
 }
 
@@ -791,6 +829,10 @@ GaiaCookieManagerService::GetCookieManagerForPartition() {
   return signin_client_->GetCookieManager();
 }
 
+signin::PartitionSuffix GaiaCookieManagerService::GetPartitionSuffix() const {
+  return signin::PartitionSuffix::kDefault;
+}
+
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
 GaiaCookieManagerService::
@@ -800,6 +842,10 @@ GaiaCookieManagerService::
 
 network::mojom::DeviceBoundSessionManager*
 GaiaCookieManagerService::GetDeviceBoundSessionManagerForPartition() {
+  if (!base::FeatureList::IsEnabled(
+          switches::kEnableOAuthMultiloginStandardCookiesBinding)) {
+    return nullptr;
+  }
   return signin_client_->GetDeviceBoundSessionManager();
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)

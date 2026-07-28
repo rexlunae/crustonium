@@ -8,7 +8,9 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/supports_user_data.h"
 #import "components/feature_engagement/public/tracker.h"
+#import "components/omnibox/browser/aim_eligibility_service.h"
 #import "components/omnibox/browser/location_bar_model_impl.h"
 #import "components/omnibox/browser/omnibox_text_util.h"
 #import "components/omnibox/common/omnibox_features.h"
@@ -16,7 +18,11 @@
 #import "components/prefs/pref_service.h"
 #import "components/profile_metrics/browser_profile_type.h"
 #import "components/search_engines/util.h"
+#import "components/send_tab_to_self/features.h"
+#import "components/send_tab_to_self/metrics_util.h"
+#import "components/send_tab_to_self/send_tab_to_self_sync_service.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/aim/model/ios_chrome_aim_eligibility_service_factory.h"
 #import "ios/chrome/browser/autocomplete/model/autocomplete_browser_agent.h"
 #import "ios/chrome/browser/autocomplete/model/autocomplete_scheme_classifier_impl.h"
 #import "ios/chrome/browser/badges/ui_bundled/badge_button_factory.h"
@@ -35,14 +41,14 @@
 #import "ios/chrome/browser/drag_and_drop/model/drag_item_util.h"
 #import "ios/chrome/browser/drag_and_drop/model/url_drag_drop_handler.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
 #import "ios/chrome/browser/infobars/model/infobar_metrics_recorder.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service_factory.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_entrypoint.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/location_bar/badge/coordinator/location_bar_badge_coordinator.h"
 #import "ios/chrome/browser/location_bar/badge/coordinator/location_bar_badge_coordinator_delegate.h"
 #import "ios/chrome/browser/location_bar/badge/coordinator/location_bar_badge_mediator.h"
@@ -73,13 +79,16 @@
 #import "ios/chrome/browser/reader_mode/model/reader_mode_web_state_utils.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_overlay_commands.h"
@@ -89,9 +98,11 @@
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/pasteboard_util.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/sharing/ui_bundled/sharing_coordinator.h"
 #import "ios/chrome/browser/sharing/ui_bundled/sharing_params.h"
+#import "ios/chrome/browser/sync/model/send_tab_to_self_sync_service_factory.h"
 #import "ios/chrome/browser/url_loading/model/image_search_param_generator.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
@@ -101,6 +112,8 @@
 #import "ios/public/provider/chrome/browser/voice_search/voice_search_api.h"
 #import "ios/web/public/navigation/navigation_manager.h"
 #import "ios/web/public/navigation/referrer.h"
+#import "ios/web/public/thread/web_task_traits.h"
+#import "ios/web/public/thread/web_thread.h"
 #import "ios/web/public/web_state.h"
 #import "services/network/public/cpp/resource_request.h"
 #import "ui/base/device_form_factor.h"
@@ -108,6 +121,14 @@
 
 namespace {
 const size_t kMaxURLDisplayChars = 32 * 1024;
+
+// Tracks the number of active windows for which the AI Hub new feature badge
+// has been shown. Avoids calling ShouldTriggerHelpUI more than once when the
+// IPH is already showing.
+struct AIHubBadgeActiveWindowsData : public base::SupportsUserData::Data {
+  int activeWindows = 0;
+  static constexpr char key[] = "AIHubBadgeActiveWindowsData";
+};
 }  // namespace
 
 @interface LocationBarCoordinator () <
@@ -116,8 +137,8 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
     LocationBarModelDelegateWebStateProvider,
     LocationBarSteadyViewConsumer,
     LocationBarViewControllerDelegate,
-    WebLocationBarDelegate,
-    URLDragDataSource> {
+    URLDragDataSource,
+    WebLocationBarDelegate> {
   // API endpoint for omnibox.
   std::unique_ptr<WebLocationBarImpl> _locationBar;
   // Observer that updates `viewController` for fullscreen events.
@@ -127,6 +148,11 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   // Observer that updates IncognitoBadgeViewController for fullscreen events.
   std::unique_ptr<FullscreenUIUpdater> _incognitoBadgeFullscreenUIUpdater;
 
+  // Observer that updates the view controllers for fullscreen events using the
+  // FullscreenBrowserAgent.
+  std::unique_ptr<FullscreenBrowserAgentObserverBridge>
+      _fullscreenBrowserAgentObserver;
+
   // Facade objects used by `_toolbarCoordinator`.
   // Must outlive `_toolbarCoordinator`.
   std::unique_ptr<LocationBarModelDelegateIOS> _locationBarModelDelegate;
@@ -135,10 +161,12 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   // Service for local and profile preferences.
   raw_ptr<PrefService> _prefService;
   // Tracker for feature events.
-  raw_ptr<feature_engagement::Tracker, DanglingUntriaged> _tracker;
+  raw_ptr<feature_engagement::Tracker> _tracker;
 }
 // Whether the coordinator is started.
 @property(nonatomic, assign, getter=isStarted) BOOL started;
+// Whether this coordinator triggered the AI Hub new badge in the FET.
+@property(nonatomic, assign) BOOL hasTriggeredAIHubNewBadge;
 // Mediator for the badges displayed in the LocationBar.
 @property(nonatomic, strong) BadgeMediator* badgeMediator;
 // ViewController for the badges displayed in the LocationBar.
@@ -181,6 +209,10 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   return self.browser ? self.browser->GetWebStateList() : nullptr;
 }
 
+- (id<ReaderModeChipCommands>)readerModeChipHandler {
+  return self.readerModeChipCoordinator;
+}
+
 #pragma mark - Public
 
 - (UIViewController*)locationBarViewController {
@@ -221,7 +253,7 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   self.viewController.pageActionMenuHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), PageActionMenuCommands);
   self.viewController.geminiHandler =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), BWGCommands);
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), GeminiCommands);
   _tracker = feature_engagement::TrackerFactory::GetForProfile(self.profile);
   self.viewController.tracker = _tracker;
   self.viewController.voiceSearchEnabled =
@@ -264,7 +296,7 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
         [self.omniboxCoordinator offsetProvider];
   }
 
-  if (IsAskGeminiChipEnabled() || IsProactiveSuggestionsFrameworkEnabled() ||
+  if (IsPageActionMenuEnabled() || IsProactiveSuggestionsFrameworkEnabled() ||
       IsLocationBarBadgeMigrationEnabled()) {
     self.locationBarBadgeCoordinator = [[LocationBarBadgeCoordinator alloc]
         initWithBaseViewController:self.viewController
@@ -304,7 +336,7 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
         didMoveToParentViewController:self.viewController];
   }
 
-  if (IsReaderModeAvailable() && !IsChromeNextIaEnabled()) {
+  if (IsReaderModeAvailable()) {
     self.readerModeChipCoordinator = [[ReaderModeChipCoordinator alloc]
         initWithBaseViewController:self.viewController
                            browser:self.browser];
@@ -345,14 +377,17 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
       static_cast<id<BrowserCoordinatorCommands, LocationBarBadgeCommands>>(
           self.browser->GetCommandDispatcher());
   buttonFactory.delegate = self.badgeMediator;
-  FullscreenController* fullscreenController =
-      FullscreenController::FromBrowser(self.browser);
-  _badgeFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
-      fullscreenController, self.badgeViewController);
+
+  if (!IsFullscreenRefactoringEnabled()) {
+    FullscreenController* fullscreenController =
+        FullscreenController::FromBrowser(self.browser);
+    _badgeFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
+        fullscreenController, self.badgeViewController);
+  }
 
   // Create incognito badge view controller and mediator for an incognito
   // profile.
-  if (isIncognito) {
+  if (isIncognito && !IsChromeNextIaEnabled()) {
     self.incognitoBadgeViewController = [[IncognitoBadgeViewController alloc]
         initWithButtonFactory:buttonFactory];
     if (!IsLocationBarBadgeMigrationEnabled()) {
@@ -372,25 +407,30 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
     self.incognitoBadgeMediator =
         [[IncognitoBadgeMediator alloc] initWithWebStateList:self.webStateList];
     self.incognitoBadgeMediator.consumer = self.incognitoBadgeViewController;
-    _incognitoBadgeFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
-        fullscreenController, self.incognitoBadgeViewController);
+
+    if (!IsFullscreenRefactoringEnabled()) {
+      _incognitoBadgeFullscreenUIUpdater =
+          std::make_unique<FullscreenUIUpdater>(
+              FullscreenController::FromBrowser(self.browser),
+              self.incognitoBadgeViewController);
+    }
   }
 
   UrlLoadingBrowserAgent* URLLoading =
       UrlLoadingBrowserAgent::FromBrowser(self.browser);
-  self.mediator =
-      [[LocationBarMediator alloc] initWithURLLoadingBrowsingAgent:URLLoading
-                                                       isIncognito:isIncognito];
+  AimEligibilityService* aimEligibilityService =
+      IOSChromeAimEligibilityServiceFactory::GetForProfile(self.profile);
+  self.mediator = [[LocationBarMediator alloc]
+      initWithURLLoadingBrowsingAgent:URLLoading
+                aimEligibilityService:aimEligibilityService
+                          isIncognito:isIncognito];
   self.mediator.templateURLService =
       ios::TemplateURLServiceFactory::GetForProfile(self.profile);
   self.mediator.consumer = self.viewController;
   self.mediator.webStateList = self.webStateList;
-  if (base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdate) ||
-      base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdateV2)) {
-    PlaceholderService* placeholderService =
-        ios::PlaceholderServiceFactory::GetForProfile(self.profile);
-    self.mediator.placeholderService = placeholderService;
-  }
+  PlaceholderService* placeholderService =
+      ios::PlaceholderServiceFactory::GetForProfile(self.profile);
+  self.mediator.placeholderService = placeholderService;
 
   self.viewController.mutator = self.mediator;
 
@@ -403,8 +443,22 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   self.steadyViewMediator.consumer = self;
   self.steadyViewMediator.tracker = _tracker;
 
-  _omniboxFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
-      fullscreenController, self.viewController);
+  if (IsFullscreenRefactoringEnabled()) {
+    self.mediator.layoutState = self.browser->GetSceneState().layoutState;
+    _fullscreenBrowserAgentObserver =
+        std::make_unique<FullscreenBrowserAgentObserverBridge>(
+            self.mediator, FullscreenBrowserAgent::FromBrowser(self.browser));
+    [self.mediator addFullscreenUIElement:self.viewController];
+    if (self.badgeViewController) {
+      [self.mediator addFullscreenUIElement:self.badgeViewController];
+    }
+    if (self.incognitoBadgeViewController) {
+      [self.mediator addFullscreenUIElement:self.incognitoBadgeViewController];
+    }
+  } else {
+    _omniboxFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
+        FullscreenController::FromBrowser(self.browser), self.viewController);
+  }
 
   AutocompleteBrowserAgent* autocompleteBrowserAgent =
       AutocompleteBrowserAgent::FromBrowser(self.browser);
@@ -427,12 +481,13 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   if (!self.started) {
     return;
   }
+  [self decrementAIHubNewBadgeActiveWindowCount];
   [self.browser->GetCommandDispatcher() stopDispatchingToTarget:self];
   [self.browser->GetCommandDispatcher()
       stopDispatchingToTarget:self.viewController
                                   .pageActionMenuEntryPointHandler];
 
-  if (IsAskGeminiChipEnabled() || IsProactiveSuggestionsFrameworkEnabled() ||
+  if (IsPageActionMenuEnabled() || IsProactiveSuggestionsFrameworkEnabled() ||
       IsLocationBarBadgeMigrationEnabled()) {
     [self.locationBarBadgeCoordinator stop];
     self.locationBarBadgeCoordinator = nil;
@@ -476,10 +531,12 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   _locationBarModel = nullptr;
   _locationBarModelDelegate = nullptr;
   _prefService = nullptr;
+  _tracker = nullptr;
 
   _badgeFullscreenUIUpdater = nullptr;
   _incognitoBadgeFullscreenUIUpdater = nullptr;
   _omniboxFullscreenUIUpdater = nullptr;
+  _fullscreenBrowserAgentObserver = nullptr;
   self.started = NO;
 }
 
@@ -523,10 +580,22 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
 }
 
 - (void)setPageActionMenuEntryPointDispatcher {
+  CHECK(!IsChromeNextIaEnabled());
   [self.browser->GetCommandDispatcher()
       startDispatchingToTarget:self.viewController
                                    .pageActionMenuEntryPointHandler
                    forProtocol:@protocol(PageActionMenuEntryPointCommands)];
+}
+
+- (void)setLocationBarActive:(BOOL)active {
+  [self.badgeMediator setActive:active];
+  self.mediator.active = active;
+  [self.locationBarBadgeCoordinator setActive:active];
+  self.viewController.active = active;
+}
+
+- (void)setTopPosition:(BOOL)topPosition {
+  self.mediator.topPosition = topPosition;
 }
 
 #pragma mark - LocationBarURLLoader
@@ -580,8 +649,17 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   }
 }
 
+- (void)insertTextToOmnibox:(NSString*)string {
+  CHECK(!IsComposeboxIOSEnabled());
+  [self.omniboxCoordinator insertTextToOmnibox:string];
+}
+
 - (void)focusOmniboxForVoiceOver {
   [self.viewController focusSteadyViewForVoiceOver];
+}
+
+- (void)setCustomLeadingViewVisible:(BOOL)visible animated:(BOOL)animated {
+  [self.viewController setCustomLeadingViewVisible:visible animated:animated];
 }
 
 - (void)cancelOmniboxEdit {
@@ -663,6 +741,42 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
       feature_engagement::TrackerFactory::GetForProfile(self.profile));
 }
 
+- (BOOL)locationBarCanSendTabToSelf {
+  if (!base::FeatureList::IsEnabled(
+          send_tab_to_self::kSendTabToSelfExtraEntryPoints)) {
+    return NO;
+  }
+  if (!self.webState) {
+    return NO;
+  }
+  send_tab_to_self::SendTabToSelfSyncService* send_tab_to_self_service =
+      SendTabToSelfSyncServiceFactory::GetForProfile(self.profile);
+  return send_tab_to_self_service &&
+         send_tab_to_self_service
+             ->GetEntryPointDisplayReason(self.webState->GetVisibleURL())
+             .has_value();
+}
+
+- (void)locationBarSendTabToSelfTapped {
+  if (!self.webState || ![self locationBarCanSendTabToSelf]) {
+    return;
+  }
+  GURL url = self.webState->GetVisibleURL();
+  NSString* title = base::SysUTF16ToNSString(self.webState->GetTitle());
+  id<BrowserCoordinatorCommands> browserCoordinatorHandler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
+
+  ExecuteWhenTransitionsComplete(
+      ^{
+        [browserCoordinatorHandler
+            showSendTabToSelfUI:url
+                          title:title
+                     entryPoint:send_tab_to_self::ShareEntryPoint::
+                                    kOmniboxMenu];
+      },
+      self.viewController);
+}
+
 - (void)searchCopiedImage {
   __weak LocationBarCoordinator* weakSelf = self;
   ClipboardRecentContent::GetInstance()->GetRecentImageFromClipboard(
@@ -685,21 +799,53 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
 }
 
 - (void)locationBarDidTapAIHubNewBadge {
-  _tracker->NotifyUsedEvent(feature_engagement::kIPHiOSAIHubNewBadge);
+  [self decrementAIHubNewBadgeActiveWindowCount];
+  if (_tracker) {
+    _tracker->NotifyUsedEvent(feature_engagement::kIPHiOSAIHubNewBadge);
+  }
 }
 
 - (BOOL)shouldShowAIHubNewFeatureBadge {
   if (!IsAIHubNewBadgeEnabled()) {
     return NO;
   }
-  return _tracker->ShouldTriggerHelpUI(
-      feature_engagement::kIPHiOSAIHubNewBadge);
+  if (self.hasTriggeredAIHubNewBadge) {
+    return YES;
+  }
+
+  if (!_tracker) {
+    return NO;
+  }
+
+  AIHubBadgeActiveWindowsData* data = static_cast<AIHubBadgeActiveWindowsData*>(
+      _tracker->GetUserData(AIHubBadgeActiveWindowsData::key));
+  if (data && data->activeWindows > 0) {
+    [self incrementAIHubNewBadgeActiveWindowCount];
+    return YES;
+  }
+
+  if (_tracker->ShouldTriggerHelpUI(feature_engagement::kIPHiOSAIHubNewBadge)) {
+    [self incrementAIHubNewBadgeActiveWindowCount];
+    return YES;
+  }
+
+  return NO;
 }
 
-- (void)locationBarViewController:(LocationBarViewController*)controller
-         didChangeEditStateHeight:(CGFloat)height {
-  [self.heightDelegate locationBarCoordinator:self
-                     didChangeEditStateHeight:height];
+- (void)locationBarHideToolbarTapped {
+  if (IsFullscreenRefactoringEnabled()) {
+    [HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                        FullscreenCommands)
+        enterFullscreenWithTrigger:FullscreenModeTransitionTrigger::
+                                       kForcedByUser
+                          animated:YES];
+    return;
+  }
+  FullscreenController* fullscreenController =
+      FullscreenController::FromBrowser(self.browser);
+  fullscreenController->EnterForceFullscreenMode(
+      /* insets_update_enabled */ true,
+      FullscreenModeTransitionTrigger::kForcedByUser);
 }
 
 #pragma mark - LocationBarBadgeCommands
@@ -719,15 +865,24 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   [self.locationBarBadgeCoordinator markDisplayedBadgeAsUnread:read];
 }
 
+- (void)togglePageActionMenuEntryPointHighlight:(BOOL)highlight {
+  [self.viewController.pageActionMenuEntryPointHandler
+      toggleEntryPointHighlight:highlight];
+}
+
 #pragma mark - ContextualPanelEntrypointCommands
 
 - (void)notifyContextualPanelEntrypointIPHDismissed {
   [self.locationBarBadgeCoordinator
           notifyContextualPanelEntrypointIPHDismissed];
+  [self.contextualPanelEntrypointCoordinator
+          notifyContextualPanelEntrypointIPHDismissed];
 }
 
 - (void)cancelContextualPanelEntrypointLoudMoment {
   [self.locationBarBadgeCoordinator cancelContextualPanelEntrypointLoudMoment];
+  [self.contextualPanelEntrypointCoordinator
+          cancelContextualPanelEntrypointLoudMoment];
 }
 
 #pragma mark - ContextualPanelEntrypointCoordinatorDelegate
@@ -746,7 +901,9 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
 #pragma mark - LocationBarSteadyViewConsumer
 
 - (void)updateLocationText:(NSString*)text clipTail:(BOOL)clipTail {
-  [self.omniboxCoordinator updateOmniboxState];
+  if (IsOmniboxCrashFixKillSwitchEnabled()) {
+    [self.omniboxCoordinator updateOmniboxState];
+  }
   [self.viewController updateLocationText:text clipTail:clipTail];
   [self.viewController updateForNTP:NO];
   [self.mediator locationUpdated];
@@ -773,6 +930,10 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
   [self.viewController recordLensOverlayAvailability];
 }
 
+- (void)updateAIHubNewBadgeVisibility {
+  [self.viewController updateAIHubNewBadgeVisibility];
+}
+
 #pragma mark - URLDragDataSource
 
 - (URLInfo*)URLInfoForView:(UIView*)view {
@@ -795,6 +956,43 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
 }
 
 #pragma mark - Private
+
+// Increments the active window count for the AI Hub new feature badge.
+- (void)incrementAIHubNewBadgeActiveWindowCount {
+  if (!_tracker) {
+    return;
+  }
+
+  AIHubBadgeActiveWindowsData* data = static_cast<AIHubBadgeActiveWindowsData*>(
+      _tracker->GetUserData(AIHubBadgeActiveWindowsData::key));
+  if (!data) {
+    std::unique_ptr<AIHubBadgeActiveWindowsData> new_data =
+        std::make_unique<AIHubBadgeActiveWindowsData>();
+    data = new_data.get();
+    _tracker->SetUserData(AIHubBadgeActiveWindowsData::key,
+                          std::move(new_data));
+  }
+
+  data->activeWindows++;
+  self.hasTriggeredAIHubNewBadge = YES;
+}
+
+// Decrements the active window count for the AI Hub new feature badge and
+// informs the tracker if the count drops to zero.
+- (void)decrementAIHubNewBadgeActiveWindowCount {
+  if (self.hasTriggeredAIHubNewBadge && _tracker) {
+    AIHubBadgeActiveWindowsData* data =
+        static_cast<AIHubBadgeActiveWindowsData*>(
+            _tracker->GetUserData(AIHubBadgeActiveWindowsData::key));
+    if (data && data->activeWindows > 0) {
+      data->activeWindows--;
+      if (data->activeWindows == 0) {
+        _tracker->Dismissed(feature_engagement::kIPHiOSAIHubNewBadge);
+      }
+    }
+    self.hasTriggeredAIHubNewBadge = NO;
+  }
+}
 
 - (metrics::OmniboxEventProto::PageClassification)getPageClassification:
     (BOOL)isPrefetch {
@@ -845,12 +1043,11 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
            entryPoint:LensEntrypoint::OmniboxPostCapture];
     [handler searchImageWithLens:command];
   } else {
-    web::NavigationManager::WebLoadParams webParams =
-        ImageSearchParamGenerator::LoadParamsForImage(
-            image, ios::TemplateURLServiceFactory::GetForProfile(
-                       browser->GetProfile()));
-    UrlLoadParams params = UrlLoadParams::InCurrentTab(webParams);
-    UrlLoadingBrowserAgent::FromBrowser(browser)->Load(params);
+    __weak LocationBarCoordinator* weakSelf = self;
+    ImageSearchParamGenerator::PrepareImageDataAsync(
+        image, base::BindOnce(^(NSData* imageData) {
+          [weakSelf loadImageSearchWithPreparedData:imageData];
+        }));
   }
 
   id<BrowserCoordinatorCommands> browserCoordinatorHandler = HandlerForProtocol(
@@ -860,6 +1057,20 @@ const size_t kMaxURLDisplayChars = 32 * 1024;
 
 - (UIView*)locationBarSteadyViewVisualCopy {
   return self.viewController.locationBarSteadyViewVisualCopy;
+}
+
+// Called when image data is ready for search.
+- (void)loadImageSearchWithPreparedData:(NSData*)imageData {
+  if (!self.browser) {
+    return;
+  }
+  TemplateURLService* service =
+      ios::TemplateURLServiceFactory::GetForProfile(self.browser->GetProfile());
+  web::NavigationManager::WebLoadParams webParams =
+      ImageSearchParamGenerator::LoadParamsForResizedImageData(imageData,
+                                                               GURL(), service);
+  UrlLoadParams params = UrlLoadParams::InCurrentTab(webParams);
+  UrlLoadingBrowserAgent::FromBrowser(self.browser)->Load(params);
 }
 
 @end

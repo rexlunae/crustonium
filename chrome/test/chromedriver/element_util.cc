@@ -31,26 +31,6 @@ namespace {
 const char kElementKey[] = "ELEMENT";
 const char kElementKeyW3C[] = "element-6066-11e4-a52e-4f735466cecf";
 const char kShadowRootKey[] = "shadow-6066-11e4-a52e-4f735466cecf";
-const char kFindSubFrameScript[] =
-    "function findSubFrame(frame_id) {"
-    " const findSubFrameDeep = function(nodes, id) {"
-    "   let r = null;"
-    "   for (let i = 0, el; (el = nodes[i]) && !r; ++i) {"
-    "     if ((el.tagName === 'IFRAME') "
-    "       && el.getAttribute('cd_frame_id_') === id) {"
-    "       r = el;"
-    "     } else if (el.shadowRoot) {"
-    "       r = findSubFrameDeep(el.shadowRoot.querySelectorAll('*'), id);"
-    "     }"
-    "   }"
-    "   return r;"
-    " };"
-    " const xpath = \"//*[@cd_frame_id_ ='\" + frame_id + \"']\";"
-    " const r = document.evaluate(xpath, document, null,"
-    "      XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;"
-    " return r || findSubFrameDeep(document.querySelectorAll('*'), "
-    "frame_id);"
-    "}";
 
 bool ParseFromValue(base::Value* value, WebPoint* point) {
   if (!value->is_dict())
@@ -127,7 +107,7 @@ Status VerifyElementClickable(const Session* session,
       frame, web_view, webdriver::atoms::IS_ELEMENT_CLICKABLE, args, &result);
   if (status.IsError())
     return status;
-  std::optional<bool> is_clickable = std::nullopt;
+  std::optional<bool> is_clickable;
   if (result->is_dict())
     is_clickable = result->GetDict().FindBool("clickable");
   if (!is_clickable.has_value()) {
@@ -491,6 +471,21 @@ Status IsElementFocused(
   base::Value element_dict = CreateElement(element_id, session->w3c_compliant);
   *is_focused = *result == element_dict;
   return Status(kOk);
+}
+
+Status IsElementActive(Session* session,
+                       WebView* web_view,
+                       const std::string& element_id,
+                       bool* is_active) {
+  std::unique_ptr<base::Value> active;
+  Status status = GetActiveElement(session, web_view, &active);
+  if (status.IsError()) {
+    *is_active = false;
+    return status;
+  }
+  base::Value element_dict = CreateElement(element_id, session->w3c_compliant);
+  *is_active = *active == element_dict;
+  return status;
 }
 
 Status IsDocumentTypeXml(
@@ -859,20 +854,11 @@ Status ScrollElementRegionIntoView(
   auto end = std::ranges::find(frames, web_view->GetId(), &FrameInfo::frame_id);
   for (auto it = frames.begin(); it != end; ++it) {
     const FrameInfo& frame = *it;
-    base::ListValue args;
-    args.Append(frame.chromedriver_frame_id.c_str());
-    std::unique_ptr<base::Value> result;
-    status = web_view->CallFunction(frame.parent_frame_id, kFindSubFrameScript,
-                                    args, &result);
+    std::string frame_element_id;
+    status = web_view->GetFrameOwnerElementId(
+        frame.frame_id, frame.parent_frame_id, &frame_element_id);
     if (status.IsError())
       return status;
-    if (!result->is_dict())
-      return Status(kUnknownError, "no element reference returned by script");
-    std::string* maybe_frame_element_id =
-        result->GetDict().FindString(GetElementKey(session->w3c_compliant));
-    if (!maybe_frame_element_id)
-      return Status(kUnknownError, "failed to locate a sub frame");
-    std::string frame_element_id = *maybe_frame_element_id;
 
     // Modify |region_offset| by the frame's border.
     int border_left = -1;
@@ -906,20 +892,11 @@ Status GetElementLocationInViewCenter(Session* session,
     return status;
 
   for (const FrameInfo& frame : base::Reversed(session->frames)) {
-    base::ListValue args;
-    args.Append(frame.chromedriver_frame_id.c_str());
-    std::unique_ptr<base::Value> result;
-    status = web_view->CallFunction(frame.parent_frame_id, kFindSubFrameScript,
-                                    args, &result);
+    std::string frame_element_id;
+    status = web_view->GetFrameOwnerElementId(
+        frame.frame_id, frame.parent_frame_id, &frame_element_id);
     if (status.IsError())
       return status;
-    if (!result->is_dict())
-      return Status(kUnknownError, "no element reference returned by script");
-    std::string* maybe_frame_element_id =
-        result->GetDict().FindString(GetElementKey(session->w3c_compliant));
-    if (!maybe_frame_element_id)
-      return Status(kUnknownError, "failed to locate a sub frame");
-    std::string frame_element_id = *maybe_frame_element_id;
 
     // Modify |center_location| by the frame's border.
     int border_left = -1;

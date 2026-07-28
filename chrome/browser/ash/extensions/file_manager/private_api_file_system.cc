@@ -20,6 +20,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/barrier_callback.h"
+#include "base/check_deref.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
@@ -77,11 +78,11 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
 #include "chrome/common/extensions/api/file_manager_private_internal.h"
 #include "chromeos/ash/components/disks/disk.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/drive/event_logger.h"
 #include "components/drive/file_system_core_util.h"
 #include "components/enterprise/data_controls/core/browser/component.h"
@@ -97,6 +98,7 @@
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/common/extension.h"
 #include "services/device/public/mojom/mtp_manager.mojom.h"
 #include "services/device/public/mojom/mtp_storage_info.mojom.h"
 #include "storage/browser/file_system/external_mount_points.h"
@@ -324,12 +326,25 @@ ExtensionFunction::ResponseAction FileManagerPrivateGrantAccessFunction::Run() {
   const std::optional<Params> params = Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
+  bool for_thumbnailing = params->options &&
+                          params->options->for_thumbnailing.has_value() &&
+                          params->options->for_thumbnailing.value();
+
   scoped_refptr<storage::FileSystemContext> file_system_context =
       file_manager::util::GetFileSystemContextForRenderFrameHost(
           Profile::FromBrowserContext(browser_context()), render_frame_host());
 
   auto* const backend = ash::FileSystemBackend::Get(*file_system_context);
   DCHECK(backend);
+
+  // The ImageLoader extension reads files on behalf of the Files app to
+  // generate thumbnails, so grant it access to the same paths in its own
+  // FileSystemBackend.
+  const GURL image_loader_url = file_manager::util::GetImageLoaderBaseURL();
+  const url::Origin image_loader_origin = url::Origin::Create(image_loader_url);
+  auto* const image_loader_backend = ash::FileSystemBackend::Get(
+      *file_manager::util::GetFileSystemContextForSourceURL(
+          Profile::FromBrowserContext(browser_context()), image_loader_url));
 
   const std::vector<Profile*>& profiles =
       g_browser_process->profile_manager()->GetLoadedProfiles();
@@ -349,12 +364,17 @@ ExtensionFunction::ResponseAction FileManagerPrivateGrantAccessFunction::Run() {
           file_system_url.mount_type() != storage::kFileSystemTypeExternal) {
         continue;
       }
-      backend->GrantFileAccessToOrigin(url::Origin::Create(source_url()),
-                                       file_system_url.virtual_path());
-      content::ChildProcessSecurityPolicy::GetInstance()
-          ->GrantCreateReadWriteFile(
-              render_frame_host()->GetProcess()->GetDeprecatedID(),
-              file_system_url.path());
+      if (!for_thumbnailing) {
+        backend->GrantFileAccessToOrigin(url::Origin::Create(source_url()),
+                                         file_system_url.virtual_path());
+        content::ChildProcessSecurityPolicy::GetInstance()
+            ->GrantCreateReadWriteFile(
+                render_frame_host()->GetProcess()->GetDeprecatedID(),
+                file_system_url.path());
+      } else if (image_loader_backend) {
+        image_loader_backend->GrantFileAccessToOrigin(
+            image_loader_origin, file_system_url.virtual_path());
+      }
     }
   }
   return RespondNow(NoArguments());
@@ -898,7 +918,7 @@ FileManagerPrivateInternalGetDisallowedTransfersFunction::
 ExtensionFunction::ResponseAction
 FileManagerPrivateInternalGetDisallowedTransfersFunction::Run() {
   if (!base::FeatureList::IsEnabled(
-          features::kDataLeakPreventionFilesRestriction)) {
+          ash::features::kDataLeakPreventionFilesRestriction)) {
     return RespondNow(WithArguments(base::ListValue()));
   }
 
@@ -936,7 +956,7 @@ FileManagerPrivateInternalGetDisallowedTransfersFunction::Run() {
 
   // If the new UX flow is enabled, return an empty list so the copy/move
   // operation can start.
-  if (base::FeatureList::IsEnabled(features::kNewFilesPolicyUX)) {
+  if (base::FeatureList::IsEnabled(ash::features::kNewFilesPolicyUX)) {
     return RespondNow(WithArguments(base::ListValue()));
   }
 
@@ -994,7 +1014,7 @@ FileManagerPrivateInternalGetDlpMetadataFunction::
 ExtensionFunction::ResponseAction
 FileManagerPrivateInternalGetDlpMetadataFunction::Run() {
   if (!base::FeatureList::IsEnabled(
-          features::kDataLeakPreventionFilesRestriction)) {
+          ash::features::kDataLeakPreventionFilesRestriction)) {
     return RespondNow(WithArguments(base::ListValue()));
   }
 
@@ -1076,7 +1096,7 @@ FileManagerPrivateGetDlpRestrictionDetailsFunction::
 ExtensionFunction::ResponseAction
 FileManagerPrivateGetDlpRestrictionDetailsFunction::Run() {
   if (!base::FeatureList::IsEnabled(
-          features::kDataLeakPreventionFilesRestriction)) {
+          ash::features::kDataLeakPreventionFilesRestriction)) {
     return RespondNow(WithArguments(base::ListValue()));
   }
 
@@ -1127,7 +1147,7 @@ FileManagerPrivateGetDlpBlockedComponentsFunction::
 ExtensionFunction::ResponseAction
 FileManagerPrivateGetDlpBlockedComponentsFunction::Run() {
   if (!base::FeatureList::IsEnabled(
-          features::kDataLeakPreventionFilesRestriction)) {
+          ash::features::kDataLeakPreventionFilesRestriction)) {
     return RespondNow(WithArguments(base::ListValue()));
   }
 
@@ -1324,7 +1344,9 @@ void FileManagerPrivateInternalSearchFilesFunction::RunFileSearchByName(
   // generate all trash paths that are to be excluded when searching for
   // matching files.
   std::vector<base::FilePath> excluded_paths;
-  if (file_manager::trash::IsTrashEnabledForProfile(profile)) {
+  // TODO(crbug.com/404131876): Avoid using g_browser_process.
+  if (file_manager::trash::IsTrashEnabledForProfile(
+          CHECK_DEREF(g_browser_process->local_state()), profile)) {
     auto enabled_trash_locations =
         file_manager::trash::GenerateEnabledTrashLocationsForProfile(profile);
     for (const auto& it : enabled_trash_locations) {

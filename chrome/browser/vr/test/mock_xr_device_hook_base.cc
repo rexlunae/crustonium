@@ -5,9 +5,13 @@
 #include "chrome/browser/vr/test/mock_xr_device_hook_base.h"
 
 #include "content/public/test/xr_test_utils.h"
+#include "device/vr/buildflags/buildflags.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
-#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+
+#if BUILDFLAG(ENABLE_OPENXR)
+#include "device/vr/openxr/test/openxr_mock_helper.h"
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "components/webxr/android/openxr_device_provider.h"
@@ -34,6 +38,13 @@ MockXRDeviceHookBase::MockXRDeviceHookBase() {
       receiver_.BindNewPipeAndPassRemote(thread_->task_runner()));
 #elif BUILDFLAG(IS_ANDROID)
   mojo::ScopedAllowSyncCallForTesting scoped_allow_sync;
+  // On Windows we have to rely on the ServiceTestHook to initialize the
+  // trampoline, since the device code is embedded in the utility process.
+  // However, on Android since the device code is embedded in our process/the
+  // browser process we need to ensure that we initialize the trampoline.
+#if BUILDFLAG(ENABLE_OPENXR)
+  InitializeOpenXrMockTrampoline();
+#endif
   webxr::OpenXrDeviceProvider::SetTestHook(
       receiver_.BindNewPipeAndPassRemote(thread_->task_runner()));
 #endif
@@ -94,10 +105,11 @@ void MockXRDeviceHookBase::WaitForTotalFrameCount(uint32_t total_count) {
 
 void MockXRDeviceHookBase::OnFrameSubmitted(
     const std::vector<device::ViewData>& views,
+    const std::vector<device::LayerData>& layers,
     device_test::mojom::XRTestHook::OnFrameSubmittedCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(mock_device_sequence_);
   frame_count_++;
-  ProcessSubmittedFrameUnlocked(std::move(views));
+  ProcessSubmittedFrameUnlocked(views, layers);
   if (can_signal_wait_loop_ && frame_count_ >= target_frame_count_) {
     wait_loop_->Quit();
     can_signal_wait_loop_ = false;

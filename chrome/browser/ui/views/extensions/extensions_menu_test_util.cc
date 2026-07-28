@@ -8,11 +8,10 @@
 
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
-#include "base/numerics/safe_conversions.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
+#include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
@@ -27,12 +26,9 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "extensions/common/extension_features.h"
-#include "ui/events/base_event_utils.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/layout/animating_layout_manager_test_util.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/test/button_test_api.h"
@@ -95,16 +91,17 @@ gfx::Image ExtensionsMenuTestUtil::GetIcon(const extensions::ExtensionId& id) {
 void ExtensionsMenuTestUtil::Press(const extensions::ExtensionId& id) {
   OpenExtensionsMenu();
 
-  ExtensionsMenuButton* primary_button = GetPrimaryButton(id);
-  CHECK(primary_button);
+  HoverButton* action_button = GetActionButton(id);
+  CHECK(action_button);
 
-  views::test::ButtonTestApi(primary_button).NotifyDefaultMouseClick();
+  views::test::ButtonTestApi(action_button).NotifyDefaultMouseClick();
 }
 
 gfx::NativeView ExtensionsMenuTestUtil::GetPopupNativeView() {
   ToolbarActionViewModel* popup_owner =
       extensions_toolbar_->popup_owner_for_testing();
-  return popup_owner ? popup_owner->GetPopupNativeView() : gfx::NativeView();
+  return popup_owner ? popup_owner->GetPopupNativeViewForTesting()
+                     : gfx::NativeView();
 }
 
 bool ExtensionsMenuTestUtil::HasPopup() {
@@ -159,7 +156,7 @@ void ExtensionsMenuTestUtil::OpenExtensionsMenu() {
     bubble_dialog =
         extensions_toolbar_->GetExtensionsMenuCoordinatorForTesting()
             ->CreateExtensionsMenuBubbleDialogDelegateForTesting(
-                extensions_toolbar_->GetExtensionsButton(),
+                views::BubbleAnchor(extensions_toolbar_->GetExtensionsButton()),
                 extensions_toolbar_);
   } else {
     bubble_dialog = std::make_unique<ExtensionsMenuView>(
@@ -171,7 +168,9 @@ void ExtensionsMenuTestUtil::OpenExtensionsMenu() {
     menu_view_->View::AddObserver(this);
   }
 
-  views::BubbleDialogDelegate::CreateBubble(std::move(bubble_dialog));
+  views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(bubble_dialog),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
 }
 
 bool ExtensionsMenuTestUtil::IsExtensionsMenuShowing() {
@@ -182,7 +181,7 @@ bool ExtensionsMenuTestUtil::IsExtensionsMenuShowing() {
              : menu_view_;
 }
 
-ExtensionsMenuButton* ExtensionsMenuTestUtil::GetPrimaryButton(
+HoverButton* ExtensionsMenuTestUtil::GetActionButton(
     const extensions::ExtensionId& id) {
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
@@ -199,9 +198,8 @@ ExtensionsMenuButton* ExtensionsMenuTestUtil::GetPrimaryButton(
                                return entry->extension_id() == id;
                              });
 
-    return (iter == menu_entries.end())
-               ? nullptr
-               : (*iter)->primary_action_button_for_testing();
+    return (iter == menu_entries.end()) ? nullptr
+                                        : (*iter)->action_button_for_testing();
   }
 
   base::flat_set<raw_ptr<ExtensionMenuItemView, CtnExperimental>> menu_items =

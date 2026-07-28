@@ -87,6 +87,7 @@ bool ProxyOverrideRulesPolicyHandler::CheckPolicySettings(
       !policies.GetDeviceAffiliationIds().empty() &&
       !policies.IsUserAffiliated() && !UnaffiliatedPolicyAllowed(policies)) {
     errors->AddError(policy_name(), IDS_POLICY_UNAFFILIATED_USER_ERROR);
+    return false;
   }
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 
@@ -103,6 +104,7 @@ bool ProxyOverrideRulesPolicyHandler::CheckPolicySettings(
     CheckRule(rules_list[i].GetDict(),
               CreateNewPath({}, base::checked_cast<int>(i)), errors);
   }
+
   return true;
 }
 
@@ -126,12 +128,10 @@ void ProxyOverrideRulesPolicyHandler::ApplyPolicySettings(
 
   prefs->SetValue(proxy_config::prefs::kProxyOverrideRules,
                   policy_value->Clone());
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   prefs->SetInteger(proxy_config::prefs::kProxyOverrideRulesScope,
                     policy->scope);
-  prefs->SetBoolean(proxy_config::prefs::kProxyOverrideRulesAffiliation,
-                    policies.GetDeviceAffiliationIds().empty() ||
-                        policies.IsUserAffiliated());
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 }
 

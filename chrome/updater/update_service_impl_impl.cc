@@ -16,9 +16,10 @@
 
 #include "base/barrier_callback.h"
 #include "base/barrier_closure.h"
-#include "base/check_op.h"
+#include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/queue.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -32,12 +33,13 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/enterprise_companion/global_constants.h"
@@ -51,6 +53,7 @@
 #include "chrome/updater/configurator.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/event_history.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/handle_inconsistent_apps_task.h"
 #include "chrome/updater/installer.h"
 #include "chrome/updater/persisted_data.h"
@@ -60,7 +63,6 @@
 #include "chrome/updater/remove_uninstalled_apps_task.h"
 #include "chrome/updater/update_block_check.h"
 #include "chrome/updater/update_service.h"
-#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/usage_stats_permissions.h"
 #include "chrome/updater/util/util.h"
@@ -71,6 +73,7 @@
 #include "components/update_client/update_client.h"
 #include "components/update_client/update_client_errors.h"
 #include "components/update_client/utils.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 #if BUILDFLAG(IS_MAC)
 #include <sys/mount.h>
@@ -112,8 +115,6 @@ UpdateService::Result ToResult(update_client::Error error) {
     case update_client::Error::INVALID_ARGUMENT:
     case update_client::Error::BAD_CRX_DATA_CALLBACK:
       return UpdateService::Result::kInvalidArgument;
-    case update_client::Error::MAX_VALUE:
-      NOTREACHED();
   }
 }
 
@@ -143,16 +144,14 @@ void GetComponents(
                  const std::vector<std::optional<update_client::CrxComponent>>&
                      unordered) {
                 // Re-order the vector to match the order of `ids`.
-                std::vector<std::optional<update_client::CrxComponent>> ordered;
-                for (const auto& id : ids) {
+                return base::ToVector(ids, [&](const auto& id) {
                   auto it = std::ranges::find_if(
                       unordered,
                       [&id](std::optional<update_client::CrxComponent> v) {
                         return v && v->app_id == id;
                       });
-                  ordered.push_back(it != unordered.end() ? *it : std::nullopt);
-                }
-                return ordered;
+                  return it != unordered.end() ? *it : std::nullopt;
+                });
               },
               ids)
               .Then(std::move(callback)));
@@ -203,7 +202,7 @@ namespace {
 std::wstring GetTextForUpdateClientInstallError(int error_code,
                                                 const std::wstring& language) {
 #define INSTALL_SWITCH_ENTRY(error_code)                                     \
-  case static_cast<int>(error_code):                                         \
+  case std::to_underlying(error_code):                                       \
     return GetLocalizedStringF(IDS_GENERIC_INSTALL_ERROR_BASE, L#error_code, \
                                language)
 
@@ -232,7 +231,7 @@ std::wstring GetTextForUpdateClientInstallError(int error_code,
 
 std::wstring GetTextForDownloadError(int error, const std::wstring& language) {
 #define DOWNLOAD_SWITCH_ENTRY(error_code)                                     \
-  case static_cast<int>(error_code):                                          \
+  case std::to_underlying(error_code):                                        \
     return GetLocalizedStringF(IDS_GENERIC_DOWNLOAD_ERROR_BASE, L#error_code, \
                                language)
 
@@ -243,9 +242,9 @@ std::wstring GetTextForDownloadError(int error, const std::wstring& language) {
         update_client::CrxDownloaderError::BITS_TOO_MANY_JOBS);
     DOWNLOAD_SWITCH_ENTRY(update_client::CrxDownloaderError::GENERIC_ERROR);
 
-    case static_cast<int>(update_client::CrxDownloaderError::BAD_HASH):
+    case std::to_underlying(update_client::CrxDownloaderError::BAD_HASH):
       return GetLocalizedString(IDS_DOWNLOAD_HASH_MISMATCH_BASE);
-    case static_cast<int>(update_client::CrxDownloaderError::DISK_FULL):
+    case std::to_underlying(update_client::CrxDownloaderError::DISK_FULL):
       return GetLocalizedString(IDS_UPDATER_DISK_FULL_BASE);
 
     default:
@@ -257,11 +256,11 @@ std::wstring GetTextForDownloadError(int error, const std::wstring& language) {
 
 std::wstring GetTextForUnpackError(int error, const std::wstring& language) {
 #define UNPACK_SWITCH_ENTRY(error_code)                                     \
-  case static_cast<int>(error_code):                                        \
+  case std::to_underlying(error_code):                                      \
     return GetLocalizedStringF(IDS_GENERIC_UNPACK_ERROR_BASE, L#error_code, \
                                language)
 #define UNPACK_CACHING_SWITCH_ENTRY(error_code)                             \
-  case static_cast<int>(error_code):                                        \
+  case std::to_underlying(error_code):                                      \
     return GetLocalizedStringF(IDS_UNPACK_CACHING_ERROR_BASE, L#error_code, \
                                language)
 
@@ -310,7 +309,7 @@ std::wstring GetTextForServiceError(int error, const std::wstring& language) {
     SERVICE_SWITCH_ENTRY(update_client::ServiceError::UPDATE_DISABLED);
     SERVICE_SWITCH_ENTRY(update_client::ServiceError::CHECK_FOR_UPDATE_ONLY);
 
-    case static_cast<int>(update_client::ServiceError::CANCELLED):
+    case std::to_underlying(update_client::ServiceError::CANCELLED):
       return GetLocalizedString(IDS_SERVICE_ERROR_CANCELLED_BASE, language);
 
     default:
@@ -337,26 +336,27 @@ std::wstring GetTextForUpdateCheckError(int error,
     UPDATE_CHECK_SWITCH_ENTRY(update_client::ProtocolError::URL_FETCHER_FAILED);
     UPDATE_CHECK_SWITCH_ENTRY(update_client::ProtocolError::INVALID_APPID);
 
-    case static_cast<int>(update_client::ProtocolError::UNKNOWN_APPLICATION):
+    case std::to_underlying(update_client::ProtocolError::UNKNOWN_APPLICATION):
       return GetLocalizedString(IDS_UNKNOWN_APPLICATION_BASE, language);
 
-    case static_cast<int>(update_client::ProtocolError::RESTRICTED_APPLICATION):
+    case std::to_underlying(
+        update_client::ProtocolError::RESTRICTED_APPLICATION):
       return GetLocalizedString(IDS_RESTRICTED_RESPONSE_FROM_SERVER_BASE,
                                 language);
 
-    case static_cast<int>(update_client::ProtocolError::OS_NOT_SUPPORTED):
+    case std::to_underlying(update_client::ProtocolError::OS_NOT_SUPPORTED):
       return GetLocalizedString(IDS_OS_NOT_SUPPORTED_BASE, language);
 
-    case static_cast<int>(update_client::ProtocolError::HW_NOT_SUPPORTED):
+    case std::to_underlying(update_client::ProtocolError::HW_NOT_SUPPORTED):
       return GetLocalizedString(IDS_HW_NOT_SUPPORTED_BASE, language);
 
-    case static_cast<int>(update_client::ProtocolError::NO_HASH):
+    case std::to_underlying(update_client::ProtocolError::NO_HASH):
       return GetLocalizedString(IDS_NO_HASH_BASE, language);
 
-    case static_cast<int>(update_client::ProtocolError::UNSUPPORTED_PROTOCOL):
+    case std::to_underlying(update_client::ProtocolError::UNSUPPORTED_PROTOCOL):
       return GetLocalizedString(IDS_UNSUPPORTED_PROTOCOL_BASE, language);
 
-    case static_cast<int>(update_client::ProtocolError::INTERNAL):
+    case std::to_underlying(update_client::ProtocolError::INTERNAL):
       return GetLocalizedString(IDS_INTERNAL_BASE, language);
 
     // Http Status Code `401` Unauthorized.
@@ -380,7 +380,7 @@ std::wstring GetTextForUpdateCheckError(int error,
       return GetLocalizedStringF(
           IDS_GENERIC_UPDATE_CHECK_ERROR_BASE,
           error >= 400 && error < 600
-              ? base::UTF8ToWide(base::StringPrintf("HTTP %d", error))
+              ? base::UTF8ToWide(absl::StrFormat("HTTP %d", error))
               : GetTextForSystemError(error),
           language);
   }
@@ -462,10 +462,10 @@ std::string GetInstallerText(UpdateService::ErrorCategory error_category,
            return std::wstring();
          }
          return base::StrCat(
-             {L"\n", GetLocalizedStringF(IDS_EXTRA_CODE_BASE,
-                                         base::UTF8ToWide(base::StringPrintf(
-                                             "%#x", extra_code)),
-                                         language_w)});
+             {L"\n", GetLocalizedStringF(
+                         IDS_EXTRA_CODE_BASE,
+                         base::UTF8ToWide(absl::StrFormat("%#x", extra_code)),
+                         language_w)});
        }()}));
 }
 #endif  // BUILDFLAG(IS_WIN)
@@ -696,7 +696,7 @@ void UpdateServiceImplImpl::MaybeInstallEnterpriseCompanionAppOTA(
   registration.version = kNullVersion;
   RegisterApp(
       registration,
-      base::BindOnce([](int registration_result) {})
+      base::OnceCallback<void(int)>(base::DoNothing())
           .Then(base::BindPostTask(
               main_task_runner_,
               base::BindOnce(
@@ -768,8 +768,8 @@ void UpdateServiceImplImpl::RegisterApp(
     return;
   }
 
-  if (request.app_id.empty()) {
-    VLOG(1) << "Refusing to register an empty app ID.";
+  if (!IsValidAppId(request.app_id)) {
+    VLOG(1) << "Refusing to register an invalid app ID: " << request.app_id;
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), kRegistrationError));
     return;
@@ -826,23 +826,23 @@ void UpdateServiceImplImpl::GetAppStatesImpl(
 
   scoped_refptr<PersistedData> persisted_data =
       config_->GetUpdaterPersistedData();
-  std::vector<std::string> app_ids = persisted_data->GetAppIds();
-  std::vector<AppState> apps;
-  for (const std::string& app_id : app_ids) {
-    AppState app_state;
-    app_state.app_id = app_id;
-    app_state.version = persisted_data->GetProductVersion(app_id).GetString();
-    app_state.version_path = persisted_data->GetProductVersionPath(app_id);
-    app_state.version_key = persisted_data->GetProductVersionKey(app_id);
-    app_state.ap = persisted_data->GetAP(app_id);
-    app_state.ap_path = persisted_data->GetAPPath(app_id);
-    app_state.ap_key = persisted_data->GetAPKey(app_id);
-    app_state.brand_code = persisted_data->GetBrandCode(app_id);
-    app_state.brand_path = persisted_data->GetBrandPath(app_id);
-    app_state.ecp = persisted_data->GetExistenceCheckerPath(app_id);
-    app_state.cohort = persisted_data->GetCohort(app_id);
-    apps.push_back(app_state);
-  }
+  std::vector<AppState> apps = base::ToVector(
+      persisted_data->GetAppIds(), [&](const std::string& app_id) {
+        AppState app_state;
+        app_state.app_id = app_id;
+        app_state.version =
+            persisted_data->GetProductVersion(app_id).GetString();
+        app_state.version_path = persisted_data->GetProductVersionPath(app_id);
+        app_state.version_key = persisted_data->GetProductVersionKey(app_id);
+        app_state.ap = persisted_data->GetAP(app_id);
+        app_state.ap_path = persisted_data->GetAPPath(app_id);
+        app_state.ap_key = persisted_data->GetAPKey(app_id);
+        app_state.brand_code = persisted_data->GetBrandCode(app_id);
+        app_state.brand_path = persisted_data->GetBrandPath(app_id);
+        app_state.ecp = persisted_data->GetExistenceCheckerPath(app_id);
+        app_state.cohort = persisted_data->GetCohort(app_id);
+        return app_state;
+      });
   main_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(apps)));
 }
@@ -1002,6 +1002,14 @@ void UpdateServiceImplImpl::CheckForUpdate(
   VLOG(1) << __func__ << ": " << app_id;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!IsValidAppId(app_id)) {
+    VLOG(1) << "Refusing to check update for an invalid app ID: " << app_id;
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), Result::kInvalidArgument));
+    return;
+  }
+
   base::MakeRefCounted<HandleInconsistentAppsTask>(config_, GetUpdaterScope())
       ->Run(base::BindOnce(
           &UpdateServiceImplImpl::FetchPolicies, this,
@@ -1057,6 +1065,14 @@ void UpdateServiceImplImpl::Update(
   VLOG(1) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!IsValidAppId(app_id)) {
+    VLOG(1) << "Refusing to update an invalid app ID: " << app_id;
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), Result::kInvalidArgument));
+    return;
+  }
+
   std::unique_ptr<UpdateEndEvent> event =
       std::make_unique<UpdateEndEvent>(UpdateStartEvent()
                                            .SetAppId(app_id)
@@ -1068,21 +1084,21 @@ void UpdateServiceImplImpl::Update(
             if (update_state.error_category !=
                 UpdateService::ErrorCategory::kNone) {
               event->AddError(
-                  {.category = static_cast<int>(update_state.error_category),
+                  {.category = std::to_underlying(update_state.error_category),
                    .code = update_state.error_code,
                    .extracode1 = update_state.extra_code1});
             }
             if (!update_state.next_version.empty()) {
               event->SetNextVersion(update_state.next_version);
             }
-            event->SetOutcome(update_state.state);
+            event->AddUpdateState(update_state.state);
             return update_state;
           },
           event.get())
           .Then(state_update);
   callback = base::BindOnce(
                  [](std::unique_ptr<UpdateEndEvent> event, Result result) {
-                   event->WriteAsync();
+                   event->SetResult(result).WriteAsync();
                    return result;
                  },
                  std::move(event))
@@ -1165,15 +1181,15 @@ void UpdateServiceImplImpl::UpdateAll(
               UpdateEndEvent& event = events_by_app_id->at(update_state.app_id);
               if (update_state.error_category !=
                   UpdateService::ErrorCategory::kNone) {
-                event.AddError(
-                    {.category = static_cast<int>(update_state.error_category),
-                     .code = update_state.error_code,
-                     .extracode1 = update_state.extra_code1});
+                event.AddError({.category = std::to_underlying(
+                                    update_state.error_category),
+                                .code = update_state.error_code,
+                                .extracode1 = update_state.extra_code1});
               }
               if (!update_state.next_version.empty()) {
                 event.SetNextVersion(update_state.next_version);
               }
-              event.SetOutcome(update_state.state);
+              event.AddUpdateState(update_state.state);
             }
             return update_state;
           },
@@ -1184,7 +1200,7 @@ void UpdateServiceImplImpl::UpdateAll(
                         events_by_app_id,
                     Result result) {
                    for (auto& [_, event] : *events_by_app_id) {
-                     event.WriteAsync();
+                     event.SetResult(result).WriteAsync();
                    }
                    return result;
                  },
@@ -1222,6 +1238,14 @@ void UpdateServiceImplImpl::Install(
   VLOG(1) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!IsValidAppId(registration.app_id)) {
+    VLOG(1) << "Refusing to install an invalid app ID: " << registration.app_id;
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), Result::kInvalidArgument));
+    return;
+  }
+
   std::unique_ptr<InstallEndEvent> event =
       std::make_unique<InstallEndEvent>(InstallStartEvent()
                                             .SetAppId(registration.app_id)
@@ -1232,7 +1256,7 @@ void UpdateServiceImplImpl::Install(
             if (update_state.error_category !=
                 UpdateService::ErrorCategory::kNone) {
               event->AddError(
-                  {.category = static_cast<int>(update_state.error_category),
+                  {.category = std::to_underlying(update_state.error_category),
                    .code = update_state.error_code,
                    .extracode1 = update_state.extra_code1});
             }
@@ -1337,6 +1361,11 @@ void UpdateServiceImplImpl::InstallImpl(
 void UpdateServiceImplImpl::CancelInstalls(const std::string& app_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   VLOG(1) << __func__;
+
+  if (!IsValidAppId(app_id)) {
+    VLOG(1) << "Refusing to cancel installs for an invalid app ID: " << app_id;
+    return;
+  }
   auto [first, last] = cancellation_callbacks_.equal_range(app_id);
   std::ranges::for_each(first, last, [](const auto& i) { i.second.Run(); });
 }
@@ -1353,6 +1382,14 @@ void UpdateServiceImplImpl::RunInstaller(
   VLOG(1) << __func__ << ": " << app_id << ": " << installer_path << ": "
           << install_args << ": " << install_data << ": " << install_settings;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!IsValidAppId(app_id)) {
+    VLOG(1) << "Refusing to run installer for an invalid app ID: " << app_id;
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), Result::kInvalidArgument));
+    return;
+  }
 
   base::MakeRefCounted<HandleInconsistentAppsTask>(config_, GetUpdaterScope())
       ->Run(base::BindOnce(
@@ -1443,18 +1480,25 @@ void UpdateServiceImplImpl::RunInstallerImpl(
           [](const AppInfo& app_info, const base::FilePath& installer_path,
              const std::string& install_args, const std::string& install_data,
              base::RepeatingCallback<void(const UpdateState&)> state_update) {
+#if BUILDFLAG(IS_WIN)
+            std::optional<base::ScopedTempDir> temp_dir_owner =
+                CreateSecureTempDir();
+            if (!temp_dir_owner) {
+              return InstallerResult(
+                  {.category = update_client::ErrorCategory::kInstall,
+                   .code = kErrorCreatingTempDir,
+                   .extra = HRESULTFromLastError()});
+            }
+            base::ScopedTempDir temp_dir = std::move(*temp_dir_owner);
+#else
             base::ScopedTempDir temp_dir;
             if (!temp_dir.CreateUniqueTempDir()) {
               return InstallerResult(
                   {.category = update_client::ErrorCategory::kInstall,
                    .code = kErrorCreatingTempDir,
-#if BUILDFLAG(IS_WIN)
-                   .extra = HRESULTFromLastError()
-#else
-                   .extra = logging::GetLastSystemErrorCode()
-#endif  // BUILDFLAG(IS_WIN)
-                  });
+                   .extra = logging::GetLastSystemErrorCode()});
             }
+#endif
 
             return RunApplicationInstaller(
                 app_info, installer_path, install_args,
@@ -1578,13 +1622,12 @@ void UpdateServiceImplImpl::GetUpdaterState(
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})
       ->PostTaskAndReplyWithResult(
           FROM_HERE, base::BindOnce([] {
-            std::vector<std::string> inactive_versions;
-            for (const base::FilePath& version_executable_path :
-                 GetVersionExecutablePaths(GetUpdaterScope())) {
-              inactive_versions.push_back(update_client::StringTypeToUTF8(
-                  version_executable_path.DirName().BaseName().value()));
-            }
-            return inactive_versions;
+            return base::ToVector(
+                GetVersionExecutablePaths(GetUpdaterScope()),
+                [](const base::FilePath& version_executable_path) {
+                  return update_client::StringTypeToUTF8(
+                      version_executable_path.DirName().BaseName().value());
+                });
           }),
           base::BindOnce(
               [](scoped_refptr<PersistedData> persisted_data,

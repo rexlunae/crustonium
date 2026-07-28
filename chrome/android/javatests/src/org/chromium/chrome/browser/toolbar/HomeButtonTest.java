@@ -102,11 +102,12 @@ public class HomeButtonTest {
                             new HomeButtonCoordinator(
                                     sActivity,
                                     homeButton,
-                                    (view) -> {},
+                                    (metaState, buttonState) -> {},
                                     HomepageManager.getInstance()::onMenuClick,
                                     () -> false,
                                     mThemeColorProvider,
-                                    mIncognitoStateProvider);
+                                    mIncognitoStateProvider,
+                                    /* actionRegistry= */ null);
                     SettingsNavigationFactory.setInstanceForTesting(mSettingsNavigation);
 
                     content.addView(homeButton);

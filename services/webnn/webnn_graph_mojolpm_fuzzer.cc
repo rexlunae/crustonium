@@ -6,10 +6,12 @@
 #include <optional>
 
 #include "base/base_switches.h"
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
+#include "base/debug/asan_service.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ref.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/bind.h"
@@ -37,6 +39,7 @@
 #include "services/webnn/webnn_graph_impl.h"
 #include "services/webnn/webnn_graph_mojolpm_fuzzer.pb.h"
 #include "services/webnn/webnn_test_environment.h"
+#include "testing/libfuzzer/libfuzzer_exports.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/libprotobuf-mutator/src/src/libfuzzer/libfuzzer_macro.h"
 
@@ -44,11 +47,10 @@ namespace {
 
 struct InitGlobals {
   InitGlobals() {
+    CHECK(base::CommandLine::InitializedForCurrentProcess());
     mojo::core::Init();
-    bool success = base::CommandLine::Init(0, nullptr);
-    CHECK(success);
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-    success = base::FeatureList::InitInstance(
+    bool success = base::FeatureList::InitInstance(
         command_line->GetSwitchValueASCII(switches::kEnableFeatures),
         command_line->GetSwitchValueASCII(switches::kDisableFeatures));
     CHECK(success);
@@ -57,13 +59,24 @@ struct InitGlobals {
 
     TestTimeouts::Initialize();
 
+#if defined(ADDRESS_SANITIZER)
+    base::debug::AsanService::GetInstance()->Initialize();
+#endif
+
     base::test::AllowCheckIsTestForTesting();
+
+    // Create the test environment once and persist it across fuzzer iterations.
+    // This avoids destroying and recreating the TaskEnvironment (thread pool)
+    // and GPU backend state between iterations, which causes ASan thread
+    // initialization crashes from the resulting thread churn.
+    webnn_test_environment_.emplace();
   }
 
   base::test::ScopedFeatureList scoped_feature_list_;
+  std::optional<webnn::test::WebNNTestEnvironment> webnn_test_environment_;
 };
 
-InitGlobals* init_globals = new InitGlobals();
+InitGlobals* init_globals = nullptr;
 
 class WebnnGraphLPMFuzzer {
  public:
@@ -71,19 +84,6 @@ class WebnnGraphLPMFuzzer {
       const services::fuzzing::webnn_graph::proto::Testcase& testcase)
       : testcase_(testcase) {
     input_generator_.ReseedForTesting(testcase_->seed_for_input_data());
-
-    webnn_test_environment_.BindWebNNContextProvider(
-        provider_remote_.BindNewPipeAndPassReceiver());
-
-    base::test::TestFuture<webnn::mojom::CreateContextResultPtr>
-        create_context_future;
-    provider_remote_->CreateWebNNContext(
-        webnn::mojom::CreateContextOptions::New(),
-        create_context_future.GetCallback());
-    webnn::mojom::CreateContextResultPtr create_context_result =
-        create_context_future.Take();
-    webnn_context_.Bind(
-        std::move(create_context_result->get_success()->context_remote));
   }
 
   void NextAction() {
@@ -101,37 +101,32 @@ class WebnnGraphLPMFuzzer {
     return action_index_ > 100 || action_index_ >= testcase_->actions_size();
   }
 
-  void RunUntilIdle() { webnn_test_environment_.RunUntilIdle(); }
-
  private:
   mojo_base::BigBuffer GenerateBytes(size_t byte_size) {
     mojo_base::BigBuffer buffer(byte_size);
-    auto [head, tail] = base::span(buffer).split_at(
-        (byte_size / sizeof(uint64_t)) * sizeof(uint64_t));
     // SAFETY: Generating a uint64_t view over an existing buffer where we hold
-    // the only pointer.
-    base::span<uint64_t> uint64_head =
-        UNSAFE_BUFFERS(base::span(reinterpret_cast<uint64_t*>(head.data()),
-                                  head.size() / sizeof(uint64_t)));
-    std::ranges::generate(uint64_head,
-                          [this]() { return input_generator_.RandUint64(); });
-    std::ranges::generate(tail,
-                          [this]() { return input_generator_.RandUint32(); });
+    // the only pointer. Unsafe buffer access patterns are used to avoid the
+    // overhead of bounds checks when the code is heavily instrumented for
+    // fuzzing.
+    uint64_t* buffer_ptr = reinterpret_cast<uint64_t*>(buffer.data());
+    for (size_t i = 0; i < byte_size / sizeof(uint64_t); ++i) {
+      UNSAFE_BUFFERS(buffer_ptr[i]) = input_generator_.RandUint64();
+    }
+    for (size_t i = byte_size / sizeof(uint64_t) * sizeof(uint64_t);
+         i < byte_size; ++i) {
+      UNSAFE_BUFFERS(buffer.data()[i]) = input_generator_.RandUint32();
+    }
     return buffer;
   }
 
   void BuildGraph(const mojolpm::webnn::mojom::GraphInfo& graph_info_proto,
                   webnn::mojom::Device device) {
     mojo::Remote<webnn::mojom::WebNNContextProvider> webnn_provider_remote;
-    mojo::Remote<webnn::mojom::WebNNContext> webnn_context_remote;
-    mojo::AssociatedRemote<webnn::mojom::WebNNGraphBuilder>
-        webnn_graph_builder_remote;
-    mojo::AssociatedRemote<webnn::mojom::WebNNGraph> webnn_graph_remote;
-
-    webnn_test_environment_.BindWebNNContextProvider(
+    init_globals->webnn_test_environment_->BindWebNNContextProvider(
         webnn_provider_remote.BindNewPipeAndPassReceiver());
 
     // Create the ContextImpl through context provider.
+    mojo::Remote<webnn::mojom::WebNNContext> webnn_context_remote;
     base::test::TestFuture<webnn::mojom::CreateContextResultPtr>
         create_context_future;
     webnn_provider_remote->CreateWebNNContext(
@@ -151,8 +146,9 @@ class WebnnGraphLPMFuzzer {
     EXPECT_TRUE(webnn_context_remote.is_bound());
 
     // Create the GraphBuilder through the context.
+    mojo::Remote<webnn::mojom::WebNNGraphBuilder> webnn_graph_builder_remote;
     webnn_context_remote->CreateGraphBuilder(
-        webnn_graph_builder_remote.BindNewEndpointAndPassReceiver());
+        webnn_graph_builder_remote.BindNewPipeAndPassReceiver());
 
     base::test::TestFuture<base::expected<webnn::mojom::CreateGraphSuccessPtr,
                                           webnn::mojom::ErrorPtr>>
@@ -167,23 +163,23 @@ class WebnnGraphLPMFuzzer {
     auto graph_info = webnn::mojom::GraphInfo::New();
     mojolpm::FromProto(graph_info_proto, graph_info);
 
+    size_t total_tensor_length = 0;
     for (uint32_t id = 0; id < graph_info->operands.size(); ++id) {
       const auto& operand = graph_info->operands[id];
-      if (operand->kind == webnn::mojom::Operand::Kind::kConstant) {
-        size_t tensor_length = operand->descriptor.PackedByteLength();
-        if (tensor_length > base::GiB(3).InBytes()) {
-          // Serialization of this Mojo call will fail if the tensor data is
-          // too big. We intentionally don't use ValidateTensor to ensure that
-          // the checks in the implementation of CreatePendingConstant are
-          // still exercised. The value is chosen to be larger than most
-          // context implementations support.
-          //
-          // This check can be removed if streaming constant uploads are
-          // implemented as the value will no longer be sent in a single
-          // message.
-          return;
-        }
 
+      // Limit the total size of tensors in the graph to avoid running out of
+      // memory or timing out from computing extremely large graphs. Ideally we
+      // would be able to exercise larger graphs but the tradeoff is that the
+      // fuzzer will not explore as many graphs when it spends too much time
+      // with these large examples.
+      constexpr size_t kMaxTensorBytes = base::GiBU(1).InBytes();
+      const size_t tensor_length = operand->descriptor.PackedByteLength();
+      if (kMaxTensorBytes - total_tensor_length < tensor_length) {
+        return;
+      }
+      total_tensor_length += tensor_length;
+
+      if (operand->kind == webnn::mojom::Operand::Kind::kConstant) {
         const blink::WebNNPendingConstantToken token;
         webnn_graph_builder_remote->CreatePendingConstant(
             token, operand->descriptor.data_type(),
@@ -199,8 +195,10 @@ class WebnnGraphLPMFuzzer {
     if (!create_graph_result.has_value()) {
       return;
     }
-    webnn_graph_remote.Bind(
-        std::move(create_graph_result.value()->graph_remote));
+    webnn_graph_builder_remote.reset();
+
+    blink::WebNNGraphToken graph_token =
+        create_graph_result.value()->graph_token;
 
     // Get graph_info again for tensor operations.
     graph_info = webnn::mojom::GraphInfo::New();
@@ -227,7 +225,6 @@ class WebnnGraphLPMFuzzer {
       base::test::TestFuture<webnn::mojom::CreateTensorResultPtr>
           create_tensor_future;
       webnn_context_remote->CreateTensor(std::move(tensor_info),
-                                         mojo_base::BigBuffer(0),
                                          create_tensor_future.GetCallback());
       webnn::mojom::CreateTensorResultPtr create_tensor_result =
           create_tensor_future.Take();
@@ -263,7 +260,6 @@ class WebnnGraphLPMFuzzer {
       base::test::TestFuture<webnn::mojom::CreateTensorResultPtr>
           create_tensor_future;
       webnn_context_remote->CreateTensor(std::move(tensor_info),
-                                         mojo_base::BigBuffer(0),
                                          create_tensor_future.GetCallback());
       webnn::mojom::CreateTensorResultPtr create_tensor_result =
           create_tensor_future.Take();
@@ -277,7 +273,8 @@ class WebnnGraphLPMFuzzer {
           *operand.name, create_tensor_result->get_success()->tensor_handle);
     }
 
-    webnn_graph_remote->Dispatch(named_input_handles, named_output_handles);
+    webnn_context_remote->Dispatch(graph_token, named_input_handles,
+                                   named_output_handles);
 
     // Wait for reading all output data.
     for (auto& remote : output_remotes) {
@@ -286,27 +283,39 @@ class WebnnGraphLPMFuzzer {
       remote->ReadTensor(read_tensor_future.GetCallback());
       EXPECT_TRUE(read_tensor_future.Wait());
     }
+
+    webnn_context_remote->DestroyGraph(graph_token);
   }
 
   const raw_ref<const services::fuzzing::webnn_graph::proto::Testcase>
       testcase_;
   int action_index_ = 0;
   base::test::InsecureRandomGenerator input_generator_;
-
-  webnn::test::WebNNTestEnvironment webnn_test_environment_;
-  mojo::Remote<webnn::mojom::WebNNContextProvider> provider_remote_;
-  mojo::Remote<webnn::mojom::WebNNContext> webnn_context_;
 };
 
-DEFINE_BINARY_PROTO_FUZZER(
+DEFINE_TEXT_PROTO_FUZZER(
     const services::fuzzing::webnn_graph::proto::Testcase& testcase) {
-  WebnnGraphLPMFuzzer webnn_graph_fuzzer_instance(testcase);
-  while (!webnn_graph_fuzzer_instance.IsFinished()) {
-    webnn_graph_fuzzer_instance.NextAction();
+  {
+    WebnnGraphLPMFuzzer webnn_graph_fuzzer_instance(testcase);
+    while (!webnn_graph_fuzzer_instance.IsFinished()) {
+      webnn_graph_fuzzer_instance.NextAction();
+    }
   }
-  // Ensure that any tasks scheduled by `webnn_graph_fuzzer_instance` are
-  // executed before it is freed. See https://crbug.com/441020155.
-  webnn_graph_fuzzer_instance.RunUntilIdle();
+  // Ensure that tasks scheduled by creating and destroying WebNN contexts have
+  // completed before continuing to the next test case.
+  // See https://crbug.com/441020155.
+  init_globals->webnn_test_environment_->WaitForAllContextsToBeDestroyed();
 }
 
 }  // namespace
+
+extern "C" int LLVMFuzzerInitialize(int* argc, char*** argv) {
+  // Avoid crashing if CommandLine is already initialized, which can happen on
+  // Android.
+  if (!base::CommandLine::InitializedForCurrentProcess()) {
+    CHECK(base::CommandLine::Init(*argc, *argv));
+  }
+  static base::NoDestructor<InitGlobals> globals;
+  init_globals = globals.get();
+  return 0;
+}

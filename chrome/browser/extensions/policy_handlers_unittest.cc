@@ -20,7 +20,6 @@
 #include "chrome/browser/extensions/extension_management_constants.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
@@ -41,6 +40,7 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_extension_constants.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #endif
 
@@ -590,7 +590,7 @@ TEST(ExtensionSettingsPolicyHandlerTest, DropInvalidKeys) {
 }
 
 // Only enterprise managed machines can auto install extensions from a location
-// other than the webstore https://crbug.com/809004.
+// other than the webstore https://crbug.com/41368809.
 TEST(ExtensionSettingsPolicyHandlerTest, NonManagedOffWebstoreExtension) {
   // Mark as not enterprise managed.
   auto policy_result = base::JSONReader::ReadAndReturnValueWithError(

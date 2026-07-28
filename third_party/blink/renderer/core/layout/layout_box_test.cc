@@ -16,8 +16,18 @@
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/platform/graphics/test/stub_image.h"
 #include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 
 namespace blink {
+
+namespace {
+const bool kOverscrollShiftsContent =
+#if BUILDFLAG(IS_ANDROID)
+    false;
+#else
+    true;
+#endif
+}  // namespace
 
 class LayoutBoxTest : public RenderingTest {
  public:
@@ -462,10 +472,9 @@ TEST_F(LayoutBoxTest, ControlClip) {
     <input id='target' type='button' value='some text'/>
   )HTML");
   LayoutBox* target = GetLayoutBoxByElementId("target");
-  EXPECT_TRUE(target->HasControlClip());
   EXPECT_TRUE(target->HasClipRelatedProperty());
   EXPECT_TRUE(target->ShouldClipOverflowAlongEitherAxis());
-  EXPECT_EQ(PhysicalRect(2, 2, 96, 46), target->ClippingRect(PhysicalOffset()));
+  EXPECT_EQ(PhysicalRect(2, 2, 96, 46), target->ClippingRect());
 }
 
 TEST_F(LayoutBoxTest, VisualOverflowRectWithBlockChild) {
@@ -752,8 +761,7 @@ TEST_F(LayoutBoxTest, OverflowRectsContainPaint) {
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->VisualOverflowRect());
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->SelfVisualOverflowRect());
   EXPECT_CONTENTS_VISUAL_OVERFLOW(PhysicalRect(10, 10, 300, 400), container);
-  EXPECT_EQ(PhysicalRect(10, 10, 100, 200),
-            container->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(PhysicalRect(10, 10, 100, 200), container->OverflowClipRect());
 }
 
 TEST_F(LayoutBoxTest, OverflowRectsOverflowHidden) {
@@ -771,8 +779,7 @@ TEST_F(LayoutBoxTest, OverflowRectsOverflowHidden) {
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->VisualOverflowRect());
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->SelfVisualOverflowRect());
   EXPECT_CONTENTS_VISUAL_OVERFLOW(PhysicalRect(10, 10, 300, 400), container);
-  EXPECT_EQ(PhysicalRect(10, 10, 100, 200),
-            container->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(PhysicalRect(10, 10, 100, 200), container->OverflowClipRect());
 }
 
 TEST_F(LayoutBoxTest, SetTextFieldIntrinsicInlineSize) {
@@ -1818,6 +1825,8 @@ TEST_F(LayoutBoxTest, AnchorInFragmentedContainingBlock) {
     }
     #target {
       position: absolute;
+      position-anchor: --a;
+      inset: auto;
     }
   )CSS");
   SetBodyInnerHTML(R"HTML(
@@ -1825,7 +1834,7 @@ TEST_F(LayoutBoxTest, AnchorInFragmentedContainingBlock) {
       <div id="cb">
         <div id="spacer"></div>
         <div id="anchor"></div>
-        <div id="target" anchor="anchor"></div>
+        <div id="target"></div>
       </div>
     </div>
   )HTML");
@@ -1834,8 +1843,6 @@ TEST_F(LayoutBoxTest, AnchorInFragmentedContainingBlock) {
   EXPECT_EQ(GetLayoutObjectByElementId("anchor"),
             target->FindTargetAnchor(*MakeGarbageCollected<ScopedCSSName>(
                 AtomicString("--a"), &GetDocument())));
-  EXPECT_EQ(GetLayoutObjectByElementId("anchor"),
-            target->AcceptableImplicitAnchor());
 }
 
 TEST_F(LayoutBoxTest, AnchorInInlineContainingBlock) {
@@ -1844,8 +1851,8 @@ TEST_F(LayoutBoxTest, AnchorInInlineContainingBlock) {
       <span id="not-implicit-anchor">not implicit anchor</span>
       <span style="position: relative">
         <span id="anchor" style="anchor-name: --a">anchor</span>
-        <div id="target" anchor="not-implicit-anchor"
-             style="position: absolute; top: anchor(--a top)"></div>
+        <div id="target"
+             style="position-anchor: --a; position: absolute; top: anchor(--a top)"></div>
       </span>
       some text
     </div>
@@ -2021,6 +2028,63 @@ TEST_F(LayoutBoxTest,
   EXPECT_EQ(PhysicalRect(-6, -6, 812, 12), box->VisualOverflowRect());
   EXPECT_EQ(PhysicalRect(-2, -2, 4, 4), span->VisualOverflowRect());
 }
+
+TEST_F(LayoutBoxTest, ContentBoxFragmentedHtb) {
+  SetBodyInnerHTML(R"HTML(
+<div style="columns:3; column-fill:auto; block-size:100px; writing-mode:horizontal-tb;">
+  <div id="elm" style="border:solid; border-width:1px 2px 3px 4px; padding:5px 10px 15px 20px; inline-size:50px; block-size:200px;">
+    <div style="block-size:1000px;"></div>
+  </div>
+</div>
+)HTML");
+  const LayoutBox* box = GetLayoutBoxByElementId("elm");
+  EXPECT_EQ(box->PhysicalContentBoxRect(), PhysicalRect(24, 6, 50, 200));
+}
+
+TEST_F(LayoutBoxTest, ContentBoxFragmentedVlr) {
+  SetBodyInnerHTML(R"HTML(
+<div style="columns:3; column-fill:auto; block-size:100px; writing-mode:vertical-lr;">
+  <div id="elm" style="border:solid; border-width:1px 2px 3px 4px; padding:5px 10px 15px 20px; inline-size:50px; block-size:200px;">
+    <div style="block-size:1000px;"></div>
+  </div>
+</div>
+)HTML");
+  const LayoutBox* box = GetLayoutBoxByElementId("elm");
+  EXPECT_EQ(box->PhysicalContentBoxRect(), PhysicalRect(24, 6, 200, 50));
+}
+
+TEST_F(LayoutBoxTest, ContentBoxFragmentedVrl) {
+  SetBodyInnerHTML(R"HTML(
+<div style="columns:3; column-fill:auto; block-size:100px; writing-mode:vertical-rl;">
+  <div id="elm" style="border:solid; border-width:1px 2px 3px 4px; padding:5px 10px 15px 20px; inline-size:50px; block-size:200px;">
+    <div style="block-size:1000px;"></div>
+  </div>
+</div>
+)HTML");
+  const LayoutBox* box = GetLayoutBoxByElementId("elm");
+  EXPECT_EQ(box->PhysicalContentBoxRect(), PhysicalRect(24, 6, 200, 50));
+}
+
+class ElasticOverscrollTestingPlatformSupport : public TestingPlatformSupport {
+ public:
+  bool IsElasticOverscrollEnabledOnRoot() override {
+    return elastic_overscroll_enabled_on_root_;
+  }
+  void SetElasticOverscrollEnabledOnRoot(bool supported) {
+    elastic_overscroll_enabled_on_root_ = supported;
+  }
+
+  bool IsElasticOverscrollEnabledForSubscroll() override {
+    return elastic_overscroll_enabled_for_subscroll_;
+  }
+  void SetElasticOverscrollEnabledForSubscroll(bool enabled) {
+    elastic_overscroll_enabled_for_subscroll_ = enabled;
+  }
+
+ private:
+  bool elastic_overscroll_enabled_on_root_ = false;
+  bool elastic_overscroll_enabled_for_subscroll_ = false;
+};
 
 class LayoutBoxBackgroundPaintLocationTest : public RenderingTest,
                                              public PaintTestConfigurations {
@@ -2324,6 +2388,118 @@ TEST_P(LayoutBoxBackgroundPaintLocationTest, BorderImage) {
 
   EXPECT_EQ(kBackgroundPaintInBorderBoxSpace,
             ScrollerBackgroundPaintLocation());
+}
+
+TEST_P(LayoutBoxBackgroundPaintLocationTest,
+       ElasticOverscrollEnabledForSubscroll) {
+  ScopedTestingPlatformSupport<ElasticOverscrollTestingPlatformSupport>
+      platform;
+
+  SetBodyInnerHTML(kCommonStyle + R"HTML(
+    <div id='scroller' style='background: white;'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  // By default, it should be in contents space.
+  EXPECT_EQ(kBackgroundPaintInContentsSpace, ScrollerBackgroundPaintLocation());
+
+  // Enable elastic overscroll mock.
+  platform->SetElasticOverscrollEnabledForSubscroll(true);
+  GetLayoutBoxByElementId("scroller")->SetNeedsPaintPropertyUpdate();
+  UpdateAllLifecyclePhasesForTest();
+
+  // With setting enabled, opaque non-local background is in BothSpaces
+  // when elastic overscroll shifts content.
+  EXPECT_EQ(kOverscrollShiftsContent ? kBackgroundPaintInBothSpaces
+                                     : kBackgroundPaintInContentsSpace,
+            ScrollerBackgroundPaintLocation());
+
+  // Semi-transparent non-local background is downgraded to BorderBoxSpace
+  // for content shifting elastic overscroll.
+  SetBodyInnerHTML(kCommonStyle + R"HTML(
+    <div id='scroller' style='background: rgba(255, 255, 255, 0.5);'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+  GetLayoutBoxByElementId("scroller")->SetNeedsPaintPropertyUpdate();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(kOverscrollShiftsContent ? kBackgroundPaintInBorderBoxSpace
+                                     : kBackgroundPaintInContentsSpace,
+            ScrollerBackgroundPaintLocation());
+
+  // Local background should STILL be in contents space.
+  SetBodyInnerHTML(kCommonStyle + R"HTML(
+    <div id='scroller' style='background: white local;'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+  GetLayoutBoxByElementId("scroller")->SetNeedsPaintPropertyUpdate();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(kBackgroundPaintInContentsSpace, ScrollerBackgroundPaintLocation());
+}
+
+TEST_P(LayoutBoxBackgroundPaintLocationTest,
+       ElasticOverscrollSupportedForLayoutView) {
+  ScopedTestingPlatformSupport<ElasticOverscrollTestingPlatformSupport>
+      platform;
+  GetDocument().GetSettings()->SetLCDTextPreference(
+      LCDTextPreference::kIgnored);
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      html {
+        background: white fixed;
+      }
+    </style>
+  )HTML");
+
+  // By default, LayoutView background paint location should be in contents
+  // space.
+  EXPECT_EQ(kBackgroundPaintInContentsSpace,
+            GetLayoutView().GetBackgroundPaintLocation());
+
+  // Enable IsElasticOverscrollSupported mock.
+  platform->SetElasticOverscrollEnabledOnRoot(true);
+  GetLayoutView().SetNeedsPaintPropertyUpdate();
+  UpdateAllLifecyclePhasesForTest();
+
+  // With root elastic overscroll shifting content, opaque background upgrades
+  // to BothSpaces.
+  EXPECT_EQ(kOverscrollShiftsContent ? kBackgroundPaintInBothSpaces
+                                     : kBackgroundPaintInContentsSpace,
+            GetLayoutView().GetBackgroundPaintLocation());
+
+  // Semi-transparent root background falls back to BorderBoxSpace.
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      html {
+        background: rgba(255, 255, 255, 0.5) fixed;
+      }
+    </style>
+  )HTML");
+
+  // Translucent backgrounds must paint into the correct space if elastic
+  // overscroll shifts content.
+  EXPECT_EQ(kOverscrollShiftsContent ? kBackgroundPaintInBorderBoxSpace
+                                     : kBackgroundPaintInContentsSpace,
+            GetLayoutView().GetBackgroundPaintLocation());
+
+  // Setting overscroll-behavior: none prevents elastic overscroll from
+  // applying.
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      html {
+        background: rgba(255, 255, 255, 0.5) fixed;
+        overscroll-behavior: none;
+      }
+    </style>
+  )HTML");
+
+  EXPECT_EQ(kBackgroundPaintInContentsSpace,
+            GetLayoutView().GetBackgroundPaintLocation());
 }
 
 }  // namespace blink
